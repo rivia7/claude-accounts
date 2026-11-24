@@ -248,9 +248,9 @@ if sect unit; then
 # 辅助程序内部的检查（原来这一节里各份 Python 测试直接调内嵌 Python 的函数查的那些：解析、规则、价格表、时段、客户端更新的每一步……）
 # 都在 cargo test 里；下面各份 Python 测试把辅助程序当黑盒跑（tests/helper_bin.py），或者切出 cca 里的 bash 函数来测
 ok "辅助程序（cli/）自己的单元测试：cargo test" '( cd "$D/../cli" && cargo test --locked --offline ) > "$T/cargo-test.log" 2>&1'
-# 代码照 cli/rustfmt.toml 排过（工具链是固定的，排出来哪台机器都一样）：没排过的改动一合进来，以后谁顺手 cargo fmt 就是一大片不相干的改动。
+# 代码照仓库根的 rustfmt.toml 排过（cli/ 和 tests/ 两个包都是；工具链是固定的，排出来哪台机器都一样）：没排过的改动一合进来，以后谁顺手 cargo fmt 就是一大片不相干的改动。
 # 生成的数据表标着 #[rustfmt::skip]，不参与
-ok "辅助程序（cli/）的代码排过版：cargo fmt --check（没过就在 cli/ 里运行 cargo fmt）" '( cd "$D/../cli" && cargo fmt --check ) > "$T/cargo-fmt.log" 2>&1'
+ok "Rust 代码（cli/ 和 tests/）排过版：cargo fmt --all --check（没过就在 cli/ 里运行 cargo fmt --all）" '( cd "$D/../cli" && cargo fmt --all --check ) > "$T/cargo-fmt.log" 2>&1'
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
 ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'

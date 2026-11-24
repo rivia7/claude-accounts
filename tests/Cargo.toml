@@ -1,0 +1,49 @@
+[package]
+name = "cca-tests"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.100"
+publish = false
+description = "cca 的测试：回归用的小工具 cca-test、照文档独立实现的那一头、各份把 cca 当黑盒的测试"
+license = "MIT"
+workspace = "../cli"       # workspace 的根在 cli/：共用它的 Cargo.lock、target/、工具链；cargo 命令都在 cli/ 里运行，带 -p cca-tests
+autobins = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+# 这个包不用辅助程序（cli/src）的代码：测试把它当黑盒，协议那一头是照 server/README.md 独立写的，两边对得上才算对。
+# 支持库（kit/）：JSON、起进程、伪终端、协议的另一头、假的服务……
+[lib]
+name = "kit"
+path = "kit/lib.rs"
+doctest = false
+
+# cca-test：回归（tests/regress.sh、setup.sh、linux.sh）用的小工具——断言、现造的夹具、假的 claude / codex……
+[[bin]]
+name = "cca-test"
+path = "tool/main.rs"
+test = false
+
+# 各份测试合成一个程序（suite.rs 列着各个模块，一个模块就是 tests/ 下的一个 .rs）；运行器是自己的（kit::harness）
+[[test]]
+name = "suite"
+path = "suite.rs"
+harness = false
+
+# 依赖只用辅助程序也用的那几个（见 docs/dev/rust.md 的「依赖」）：加新的之前先问维护者
+[dependencies]
+libc = "0.2"
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case", "unicode-gencat"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+new_without_default = "allow"
+len_without_is_empty = "allow"

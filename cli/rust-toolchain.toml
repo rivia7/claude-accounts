@@ -1,5 +1,5 @@
 # 固定工具链：发布出去的是签了名的二进制，哪台机器编出来都要一样
 [toolchain]
 channel = "1.100.0"
-components = ["clippy", "rustfmt"]
+components = ["clippy", "rustfmt", "llvm-tools"]   # llvm-tools：交叉编译 Linux 的目标时要它的 llvm-ar（见 musl-env.sh）
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]

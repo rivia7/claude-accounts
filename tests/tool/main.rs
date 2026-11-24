@@ -1,0 +1,23 @@
+//! cca-test：回归用的小工具。用法：cca-test 子命令 参数…
+//! 各个子命令在各自的模块里（每个模块一张 CMDS 表）；出错（用法不对、认不出的写法）退出码 2，说在 stderr。
+
+/// 一个子命令：收下子命令后面的参数，返回退出码
+pub type Run = fn(&[String]) -> i32;
+
+/// 各个模块的子命令表
+const TABLES: &[&[(&str, Run)]] = &[];
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(name) = args.first() else {
+        eprintln!("用法：cca-test 子命令 参数…");
+        std::process::exit(2);
+    };
+    match TABLES.iter().flat_map(|t| t.iter()).find(|(n, _)| n == name) {
+        Some((_, run)) => std::process::exit(run(&args[1..])),
+        None => {
+            eprintln!("cca-test：没有 {name} 这个子命令");
+            std::process::exit(2);
+        }
+    }
+}

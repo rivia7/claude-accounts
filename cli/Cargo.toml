@@ -20,10 +20,18 @@ sha1 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false, features = ["std"] }
 
-# 邮箱助手连 Gmail 的 IMAP 要 TLS：只有 macOS 的构建带（邮箱助手要用账号专属的 Chrome 打开登录链接，Linux 上没有这个功能）。
-# 证书照系统的 /etc/ssl/cert.pem 验（和原来 Python 的 ssl.create_default_context() 一样），不带另一份根证书
-[target.'cfg(target_os = "macos")'.dependencies]
+# TLS 和签名：Team 的同步服务器（team-server，跑在 Linux 上）要 TLS、要验设备的签名（Ed25519），证书助手（team-acme）要连证书机构、
+# 给请求签名（ECDSA P-256）；邮箱助手连 Gmail 的 IMAP 也要 TLS（只在 macOS 上有，证书照系统的 /etc/ssl/cert.pem 验）。
+# ring 里有 C 和汇编：从 macOS 交叉编译 Linux 的两个目标前先 source cli/musl-env.sh
+ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+# tests/ 是同一个 workspace 里的另一个包（回归用的小工具 cca-test 和各份测试；不用这里的代码）：共用 Cargo.lock 和 target/。
+# 不带 -p 的命令照旧只管辅助程序：cargo build --release --locked 出来的还是 target/release/cca-core
+[workspace]
+members = [".", "../tests"]
+default-members = ["."]
+resolver = "2"
 
 [profile.release]
 opt-level = 2
@@ -35,6 +43,18 @@ debug = false
 
 [profile.dev]
 panic = "abort"            # 和发布版一样：没人接的 panic 走 main 的钩子，退出码 1
+
+# tests/ 那个包用这一档（cargo build / test --profile kit -p cca-tests）：panic 要接得住（一个用例 panic 不该带走整个进程），
+# 自己的代码少优化一点、编得快；依赖照发布版优化（不然 PBKDF2、TLS 慢好多倍）
+[profile.kit]
+inherits = "dev"
+panic = "unwind"
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.kit.package."*"]
+opt-level = 3
+debug = false
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
