@@ -168,7 +168,7 @@ pub fn samefile(a: &Path, b: &Path) -> bool {
 /// （`follow_symlinks=False`）
 pub fn utime(path: &Path, secs: i64, follow: bool) {
     let c = CString::new(path.as_os_str().as_bytes()).unwrap_or_else(|_| panic!("路径里有 NUL：{}", path.display()));
-    let at = libc::timespec { tv_sec: secs as libc::time_t, tv_nsec: 0 };
+    let at = libc::timespec { tv_sec: secs as _, tv_nsec: 0 };
     let flags = if follow { 0 } else { libc::AT_SYMLINK_NOFOLLOW };
     // SAFETY: c 是以 NUL 结尾的路径，times 是两个有效的 timespec；utimensat 只读它们
     let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), [at, at].as_ptr(), flags) };

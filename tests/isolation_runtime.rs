@@ -132,8 +132,8 @@ fn info_plist(app: &Path, entries: &[(&str, &str)]) {
 /// time.strftime('%a %b %d %H:%M:%S %Y', time.localtime(秒))：ps 的 lstart 那一栏（本地时间；这个进程没设过语言环境，
 /// 星期、月份是 C 的写法）
 fn lstart(secs: i64) -> String {
-    let when = secs as libc::time_t;
-    // SAFETY: tm 是只有整数和指针的普通结构，全零是合法的值；localtime_r（头一次用时自己读时区）、strftime 只写给它们的那一份
+    let when = secs as _; // time_t：musl 上 libc 把这个名字标成了过时的，让编译器自己推
+                          // SAFETY: tm 是只有整数和指针的普通结构，全零是合法的值；localtime_r（头一次用时自己读时区）、strftime 只写给它们的那一份
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     assert!(!unsafe { libc::localtime_r(&when, &mut tm) }.is_null(), "localtime_r 失败");
     let mut buf = [0u8; 64];
