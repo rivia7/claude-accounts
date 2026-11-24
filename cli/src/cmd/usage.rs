@@ -2138,7 +2138,7 @@ mod tests {
 
     #[test]
     fn reset_short_like_python_test() {
-        // tests/usage_view.py 的 test_reset_short
+        // 原来 tests/usage_view.py 的 test_reset_short
         let now = time::time();
         assert_eq!(reset_short(now + 2.0 * 3600.0 + 13.0 * 60.0 + 5.0, now, false).unwrap(), "2小时13分后");
         assert_eq!(reset_short(now + 30.0, now, false).unwrap(), "不到1分钟后");
@@ -2257,7 +2257,7 @@ mod tests {
 
     #[test]
     fn fit_note_like_python_test() {
-        // tests/usage_view.py 的 test_fit_note
+        // 原来 tests/usage_view.py 的 test_fit_note
         let parts: Vec<String> = ["剩余重置 2 次（最早 12 月 5 日过期）", "GPT-5-Pro 本周 30%", "credits 余额 12.5"]
             .iter()
             .map(|s| s.to_string())
@@ -2270,7 +2270,7 @@ mod tests {
 
     #[test]
     fn use_first_like_python_test() {
-        // tests/usage_view.py 的 test_use_first
+        // tests/usage_view.rs 的 use_first
         let now = time::time();
         let at = |secs: f64| (now + secs).floor();
         let rl =
@@ -2291,7 +2291,7 @@ mod tests {
 
     #[test]
     fn weeks_add_like_python_test() {
-        // tests/usage_view.py 的 test_weeks_add：按重置时间认是哪一周，记最高的百分比；掉下去一大截是中间重置过，之前的累计下来
+        // 原来 tests/usage_view.py 的 test_weeks_add：按重置时间认是哪一周，记最高的百分比；掉下去一大截是中间重置过，之前的累计下来
         let w = WEEK as f64;
         let t = 1_800_000_000.0;
         let end = t + 3.0 * 86400.0;
@@ -2342,7 +2342,7 @@ mod tests {
 
     #[test]
     fn weeks_record_file_like_python_test() {
-        // tests/usage_view.py 的 test_weeks_record_file：查到用量时记进账号目录的 usage-weeks.json（600）；同一次查询不重写，
+        // tests/usage_view.rs 的 weeks_record_file：查到用量时记进账号目录的 usage-weeks.json（600）；同一次查询不重写，
         // 坏的项读的时候不要
         use std::os::unix::fs::MetadataExt;
         let dir = crate::py::fs::TempDir::new().unwrap();
@@ -2374,7 +2374,7 @@ mod tests {
 
     #[test]
     fn usage_cached_keeps_model_scoped() {
-        // tests/usage_view.py 的 test_usage_cached_keeps_model_scoped：Claude Code 的用量缓存比 usage.json 新时，它没有 model_scoped，
+        // tests/usage_view.rs 的 usage_cached_keeps_model_scoped：Claude Code 的用量缓存比 usage.json 新时，它没有 model_scoped，
         // 照 usage.json 有哪几个模型从它的 limits 补上；usage.json 里没有的模型不加，账号对不上的不算
         let now = time::time();
         let ends = "2099-01-01T00:00:00Z";
@@ -2472,7 +2472,7 @@ mod tests {
         assert_eq!(usage_entry(&row, now).unwrap().at("age_seconds").as_int(), Some(-30));
     }
 
-    /// tests/usage_view.py 的那四行：查到了的（备注两项）、Claude Code 记的套餐过时的、端口不通用缓存顶上的、没登录的
+    /// tests/usage_view.rs 的那四行：查到了的（备注两项）、Claude Code 记的套餐过时的、端口不通用缓存顶上的、没登录的
     fn table_rows(now: f64) -> Vec<Row> {
         let row = |alias: &str,
                    email: &str,
@@ -2517,7 +2517,7 @@ mod tests {
 
     #[test]
     fn table_never_wider_than_terminal() {
-        // tests/usage_view.py 的 test_one_line_per_account_never_wider_than_terminal
+        // tests/usage_view.rs 的 one_line_per_account_never_wider_than_terminal
         let now = time::time();
         let rows = table_rows(now);
         for cols in 40..=200 {
@@ -2537,7 +2537,7 @@ mod tests {
 
     #[test]
     fn table_folds_columns_in_order() {
-        // tests/usage_view.py 的 test_wide_terminal_keeps_everything、test_narrow_terminal_folds_columns_in_order
+        // tests/usage_view.rs 的 wide_terminal_keeps_everything、narrow_terminal_folds_columns_in_order
         let now = time::time();
         let table = |cols: &str| usage_table_lines(&table_rows(now), now, cols, false, &["kimi".to_string()]).unwrap();
         let like = |line: &str, pattern: &str| assert!(Re::new(pattern).found(line), "{line:?} 对不上 {pattern}");

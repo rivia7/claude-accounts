@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn names_and_capability() {
-        // tests/local_udp.py 的节点：vless 写了 udp: true、trojan 没写、hysteria2 本来就转发
+        // tests/local_udp.rs 的节点：vless 写了 udp: true、trojan 没写、hysteria2 本来就转发
         assert!(
             udp_name_ok("US-A")
                 && udp_name_ok("节点 1")
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn running_is_read_from_the_command_line() {
-        // tests/local_udp.py 的 test_view_and_running：只认「root 那边的目录/mihomo -d 」这一段
+        // tests/local_udp.rs 的 view_and_running：只认「root 那边的目录/mihomo -d 」这一段
         let root = udp_paths().0;
         let rows = |cmd: String| vec![(10, cmd)];
         assert!(udp_running(Some(&rows(format!("{root}/mihomo -d {root} -f {root}/config.yaml")))));
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn off_without_a_node() {
-        // 没设节点、不是内置代理时不看节点定义，直接是 off（tests/local_udp.py 的 test_state_and_set 的头尾）
+        // 没设节点、不是内置代理时不看节点定义，直接是 off（tests/local_udp.rs 的 state_and_set 的头尾）
         assert_eq!(udp_state(&dict! { "local" => dict! { "client" => "builtin" } }), (String::new(), "off"));
         assert_eq!(udp_state(&dict! { "local" => dict! { "client" => "", "udp" => "US-A" } }), (String::new(), "off"));
         assert_eq!(udp_state(&dict! { "local" => dict! { "client" => "builtin", "udp" => "" } }), (String::new(), "off"));
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn view_without_a_node() {
-        // tests/local_udp.py 的 test_view_and_running 开头：没设节点时 node 是 None、不看进程（installed 看 root 那边装没装，这里不管）。
+        // tests/local_udp.rs 的 view_and_running 开头：没设节点时 node 是 None、不看进程（installed 看 root 那边装没装，这里不管）。
         // 设了节点的几种状态要有节点定义，不在这里测（经 udp-env、local-env 看的是同一个 udp_state）
         let rows = vec![(10, format!("{}/mihomo -d x", udp_paths().0))];
         let view = udp_view(&dict! { "local" => dict! { "client" => "builtin" } }, Some(&rows));
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn routes_tile_the_rest_finer_than_full_tunnels() {
-        // tests/local_udp.py 的 test_config_only_udp_goes_to_node 经 udp-build 看同一份（公网地址在里面、局域网不在）
+        // tests/local_udp.rs 的 config_only_udp_goes_to_node 经 udp-build 看同一份（公网地址在里面、局域网不在）
         use std::net::{Ipv4Addr, Ipv6Addr};
         let parse = |s: &str| -> (u32, u128, u32) {
             let (a, len) = s.split_once('/').unwrap();
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn other_vpn_counts_only_while_the_launch_script_runs() {
-        // tests/local_udp.py 的 test_view_and_running 后半：other-vpn 里的网卡名，启动脚本（root 那边的 cca-udp）在跑时才算
+        // tests/local_udp.rs 的 view_and_running 后半：other-vpn 里的网卡名，启动脚本（root 那边的 cca-udp）在跑时才算
         let dir = std::env::temp_dir().join(format!("cca-udp-other-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

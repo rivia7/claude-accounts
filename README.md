@@ -611,10 +611,10 @@ bash /tmp/cca install
 - 跑测试：`bash tests/regress.sh`。全部使用假的路由器、claude 和 GitHub，不联网，也不碰你真实的配置。
 - 在 Linux 上测：`bash tests/linux.sh`（临时 HOME、假的 claude / codex，不碰你的 crontab；要联网下载内核、测真实的出口）。覆盖一键安装和自动更新、内置代理（含重启后自己起来）、服务器上的登录、密钥文件、设备统计、Codex、出口和泄露检测。装了 Docker 的话 `bash tests/linux.sh --docker` 在 Ubuntu、Debian、Rocky、AlmaLinux、Fedora、Amazon Linux、Alpine、Arch、openSUSE 的容器里各跑一遍，容器里还测在家走路由器（假路由器上跑真的路由器端脚本和 mihomo 内核）。
 - 下面这几份直接测 cca 的辅助程序（`cli/` 下的 Rust 程序），单独跑之前先编出来：`cd cli && cargo build --release`（辅助程序自己的单元测试：`cargo test`）。
-- 只测设备标识的隔离、迁移和并发：`python3 tests/device_identity.py`（完整回归也会跑）。
+- 只测设备标识的隔离、迁移和并发：`cd cli && cargo test --profile kit -p cca-tests --test suite -- device_identity`（完整回归也会跑）。
 - 隔离防护专项：`python3 -m unittest discover -s tests -p 'isolation_*.py'`，覆盖配置解析、危险覆盖、App 环境与资料目录验证、浏览器失败路径及泄露检测状态；使用临时目录和测试替身，不登录真实账号。
 - 原生客户端兼容性测试（可选）：`CCA_TEST_CLAUDE_BIN=/绝对路径/claude python3 tests/isolation_credentials.py`，使用临时 HOME、假钥匙串和假凭证，验证实际客户端的凭证来源；`CCA_TEST_CHROME_BIN='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' python3 tests/isolation_chrome_native.py` 使用空 profile 和本机测试页/STUN 验证 WebRTC。需要 macOS 允许启动测试进程和本机监听；默认不执行这些原生测试。
-- 只测历史/记忆/配置共享、旧链接迁移、配置合并和冲突保留：`python3 tests/shared_state.py`（完整回归也会跑）。
+- 只测历史/记忆/配置共享、旧链接迁移、配置合并和冲突保留：`cd cli && cargo test --profile kit -p cca-tests --test suite -- shared_state`（完整回归也会跑）。
 - 图形界面 App 的源码在 `macos/`（SwiftUI，只用苹果的命令行工具就能编，不用 Xcode）：`bash macos/build.sh` 编出 `macos/build/cca.app`，`bash macos/test.sh` 跑它的契约测试。开发模式（`cca` 旁边有 `.git`）下 `cca gui` 直接从源码编译并打开它。App 和 cca 之间的接口见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
 - 发布新版本：改 `cca` 里的 `VERSION` 并提交，然后运行 `./release.sh "更新说明"`。它会跑测试、签名、编译界面 App、打 tag、推送，并创建 GitHub Release。
 

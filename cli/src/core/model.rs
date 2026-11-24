@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn key_hint_like_python_test() {
-        // tests/usage_view.py 的 test_key_hint：给人看的 key 掩码
+        // tests/usage_view.rs 的 key_hint：给人看的 key 掩码
         assert_eq!(key_hint("sk-ant-api03-0123456789abcdefghijWXYZ"), "sk-ant-…WXYZ");
         assert_eq!(key_hint("sk-proj-0123456789abcdefghijEFGH"), "sk-proj-…EFGH");
         assert_eq!(key_hint("abcdefghijklmnopqrstuvwxyz"), "…wxyz");
