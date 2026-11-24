@@ -11,10 +11,11 @@ pub mod json;
 pub mod mailfake;
 pub mod plist;
 pub mod proc;
+pub mod pty;
 pub mod spec;
 pub mod tls;
 pub mod tlsd;
 pub mod width;
 
-// 这几个依赖要等用到它们的模块写好（起进程、加解密、TLS、正则、压缩）：先占着，免得说没用到
-use {libc as _, miniz_oxide as _, regex as _, ring as _, rustls as _};
+// 这两个依赖要等用到它们的模块写好（TLS、压缩）：先占着，免得说没用到
+use {miniz_oxide as _, rustls as _};
