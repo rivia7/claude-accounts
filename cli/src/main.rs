@@ -35,8 +35,9 @@ fn main() {
 }
 
 fn run(args: Vec<String>) -> R<()> {
-    // Team 的同步服务器、证书助手是常驻的服务，不是这台机器上 cca 的一部分：下面那几步（认当前是哪种工具、读账号表里的模型名）都不做
-    if let Some(c) = args.first().and_then(|s| server::standalone(s)) {
+    // Team 的同步服务器、证书助手（常驻的服务，跑在 Team 的服务器上）和 pack（发布时把辅助程序接到 cca 后面）不是这台机器上 cca 的
+    // 一部分：下面那几步（认当前是哪种工具、读账号表里的模型名）都不做
+    if let Some(c) = args.first().and_then(|s| cmd::standalone(s)) {
         return (c.run)(&args[1..]);
     }
     core::tool::init_current()?;

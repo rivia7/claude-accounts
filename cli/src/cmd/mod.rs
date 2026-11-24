@@ -76,6 +76,12 @@ const MODULES: &[&[Cmd]] = &[
     crate::server::CMDS,
 ];
 
+/// 不是这台机器上 cca 的一部分的子命令：Team 的同步服务器、证书助手（server/）和 pack（release.sh 在维护者的机器上对着仓库里的文件
+/// 运行）。main 直接运行它们：不认当前是哪种工具，不读 HOME 下 cca 的文件
+pub fn standalone(name: &str) -> Option<&'static Cmd> {
+    crate::server::standalone(name).or_else(|| pack::CMDS.iter().find(|c| c.name == name))
+}
+
 /// 按名字找子命令
 pub fn find(name: &str) -> Option<&'static Cmd> {
     MODULES.iter().flat_map(|m| m.iter()).find(|c| c.name == name)
@@ -285,6 +291,16 @@ mod tests {
         "fill-summary",
         "presence-note",
     ];
+
+    /// main 一开头就分出去的那几条（不认当前是哪种工具、不读账号表）：服务端的两条和 pack，都也登记在平常的表里
+    #[test]
+    fn standalone_commands() {
+        for name in ["team-server", "team-acme", "pack"] {
+            assert_eq!(standalone(name).unwrap().name, name);
+            assert!(find(name).is_some(), "{name}");
+        }
+        assert!(standalone("env").is_none() && standalone("team-join").is_none() && standalone("").is_none());
+    }
 
     /// 原来的 149 个子命令（加上切换以后新加的）除了特意去掉的（REMOVED）一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）、
     /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）、`hub-…`（一键部署的安装脚本，见 hub/deploy.rs）、`team-…`（Team，
