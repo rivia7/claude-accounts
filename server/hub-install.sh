@@ -18,7 +18,7 @@
 # 从公网连这台服务器的 80 端口，80 端口只有一个：这台服务器上的几个 Team 共用一个证书助手（服务 cca-team-acme，装在 /opt/cca-team-acme：
 # 第一个开网页端的 Team 装上它，别的 Team 在它那里登记自己的地址；同一个地址只要一张证书；最后一个 Team 卸载时连同它一起删掉）。
 # 80 端口被别的程序占着、地址是内网的，这一次就不开（说一声，再运行时再看）。--name：网页的标题、手机主屏幕上的名字带上 Team 的名字。
-# 选的都记在 .env 里，再运行照旧。
+# 选的都记在 .env 里，再运行照旧。没装完（起不来、被打断）时换回原来的（程序、设置），原来的服务照原来的方式重新起来。
 #
 # 也可以在管理员的电脑上运行 cca team deploy Team root@服务器：经 SSH 装上这一份，装好了自动接上。
 # 目录里：app/ 服务端程序 cca-core（同步服务器、证书助手都是它的子命令，网页端的文件编在它里面）和 Team 的名字（name），certs/ 自签的
@@ -65,22 +65,22 @@ CARCH="" CORENEW=""        # 这台服务器用安装脚本里带的哪一份服
 # cca team deploy 经 SSH 运行时（上面那一行放进了 CCA_HUB_MANAGED=1、根公钥和参数）：进度写 stderr，结果一行一项（CCA-HUB 键 值）写 stdout
 MANAGED=${CCA_HUB_MANAGED:-}
 VERSION=${CCA_HUB_VERSION:-}
-ROLLBACK=""                # 这一次写过 .env 了：没装完时换回原来的（write_env、rollback）
+# 没装完（die、被打断）时换回原来的（rollback）：ROLLBACK 是 1 时原来的那几样留好了（save_prev），STARTED 是 1 时动过服务了
+ROLLBACK="" STARTED=""
 
 say() { if [ -n "$MANAGED" ]; then printf '  %s\n' "$*" >&2; else printf '%s\n' "$*"; fi; }
 note() { [ -z "$MANAGED" ] || printf 'CCA-HUB %s\n' "$*"; }
-die() {   # die 原因码 说明（原因码见 cli/src/cmd/hub/deploy.rs 的 fail_code）：.env 先换回原来的，写到一半的服务端程序删掉
-	rollback
-	[ -z "$CORENEW" ] || rm -f "$CORENEW"
+die() {   # die 原因码 说明（原因码见 cli/src/cmd/hub/deploy.rs 的 fail_code）：说完换回原来的（rollback；这中间不理会 Ctrl-C、断线）
+	trap '' HUP INT TERM PIPE
 	code=$1
 	shift
 	if [ -n "$MANAGED" ]; then printf 'CCA-HUB fail %s %s\n' "$code" "$*"; else printf '✗ %s\n' "$*" >&2; fi
+	rollback
 	exit 1
 }
-interrupted() {   # Ctrl-C、SSH 断了（之后再往断了的管道里写是 SIGPIPE）：服务还没起来的话 .env 换回原来的，就退出，不再写什么
+interrupted() {   # Ctrl-C、SSH 断了（之后再往断了的管道里写是 SIGPIPE）：服务还没用这一次的起来的话换回原来的（rollback），就退出
 	trap '' HUP INT TERM PIPE
 	rollback
-	[ -z "$CORENEW" ] || rm -f "$CORENEW"
 	exit 1
 }
 usage() {
@@ -91,7 +91,8 @@ usage() {
       sudo sh cca-hub-install.sh --uninstall --dir 目录
 EOF
 }
-tmo() { if command -v timeout >/dev/null 2>&1; then timeout "$@"; else shift; "$@"; fi; }   # busybox、coreutils 都有 timeout；没有就不限时
+# busybox、coreutils 都有 timeout；没有就不限时。到时候发 KILL：rollback 时忽略着 TERM（子进程也忽略），TERM 停不了它们
+tmo() { if command -v timeout >/dev/null 2>&1; then timeout -s KILL "$@"; else shift; "$@"; fi; }
 env_get() { [ -f "$ROOT$D/.env" ] && sed -n "s/^$1=//p" "$ROOT$D/.env" | tail -n 1; }
 hexof() { od -An -tx1 | tr -d ' \n'; }
 pin_of() {   # 证书公钥的指纹（curl --pinnedpubkey 的写法去掉开头的 sha256//）：从证书文件读，或者从 stdin（s_client 的输出）读
@@ -393,6 +394,9 @@ core_put() {   # 服务端程序（安装脚本里带着的 cca-core，core_pick
 		die install "解不开服务端程序（安装脚本不完整？）"
 	chmod 755 "$CORENEW" && [ "$("$CORENEW" sh-re-escape ok 2>/dev/null)" = ok ] ||
 		die install "服务端程序在这台服务器上运行不了（${D} 所在的盘不许执行程序？换个目录：--dir）"
+	# 原来的那一份留着（硬链接；文件系统不支持时挪开，紧接着换上这一份）：没装完时 rollback 换回去
+	[ ! -f "$ROOT$D/app/cca-core" ] || ln -f "$ROOT$D/app/cca-core" "$ROOT$D/app/.cca-core.prev" 2>/dev/null ||
+		mv -f "$ROOT$D/app/cca-core" "$ROOT$D/app/.cca-core.prev" || die install "换不了 ${D}/app/cca-core"
 	mv -f "$CORENEW" "$ROOT$D/app/cca-core" || die install "换不了 ${D}/app/cca-core"
 	CORENEW=""
 }
@@ -425,18 +429,59 @@ env_file() {
 	[ -z "$WEBON" ] || printf 'CCA_HUB_WEB_URL=%s\n' "$WEBURL"
 	[ -z "$VERSION" ] || printf 'CCA_HUB_VERSION=%s\n' "$VERSION"
 }
-write_env() {   # .env 换成这一次的（起服务之前）。没装完（die、被打断）时 rollback 换回原来的（第一次装时删掉）：下一次照原来的判断是哪种情况
-	if [ -z "$ROLLBACK" ]; then
-		rm -f "$ROOT$D/.env.prev"
-		[ ! -f "$ROOT$D/.env" ] || cp -p "$ROOT$D/.env" "$ROOT$D/.env.prev" || die install "写不了 ${D}/.env.prev"
-		ROLLBACK=1
-	fi
-	put "$ROOT$D/.env" 600 env_file
+write_env() { put "$ROOT$D/.env" 600 env_file; }   # .env 换成这一次的（起服务之前；原来的 save_prev 留了一份）
+
+# --- 没装完时换回原来的 ------------------------------------------------------------------------------------------------------
+save_prev() {   # 动手之前：原来的 .env、unit、compose.yaml 各留一份（.env.prev、.unit.prev、.compose.prev；原来没有的不留），服务端程序
+	            # 在 core_put 里留。都留好了 ROLLBACK 才是 1：没装完时 rollback 照它们换回去，原来没有的删掉——下一次照原来的判断是新装
+	            # 还是更新，原来的服务照旧
+	drop_prev
+	keep_prev "$ROOT$D/.env" "$ROOT$D/.env.prev"
+	keep_prev "$ROOT$UNIT" "$ROOT$D/.unit.prev"
+	keep_prev "$ROOT$D/compose.yaml" "$ROOT$D/.compose.prev"
+	ROLLBACK=1
 }
-rollback() {
+keep_prev() { [ ! -f "$1" ] || cp -p "$1" "$2" || die install "写不了 ${D}（留不了原来的 ${1#"$ROOT"}）"; }
+drop_prev() { rm -f "$ROOT$D/.env.prev" "$ROOT$D/.unit.prev" "$ROOT$D/.compose.prev" "$ROOT$D/app/.cca-core.prev"; }
+back() {   # back 文件 留下的那一份：换回原来的（拷到旁边再换上：unit 照 /etc/systemd/system 的 SELinux 标签），原来没有的删掉
+	if [ ! -f "$2" ]; then rm -f "$1"
+	elif cp -p "$2" "$1.new.$$" && mv -f "$1.new.$$" "$1"; then rm -f "$2"
+	else rm -f "$1.new.$$"; fi
+}
+rollback() {   # 没装完：换回 save_prev、core_put 留下的。动过服务（STARTED）的话先停掉这一次起的（换了运行方式时它占着端口），
+	           # 原来装过的照原来的方式重新起来（relaunch）。这里不调会 die 的
+	[ -z "$CORENEW" ] || rm -f "$CORENEW"
 	[ -n "$ROLLBACK" ] || return 0
 	ROLLBACK=""
-	if [ -f "$ROOT$D/.env.prev" ]; then mv -f "$ROOT$D/.env.prev" "$ROOT$D/.env"; else rm -f "$ROOT$D/.env"; fi
+	if [ -n "$STARTED" ]; then
+		[ ! -f "$ROOT$D/compose.yaml" ] || ! command -v docker >/dev/null 2>&1 || dc down >/dev/null 2>&1
+		[ ! -f "$ROOT$UNIT" ] || tmo 120 systemctl disable --now "$SVC" </dev/null >/dev/null 2>&1
+	fi
+	back "$ROOT$D/.env" "$ROOT$D/.env.prev"
+	back "$ROOT$UNIT" "$ROOT$D/.unit.prev"
+	back "$ROOT$D/compose.yaml" "$ROOT$D/.compose.prev"
+	[ ! -f "$ROOT$D/app/.cca-core.prev" ] || mv -f "$ROOT$D/app/.cca-core.prev" "$ROOT$D/app/cca-core"   # 原来没有的：这一份留着，不碍事
+	[ -n "$STARTED" ] || return 0
+	! command -v systemctl >/dev/null 2>&1 || systemctl daemon-reload </dev/null >/dev/null 2>&1
+	relaunch
+}
+relaunch() {   # rollback 里：原来装过的照原来的方式（OLD）重新起来——certs/、data/ 和网页端的那一份证书的组照原来的 chown 回去——说一声
+	w=$ROOT$AD/webcert/$SVC
+	case "$OLD" in
+		docker)
+			chown -R "$CUID:$CUID" "$ROOT$D/certs" "$ROOT$D/data" >/dev/null 2>&1
+			[ ! -d "$w" ] || chown -R ":$CUID" "$w" >/dev/null 2>&1
+			[ -f "$ROOT$D/compose.yaml" ] && dc up -d --force-recreate --remove-orphans >/dev/null 2>&1 ;;
+		systemd)
+			chown -R "$SVC" "$ROOT$D/certs" "$ROOT$D/data" >/dev/null 2>&1
+			[ ! -d "$w" ] || chown -R ":$(id -g "$SVC" 2>/dev/null)" "$w" >/dev/null 2>&1
+			[ -f "$ROOT$UNIT" ] && systemctl enable "$SVC" </dev/null >/dev/null 2>&1 &&
+				tmo 120 systemctl restart "$SVC" </dev/null >/dev/null 2>&1 ;;
+		*) return 0 ;;   # 第一次装：没有原来的
+	esac
+	if svc_running; then say "换回了原来的（服务端程序、设置），原来的服务又起来了"
+	elif [ "$OLD" = docker ]; then say "! 换回了原来的（服务端程序、设置），原来的服务却没起来（docker logs ${SVC} 看它说的）"
+	else say "! 换回了原来的（服务端程序、设置），原来的服务却没起来（journalctl -u ${SVC} 看它说的）"; fi
 }
 tasks() { if [ -n "$WEBON" ]; then printf 512; else printf 64; fi; }   # 服务端最多几个线程：网页端开着时每条 WebSocket 一个，两个端口各能同时处理 64 个请求
 named() { [ -s "$ROOT$D/app/name" ]; }   # 记着 Team 的名字（网页的标题用它）
@@ -793,7 +838,7 @@ uninstall() {   # 停掉、删掉这个目录里装的（只认装过的目录�
 	[ -n "$o" ] || stop_systemd
 	[ -n "$o" ] || acme_leave all   # 共用的证书助手里它的登记、那一份证书；最后一个用它的 Team 连同证书助手一起删掉
 	rm -rf "$ROOT$D/app" "$ROOT$D/certs" "$ROOT$D/data" "$ROOT$D/webcert" "$ROOT$D/acme"
-	rm -f "$ROOT$D/.env" "$ROOT$D/.env.prev" "$ROOT$D/.cca-hub"
+	rm -f "$ROOT$D/.env" "$ROOT$D/.env.prev" "$ROOT$D/.unit.prev" "$ROOT$D/.compose.prev" "$ROOT$D/.cca-hub"
 	rmdir "$ROOT$D" 2>/dev/null
 	[ -n "$o" ] || ! id "$SVC" >/dev/null 2>&1 || userdel "$SVC" >/dev/null 2>&1
 	# Docker 方式用的空镜像：还有容器用着它（别的 Team、证书助手）时 Docker 不让删，最后一个卸载的才真的删掉
@@ -889,7 +934,9 @@ main() {
 		die port "端口 ${PORT} 被别的程序占着：换一个（--port）"
 	fi
 
+	save_prev   # 从这里起动手：原来的留一份，没装完时换回去
 	prepare
+	STARTED=1   # 从这里起动服务（停原来的、起这一次的）：没装完时 rollback 停掉这一次起的，原来的重新起来
 	if [ "$MODE" = docker ]; then
 		write_env
 		if ! start_docker; then
@@ -903,10 +950,10 @@ main() {
 		start_systemd
 	fi
 	wait_served
-	# 服务用这一份 .env 起来了：之后再断（打结果时 SSH 断了是 SIGPIPE）、被打断也不换回，不然跑着的服务和 .env 对不上
+	# 服务用这一次的起来了：之后再断（打结果时 SSH 断了是 SIGPIPE）、被打断也不换回，不然跑着的服务和 .env 对不上
 	ROLLBACK=""
-	rm -f "$ROOT$D/.env.prev"
-	# 以前的版本装的 Python 的服务端、网页端的文件：新的服务在回话了才删（没换成时留着：用以前的安装脚本再运行一次就回得去）
+	drop_prev
+	# 以前的版本装的 Python 的服务端、网页端的文件：新的服务在回话了才删（没换成时 rollback 换回去的 unit / compose.yaml 还用着它们）
 	rm -rf "$ROOT$D/app/cca-presence.py" "$ROOT$D/app/cca-acme.py" "$ROOT$D/app/web" "$ROOT$D/app/web.new" "$ROOT$D/app/web.old"
 	# 共用的证书助手：网页端开着就登记（以前它自己的证书助手的证书、账户搬过去）、起它；没开就去掉登记（没有 Team 用了就停掉它）
 	if [ -n "$WEBON" ]; then acme_start; wait_cert; else acme_leave; fi

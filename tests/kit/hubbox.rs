@@ -17,9 +17,10 @@
 //!
 //! 目录下这些文件在时：uid（id -u 说的；root 是 0）、sudo_ok（免密码的 sudo）、ip（默认路由出去的源地址）、listening（ss 说这些
 //! 端口有人监听）、import_fail（docker import 建不了镜像）、docker_down（docker info 不通）、no_compose（没有 compose 插件，只有
-//! 老的 docker-compose 1.x）、compose_fail（docker compose up 起不来）、start_fail（systemctl restart 起不来）、start_hang
-//! （systemctl restart 一直不回来）、acme_fail（证书助手要不到证书）。安装脚本等证书最多 CCA_HUB_CERT_WAIT 秒（这里是 4）；any_ip
-//! 时内网地址也开网页端（CCA_HUB_ANY_IP）。
+//! 老的 docker-compose 1.x）、compose_fail（docker compose up 起不来；--force-recreate 时原来的容器已经停了）、start_fail
+//! （systemctl restart 起不来，原来的停了）、start_hang（systemctl restart 一直不回来）、acme_fail（证书助手要不到证书）。内容是 once
+//! 的标志只管一次（[`Box::flag_once`]：出过一次状况就拿掉——换回原来的、重新起它的那一次照常）。安装脚本等证书最多
+//! CCA_HUB_CERT_WAIT 秒（这里是 4）；any_ip 时内网地址也开网页端（CCA_HUB_ANY_IP）。
 //!
 //! 假命令记下的（测试照这些查）：systemctl.log、docker.log（每次的参数一行）、server.argv（起的每条命令一行）、server.log（起的
 //! 程序的输出）、进程号文件 server.<服务名>.pid（以前的自己的同步服务器 cca-hub 是 server.pid；证书助手的服务名是 <服务名>-acme
@@ -268,6 +269,12 @@ exec env -i {} /bin/sh -c "$1"
         self.write_fake(name, text).unwrap_or_else(|e| panic!("写不了假命令 {name}：{e}"));
     }
 
+    /// 放下一个只管一次的标志文件（内容是 once：出一次状况就自己拿掉；start_fail、start_hang、compose_fail 用得上）
+    pub fn flag_once(&self, name: &str) {
+        let p = self.d.join(name);
+        fs::write(&p, "once\n").unwrap_or_else(|e| panic!("写不了标志文件 {}：{e}", p.display()));
+    }
+
     /// 放下（on）或者拿掉目录下的一个标志文件（见模块开头的那几个）
     pub fn flag(&self, name: &str, on: bool) {
         let p = self.d.join(name);
@@ -439,8 +446,17 @@ fn box_dir() -> Result<PathBuf, Fail> {
     need_env("HUB_BOX").map(PathBuf::from)
 }
 
+/// 标志文件在：这一回出这个状况。内容是 once 的只这一次（看到就拿掉）
 fn flag_on(boxd: &Path, name: &str) -> bool {
-    boxd.join(name).exists()
+    let p = boxd.join(name);
+    match fs::read_to_string(&p) {
+        Ok(s) if py::strip(&s) == "once" => {
+            let _ = fs::remove_file(&p);
+            true
+        }
+        Ok(_) => true,
+        Err(_) => p.exists(),
+    }
 }
 
 fn append(path: &Path, text: &str) -> Result<(), Fail> {
@@ -859,10 +875,16 @@ fn up_projects(boxd: &Path) -> Vec<String> {
 /// 查镜像是本机建的那个空镜像、命令和 ports、挂载对得上（和 server/hub-install.sh 写的 compose.yaml 是约定）；--remove-orphans 时
 /// 这个项目上次起的、这次没有了的停掉（网页端关了，证书助手就没了）
 fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), Fail> {
+    let y = read_text(Path::new("compose.yaml"))?;
     if flag_on(boxd, "compose_fail") {
+        // 真的 compose 是先删掉原来的容器、建新的，起的时候才出错：--force-recreate 时原来的容器已经停了
+        if a.iter().any(|x| x == "--force-recreate") {
+            for block in services(&y) {
+                stop_service(boxd, &container_name(&block)?)?;
+            }
+        }
         return Err("Error response from daemon: driver failed programming external connectivity on endpoint cca-team".to_string());
     }
-    let y = read_text(Path::new("compose.yaml"))?;
     let env = env_file(&read_text(Path::new(".env"))?);
     let up = boxd.join(format!("compose.{proj}.up"));
     let before: Vec<String> = if up.exists() { py::split(&read_text(&up)?).map(str::to_string).collect() } else { Vec::new() };

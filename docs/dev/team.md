@@ -404,7 +404,8 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 - 从 3.6.x 以前的装法换过来（服务端是 Python 的：`app/cca-presence.py`、`app/web/`，证书助手是 `app/cca-acme.py`，unit、compose.yaml 里运行的
   是 `python3`，Docker 的 `.env` 记着拉到的 python 镜像 `CCA_HUB_IMAGE`）：用这一版再运行就是平常的更新——`certs/`、`data/`、端口都不碰，
   指纹不变，管理员和各台设备不用重新接；unit / compose.yaml 重写成运行 `cca-core`，`.env` 不再写 `CCA_HUB_IMAGE`；新的服务在回话了
-  （`wait_served` 过了）才删掉 `app/` 里以前的那几个文件——没换成时它们还在，照以前的安装脚本再运行一次就回得去。共用的证书助手在
+  （`wait_served` 过了）才删掉 `app/` 里以前的那几个文件——没换成时它们还在：`rollback` 把 unit / compose.yaml、`.env` 换回 Python 的、照原来的方式
+  重新起来（以前的安装脚本再运行一次也回得去）。共用的证书助手在
   `acme_start` 里一样换（证书、账户接着用，不再要一张）。以前拉下来的 python 镜像不删（不是这一份脚本建的）。反过来也行：3.6.x 的 cca
   再部署（退回旧版本，或者另一台还没更新的管理员设备）时，它的安装脚本照旧拉 python 镜像（systemd 方式要服务器上有 python3，没有时它自己的
   `pick_mode` 在动手之前停下）、把 unit / compose.yaml 写回 Python 的，`app/cca-core`、空镜像留着不碍事；再用这一版运行又换回来。两头
@@ -414,10 +415,17 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   服务端带 `--web-name-file`（服务端的 `web_name`：第一行，1～64 个字符、没有控制字符，不对时照旧叫 cca），网页的标题（`cca 远程会话（名字）`）、
   手机主屏幕上的名字（`apple-mobile-web-app-title`、manifest 的 `name` / `short_name`：`cca 名字`）带上它（`web_named`，转义过）。安装脚本查：
   没有换行，`${#NAME}` 最多 256（dash 数的是字节）。
-- `.env` 在起服务之前写（`write_env`），没装完（`die`，或者被打断：`trap` 了 HUP、INT、TERM、PIPE，SSH 断了以后往 stdout 写是 SIGPIPE）时换回
-  原来的（`rollback`；第一次装的删掉）：下一次照原来的判断是新装还是更新。服务用新的 `.env` 起来了（`wait_served` 过了）才删掉 `.env.prev`、
-  不再换回：起来以后再换回的话，跑着的服务和 `.env` 对不上。所以打结果时 SSH 断了（管理员那头是 `ssh`）服务器上已经是这一次的，管理员这台照旧
-  接着原来的，再部署是更新、接上新的。
+- 没装完时换回原来的（`rollback`）。动手之前（`save_prev`，在 `prepare` 前面）原来的 `.env`、unit、compose.yaml 各拷一份放在目录里
+  （`.env.prev`、`.unit.prev`、`.compose.prev`；原来没有的不留，都拷好了才算数），服务端程序在 `core_put` 换上之前留一个硬链接
+  （`app/.cca-core.prev`；文件系统不支持时挪开）。`die`（先说为什么，再换回；这中间不理会 HUP、INT、TERM、PIPE）或者被打断（`trap` 了这几个，
+  SSH 断了以后往 stdout 写是 SIGPIPE）时照它们换回去：拷到旁边再换上（unit 照 `/etc/systemd/system` 的 SELinux 标签），原来没有的删掉——第一次装的
+  不留 `.env`、unit、compose.yaml，原来没有的服务端程序留着（不碍事）。已经动了服务（`STARTED`：`prepare` 之后，停原来的、起这一次的）的话先停掉
+  这一次起的（换了运行方式时它占着端口：`compose down`、`systemctl disable --now`），`daemon-reload`，原来装过的照原来的方式（`OLD`）重新起来
+  （`relaunch`：`certs/`、`data/` 和网页端那一份证书的组照原来的方式 chown 回去；Docker 的 `compose up`，systemd 的 `enable` + `restart`），说一声
+  起没起来。所以更新、换运行方式、从 Python 的换过来没成时，原来的服务照旧在运行，管理员和各台设备不用做什么；下一次照原来的判断是新装还是更新。
+  rollback 里的 `systemctl` 最多等 120 秒（`tmo` 到时候发 KILL：这时 TERM 是忽略着的，子进程也忽略）。服务用这一次的起来了（`wait_served`
+  过了）才删掉那几份（`drop_prev`）、不再换回：起来以后再换回的话，跑着的服务和 `.env` 对不上。所以打结果时 SSH 断了（管理员那头是 `ssh`）
+  服务器上已经是这一次的，管理员这台照旧接着原来的，再部署是更新、接上新的。
 - 直接在服务器上运行：打出接上它的那一行要有地址（第一次装、换了端口），没有时有终端就问、没有就停下要 `--host`（`die host`）；最后说网页端
   怎么样了（`web_say`）、要放行哪些端口。只是更新（端口、证书都没换）时不再打那一行；证书是新生成的（原来的不见了）时说管理员要照新的
   那一行重新接上。
@@ -848,9 +856,9 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   是假的（记一笔、退出码 127：`clean` 查没人叫过它），`etc/ssl/certs/ca-certificates.crt` 放着一份 CA 证书。`Box::stand_in` 起一个顶替的进程
   （以前的版本的服务正在运行的样子）。`sh` 是 `/bin/dash`（没有时 `/bin/sh`）；每个服务各有各的进程号文件（`server.<服务名>.pid`，以前的 `cca-hub`
   是 `server.pid`）；目录下的几个文件让它出各种状况（`uid`、`sudo_ok`、`ip`、`listening`、`import_fail`、`docker_down`、`no_compose`、`compose_fail`、
-  `start_fail`、`start_hang`、`acme_fail`、`ssh_denied`……，见它开头），等证书最多 4 秒（`CCA_HUB_CERT_WAIT`），`any_ip` 时内网地址也开网页端
+  `start_fail`、`start_hang`、`acme_fail`、`ssh_denied`……，见它开头；内容是 `once` 的只管一次：`Box::flag_once`，换回原来的那一次照常），等证书最多 4 秒（`CCA_HUB_CERT_WAIT`），`any_ip` 时内网地址也开网页端
   （`CCA_HUB_ANY_IP`）；`enter` 是假 ssh 的服务器那一头。
-  - 在服务器上直接运行安装脚本的十七条：`script_itself`（`sh -n`、带着版本、两种机器的服务端程序解出来和给的一字节不差、校验值写着，没有
+  - 在服务器上直接运行安装脚本的十八条：`script_itself`（`sh -n`、带着版本、两种机器的服务端程序解出来和给的一字节不差、校验值写着，没有
     `python3`、`docker pull`；模板不能运行；参数、root 的检查）、
     `systemd`（装好、打出接上它的那一行，内网地址不开网页端、说一声；目录、权限、unit；再运行是更新；换端口再打一次那一行；`--uninstall`）、
     `installer_test_web`（共用的证书助手 `cca-team-acme`：自己的系统用户、只给绑 80 的权限、目录和权限，照登记的地址要来证书、放进这个 Team 的那一份，
@@ -861,12 +869,15 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     用户 10001、项目名是服务名、共用的证书助手是另一个 compose 项目，这个 Team 只读挂它的那一份；改用 systemd 时这个 Team 的容器停掉、证书助手照旧是
     Docker 的；`docker import` 没成改用 systemd，`--docker` 时停下 `image`）、
     `compose`（只有老的 docker-compose、`compose up` 起不来时改用 systemd，`--docker` 时停下、第一次装的 `.env` 不留；Docker 的卸载）、
-    `dir`（别人的目录装、卸载都不碰，末尾的 `/` 去掉，同一个 Team 一台只装一个）、`failed_update_rolls_back`（起不来、被打断时 `.env`
-    换回原来的）、`needs`（缺东西时停下什么都不动，没有 python3 的服务器照样装成 systemd 的；看得到的公网 IP 照用）、`old_own_server`（`/opt/cca-hub` 只能卸载、不往里装）、
+    `dir`（别人的目录装、卸载都不碰，末尾的 `/` 去掉，同一个 Team 一台只装一个）、`failed_update_rolls_back`（起不来、被打断时 `.env`、
+    unit、服务端程序都换回原来的，不留备份，原来的服务又起来了、管理员照样连得上；再运行照旧是更新）、`switch_rolls_back`（systemd → Docker 的
+    `compose up`、Docker → systemd 的服务起不来：这一次起的停掉、删掉，原来的 unit / compose.yaml、`.env` 换回去，`certs/`、`data/` chown 回原来的
+    用户，原来的服务照原来的方式又起来了）、`needs`（缺东西时停下什么都不动，没有 python3 的服务器照样装成 systemd 的；看得到的公网 IP 照用）、`old_own_server`（`/opt/cca-hub` 只能卸载、不往里装）、
     `teams`（两个 Team 各一个服务、从 18445 起找端口、只写目录再运行是更新、中转的端口能换能关、另一个 Team 的目录不碰、卸载一个另一个照旧）、
     `from_python`（两种方式各一遍：把这一版装好的摆成 3.6.x 的样子——`make_python_era`：`app/` 里是 Python 的程序和 `web/`，unit、compose.yaml
     运行 `python3`，`.env` 记着 python 镜像，本机没有空镜像——再用这一版运行：指纹、端口、数据、网页端的证书、证书机构那里的账户都不变，
-    以前的文件删掉、不再记镜像，服务和证书助手都换了进程，管理员和成员照旧同步得了）、`core_checks`（别的机器 `deps`、这一份脚本没带这种
+    以前的文件删掉、不再记镜像，服务和证书助手都换了进程，管理员和成员照旧同步得了；`rollback-systemd`、`rollback-docker`：换过来没成时 `.env`、
+    unit / compose.yaml 换回 Python 的、以前的文件都在，照原来的方式又起了一次——假服务器上起不了 Python 的，说没起来、看哪里的日志——再运行照样换过来）、`core_checks`（别的机器 `deps`、这一份脚本没带这种
     机器的 `install`，都在动手之前；那一段坏了、解出来的程序运行不了是 `install`：装着的程序、`.env`、正在运行的服务都不动，写到一半的不留，
     第一次装的不留 `.env`）、`no_ca_bundle`（服务器上没有 CA 证书：说装 `ca-certificates`、证书助手不起，Team 的服务照样装好；装上再运行就开上）、
     `runtime_image`（两个 Docker 的 Team 用同一个空镜像；卸载一个删不掉、留着，卸载最后一个一起删掉；systemd 方式的卸载不受它影响）。

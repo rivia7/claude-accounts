@@ -7,7 +7,8 @@
 //! 假服务器上运行同一个脚本。
 //!
 //! 原来是 tests/hub_deploy.py（InstallerTest 13 个用例、DeployTest 10 个；两个类里都有 test_web，这里叫 installer_test_web、
-//! deploy_test_web）；服务端从 Python 换成 cca-core 以后加了 from_python、core_checks、no_ca_bundle、runtime_image 四个。
+//! deploy_test_web）；服务端从 Python 换成 cca-core 以后加了 from_python、core_checks、no_ca_bundle、runtime_image 四个，没装完时
+//! 连服务一起换回原来的以后加了 switch_rolls_back。
 //! 和原来不一样的还有端口怎么来：
 //! - 给安装脚本的端口（[`team_port`]、[`one_port`]）：原来是“绑一下 0 号端口、记下系统给的”，可安装脚本没写中转的端口时自己用
 //!   下一个（P + 1），而 macOS 给 0 号端口的办法是整台机器一个接一个往下发——同时在跑的别的测试再要一个端口，拿到的正好是
@@ -52,6 +53,7 @@ pub const MODULE: Module = Module {
         case!(compose),
         case!(dir),
         case!(failed_update_rolls_back),
+        case!(switch_rolls_back),
         case!(needs),
         case!(old_own_server),
         case!(teams),
@@ -1259,31 +1261,47 @@ fn dir(t: &mut Ctx) {
     assert_eq!(fsx::read_text(&precious), "别人的数据", "旁边的不动");
 }
 
-/// 更新时起不来（.env 已经换了）、被打断：.env 换回原来的，再运行照旧是更新，管理员照样连得上
+/// 更新没成：起不来、被打断——换回原来的（.env、unit、服务端程序：装着的那一份先换成转给辅助程序的一个 sh，当作以前的版本，看得出
+/// 换回来的是不是它），原来的服务又起来了，管理员不用再做什么、照样连得上，不留那几份备份；再运行照旧是更新
 fn failed_update_rolls_back(t: &mut Ctx) {
     let fx = setup(t);
     let b = fx.hub(t, &plain());
     let (a, tid, root, svc) = fx.team("甲组");
     let d = opt(&b, &svc);
+    let unit = b.root.join(UNITS).join(format!("{svc}.service"));
     let dir_arg = format!("/opt/{svc}");
     let port = team_port();
     fx.install(&b, &["--team-root", &root, "--host", "127.0.0.1", "--port", &port.to_string()]);
     a.ok(&["team-attach", &tid, &format!("https://127.0.0.1:{port}"), &pin(&d)]);
-    let before = fsx::read_text(d.join(".env"));
-    b.flag("start_fail", true);
+    // 以前的版本：换的是目录里的文件（换名字换上），正在运行的进程照旧
+    let old = d.join("app/.old");
+    fsx::write_script(&old, &format!("#!/bin/sh\nexec '{}' \"$@\"\n", harness::helper().display()));
+    std::fs::rename(&old, d.join("app/cca-core")).expect("换上以前的版本");
+    let state = || (fsx::read_text(d.join(".env")), fsx::read(d.join("app/cca-core")), fsx::read_text(&unit));
+    let before = state();
+    let rolled_back = |what: &str, pid: &str| {
+        assert!(state() == before, "{what}：.env、装着的程序、unit 都换回了原来的");
+        assert_eq!(names(&d), [".cca-hub", ".env", "app", "certs", "data"], "{what}：不留那几份备份");
+        assert_eq!(names(&d.join("app")), ["cca-core"], "{what}");
+        assert!(b.running(&svc) && pid_of(&b, &svc) != pid, "{what}：原来的服务重新起来了");
+        wait_for(what, WAIT, || sync_state(&a) == "ok");
+    };
+    // 起不来（这一次的起不来；换回原来的以后起得来：只这一次）
+    let pid = pid_of(&b, &svc);
+    b.flag_once("start_fail");
     let r = fx.try_install(&b, &["--dir", &dir_arg, "--port", &team_port().to_string()]);
     assert_eq!(r.code, 1);
     assert_in("systemd 起不来", &r.err);
-    assert_eq!(fsx::read_text(d.join(".env")), before, ".env 换回了原来的");
-    assert!(!d.join(".env.prev").exists());
-    b.flag("start_fail", false);
+    assert_in("换回了原来的（服务端程序、设置），原来的服务又起来了", &r.out);
+    rolled_back("起不来", &pid);
     // 被打断（Ctrl-C、SSH 断了）：在起服务的时候
-    b.flag("start_hang", true);
+    let pid = pid_of(&b, &svc);
     let restart = format!("restart {svc}");
     let restarts = || b.log("systemctl.log").split('\n').filter(|l| *l == restart).count();
-    let n = restarts(); // 上面起不来的那一次最后也是 restart：要等这一次的
-                        // 安装脚本在自己的会话里（start_new_session）：TERM 发给它那一组，卡着的假 systemctl 一起收到。中途 panic 了（没等到）
-                        // 也不会留下：Child 离开作用域时整组停掉
+    let n = restarts();
+    b.flag_once("start_hang");
+    // 安装脚本在自己的会话里（start_new_session）：TERM 发给它那一组，卡着的假 systemctl 一起收到。中途 panic 了（没等到）
+    // 也不会留下：Child 离开作用域时整组停掉
     let mut p = Cmd::new(hubbox::sh())
         .arg(&fx.script)
         .args(["--dir", &dir_arg, "--port", &team_port().to_string()])
@@ -1294,20 +1312,78 @@ fn failed_update_rolls_back(t: &mut Ctx) {
         .session(Session::New)
         .spawn()
         .unwrap_or_else(|e| panic!("安装脚本起不来：{e}"));
-    wait_for("起服务", WAIT, || restarts() > n && d.join(".env.prev").exists());
-    assert_ne!(fsx::read_text(d.join(".env")), before);
+    // 假的 systemctl 记下 restart、拿掉只管一次的 start_hang 以后就卡着
+    wait_for("起服务", WAIT, || restarts() > n && !b.d.join("start_hang").exists());
+    assert_ne!(fsx::read_text(d.join(".env")), before.0);
     p.signal_group(libc::SIGTERM).expect("给安装脚本那一组发 TERM");
     let exit = p
         .wait_timeout(Duration::from_secs(30))
         .expect("等安装脚本退出")
         .unwrap_or_else(|| panic!("发了 TERM，30 秒了安装脚本还没退出"));
     assert_eq!(exit.py(), 1);
-    assert_eq!(fsx::read_text(d.join(".env")), before, "被打断：.env 换回了原来的");
-    b.flag("start_hang", false);
+    rolled_back("被打断", &pid);
+    // 再运行：照旧是更新，这一次的换上了
     let r = fx.install(&b, &["--dir", &dir_arg]);
     assert_in("更新了服务端程序", &r.out);
     assert_eq!(env_of(&b, &d, "CCA_HUB_PORT"), port.to_string());
-    wait_for("重启后照样连得上", WAIT, || a.run(&["team-sync"]).out.split('\t').nth(2) == Some("ok"));
+    assert!(fsx::read(d.join("app/cca-core")) == helper_bytes());
+    assert_eq!(names(&d), [".cca-hub", ".env", "app", "certs", "data"]);
+    wait_for("更新以后照样连得上", WAIT, || sync_state(&a) == "ok");
+    clean(&b);
+}
+
+/// 换运行方式没成：systemd → Docker（compose up 起不来）、Docker → systemd（起不来）——这时原来的已经停了。停掉这一次起的，
+/// .env、unit / compose.yaml 换回原来的（原来没有的删掉），certs/、data/ 照原来的方式 chown 回去，原来的服务照原来的方式又起来了，
+/// 管理员照样连得上
+fn switch_rolls_back(t: &mut Ctx) {
+    let fx = setup(t);
+    let b = fx.hub(t, &with_docker());
+    let (a, tid, root, svc) = fx.team("甲组");
+    let d = opt(&b, &svc);
+    let unit = b.root.join(UNITS).join(format!("{svc}.service"));
+    let dir_arg = format!("/opt/{svc}");
+    let port = team_port();
+    fx.install(&b, &["--team-root", &root, "--systemd", "--host", "127.0.0.1", "--port", &port.to_string()]);
+    a.ok(&["team-attach", &tid, &format!("https://127.0.0.1:{port}"), &pin(&d)]);
+    let since = |log: &str, mark: usize| b.log(log)[mark..].to_string();
+    let marks = || (b.log("systemctl.log").len(), b.log("docker.log").len(), b.log("chown.log").len());
+    // systemd → Docker：compose up 起不来
+    let before = (fsx::read_text(d.join(".env")), fsx::read_text(&unit));
+    let (sm, dm, cm) = marks();
+    b.flag_once("compose_fail");
+    let r = fx.try_install(&b, &["--dir", &dir_arg, "--docker"]);
+    assert_eq!(r.code, 1);
+    assert_in("docker compose up 没成", &r.err);
+    assert_in("换回了原来的（服务端程序、设置），原来的服务又起来了", &r.out);
+    assert!((fsx::read_text(d.join(".env")), fsx::read_text(&unit)) == before, ".env、unit 换回了原来的");
+    assert!(!d.join("compose.yaml").exists() && b.running(&svc), "这一次的 compose.yaml 删了，原来的 systemd 服务又起来了");
+    assert_in(&format!("compose -p {svc} -f compose.yaml down"), &since("docker.log", dm));
+    assert_in(&format!("enable {svc}\nrestart {svc}\n"), &since("systemctl.log", sm));
+    assert!(
+        since("chown.log", cm).ends_with(&format!("-R {svc} {d}/certs {d}/data\n", d = d.display())),
+        "certs/、data/ 换回 systemd 的用户"
+    );
+    wait_for("换回 systemd 以后照样连得上", WAIT, || sync_state(&a) == "ok");
+    // 换成 Docker（这次成了），再 Docker → systemd：systemd 起不来
+    fx.install(&b, &["--dir", &dir_arg, "--docker"]);
+    wait_for("换成 Docker 以后照样连得上", WAIT, || sync_state(&a) == "ok");
+    let before = (fsx::read_text(d.join(".env")), fsx::read_text(d.join("compose.yaml")));
+    let (sm, dm, cm) = marks();
+    b.flag_once("start_fail");
+    let r = fx.try_install(&b, &["--dir", &dir_arg, "--systemd"]);
+    assert_eq!(r.code, 1);
+    assert_in("systemd 起不来", &r.err);
+    assert_in("换回了原来的（服务端程序、设置），原来的服务又起来了", &r.out);
+    assert!((fsx::read_text(d.join(".env")), fsx::read_text(d.join("compose.yaml"))) == before, ".env、compose.yaml 换回了原来的");
+    assert!(!unit.exists() && b.running(&svc), "这一次的 unit 停了、删了，原来的容器又起来了");
+    assert_in(&format!("disable --now {svc}"), &since("systemctl.log", sm));
+    assert_in(&format!("compose -p {svc} -f compose.yaml up -d --force-recreate --remove-orphans"), &since("docker.log", dm));
+    assert!(
+        since("chown.log", cm).ends_with(&format!("-R 10001:10001 {d}/certs {d}/data\n", d = d.display())),
+        "certs/、data/ 换回容器的用户"
+    );
+    wait_for("换回 Docker 以后照样连得上", WAIT, || sync_state(&a) == "ok");
+    clean(&b);
 }
 
 /// 缺东西时停下、说怎么办，什么都不动：没有 Docker 也没有 systemd、端口被占、认不出公网地址；服务器上没有 Python 不碍事
@@ -1574,6 +1650,8 @@ fn make_python_era(b: &FakeBox, svc: &str, docker: bool) {
 fn from_python(t: &mut Ctx) {
     t.sub("systemd", |t| python_era(t, false));
     t.sub("docker", |t| python_era(t, true));
+    t.sub("rollback-systemd", |t| python_era_rollback(t, false));
+    t.sub("rollback-docker", |t| python_era_rollback(t, true));
 }
 
 fn python_era(t: &mut Ctx, docker: bool) {
@@ -1665,6 +1743,46 @@ fn python_era(t: &mut Ctx, docker: bool) {
     let (st, body) = https(web, "/");
     assert_eq!(st, 200);
     assert_in("<title>cca 远程会话（甲组）</title>", &utf8(body));
+    clean(&b);
+}
+
+/// 从 3.6.x 换过来没成（Docker 的 compose up、systemd 的服务起不来）：.env（Docker 的记着 python 镜像）、compose.yaml / unit 换回
+/// Python 的那一份，以前的程序和网页端的文件都在，照原来的方式重新起了一次（这台假服务器上起不了 Python 的：说没起来、看哪里的
+/// 日志）；再运行照样换过来
+fn python_era_rollback(t: &mut Ctx, docker: bool) {
+    let fx = setup(t);
+    let b = fx.hub(t, &if docker { docker_any_ip() } else { any_ip() });
+    let (a, tid, root, svc) = fx.team("甲组");
+    let d = opt(&b, &svc);
+    let (port, web) = two_ports();
+    let (ps, ws) = (port.to_string(), web.to_string());
+    let mode = if docker { "--docker" } else { "--systemd" };
+    fx.install(&b, &["--team-root", &root, mode, "--host", "127.0.0.1", "--port", &ps, "--web-port", &ws]);
+    a.ok(&["team-attach", &tid, &format!("https://127.0.0.1:{port}"), &pin(&d)]);
+    make_python_era(&b, &svc, docker);
+    let run = if docker { d.join("compose.yaml") } else { b.root.join(UNITS).join(format!("{svc}.service")) };
+    let state = || [d.join(".env"), run.clone(), d.join("app/cca-presence.py"), d.join("app/web/index.html")].map(fsx::read_text);
+    let before = state();
+    let (log, started, says) = if docker {
+        ("docker.log", format!("compose -p {svc} -f compose.yaml up "), format!("docker logs {svc}"))
+    } else {
+        ("systemctl.log", format!("restart {svc}"), format!("journalctl -u {svc}"))
+    };
+    let mark = b.log(log).len();
+    b.flag_once(if docker { "compose_fail" } else { "start_fail" });
+    let r = fx.try_install(&b, &["--dir", &format!("/opt/{svc}"), mode]);
+    assert_eq!(r.code, 1);
+    assert_in(if docker { "docker compose up 没成" } else { "systemd 起不来" }, &r.err);
+    assert!(state() == before, ".env、compose.yaml / unit、以前的程序和网页端的文件都还是原来的");
+    assert!(!(d.join(".env.prev").exists() || d.join(".compose.prev").exists() || d.join(".unit.prev").exists()), "不留那几份备份");
+    let starts = b.log(log)[mark..].lines().filter(|l| l.starts_with(&started)).count();
+    assert_eq!(starts, 2, "这一次的起了一次，换回去以后照原来的又起了一次");
+    assert_in(&format!("原来的服务却没起来（{says} 看它说的）"), &r.out);
+    // 再运行（这次起得来）：照样换成 cca-core
+    let r = fx.install(&b, &["--dir", &format!("/opt/{svc}")]);
+    assert_in("更新了服务端程序", &r.out);
+    assert_eq!(names(&d.join("app")), ["cca-core"]);
+    wait_for("换成 cca-core 以后照样连得上", WAIT, || sync_state(&a) == "ok");
     clean(&b);
 }
 
