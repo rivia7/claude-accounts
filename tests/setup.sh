@@ -981,9 +981,11 @@ grep -q '"cca-install"' "$f" 2>/dev/null && CD="$CCA_T/core_install"   # 辅助�
 grep -q '"tun"' "$f" 2>/dev/null && CD="$CCA_T/core_udp"   # 本机 UDP 走节点的 TUN 内核（cca local udp，root 的系统服务）：状态另放
 grep -q '"cca-test-1"' "$f" 2>/dev/null && CD="$CCA_T/core_test"   # 实测 Team 节点的临时内核（入站叫 cca-test-N）：状态另放
 mkdir -p "$CD/groups" "$CD/sel"
-if [ -n "$test" ]; then   # -t 只校验配置、不起内核（cca node add 用它校验自定义节点；core/reject_text 命中就不过）
-	if FAKE_CORE_DIR="$CD" "$CCA_T/cca-test" core-load "$f" >/dev/null 2>&1; then echo "configuration file $f test is successful"; exit 0; fi
-	echo "level=error msg=\"configuration file test failed\"" >&2; exit 1
+if [ -n "$test" ]; then   # -t 只校验配置、不起内核（cca node add 用它校验自定义节点；core/reject_text 命中就不过）。core-load 的状态写进
+	# 一个临时目录：真的 mihomo -t 不碰在跑的内核，假的也不能把在跑的那个的 sock、listening、groups 换成被校验的配置的
+	td="$CCA_T/core-t.$$"; mkdir -p "$td/groups" "$td/sel"; [ -f "$CD/reject_text" ] && cp "$CD/reject_text" "$td/"
+	if FAKE_CORE_DIR="$td" "$CCA_T/cca-test" core-load "$f" >/dev/null 2>&1; then rm -rf "$td"; echo "configuration file $f test is successful"; exit 0; fi
+	rm -rf "$td"; echo "level=error msg=\"configuration file test failed\"" >&2; exit 1
 fi
 mkdir -p "$CD/groups" "$CD/sel"
 [ -f "$CD/start_fail" ] && { echo 'level=fatal msg="Parse config error: fake"' >&2; exit 1; }

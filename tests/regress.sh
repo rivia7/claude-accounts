@@ -3540,6 +3540,7 @@ if sect 11b4; then
 #       界面 App 时像 App 那样在后台运行 cca _core run）。内核文件按写死的 SHA256 校验（mkver 换成了假内核的），节点定义在家时
 #       从路由器拷（core/nodes.json），再补 Team 的配置带的节点。这时这台 Mac 不在任何 Team 里（11b3d 收尾时都退出了），
 #       结束时都还原。这时路由器上的节点是 US-A～D 和 HK-A2（10a 里改过名），可选节点也是这几个
+mkver "$(ver)" "$H/.cca/bin/cca"   # 分节续跑时快照里装着的 cca 可能比仓库里的旧
 CD="$T/core"; CN="$H/.cca/core"
 creloads() { grep -c '^RELOAD$' "$CD/core.log" 2>/dev/null || echo 0; }
 csel() { cat "$CD/sel/$1" 2>/dev/null || echo -; }
@@ -3711,8 +3712,10 @@ cp "$H/.cca/config.json" "$T/cfg.cn.bak"
 out=$(sess '{"add.basic":[{"email":"cn@example.com","alias":""}]}' --eof-at add.node -- cca add 2>&1); rc=$?
 ok "加账号选节点：没有路由器、能用内置代理时，末尾多一项「自定义代理…」（选它可粘贴分享链接 / Clash 节点）" '[ "$(asks)" = "add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and any(\"自定义代理\" in o[\"label\"] for o in e[\"fields\"][0][\"options\"])"'
 VMLINK=vmess://$("$TESTBIN" run "print(json.dumps({'ps':'My Node','add':'198.51.100.9','port':'443','id':'uu','aid':'0','net':'ws','host':'h.example.com','path':'/p','tls':'tls','scy':'auto'}), end='')" | "$TESTBIN" b64)
+n0=$(creloads)
 out=$(run cca node add "$VMLINK" 2>&1); rc=$?
 ok "cca node add 分享链接：解析 vmess、内核 -t 校验、存进 custom-nodes.json（600），名字加进可选节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加好了自定义节点「My Node」" && [ "$(stat -f %Lp "$CN/custom-nodes.json")" = 600 ] && "$TESTBIN" check -f "j=$CN/custom-nodes.json" "p=j[\"proxies\"][0]; p[\"name\"]==\"My Node\" and p[\"server\"]==\"198.51.100.9\" and p[\"type\"]==\"vmess\" and p[\"network\"]==\"ws\"" && cfgok "\"My Node\" in c[\"nodes\"]"'
+ok "cca node add 时内置代理在跑：端口池马上跟上（重新加载一次，不等在外面启动账号），_gui state 的本机端口池是同步好的" '[ "$(creloads)" = $((n0 + 1)) ] && ccfg "any(p[\"name\"] == \"My Node\" for p in c[\"proxies\"])" && gj state | jok "d[\"routing\"][\"local_sync\"] == \"ok\""'
 ok "cca node ls：列出自定义节点（名字、类型、服务器:端口）" 'run cca node ls 2>&1 | grep -q "My Node（vmess 198.51.100.9:443）"'
 out=$(run cca node add "这不是节点配置" 2>&1); rc=$?
 ok "cca node add 认不出的内容：报错、不存（custom-nodes.json 还是只有一个）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "认不出" && "$TESTBIN" check -f "j=$CN/custom-nodes.json" "len(j[\"proxies\"])==1"'
@@ -3734,6 +3737,26 @@ rm -f "$CN"/mihomo-v*; : > gh.log
 run cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 50); do [ -x "$CN/mihomo-v1.19.33" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && break; sleep 0.1; done
 ok "已经用内置代理、内核文件不在（比如 cca 升级换了内核版本）：在家启动后在后台先下好（在外面直连 GitHub 可能很慢）" '[ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo" gh.log'
+# 端口池跟上（core_follow）：在家启动账号时内置代理在跑、端口池旧了（这里直接把记下的摘要改旧：拷来的节点定义、账号表、别的程序的 TUN
+# 变了都是这样）：账号照常走路由器，在后台让内置代理重新加载一次。以前只在外面启动账号时才更新，在家时「节点分流」页一直说本机的端口还没更新
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['local']['applied'] = 'stale'"
+out=$(gj state)
+ok "端口池旧了：_gui state 的本机端口池是 pending" 'printf "%s" "$out" | jok "d[\"routing\"][\"local_sync\"] == \"pending\""'
+n0=$(creloads); : > curl.log
+run cca @alice --version >/dev/null 2>&1; rc=$?
+for i in $(seq 1 50); do [ "$(creloads)" != "$n0" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && break; sleep 0.1; done
+out=$(gj state)
+ok "在家启动账号、内置代理在跑、端口池旧了：照常走路由器的端口，在后台让内置代理重新加载一次，之后 _gui state 的本机端口池是同步好的" '[ $rc -eq 3 ] && grep -q "CURL via :7901 https://claude.ai/cdn-cgi/trace" curl.log && [ "$(creloads)" = $((n0 + 1)) ] && printf "%s" "$out" | jok "d[\"routing\"][\"local_sync\"] == \"ok\""'
+n0=$(creloads)
+run cca @alice --version >/dev/null 2>&1; sleep 0.5
+ok "端口池已经是最新的：在家启动账号不再重新加载" '[ "$(creloads)" = "$n0" ] && [ ! -d "$H/.cca/core-nodes.lock" ]'
+# 内核由界面 App 起（cca _core run）：照刚写好的配置起，记下端口池已同步（不然 App 刚起好内核时分流页也说本机的端口还没更新）
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['local']['applied'] = 'stale'"
+core_stop; n0=$(creloads)
+( run cca _core run >> "$CD/app.log" 2>&1 < /dev/null & )
+for i in $(seq 1 50); do [ -f "$CD/up" ] && break; sleep 0.1; done
+out=$(gj state)
+ok "界面 App 起内核（cca _core run）：照最新的配置起，记下端口池已同步，不用再重新加载" '[ -f "$CD/up" ] && [ "$(creloads)" = "$n0" ] && printf "%s" "$out" | jok "d[\"routing\"][\"local_sync\"] == \"ok\""'
 # 配置本机出口的表单（local.builtin）：GUI 里问一句用不用内置代理
 "$TESTBIN" edit --unicode "c=$H/.cca/config.json" "(c.get('local') or {}).pop('client', None)"   # 前面已把 local.client 设成 builtin；清掉它，cmd_local_setup 才会问 local.builtin
 : > env.log

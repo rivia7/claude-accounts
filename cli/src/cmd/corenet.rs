@@ -923,8 +923,9 @@ pub fn cmd_core_nodes_save(args: &[String]) -> R<()> {
     save_json(&CORE_NODES, &V::Dict(data), Some(0o600), false)
 }
 
-/// 在家启动后要在后台做的（cca _core-nodes 的参数）：nodes 从路由器拷节点定义，bin 下载内核文件（已经用内置代理、文件还不在）。
-/// 只读 config.json、节点缓存：每次在家启动都会跑，不能慢
+/// 在家启动后要在后台做的（cca _core-nodes 的参数）：nodes 从路由器拷节点定义，bin 下载内核文件（已经用内置代理、文件还不在），
+/// reload 让在跑的内核跟上端口池（pool_stale；在家时账号不经内置代理，以前要等在外面启动账号才更新）。
+/// 读 config.json、节点缓存（配了内置代理时还读账号表）：每次在家启动都会跑，不能慢
 pub fn cmd_core_stale(args: &[String]) -> R<()> {
     arity("cmd_core_stale", args, 0, 1)?;
     let c = cfg_load()?;
@@ -935,8 +936,21 @@ pub fn cmd_core_stale(args: &[String]) -> R<()> {
     if client_builtin(&c) && arg(args, 0, "").is_empty() && router_host(&c) {
         todo.push("bin");
     }
+    if client_builtin(&c) && pool_stale(&ctx()?.0)? {
+        todo.push("reload");
+    }
     out!("{}", todo.join(" "));
     Ok(())
+}
+
+/// 内置代理的端口池旧了：在跑的内核加载的（config.json 的 local.applied）和现在要的（local_want：账号表、节点定义、开着 TUN 时
+/// 绑定的网卡）对不上。没配内置代理时不算。要读过账号表的 c（ctx）
+fn pool_stale(c: &Dict) -> R<bool> {
+    if !client_builtin(c) {
+        return Ok(false);
+    }
+    let want = local_want(c)?;
+    Ok(!sect(c, "local").get("applied").is_some_and(|a| a.as_str() == Some(want.as_str())))
 }
 
 pub fn cmd_core_missing(args: &[String]) -> R<()> {

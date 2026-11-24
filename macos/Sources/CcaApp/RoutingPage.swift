@@ -274,7 +274,9 @@ struct RoutingBanners: View {
             }
             if routing?.localSync == .pending {
                 Banner(systemImage: "laptopcomputer", tint: .orange, title: "本机 Clash 的端口还没更新",
-                       message: "下次在外面启动账号时会自动更新。")
+                       message: "账号表或节点有变化，内置代理还在用原来的端口池。下次启动账号时会自动更新，也可以现在更新。") {
+                    Button("现在更新") { model.run(.localRefresh) }.buttonStyle(.borderedProminent)
+                }
             }
             if let e = model.live?.router?.error {
                 routerErrorBanner(e)

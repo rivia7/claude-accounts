@@ -414,7 +414,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `slots`：端口池的每个槽位（数量是 `pool_size`，8 的倍数）。`tool` / `key` 为 null 的是空槽位（`node` 是 `REJECT`）。
   `local_node` 是内置代理的节点定义里的叫法（按服务器地址认：路由器上改了名、还没同步时也认得出；没配内置代理、认不出时和 `node` 一样）。
 - `sync`：路由器和这台 Mac 上的账号表一致吗。`ok` | `pending`（下次启动账号时会同步，也可以点“同步路由器”）| `n/a`（没配置路由器）。
-- `local_sync`：本机 Clash 的端口池是否最新，`ok` | `pending` | `n/a`（没配置本机 Clash）。
+- `local_sync`：本机 Clash 的端口池是否最新，`ok` | `pending` | `n/a`（没配置本机 Clash）。内置代理的内核在运行时 cca 自己让它跟上
+  （改了账号表、Team 的配置变了之后马上，在家启动账号时在后台；内核由 `_core run` 起时照最新的配置起），`pending` 只在这之间、
+  重新加载没成功时出现：分流页的「现在更新」运行 `local setup`（已经配置过时不再问，让内核就绪、重新加载）。
 - `nodes`：可选节点和用它的账号。
 
 `errors[]`：`{"code": "config_unreadable" | "table_unreadable" | "account_unreadable", "tool": "claude" | "codex" | "agy" | null, "message": "…"}`（文件读不了；
@@ -1028,7 +1030,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `team new`、`team join`、`team deploy <Team>`、`team leave <Team>`（管理员） | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」「删掉这个 Team…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`；`consent.team_delete`、`hub.password`、`hub.pubkey`、`team.keep_server`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` / `team_left` |
 | `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team leave`（成员） | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」）；「更多」里的「退出这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave`；`invite` 的 stdout 只经内存里的管道读，4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
-| `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
+| `router setup`、`local setup` | 工具栏「＋」、分流页（含端口池旧了时的「现在更新」）、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `mail setup [--account]` | 账号页「邮箱」一节的「配置 / 更换」 | 提问会话（`mail.setup`；要 `hello.mail`，4.11） |
 | `mail trust-forwarder <账号>` | 「邮箱」一节的「信任转发中转（不安全）」开关 | 提问会话（`mail.forwarder` + `consent.mail_trust_forwarder`，4.11）；关闭是 `cca mail trust-forwarder <账号> off` |

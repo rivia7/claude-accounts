@@ -165,6 +165,10 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                                  message: "一步步来：有没有 Team 的邀请链接、选好网络出口、添加账号。", inApp: true, needsForms: true)
     static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。", inApp: true, needsForms: true)
     static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。", inApp: true, needsForms: true)
+    /// 内置代理的端口池旧了（state 的 `routing.local_sync` 是 `pending`，PROTOCOL 2.2）时分流页的「现在更新」：同样是 `cca local setup`——
+    /// 已经配置过内置代理时不再问，在家先从路由器拷节点定义，再让内核照现在的账号表重新加载、切好节点
+    static let localRefresh = Handoff(arguments: ["local", "setup"], title: "更新本机的端口池",
+                                      message: "让内置代理照现在的账号表和节点重新加载。", inApp: true, needsForms: true)
     /// 本机 UDP 走节点（`cca local udp …`，PROTOCOL 7.1）：装、换节点、删掉系统服务时系统自己弹授权框问管理员密码（不经 App）。
     static let localUDPOn = Handoff(arguments: ["local", "udp", "on"], title: "本机 UDP 走节点",
                                     message: "让这台 Mac 的 UDP 也经节点出去；系统会弹出授权框问管理员密码。", inApp: true)
