@@ -475,6 +475,8 @@ relaunch() {   # rollback 里：原来装过的照原来的方式（OLD）重新
 		systemd)
 			chown -R "$SVC" "$ROOT$D/certs" "$ROOT$D/data" >/dev/null 2>&1
 			[ ! -d "$w" ] || chown -R ":$(id -g "$SVC" 2>/dev/null)" "$w" >/dev/null 2>&1
+			# 这一次的在 30 秒里一直起不来、重启了好几次：先清掉失败的记录（不然可能撞上 systemd 的启动频率限制）
+			systemctl reset-failed "$SVC" </dev/null >/dev/null 2>&1
 			[ -f "$ROOT$UNIT" ] && systemctl enable "$SVC" </dev/null >/dev/null 2>&1 &&
 				tmo 120 systemctl restart "$SVC" </dev/null >/dev/null 2>&1 ;;
 		*) return 0 ;;   # 第一次装：没有原来的

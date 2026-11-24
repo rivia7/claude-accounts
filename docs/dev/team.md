@@ -421,7 +421,7 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   SSH 断了以后往 stdout 写是 SIGPIPE）时照它们换回去：拷到旁边再换上（unit 照 `/etc/systemd/system` 的 SELinux 标签），原来没有的删掉——第一次装的
   不留 `.env`、unit、compose.yaml，原来没有的服务端程序留着（不碍事）。已经动了服务（`STARTED`：`prepare` 之后，停原来的、起这一次的）的话先停掉
   这一次起的（换了运行方式时它占着端口：`compose down`、`systemctl disable --now`），`daemon-reload`，原来装过的照原来的方式（`OLD`）重新起来
-  （`relaunch`：`certs/`、`data/` 和网页端那一份证书的组照原来的方式 chown 回去；Docker 的 `compose up`，systemd 的 `enable` + `restart`），说一声
+  （`relaunch`：`certs/`、`data/` 和网页端那一份证书的组照原来的方式 chown 回去；Docker 的 `compose up`，systemd 的 `reset-failed`、`enable`、`restart`），说一声
   起没起来。所以更新、换运行方式、从 Python 的换过来没成时，原来的服务照旧在运行，管理员和各台设备不用做什么；下一次照原来的判断是新装还是更新。
   rollback 里的 `systemctl` 最多等 120 秒（`tmo` 到时候发 KILL：这时 TERM 是忽略着的，子进程也忽略）。服务用这一次的起来了（`wait_served`
   过了）才删掉那几份（`drop_prev`）、不再换回：起来以后再换回的话，跑着的服务和 `.env` 对不上。所以打结果时 SSH 断了（管理员那头是 `ssh`）
