@@ -353,11 +353,11 @@
 
 ## 测试
 
-- `tests/team_relay.py`（回归的 unit 一节）：每个 Team 各用各的中转。两个 Team 各有一台真的服务器（都开着中转）、两台都在这两个 Team 里的设备、
+- `tests/team_relay.rs`（回归的 unit 一节）：每个 Team 各用各的中转。两个 Team 各有一台真的服务器（都开着中转）、两台都在这两个 Team 里的设备、
   box 上几个会话（两个 Team 各给的账号的、这台设备自己的账号的）：`remote-hubs` 标着家是先加入的那个 Team 的那一台；没说在哪台上配对时在家里
   那一台上配，经它看得到走它的会话（自己的账号走家），在另一台上再配一次才看得到另一个 Team 给的（同两台设备各记各的、各有一把密钥）；
   接入一个 Team 的会话时另一台的转发器上一个字节都不经过；输入配对码的那一头自己找得到是哪台；取消配对告诉的是记着它的那一台。
-  `ShellTest`：bash 这一层的 `--team`，没说在哪台上时问之前说记在哪台上、要在别的上面配怎么写。`NoRelayTest`：Team 的服务器没开中转时说清楚要谁做什么
+  `terminal`：bash 这一层的 `--team`，没说在哪台上时问之前说记在哪台上、要在别的上面配怎么写。`pairing_on_a_team_server_without_relay`：Team 的服务器没开中转时说清楚要谁做什么
 - `tests/acme.rs` + `tests/kit/acmefake.rs`（回归的 unit 一节）：证书助手对着假的证书机构——它不是随便回几句的桩，照 ACME 的规范核对
   每个请求（拿 openssl 验 JWS 的签名、nonce 只能用一次、开账户用 jwk 之后用 kid、单子上的地址和证书种类、http-01 真的来取文件、
   证书请求里的地址和单子上的一样而且没有 Common Name）。看：给 IP 要的是 shortlived、nonce 不对自己再发、文件和权限、没到时候不重复要、
@@ -376,14 +376,14 @@
   iPhone 的屏幕大小和触摸，从输入配对码走到会话结束，控制台里不许有报错——内容安全策略拦下的也算）
 - `python3 tests/web_demo.py [-- 会话里跑的命令…]`：在本机把网页端跑起来自己看（真的服务器开在 `http://localhost`、一台临时的
   “电脑”、一个会话、一个配对码），在这台 Mac 的浏览器里打开。手机上试不了这个（手机要 HTTPS 和信得过的证书）
-- `tests/remote_relay.py`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：真的 Team 的服务器进程（开着中转）、每台设备一个临时 HOME 和
-  登记在这个 Team 里的密钥（`team_enroll`）、会话在真的伪终端上。`ServerTest` 两头都照文档自己说话（配对的各种先后和拒绝、票据只能用一次、认证码不对的不算用掉、
+- `tests/remote_relay.rs`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：真的 Team 的服务器进程（开着中转）、每台设备一个临时 HOME 和
+  登记在这个 Team 里的密钥（`team_enroll`）、会话在真的伪终端上。前五条（`pairing` 到 `pairings_survive_a_restart`）两头都照文档自己说话（配对的各种先后和拒绝、票据只能用一次、认证码不对的不算用掉、
   对接后大块的一个字节不丢、宿主说完就关时最后几个字节也到、宿主不来接时接入方等到 `nohost`、取消配对 / 撤销设备后正接着的被断开、
   重启后配对还在；嵌套几万层的 JSON、不是 JSON、只发 PING 不收 PONG 都只断开那一条，中转照常；控制连接断了会话留着、重连以后说明还在）；
-  `LimitsTest` 直接调服务器的 `Remote`（不经网络，时间由用例给）：同时开着的配对、配对的机器数、没用掉的票据、会话数、接入数的上限，
-  用过的时间一天记一次、180 天没用过的配对删掉；`ClientTest` 两台设备都是真的辅助程序（配对 → 列表 → 接入 → 两边打字 → 断开 → 再接入 → 会话结束的退出码；
+  各种上限（同时开着的配对、配对的机器数、没用掉的票据、会话数、接入数，用过的时间一天记一次、180 天没用过的配对删掉）在服务端自己的
+  单元测试里（`cargo test`，`cli/src/server/remote/tests.rs`：不经网络，时间由用例给）；`pair_list_attach` 起的六条两台设备都是真的辅助程序（配对 → 列表 → 接入 → 两边打字 → 断开 → 再接入 → 会话结束的退出码；
   设备和数据端口之间隔着一个记下所有字节的转发器：终端里的字、按键、账号名、文件夹、密钥一个都没有明文，发给服务器的请求里没有配对码和 P；
-  `allow view / none / control` 当场生效；取消配对；这台机器上的会话不问服务器、服务器停了照常）；另一头换成 `spec_wire`（照文档独立实现的）
+  `allow view / none / control` 当场生效；取消配对；这台机器上的会话不问服务器、服务器停了照常）；另一头换成 `kit::spec`（照文档独立实现的）
   再走一遍，并且不守规矩：只让看时照发按键、报很小的窗口、改窗口大小，改一个字节、拿错的密钥握手，宿主那头都不认；到接入方的只有输出和
   “会话结束了”（没有宿主的欢迎帧、状态：里面的邮箱、路径、进程号一个都不出现）；转接进程被 `kill -9`：正接着的断开、它的子进程自己走、
   宿主再起一个以后接入端自己接回来（断着的时候那边的输出在回放里，断着的时候敲的键没有送过去）；服务器重启（用回原来的端口）以后
@@ -391,12 +391,12 @@
   改成只看以后自己接回来并且说一句、不让了以后试一阵说没接上（这两处用 `CCA_REMOTE_RETRY` 把等的时间调短）；能操作的接入方发 `END`
   （0x07）宿主那头不转。等某个状态时一圈圈问服务器的地方两次之间隔一秒（`far()`）：
   服务器给每台设备的请求限了流，问光了之后那台设备的请求会被拒（取消配对那一句就说不到）
-  转发器是另一个进程：测试进程里有线程的话，开伪终端的 `fork` 不安全
+  转发器（`kit::relay` 的 `Sniffer`）是测试进程里的线程；夹具都在 `tests/kit/relay.rs`，网页端的测试也用它
 - `cargo test`：`remote::crypto`（和 `spec_wire` 算出来的向量逐字节一样——改了格式先改 `spec_wire` 再重新生成；记录的往返、改一个字节 / 重放 /
   跳号都断开；握手要同一把密钥、同一个会话、同一对机器）、`remote::relay`（真的 TCP 上握手和通道）、`remote::peers`、`remote::far`、`py::hash` 的 PBKDF2
-- 界面 App 用的那一半：`tests/remote_relay.py` 的 `ShellTest`（真的 `cca`：终端里配对；`test_in_the_app` 用 `tests/gui_session.py` 扮演 App——
+- 界面 App 用的那一半：`tests/remote_relay.rs` 的 `pairing_errors`、`terminal`、`in_the_app`（真的 `cca`：终端里配对；`in_the_app` 用 `kit::gui_session` 扮演 App——
   同意当场问、答否不出配对码、配对码那一页上取消以后辅助程序停下而且那个配对码马上作废、两头各在自己的提问会话里配好、
-  `allow` / `unpair` 的结果事件）、`ClientTest` 里 `remote list --json` 的内容（别的机器上的会话、只让看、不在线、对方取消了配对、
+  `allow` / `unpair` 的结果事件）、`pair_list_attach`、`local_sessions_never_touch_the_network` 里 `remote list --json` 的内容（别的机器上的会话、只让看、不在线、对方取消了配对、
   没问到服务器的原因）。regress.sh：3e 会话开着时的 `cca remote list --json` 和 `hello.remote`；10h 的 `contract-tests --terminal-smoke`
   （App 真正的伪终端代码 `ProcessTransport.startTerminal` 对真的 `cca remote attach`：会话是直接起在宿主里的小脚本，接上先看到之前的输出，
   App 敲的字会话收到，断开后接入端退出码 0、会话还在）。这几份真实输出交给 `macos/test.sh` 解码

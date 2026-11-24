@@ -3142,7 +3142,7 @@ dcost oput "$(python3 -c 'import time; print(time.time() - 7200)')" 1.5; rc=$?
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_cost_orphan.json"
 ok "dan-air 传了它认不出账号的那一份（1.5 美元）：unattributed.cost 两台设备（这台在前），合计 1.506，按模型合起来；都传了，unsynced 空了；顶层、me 的合计不含它" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "(lambda t, u: [(x[\"name\"], x[\"me\"]) for x in u[\"devices\"]] == [(\"$ME\", True), (\"dan-air\", False)] and u[\"summary\"][\"days_usd\"] == 1.506 and u[\"summary\"][\"requests\"] == 2 and [(m[\"model\"], m[\"days\"][\"requests\"]) for m in u[\"models\"]] == [(\"claude-opus-5-5\", 2)] and [(m[\"model\"], m[\"days\"][\"usd\"]) for m in u[\"devices\"][1][\"models\"]] == [(\"claude-opus-5-5\", 1.5)] and t[\"unattributed\"][\"unsynced\"] == [] and t[\"days_usd\"] == 2.579 and t[\"me\"][\"days_usd\"] == 0.079)(d[\"cost_total\"], d[\"cost_total\"][\"unattributed\"][\"cost\"])"'
 # 远程会话的配对（docs/dev/remote.md；服务器开着中转）：这里只测 cca remote pair / join / peers / allow / unpair 这几条命令怎么问、怎么说，
-# 配对、列表、接入、加密本身在 tests/remote_relay.py（unit 一节）。另一台机器还是 dan-air，照 server/README.md 的格式自己说话
+# 配对、列表、接入、加密本身在 tests/remote_relay.rs（unit 一节）。另一台机器还是 dan-air，照 server/README.md 的格式自己说话
 dpair() {   # dpair join 配对码 | show 文件：dan-air 输入这台 Mac 显示的配对码 / 自己显示一个（写进文件），等对方输入。配好打印“配对编号 密钥”
 	          # dpair web 配对码（DPAIR_KEY=密钥）：手机上的网页端——一把不在设备清单里的密钥输入这台 Mac 给网页端开的配对码，公钥带在请求里
 	"$TESTBIN" spec dpair "${DPAIR_KEY:-$T/dan}" "$GLPORT" "$@"   # 照 server/README.md 的格式独立实现的（tests/kit/spec.rs，不用 cca 的代码）
@@ -4340,8 +4340,8 @@ ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'suite_ok cost_view'
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'suite_ok mail_view'
 ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'suite_ok remote_host'
-ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
-ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
+ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'suite_ok remote_relay'
+ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'suite_ok team_relay'
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_ok acme'
 # 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
 ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'python3 "$D/web_relay.py" 2>/dev/null'

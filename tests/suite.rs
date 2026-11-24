@@ -18,9 +18,11 @@ mod local_udp;
 mod mail_view;
 mod presence;
 mod remote_host;
+mod remote_relay;
 mod router_merge;
 mod shared_state;
 mod team;
+mod team_relay;
 mod usage_view;
 
 fn main() {
@@ -46,6 +48,8 @@ fn main() {
             cost_view::MODULE,
             mail_view::MODULE,
             remote_host::MODULE,
+            remote_relay::MODULE,
+            team_relay::MODULE,
             acme::MODULE,
             isolation_chrome_native::MODULE,
         ],
