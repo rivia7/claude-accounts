@@ -42,6 +42,52 @@ pub fn compress(raw: &[u8], level: u8) -> Vec<u8> {
     gz
 }
 
+/// 只有这么长以内的输入才另外试固定的 Huffman 编码：再长的动态编码一定更短（码表的那点开销早就压回来了）
+const FIXED_MAX: usize = 16 << 10;
+
+/// 和 `compress` 一样，只是不长的输入另外只用固定的 Huffman 编码（RFC 1951 3.2.6）也压一遍，取短的那个
+/// （头、结尾两边一样，只换中间）。zlib（CPython 的 `gzip.compress`）每一块都在动态的、固定的编码里挑短的；miniz_oxide
+/// 不到 48 个字节才用固定的，一百来个字节的输入上动态编码的码表就占了一大截，压出来常比原样还长。
+/// 网页端照「压了比原样短才给压过的」挑（server/web.rs，Py:1647）：小文件这样挑出来的才和 Python 一样
+pub fn compress_shortest(raw: &[u8], level: u8) -> Vec<u8> {
+    let gz = compress(raw, level);
+    if raw.len() > FIXED_MAX {
+        return gz;
+    }
+    match (deflate_fixed(raw, level.min(9)), gz.get(..HEAD), gz.get(gz.len().saturating_sub(TAIL)..)) {
+        (Some(body), Some(head), Some(tail)) if HEAD + body.len() + TAIL < gz.len() => [head, &body, tail].concat(),
+        _ => gz,
+    }
+}
+
+/// 只用固定的 Huffman 编码的 deflate（不带 zlib 的头）；压不了（miniz_oxide 出错）是 None
+fn deflate_fixed(raw: &[u8], level: u8) -> Option<Vec<u8>> {
+    use miniz_oxide::deflate::core::{
+        compress as deflate, create_comp_flags_from_zip_params, CompressionStrategy, CompressorOxide, TDEFLFlush, TDEFLStatus,
+    };
+    let flags = create_comp_flags_from_zip_params(i32::from(level), 0, CompressionStrategy::Fixed as i32);
+    let mut c = CompressorOxide::new(flags);
+    let mut out = vec![0u8; raw.len() / 2 + 64];
+    let (mut input, mut at) = (raw, 0);
+    loop {
+        let (status, used, wrote) = deflate(&mut c, input, out.get_mut(at..)?, TDEFLFlush::Finish);
+        at += wrote;
+        input = input.get(used..)?;
+        match status {
+            TDEFLStatus::Done => {
+                out.truncate(at);
+                return Some(out);
+            }
+            TDEFLStatus::Okay => {
+                if out.len() - at < 64 {
+                    out.resize(out.len() * 2, 0);
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// 解开一个 gzip 成员：头里的附加字段、文件名、注释、头的校验跳过不看（和 Python 的 gzip 模块一样），解出来的数据的
 /// CRC32 和长度要和结尾记的对得上；后面不许再有别的（只认一个成员）。
 ///
@@ -206,6 +252,25 @@ mod tests {
         // 很能压的压得下去；随机的也不会胀很多
         assert!(compress(&cases[4].1, 9).len() < 5_000);
         assert!(compress(&cases[3].1, 9).len() < (1 << 20) + 1_000);
+    }
+
+    /// 小的输入另外试固定的编码：解得开、不比 `compress` 长、头和结尾一样；CPython 给 FIXTURE 的就是固定编码的一块
+    /// （deflate 的头一个字节 0x4b：最后一块、固定编码），这里挑出来的不比它长。大的输入和 `compress` 一字不差
+    #[test]
+    fn shortest_tries_fixed_codes() {
+        let manifest =
+            r#"{"name": "cca 远程会话（US-A）", "short_name": "cca US-A", "display": "standalone", "start_url": "./"}"#.as_bytes();
+        for raw in [&b""[..], b"a", FIXTURE, manifest, &b"cca ".repeat(4000), &random_ish(FIXED_MAX, 3)] {
+            let (best, plain) = (compress_shortest(raw, 9), compress(raw, 9));
+            assert_eq!(decompress(&best, raw.len()).as_deref(), Ok(raw), "{}", raw.len());
+            assert!(best.len() <= plain.len(), "{}", raw.len());
+            assert_eq!((&best[..HEAD], &best[best.len() - TAIL..]), (&plain[..HEAD], &plain[plain.len() - TAIL..]));
+        }
+        assert_eq!(compress_shortest(FIXTURE, 9)[HEAD] & 0x07, 0x03, "固定编码的最后一块");
+        assert!(compress_shortest(FIXTURE, 9).len() <= PYTHON_GZIP.len());
+        assert!(compress_shortest(manifest, 9).len() < manifest.len(), "一百来个字节的 JSON 也压得比原样短");
+        let big = random_ish(FIXED_MAX + 1, 5);
+        assert_eq!(compress_shortest(&big, 9), compress(&big, 9));
     }
 
     #[test]

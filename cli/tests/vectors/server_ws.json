@@ -1,0 +1,6136 @@
+{
+ "_about": "Recorded from server/cca-presence.py (Python 3.14.0) by a scratch script that is not part of the repository: ws_frames called in-process; the handshakes and pump scenarios run the real srv.Handler on one end of a socketpair, with a fake server object for the IP bucket, the tickets and the relay (WS_IDLE 0.6 s, WS_STALL 0.4 s, 80 ms after each step). Bodies longer than 256 bytes are {len, sha256}.",
+ "guid": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+ "accept": [
+  [
+   "dGhlIHNhbXBsZSBub25jZQ==",
+   "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+  ],
+  [
+   "AAAAAAAAAAAAAAAAAAAAAA==",
+   "ICX+Yqv66kxgM0FcWaLWlFLwTAI="
+  ],
+  [
+   "////////////////////////",
+   "e2MUuunHTd8SoQHnfSXkYomjEQs="
+  ],
+  [
+   "x3JJHMbDL1EzLkh9GBhXDw==",
+   "HSmrc0sMlYUkAGmm5OPpG2HaGWk="
+  ],
+  [
+   "+/+/+/+/+/+/+/+/+/+/+w==",
+   "M0DUs3om0SqzerhOhYSMM7WQuBQ="
+  ]
+ ],
+ "frames": [
+  {
+   "about": "binary 0",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": ""
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": ""
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 1",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "YQ=="
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "YQ=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 4",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "YWJjZA=="
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "YWJjZA=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 5",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "YWJjZGU="
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "YWJjZGU="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 125",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       125,
+       1
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "DRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanE="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 126",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       126,
+       2
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "GiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd36F"
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 127",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       127,
+       3
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "Jy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI+WnaSrsrnAx87V3OPq8fj/Bg0UGyIpMDc+RUxTWmFob3Z9hIuSmQ=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 65535",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       65535,
+       4
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "len": 65535,
+      "sha256": "8619677cb178541332cc79ecf900c4a7d97b7543ca6b6b87ba2dd2fa50cdf55c"
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 65536",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       65536,
+       5
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "len": 65536,
+      "sha256": "a1348b62f8e4debe9451a757a5a6ffddfbf938d203fa43e9d79271d84efe23a3"
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "binary 70000",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       70000,
+       6
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "len": 70000,
+      "sha256": "8c290fd0c82c549991e9eef4476ec71b1be22a5b6c8d6e32bd28c35ed121cd9f"
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "zero mask",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "emVybyBtYXNr"
+     },
+     "mask": "00000000"
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "emVybyBtYXNr"
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "ff mask",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "ZmYgbWFzayE="
+     },
+     "mask": "ffffffff"
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "ZmYgbWFzayE="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "5 bytes in the 126 form",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "c2hvcnQ="
+     },
+     "len": 126
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "c2hvcnQ="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "5 bytes in the 127 form",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "c2hvcnQ="
+     },
+     "len": 127
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "c2hvcnQ="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "200 bytes in the 127 form",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       200,
+       7
+      ]
+     },
+     "len": 127
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "W2JpcHd+hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4/wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQrMjlAR05VXGNqcXh/ho2Um6KpsLe+xcw="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "ping 0",
+   "in": [
+    {
+     "op": 9,
+     "data": {
+      "b64": ""
+     }
+    }
+   ],
+   "frames": [
+    [
+     9,
+     {
+      "b64": ""
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "ping 125",
+   "in": [
+    {
+     "op": 9,
+     "data": {
+      "pattern": [
+       125,
+       8
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     9,
+     {
+      "b64": "aG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQrMjlAR05VXGNqcXh/ho2Um6KpsLe+xcw="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "ping 126",
+   "in": [
+    {
+     "op": 9,
+     "data": {
+      "pattern": [
+       126,
+       9
+      ]
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 134
+   }
+  },
+  {
+   "about": "close 126",
+   "in": [
+    {
+     "op": 8,
+     "data": {
+      "pattern": [
+       126,
+       10
+      ]
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 134
+   }
+  },
+  {
+   "about": "pong 200",
+   "in": [
+    {
+     "op": 10,
+     "data": {
+      "pattern": [
+       200,
+       11
+      ]
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 208
+   }
+  },
+  {
+   "about": "op 11 126",
+   "in": [
+    {
+     "op": 11,
+     "data": {
+      "pattern": [
+       126,
+       12
+      ]
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 134
+   }
+  },
+  {
+   "about": "op 15 0",
+   "in": [
+    {
+     "op": 15,
+     "data": {
+      "b64": ""
+     }
+    }
+   ],
+   "frames": [
+    [
+     15,
+     {
+      "b64": ""
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "op 3 200",
+   "in": [
+    {
+     "op": 3,
+     "data": {
+      "pattern": [
+       200,
+       13
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     3,
+     {
+      "b64": "qbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI+WnaSrsrnAx87V3OPq8fj/Bg0UGyIpMDc+RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N/m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3/gUMExo="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "op 7 1",
+   "in": [
+    {
+     "op": 7,
+     "data": {
+      "b64": "eA=="
+     }
+    }
+   ],
+   "frames": [
+    [
+     7,
+     {
+      "b64": "eA=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "op 1 text",
+   "in": [
+    {
+     "op": 1,
+     "data": {
+      "text": "текст"
+     }
+    }
+   ],
+   "frames": [
+    [
+     1,
+     {
+      "b64": "0YLQtdC60YHRgg=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "op 0 continuation",
+   "in": [
+    {
+     "op": 0,
+     "data": {
+      "b64": "bW9yZQ=="
+     }
+    }
+   ],
+   "frames": [
+    [
+     0,
+     {
+      "b64": "bW9yZQ=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "fin 0 binary",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "cGFydA=="
+     },
+     "fin": false
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "cGFydA=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "fin 0 ping",
+   "in": [
+    {
+     "op": 9,
+     "data": {
+      "b64": "cA=="
+     },
+     "fin": false
+    }
+   ],
+   "frames": [
+    [
+     9,
+     {
+      "b64": "cA=="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "claims 1048577",
+   "in": [
+    {
+     "raw": {
+      "b64": "gv8AAAAAABAAAQ=="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 10
+   }
+  },
+  {
+   "about": "claims 1048576",
+   "in": [
+    {
+     "raw": {
+      "b64": "gv8AAAAAABAAAA=="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 10
+   }
+  },
+  {
+   "about": "claims 2**63",
+   "in": [
+    {
+     "raw": {
+      "b64": "gv+AAAAAAAAAAA=="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 10
+   }
+  },
+  {
+   "about": "claims 2**64-1",
+   "in": [
+    {
+     "raw": {
+      "b64": "gv///////////w=="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 10
+   }
+  },
+  {
+   "about": "claims 65535 (126 form)",
+   "in": [
+    {
+     "raw": {
+      "b64": "gv7//w=="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 4
+   }
+  },
+  {
+   "about": "ping claims 126 without data",
+   "in": [
+    {
+     "raw": {
+      "b64": "if4Afg=="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "long",
+    "left": 4
+   }
+  },
+  {
+   "about": "rsv1",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "eA=="
+     },
+     "rsv": 64
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 7
+   }
+  },
+  {
+   "about": "rsv2",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "eA=="
+     },
+     "rsv": 32
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 7
+   }
+  },
+  {
+   "about": "rsv3",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "eA=="
+     },
+     "rsv": 16
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 7
+   }
+  },
+  {
+   "about": "rsv all",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "eA=="
+     },
+     "rsv": 112
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 7
+   }
+  },
+  {
+   "about": "unmasked",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "eA=="
+     },
+     "mask": null
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 3
+   }
+  },
+  {
+   "about": "unmasked empty",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": ""
+     },
+     "mask": null
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 2
+   }
+  },
+  {
+   "about": "unmasked close",
+   "in": [
+    {
+     "op": 8,
+     "data": {
+      "b64": ""
+     },
+     "mask": null
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 2
+   }
+  },
+  {
+   "about": "unmasked header only",
+   "in": [
+    {
+     "raw": {
+      "b64": "ggU="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 2
+   }
+  },
+  {
+   "about": "rsv header only",
+   "in": [
+    {
+     "raw": {
+      "b64": "woU="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "error": "frame",
+    "left": 2
+   }
+  },
+  {
+   "about": "one byte",
+   "in": [
+    {
+     "raw": {
+      "b64": "gg=="
+     }
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 1
+   }
+  },
+  {
+   "about": "126 form, 3 bytes",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       300,
+       14
+      ]
+     },
+     "cut": [
+      0,
+      3
+     ]
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 3
+   }
+  },
+  {
+   "about": "127 form, 9 bytes",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "pattern": [
+       70000,
+       15
+      ]
+     },
+     "cut": [
+      0,
+      9
+     ]
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 9
+   }
+  },
+  {
+   "about": "half a mask",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "YWJj"
+     },
+     "cut": [
+      0,
+      4
+     ]
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 4
+   }
+  },
+  {
+   "about": "mask, no data",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "YWJj"
+     },
+     "cut": [
+      0,
+      6
+     ]
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 6
+   }
+  },
+  {
+   "about": "half the data",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "YWJjZGVm"
+     },
+     "cut": [
+      0,
+      9
+     ]
+    }
+   ],
+   "frames": [],
+   "end": {
+    "more": 9
+   }
+  },
+  {
+   "about": "frame then half",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "b25l"
+     }
+    },
+    {
+     "op": 2,
+     "data": {
+      "b64": "dHdv"
+     },
+     "cut": [
+      0,
+      7
+     ]
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "b25l"
+     }
+    ]
+   ],
+   "end": {
+    "more": 7
+   }
+  },
+  {
+   "about": "several",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "YQ=="
+     }
+    },
+    {
+     "op": 9,
+     "data": {
+      "b64": "cA=="
+     }
+    },
+    {
+     "op": 8,
+     "data": {
+      "b64": ""
+     }
+    },
+    {
+     "op": 2,
+     "data": {
+      "b64": "YWZ0ZXI="
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "YQ=="
+     }
+    ],
+    [
+     9,
+     {
+      "b64": "cA=="
+     }
+    ],
+    [
+     8,
+     {
+      "b64": ""
+     }
+    ],
+    [
+     2,
+     {
+      "b64": "YWZ0ZXI="
+     }
+    ]
+   ],
+   "end": {
+    "more": 0
+   }
+  },
+  {
+   "about": "good then unmasked",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "b2s="
+     }
+    },
+    {
+     "op": 2,
+     "data": {
+      "b64": "YmFk"
+     },
+     "mask": null
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "b2s="
+     }
+    ]
+   ],
+   "end": {
+    "error": "frame",
+    "left": 5
+   }
+  },
+  {
+   "about": "good then long ping",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "b2s="
+     }
+    },
+    {
+     "op": 9,
+     "data": {
+      "pattern": [
+       126,
+       16
+      ]
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "b2s="
+     }
+    ]
+   ],
+   "end": {
+    "error": "long",
+    "left": 134
+   }
+  },
+  {
+   "about": "good then rsv",
+   "in": [
+    {
+     "op": 2,
+     "data": {
+      "b64": "b2s="
+     }
+    },
+    {
+     "op": 2,
+     "data": {
+      "b64": "eA=="
+     },
+     "rsv": 64
+    },
+    {
+     "op": 2,
+     "data": {
+      "b64": "bmV2ZXI="
+     }
+    }
+   ],
+   "frames": [
+    [
+     2,
+     {
+      "b64": "b2s="
+     }
+    ]
+   ],
+   "end": {
+    "error": "frame",
+    "left": 18
+   }
+  },
+  {
+   "about": "empty input",
+   "in": [],
+   "frames": [],
+   "end": {
+    "more": 0
+   }
+  }
+ ],
+ "handshake": {
+  "origin": "https://relay.example.com:8443",
+  "ticket": "abababababababababababababababab",
+  "ip": "192.0.2.1",
+  "cases": [
+   {
+    "about": "good (RFC 6455 key)",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "no Origin",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "Upgrade in another case, Connection with two tokens",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "WebSocket"
+     ],
+     [
+      "Connection",
+      "keep-alive, Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "no Upgrade",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "Upgrade: websockets",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websockets"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "Connection: close",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "close"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "no Connection",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "Connection: Upgraded (a substring)",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgraded"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "version 8",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "8"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "no version",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "version with a space after",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13 "
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "version with spaces before",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "  13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "no key",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "short key",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "abc"
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "url-safe key",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ-_"
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "key of zeros",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "AAAAAAAAAAAAAAAAAAAAAA=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "ICX+Yqv66kxgM0FcWaLWlFLwTAI="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "key with a space after",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ== "
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "key with one =",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQa="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "wrong Origin",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://evil.example.com"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"denied\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "Origin with a slash",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443/"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"denied\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "empty Origin",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      ""
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"denied\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "Origin null",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "null"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"denied\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "Origin in another case",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://Relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"denied\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "rate limited",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": false,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 429 Too Many Requests",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "16"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"rate\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "no ticket",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"ticket\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "ticket in capitals",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=ABABABABABABABABABABABABABABABAB",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"ticket\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "ticket too short",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=ababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"ticket\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "ticket after another parameter",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?x=1&t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"ticket\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "ticket then another parameter",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab&x=1",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"ticket\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "ticket refused",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": false,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"ticket\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "busy (8 taken for this address)",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 8,
+    "status_line": "HTTP/1.0 429 Too Many Requests",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "16"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"busy\"}",
+    "slots_after": [
+     8,
+     {
+      "192.0.2.1": 8
+     }
+    ]
+   },
+   {
+    "about": "7 taken: still room",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 7,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     7,
+     {
+      "192.0.2.1": 7
+     }
+    ]
+   },
+   {
+    "about": "bad key and bad Origin",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "abc"
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://evil.example.com"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 400 Bad Request",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "15"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"bad\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "bad Origin and rate limited",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://evil.example.com"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": false,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"denied\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "rate limited and no ticket",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "",
+    "bucket": false,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 429 Too Many Requests",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "16"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"rate\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "no ticket and busy",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "",
+    "bucket": true,
+    "claim": true,
+    "taken": 8,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"ticket\"}",
+    "slots_after": [
+     8,
+     {
+      "192.0.2.1": 8
+     }
+    ]
+   },
+   {
+    "about": "two Origins: good first",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ],
+     [
+      "Origin",
+      "https://evil.example.com"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "two Origins: bad first",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://evil.example.com"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.0 403 Forbidden",
+    "response_headers": [
+     [
+      "Server",
+      "cca-presence/1 "
+     ],
+     [
+      "Date",
+      "<date>"
+     ],
+     [
+      "Content-Type",
+      "application/json"
+     ],
+     [
+      "Content-Length",
+      "18"
+     ],
+     [
+      "Cache-Control",
+      "no-store"
+     ]
+    ],
+    "body": "{\"error\":\"denied\"}",
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "lower-case header names",
+    "headers": [
+     [
+      "host",
+      "relay.example.com:8443"
+     ],
+     [
+      "upgrade",
+      "websocket"
+     ],
+     [
+      "connection",
+      "Upgrade"
+     ],
+     [
+      "sec-websocket-key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "sec-websocket-version",
+      "13"
+     ],
+     [
+      "origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   },
+   {
+    "about": "HTTP/1.0 request",
+    "headers": [
+     [
+      "Host",
+      "relay.example.com:8443"
+     ],
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Key",
+      "dGhlIHNhbXBsZSBub25jZQ=="
+     ],
+     [
+      "Sec-WebSocket-Version",
+      "13"
+     ],
+     [
+      "Origin",
+      "https://relay.example.com:8443"
+     ]
+    ],
+    "query": "?t=abababababababababababababababab",
+    "bucket": true,
+    "claim": true,
+    "taken": 0,
+    "status_line": "HTTP/1.1 101 Switching Protocols",
+    "response_headers": [
+     [
+      "Upgrade",
+      "websocket"
+     ],
+     [
+      "Connection",
+      "Upgrade"
+     ],
+     [
+      "Sec-WebSocket-Accept",
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+     ]
+    ],
+    "line": "GET /v1/relay/ws?t=abababababababababababababababab HTTP/1.0",
+    "ip": "192.0.2.1",
+    "after": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "slots_after": [
+     0,
+     {}
+    ]
+   }
+  ]
+ },
+ "pump": {
+  "idle_ms": 600,
+  "stall_ms": 400,
+  "settle_ms": 80,
+  "request_headers": [
+   [
+    "Host",
+    "relay.example.com:8443"
+   ],
+   [
+    "Upgrade",
+    "websocket"
+   ],
+   [
+    "Connection",
+    "Upgrade"
+   ],
+   [
+    "Sec-WebSocket-Key",
+    "dGhlIHNhbXBsZSBub25jZQ=="
+   ],
+   [
+    "Sec-WebSocket-Version",
+    "13"
+   ],
+   [
+    "Origin",
+    "https://relay.example.com:8443"
+   ]
+  ],
+  "cases": [
+   {
+    "about": "binary both ways, the client closes",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "aGVsbG8="
+        }
+       }
+      ]
+     ],
+     [
+      "relay",
+      {
+       "b64": "d29ybGQ="
+      }
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "data",
+      {
+       "b64": "d29ybGQ="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "aGVsbG8="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "ping gets a pong, a pong is ignored",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 9,
+        "data": {
+         "b64": "cDE="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 10,
+        "data": {
+         "b64": "dW5zb2xpY2l0ZWQ="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "pong",
+      {
+       "b64": "cDE="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "fragmented binary",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "YWI="
+        },
+        "fin": false
+       },
+       {
+        "op": 0,
+        "data": {
+         "b64": "Y2Q="
+        },
+        "fin": false
+       },
+       {
+        "op": 0,
+        "data": {
+         "b64": "ZWY="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "YWJjZGVm"
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "frames in one write, a ping between",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "YQ=="
+        }
+       },
+       {
+        "op": 9,
+        "data": {
+         "b64": "cA=="
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "b64": "Yg=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "pong",
+      {
+       "b64": "cA=="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "YWI="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "a text frame ends it (the data before it goes through)",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "YmVmb3Jl"
+        }
+       },
+       {
+        "op": 1,
+        "data": {
+         "b64": "dGV4dA=="
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "b64": "YWZ0ZXI="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "YmVmb3Jl"
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "unmasked frame",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "b64": "eQ=="
+        },
+        "mask": null
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "eA=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "rsv1",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        },
+        "rsv": 64
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "rsv2",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        },
+        "rsv": 32
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "rsv3",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        },
+        "rsv": 16
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "ping of 126 bytes",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 9,
+        "data": {
+         "pattern": [
+          126,
+          1
+         ]
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "ping of 125 bytes",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 9,
+        "data": {
+         "pattern": [
+          125,
+          2
+         ]
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "pong",
+      {
+       "b64": "GiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd34="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "header claims more than 1 MiB",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "gv8AAAAAABAAAQ=="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "header claims 1 MiB, then the client stops sending",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "gv8AAAAAABAAAG1hc2t4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4"
+        }
+       }
+      ]
+     ],
+     [
+      "client_shut",
+      null
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "the relay closes first",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        }
+       }
+      ]
+     ],
+     [
+      "relay_close",
+      null
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "eA=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "the relay shuts down its sending side",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        }
+       }
+      ]
+     ],
+     [
+      "relay",
+      {
+       "b64": "bGFzdCB3b3Jkcw=="
+      }
+     ],
+     [
+      "relay_shut",
+      null
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "data",
+      {
+       "b64": "bGFzdCB3b3Jkcw=="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "eA=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "the client shuts down its sending side without a close frame",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        }
+       }
+      ]
+     ],
+     [
+      "client_shut",
+      null
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "eA=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "idle: nothing happens",
+    "extra": [],
+    "steps": [],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "idle after some traffic",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "eA=="
+        }
+       }
+      ]
+     ],
+     [
+      "relay",
+      {
+       "b64": "eQ=="
+      }
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "data",
+      {
+       "b64": "eQ=="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "eA=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "an empty binary frame",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": ""
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "b64": "eg=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "eg=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "reserved op 3",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 3,
+        "data": {
+         "b64": "eA=="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "reserved op 11",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 11,
+        "data": {
+         "b64": "eA=="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "text alone",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 1,
+        "data": {
+         "b64": "aGk="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "the relay sends 200 KB",
+    "extra": [],
+    "steps": [
+     [
+      "relay",
+      {
+       "pattern": [
+        200000,
+        3
+       ]
+      }
+     ],
+     [
+      "wait",
+      300
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "data",
+      {
+       "len": 200000,
+       "sha256": "4fb0a576f9bdcf1692c6d2be4a4812a6e557c7d703d22bf96077c9d4af0b0ab0"
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "the client sends 300 KB",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          10
+         ]
+        },
+        "fin": false
+       },
+       {
+        "op": 0,
+        "data": {
+         "pattern": [
+          65536,
+          11
+         ]
+        },
+        "fin": false
+       },
+       {
+        "op": 0,
+        "data": {
+         "pattern": [
+          65536,
+          12
+         ]
+        },
+        "fin": false
+       },
+       {
+        "op": 0,
+        "data": {
+         "pattern": [
+          65536,
+          13
+         ]
+        },
+        "fin": false
+       },
+       {
+        "op": 0,
+        "data": {
+         "pattern": [
+          37856,
+          14
+         ]
+        },
+        "fin": true
+       }
+      ]
+     ],
+     [
+      "wait",
+      300
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "len": 300000,
+     "sha256": "177cdb348e6146a00c43d91b789a2cd533298141e56163f98b6f0e949f42aca4"
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "a close frame, then data in the same write",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+hieWU="
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "b64": "bG9zdA=="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "byte by byte",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "gg=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "hA=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "Nw=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "+g=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "IQ=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "PQ=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "RA=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "lg=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "Tg=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "Sg=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "c2xvdw=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "a ping without FIN",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 9,
+        "data": {
+         "b64": "cGY="
+        },
+        "fin": false
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "pong",
+      {
+       "b64": "cGY="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "a continuation with nothing before it",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 0,
+        "data": {
+         "b64": "Y29udA=="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "Y29udA=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "5 bytes in the 127 form",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "c2hvcnQ="
+        },
+        "len": 127
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "c2hvcnQ="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "two pings in one write",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 9,
+        "data": {
+         "b64": "b25l"
+        }
+       },
+       {
+        "op": 9,
+        "data": {
+         "b64": "dHdv"
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "pong",
+      {
+       "b64": "b25l"
+      }
+     ],
+     [
+      "pong",
+      {
+       "b64": "dHdv"
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "both directions interleaved",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "YQ=="
+        }
+       }
+      ]
+     ],
+     [
+      "relay",
+      {
+       "b64": "Yg=="
+      }
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "Yw=="
+        }
+       }
+      ]
+     ],
+     [
+      "relay",
+      {
+       "b64": "ZA=="
+      }
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "data",
+      {
+       "b64": "YmQ="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "YWM="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "half a frame, then the client stops sending",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "b64": "YWJjZGVm"
+        },
+        "cut": [
+         0,
+         7
+        ]
+       }
+      ]
+     ],
+     [
+      "client_shut",
+      null
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "a close frame without a code",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": ""
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "the relay sends, then closes",
+    "extra": [],
+    "steps": [
+     [
+      "relay",
+      {
+       "b64": "Ynll"
+      }
+     ],
+     [
+      "relay_close",
+      null
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "data",
+      {
+       "b64": "Ynll"
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "the relay does not read: stall",
+    "extra": [],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          0
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          1
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          2
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          3
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          4
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          5
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          6
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          7
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          8
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          9
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          10
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          11
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          12
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          13
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          14
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          15
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          16
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          17
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          18
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          19
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          20
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          21
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          22
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          23
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          24
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          25
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          26
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          27
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          28
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          29
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          30
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          31
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          32
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          33
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          34
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          35
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          36
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          37
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          38
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          39
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          40
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          41
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          42
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          43
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          44
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          45
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          46
+         ]
+        }
+       },
+       {
+        "op": 2,
+        "data": {
+         "pattern": [
+          65536,
+          47
+         ]
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": false,
+    "loose": true,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": null,
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "early: a whole frame with the request",
+    "extra": [
+     {
+      "op": 2,
+      "data": {
+       "b64": "ZWFybHk="
+      }
+     }
+    ],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "ZWFybHk="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "early: part of a frame with the request",
+    "extra": [
+     {
+      "op": 2,
+      "data": {
+       "b64": "ZWFybHk="
+      },
+      "cut": [
+       0,
+       3
+      ]
+     }
+    ],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "raw": {
+         "b64": "+iE9UptTUU4="
+        }
+       }
+      ]
+     ],
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "ZWFybHk="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "early: a close frame with the request",
+    "extra": [
+     {
+      "op": 2,
+      "data": {
+       "b64": "eA=="
+      }
+     },
+     {
+      "op": 8,
+      "data": {
+       "b64": ""
+      }
+     }
+    ],
+    "steps": [],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": "eA=="
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "early: a ping with the request",
+    "extra": [
+     {
+      "op": 9,
+      "data": {
+       "b64": "aGk="
+      }
+     }
+    ],
+    "steps": [
+     [
+      "client",
+      [
+       {
+        "op": 8,
+        "data": {
+         "b64": "A+g="
+        }
+       }
+      ]
+     ]
+    ],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "pong",
+      {
+       "b64": "aGk="
+      }
+     ],
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   },
+   {
+    "about": "early: an unmasked frame with the request",
+    "extra": [
+     {
+      "op": 2,
+      "data": {
+       "b64": "eA=="
+      },
+      "mask": null
+     }
+    ],
+    "steps": [],
+    "relay_reads": true,
+    "loose": false,
+    "client": [
+     [
+      "close",
+      {
+       "b64": ""
+      }
+     ]
+    ],
+    "client_end": "eof",
+    "relay": {
+     "b64": ""
+    },
+    "relay_end": "eof",
+    "slots_after": [
+     0,
+     {}
+    ],
+    "handler_done": true
+   }
+  ]
+ }
+}
