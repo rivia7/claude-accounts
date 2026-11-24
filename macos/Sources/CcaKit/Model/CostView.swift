@@ -147,6 +147,13 @@ enum CostChart {
         return c?.device(id)?.used == true
     }
 
+    /// 账号页的设备菜单里分隔线下面的那几台：cca 列的别的设备（`cost_total.devices`，顺序照它）里用过这个账号的，和折合金额页看一台设备时
+    /// 列哪些账号是同一个规则（listed）。几个 Team 的设备都在 `cost_total.devices` 里：以前每个账号的菜单都全列，只在 Team B 的设备
+    /// 也出现在 Team A 的账号下面；只为诊断列出来的（used 是 false）也不列
+    static func menuDevices(_ total: CostTotal?, account c: AccountCost?) -> [CostTotalDevice] {
+        (total?.otherDevices ?? []).filter { listed(c, scope: .device($0.id)) }
+    }
+
     /// 横轴的范围：最右边是最晚结束的那一项（这一周、今天的结束时间）和现在里晚的那个，往左 13 周 / 30 天。
     /// 折合金额页所有行用同一个（上下对得齐），和每周用量的图一样按时间排，不按第几项排。
     static func domain(_ lists: [[CostPeriod]], granularity g: CostGranularity, now: Double) -> ClosedRange<Double> {

@@ -267,6 +267,13 @@ final class AppModel {
         return d.isMe ? .me : costScope
     }
 
+    /// 账号页实际显示的：选的那台设备没用过这个账号（不在这一页的设备菜单里，CostChart.menuDevices）时这一页看所有设备，
+    /// 设置不改（回到折合金额页、换到它用过的账号接着看它）
+    func costScopeShown(for c: AccountCost?) -> CostScope {
+        let s = costScopeShown
+        return CostChart.listed(c, scope: s) ? s : .all
+    }
+
     /// 分流页看哪一边：nil 按 route_pref，否则用 CCA_ROUTE 指定。
     var liveRoute: Route? {
         didSet {

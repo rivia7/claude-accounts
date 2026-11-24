@@ -51,7 +51,7 @@ struct CostStatsPage: View {
     /// 和账号页「折合金额」的标题上一样的两个切换（两页共用一个设置）、一样的顺序，和「刷新」
     @ViewBuilder
     private var controls: some View {
-        CostScopePicker()
+        CostScopePicker(page: .stats)
         CostGranularityPicker()
         SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
             .disabled(model.costRefreshing)

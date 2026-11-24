@@ -149,13 +149,45 @@ struct CostPartialLegend: View {
 }
 
 /// 看哪台设备：账号页「折合金额」的标题、折合金额页的标题上各一个，两页共用一个设置（AppModel.costScope）。
-/// 菜单里是所有设备、本机，下面是 cca 列的别的设备（`cost_total.devices`：在哪个账号里用过的，按 30 天的金额从多到少）
+/// 菜单里是所有设备、本机，下面是 cca 列的别的设备（`cost_total.devices`：在哪个账号里用过的，按 30 天的金额从多到少）。
+/// 账号页的只列用过这个账号的（CostChart.menuDevices：别的 Team 的设备不出现在这个账号下），选的那台没用过这个账号时
+/// 这一页看所有设备（AppModel.costScopeShown(for:)）
 struct CostScopePicker: View {
+    /// 哪一页的：折合金额页（所有账号）、账号页（这个账号的折合金额）
+    enum Page {
+        case stats
+        case account(AccountCost?)
+    }
+
     @Environment(AppModel.self) private var model
+    let page: Page
+
+    /// 分隔线下面列哪几台
+    private var menuDevices: [CostTotalDevice] {
+        let total = model.state?.costTotal
+        switch page {
+        case .stats: return total?.otherDevices ?? []
+        case .account(let c): return CostChart.menuDevices(total, account: c)
+        }
+    }
+
+    /// 菜单上选着的：这一页实际看的
+    private var shown: CostScope {
+        switch page {
+        case .stats: return model.costScopeShown
+        case .account(let c): return model.costScopeShown(for: c)
+        }
+    }
+
+    private var helpText: String {
+        let others: String
+        if case .account = page { others = "用过这个账号的那几台，只算那一台上用的" } else { others = "只算那一台上用的" }
+        return "所有设备：整个账号，各台设备加起来；本机：只算这台设备上用的；别的设备：" + others
+    }
 
     var body: some View {
-        let others = model.state?.costTotal?.otherDevices ?? []
-        Picker("看哪台设备", selection: Binding(get: { model.costScopeShown }, set: { model.costScope = $0 })) {
+        let others = menuDevices
+        Picker("看哪台设备", selection: Binding(get: { shown }, set: { model.costScope = $0 })) {
             Text("所有设备").tag(CostScope.all)
             Text("本机").tag(CostScope.me)
             if !others.isEmpty {
@@ -168,7 +200,7 @@ struct CostScopePicker: View {
         .pickerStyle(.menu)
         .labelsHidden()
         .fixedSize()
-        .help("所有设备：整个账号，各台设备加起来；本机：只算这台设备上用的；别的设备：只算那一台上用的")
+        .help(helpText)
     }
 }
 
@@ -244,7 +276,7 @@ struct CostSection: View {
         }
         .layoutPriority(-1)   // 放不下时先让它省略，按钮不挤
         if c != nil {
-            CostScopePicker()
+            CostScopePicker(page: .account(c))
             CostGranularityPicker()
         }
         SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
@@ -278,7 +310,7 @@ struct CostSection: View {
 
     private func tile(_ c: AccountCost, now: Double) -> some View {
         let g = model.costGranularity
-        let scope = model.costScopeShown
+        let scope = model.costScopeShown(for: c)
         let bars = CostChart.bars(c, granularity: g, scope: scope)
         let hovered = bars.first { $0.id == hover.wrappedValue }
         return VStack(alignment: .leading, spacing: 10) {

@@ -99,6 +99,14 @@ func costFixtureTests() {
         check("cost_total.devices：很久没同步、撤销了", t.devices.map(\.stale) == [false, false, true, true] && t.devices.map(\.revoked) == [false, false, false, true])
         check("看哪一方：另一台设备是 devices 里那一台的，cca 没列的设备没有", t.part(.device(aliceMini)) == mini?.part && t.part(.device("SHA256:x")) == nil)
         check("设备菜单里分隔线下面的：别的设备", t.otherDevices.map(\.name) == ["alice-mini", "office-imac", "old-mini"])
+        check("账号页的设备菜单：只列用过这个账号的（顺序照 cost_total）；carol 只有这台设备用过，别的设备一台都不列",
+              CostChart.menuDevices(t, account: s.account(bobRef)?.cost).map(\.name) == ["alice-mini", "office-imac", "old-mini"]
+              && carol?.cost != nil && CostChart.menuDevices(t, account: carol?.cost).isEmpty
+              && CostChart.menuDevices(nil, account: s.account(bobRef)?.cost).isEmpty && CostChart.menuDevices(t, account: nil).isEmpty)
+        if var diag = s.account(bobRef)?.cost {
+            diag.devices[1].used = false
+            check("账号页的设备菜单：只为诊断列出来的（used 是 false）不列", CostChart.menuDevices(t, account: diag).map(\.name) == ["office-imac", "old-mini"])
+        }
         check("账号里的设备：都用过这个账号（used）", s.tools.flatMap(\.accounts).allSatisfy { $0.cost?.devices.allSatisfy(\.used) ?? true })
         check("cost_total：认不出是哪个账号的（旧版 cca 留下的，没有原因）", t.unattributed?.daysUSD == 12.3 && t.unattributed?.requests == 40
               && t.unattributed?.why == [] && t.unattributed?.claudeCode == "2.1.330" && t.unattributed?.claudeCodeOld == false)
@@ -781,6 +789,11 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     _ = await waitUntil { dev.state != nil }
     dev.costScope = .device(aliceMini)
     check("选另一台设备：记在设置里", prefs.string(forKey: "cost.scope") == "d:" + aliceMini && dev.costScopeShown == .device(aliceMini))
+    let carolRef = AccountRef(tool: .claude, key: "carol@example.com")
+    check("账号页：选的那台设备用过这个账号时看它；没用过（carol）、没有折合金额时这一页看所有设备，设置不改",
+          dev.costScopeShown(for: dev.account(bobRef)?.cost) == .device(aliceMini)
+          && dev.account(carolRef)?.cost != nil && dev.costScopeShown(for: dev.account(carolRef)?.cost) == .all
+          && dev.costScopeShown(for: nil) == .all && prefs.string(forKey: "cost.scope") == "d:" + aliceMini)
     let devGroups = dev.costGroups()
     check("看另一台设备：折合金额页只列它用过的账号（alice-mini 只用过 bob），没有账号的组不列",
           devGroups.map(\.department) == [.claude] && devGroups.first?.accounts.map(\.key) == ["工作(bob@example.com)"], "\(devGroups.map { $0.accounts.map(\.key) })")
@@ -788,7 +801,7 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     check("选的设备这次 cca 没列出来：看所有设备，设置不改", dev.costScopeShown == .all && prefs.string(forKey: "cost.scope") == "d:SHA256:gone"
           && dev.costGroups().flatMap(\.accounts).count == groups.flatMap(\.accounts).count)
     dev.costScope = .device(me)
-    check("选的设备 id 是这台设备的：就是本机", dev.costScopeShown == .me)
+    check("选的设备 id 是这台设备的：就是本机（哪个账号页都是）", dev.costScopeShown == .me && dev.costScopeShown(for: dev.account(carolRef)?.cost) == .me)
     dev.shutdown()
     _ = tDev
     let (_, again2) = model(prefs: prefs)
