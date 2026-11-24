@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.7", title: "账号页的设备菜单只列用过这个账号的设备", points: [
+            .init(symbol: "desktopcomputer",
+                  text: "账号页「折合金额」右上角的设备菜单只列用过这个账号的设备，只在别的 Team 里的设备不再出现在这个账号下。"),
+            .init(symbol: "chart.bar.xaxis",
+                  text: "选着的设备没用过这个账号时，这一页看所有设备；「折合金额」页和那台设备用过的账号照样看它。"),
+        ]),
         ReleaseNote(version: "3.6.6", title: "Team 里每台设备都看得到各台设备的折合金额", points: [
             .init(symbol: "chart.bar.xaxis",
                   text: "Team 给的 Claude、Codex 账号，这台设备没登录也看得到 Team 里各台设备的折合金额，账号页和「折合金额」页的设备菜单里能切到各台设备。"),
