@@ -1,4 +1,5 @@
-//! 证书助手（`cca-core team-acme`）：给远程会话的网页端申请、续上浏览器信得过的证书。Python 的 server/cca-acme.py。
+//! 证书助手（`cca-core team-acme`）：给远程会话的网页端申请、续上浏览器信得过的证书。照原来 Python 的 server/cca-acme.py
+//! 移过来的（那一份不在仓库里了：见 server/mod.rs 开头）。
 //!
 //! 照 ACME（RFC 8555）向 Let's Encrypt 要证书——给 IP 地址签的（RFC 8738，只有约 6 天的短期证书这一种）或者给域名签的——放到一个
 //! 目录里（fullchain.pem、privkey.pem），到期之前自己续上；服务端发现文件换了会自己重新读（`tls::CertCtx`）。验证只用 http-01：

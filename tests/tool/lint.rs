@@ -15,6 +15,10 @@
 //!                                是目录的话查它下面所有 .sh、.swift（不跟着链接进别的目录）。没有：打出 ok；有：打出
 //!                                “：文件:行号、文件:行号…”（文件名是相对 仓库 的，先后照参数、同一个参数里照路径排）。一个不带 * 的
 //!                                参数什么都没找到：打出 “：没有 那个参数”，不再往下查
+//! nopython 仓库                  仓库里没有 Python 的程序了（辅助程序、服务端、测试都是 Rust）：仓库 下面名字以 .py、.pyc、.pyi、.pyw 结尾的
+//!                                文件、第一行是 #!…python… 的文件都算。不进 .git 这类名字以 . 开头的目录、target、build、
+//!                                node_modules、__pycache__（编出来的、别人的、以前留下的缓存），不跟着链接进别的目录。没有：打出 ok；有：打出
+//!                                “：文件、文件…”（相对 仓库 的路径，排过序）
 //! ```
 //!
 //! 退出码（和 fx.rs 一样，收尾用的就是它的 dispatch）：0 是查完了（查出毛病也是 0，看打印的那一行）；1 是原来的 Python 也会出的
@@ -32,7 +36,7 @@ use crate::fx::{arg, dispatch, raise, read_text, unsupported, Sub, R};
 
 pub const CMDS: &[(&str, crate::Run)] = &[("lint", run)];
 
-const SUBS: &[(&str, Sub)] = &[("prompts", prompts), ("ifaces", ifaces), ("dollar", dollar)];
+const SUBS: &[(&str, Sub)] = &[("prompts", prompts), ("ifaces", ifaces), ("dollar", dollar), ("nopython", nopython)];
 
 fn run(args: &[String]) -> i32 {
     dispatch("lint", SUBS, args)
@@ -337,7 +341,60 @@ fn dollar(a: &[String], out: &mut String) -> R<i32> {
     Ok(0)
 }
 
-// ---- 测试：期望的值都是原来那三段 Python 在同样的输入上打印的（生成它们的脚本不在仓库里） ----
+// ---- nopython ----
+
+/// 不进去的目录：编出来的（cli/target、macos/build）、别人的（node_modules）、以前跑 Python 的测试留在检出里的缓存
+/// （__pycache__：不归 git 管，留着也不算仓库里有 Python），名字以 . 开头的另算（.git、.claude、.build）
+const NOT_OURS: [&str; 4] = ["target", "build", "node_modules", "__pycache__"];
+
+/// 名字说它是 Python 的
+fn python_name(name: &str) -> bool {
+    [".py", ".pyc", ".pyi", ".pyw"].iter().any(|ext| name.ends_with(ext))
+}
+
+/// 第一行是 #!…python…（只读开头的一小段：不把大文件整个读进来；只看普通文件：管道、套接字一打开就卡住）
+fn python_shebang(path: &str) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 256];
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
+        return false;
+    }
+    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    let n = f.read(&mut head).unwrap_or(0);
+    let line = head[..n].split(|b| *b == b'\n').next().unwrap_or_default();
+    line.starts_with(b"#!") && line.windows(6).any(|w| w == b"python")
+}
+
+fn nopython(a: &[String], out: &mut String) -> R<i32> {
+    let root = arg(a, 0)?;
+    if !std::fs::metadata(root).is_ok_and(|m| m.is_dir()) {
+        return raise(format!("NotADirectoryError: [Errno 20] Not a directory: {}", repr_str(root)));
+    }
+    let mut bad = Vec::new();
+    let mut stack = vec![root.to_string()];
+    while let Some(dir) = stack.pop() {
+        let Some(names) = names_in(&dir)? else { continue };
+        for (name, is_dir, is_link) in names {
+            let path = fake::join(&[&dir, &name]);
+            if is_dir {
+                if !is_link && !name.starts_with('.') && !NOT_OURS.contains(&name.as_str()) {
+                    stack.push(path);
+                }
+            } else if python_name(&name) || python_shebang(&path) {
+                bad.push(relpath(&path, root)?);
+            }
+        }
+    }
+    bad.sort_unstable();
+    if bad.is_empty() {
+        out.push_str("ok\n");
+    } else {
+        out.push_str(&format!("：{}\n", bad.join("、")));
+    }
+    Ok(0)
+}
+
+// ---- 测试：prompts、ifaces、dollar 期望的值都是原来那三段 Python 在同样的输入上打印的（生成它们的脚本不在仓库里） ----
 
 #[cfg(test)]
 mod tests {
@@ -488,6 +545,50 @@ mod tests {
         std::fs::remove_file(dir.join("repo/macos/tools/bad.sh")).unwrap();
         std::os::unix::fs::symlink("nowhere", dir.join("repo/macos/tools/gone.sh")).unwrap();
         assert!(raised(dollar, &[&root, "macos/tools"]).starts_with("FileNotFoundError: "));
+    }
+
+    #[test]
+    fn nopython_lists_python_files_and_shebangs() {
+        let dir = TempDir::new("lint-nopython-");
+        for (name, text) in [
+            ("repo/cca", "#!/bin/bash\n# python3 以前在这里\npython3 -c pass\n"),
+            ("repo/cli/src/py/json.rs", "// 像 Python 的 json\n"),
+            ("repo/cli/target/debug/build/x.py", "print(1)\n"),
+            ("repo/macos/build/gen.py", "print(1)\n"),
+            ("repo/server/web/node_modules/a/setup.py", "print(1)\n"),
+            ("repo/.git/hooks/pre-commit", "#!/usr/bin/env python3\n"),
+            ("repo/.claude/worktrees/w/old.py", "print(1)\n"),
+            ("repo/tests/__pycache__/spec_wire.cpython-314.pyc", "\0\0"),
+            ("repo/docs/notes.pyx", "不算\n"),
+            ("repo/empty", ""),
+        ] {
+            fsx::write(dir.join(name), text);
+        }
+        let root = at(&dir, "repo");
+        assert_eq!(said(nopython, &[&root]), "ok\n");
+        // 名字是 Python 的、第一行的 shebang 是 python 的（第二行起提到它不算）；排过序，路径相对仓库
+        for (name, text) in [
+            ("repo/server/cca-presence.py", "#!/usr/bin/env python3\n"),
+            ("repo/tests/a.pyc", "\0\0"),
+            ("repo/tests/stubs.pyi", ""),
+            ("repo/tools/gen", "#!/usr/bin/env python3\nprint(1)\n"),
+            ("repo/tools/gen2", "#! /usr/bin/python\n"),
+            ("repo/tools/sh", "#!/bin/sh\nexec python3 x\n"),
+            ("outside/far.py", "print(1)\n"),
+            ("outside/tool", "#!/usr/bin/python3\n"),
+        ] {
+            fsx::write(dir.join(name), text);
+        }
+        // 链接：名字是 .py 的算（不管指着什么），指着别处的 Python 程序的不去读，指着目录的不进去
+        std::os::unix::fs::symlink("../cca", dir.join("repo/tools/link.py")).unwrap();
+        std::os::unix::fs::symlink(dir.join("outside/tool"), dir.join("repo/tools/tool")).unwrap();
+        std::os::unix::fs::symlink(dir.join("outside"), dir.join("repo/vendor")).unwrap();
+        assert_eq!(
+            said(nopython, &[&root]),
+            "：server/cca-presence.py、tests/a.pyc、tests/stubs.pyi、tools/gen、tools/gen2、tools/link.py\n"
+        );
+        assert_eq!(raised(nopython, &[]), "IndexError: list index out of range");
+        assert!(raised(nopython, &[&at(&dir, "repo/cca")]).starts_with("NotADirectoryError: "));
     }
 
     #[test]

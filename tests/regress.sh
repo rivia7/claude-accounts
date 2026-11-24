@@ -139,7 +139,7 @@ evq() { "$TESTBIN" evq "$T/ev.jsonl" "$1"; }   # 事件文件里有一条（e）
 evn() { grep -c "\"ev\":\"$1\"" "$T/ev.jsonl"; }   # 这种事件有几条
 runev() { : > "$T/ev.jsonl"; run CCA_EVENTS="$T/ev.jsonl" "$@" </dev/null; }   # 带事件文件运行（stdin 不是终端：App 就是这样调的）
 claude_device() { "$TESTBIN" val -f "d=$1/claude/.claude.json" 'd["userID"] + ":" + d["machineID"]'; }
-# Team 的服务器（真的 server/cca-presence.py --mode team，127.0.0.1 上、测试证书）和照 server/README.md 独立实现的那一头
+# Team 的服务器（真的：辅助程序的 team-server --mode team，127.0.0.1 上、测试证书）和照 server/README.md 独立实现的那一头
 # （tests/kit/spec.rs，经 cca-test spec 调；不用 cca 的代码：扮演管理员、别的设备）。11b2 起的几节都用；各节自己起、自己停（tm_stop），退出时停掉还开着的
 tm_cert() { mkdir -p "$1"; openssl ecparam -name prime256v1 -genkey -noout -out "$1/key.pem" 2>/dev/null; openssl req -new -x509 -key "$1/key.pem" -subj /CN=cca-team -days 2 -out "$1/cert.pem" 2>/dev/null; }
 tm_srv() {   # tm_srv 目录 根公钥 [端口 [服务器的别的参数…]]：起一台 Team 的服务器（证书在 目录/cert.pem；状态文件 目录/state.json 留着，
@@ -147,13 +147,8 @@ tm_srv() {   # tm_srv 目录 根公钥 [端口 [服务器的别的参数…]]：
 	local dir=$1 root=$2 port=${3:-0} i
 	shift 2; [ $# -eq 0 ] || shift
 	rm -f "$dir/port"
-	if [ "${CCA_TEST_SERVER:-}" = rust ]; then   # 辅助程序里的 Rust 版（tests/helper_bin.py 的 SERVER_ARGV 认的是同一个开关）；参数一样
-		"$HELPER_BIN" team-server --mode team --team-root "$root" --listen "127.0.0.1:$port" --port-file "$dir/port" \
-			--cert "$dir/cert.pem" --key "$dir/key.pem" --state "$dir/state.json" "$@" >>"$dir/log" 2>&1 &
-	else
-		python3 -I "$D/../server/cca-presence.py" --mode team --team-root "$root" --listen "127.0.0.1:$port" --port-file "$dir/port" \
-			--cert "$dir/cert.pem" --key "$dir/key.pem" --state "$dir/state.json" "$@" >>"$dir/log" 2>&1 &
-	fi
+	"$HELPER_BIN" team-server --mode team --team-root "$root" --listen "127.0.0.1:$port" --port-file "$dir/port" \
+		--cert "$dir/cert.pem" --key "$dir/key.pem" --state "$dir/state.json" "$@" >>"$dir/log" 2>&1 &
 	TMPID=$!; TMPIDS="$TMPIDS $TMPID"
 	for i in $(seq 1 50); do [ -s "$dir/port" ] && return 0; sleep 0.1; done; return 1
 }
@@ -2380,6 +2375,9 @@ lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-
 }
 ld=$(lint_dollar)
 ok "lint：cca、install.sh、release.sh、server/hub-install.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
+# 仓库里不再有 Python 的程序（辅助程序、服务端、测试、小工具都是 Rust）：.py 这类文件、python 的 shebang 都算（见 tests/tool/lint.rs）
+lpy=$("$TESTBIN" lint nopython "$D/..")
+ok "lint：仓库里没有 Python 的程序（.py 文件、第一行是 python 的脚本）${lpy#ok}" '[ "$lpy" = ok ]'
 lint_helper_env() {   # 回归里自己拼环境运行 cca 的地方（不经 run 的那几处）都要带着 CCA_HELPER="$HELPERWRAP"：不带的话那一处用的是
 	# 仓库里 cli/target/release 下的那一份，release.sh 跑回归时（CCA_HELPER 指着要发布的那一份）它可能是以前编的、甚至没有
 	local bad
@@ -2453,16 +2451,17 @@ fi
 # 换代的那一次更新：还内嵌着 Python 的旧版本（cli/PORTED_FROM 记的那个主干提交的 cca）用它自己的更新流程装上接着辅助程序的
 # 新版本——下载、验签（旧版本要求新文件 bash -n 通过、有 VERSION 那一行）、换上；新版本第一次运行自己解出辅助程序。在另一个 HOME 里
 # 做（不动下面用的更新状态）。旧版本的 cca 从 git 里取（CCA_OLD_CCA=文件 可以另指一份）；取不到（不在 git 仓库里）就跳过。
-# 等没有还内嵌 Python 的版本在用了，这个用例就可以删掉。回归里只有这一处还要 python3（旧版本自己要它）：这台机器上没有就跳过
+# 等没有还内嵌 Python 的版本在用了，这个用例就可以删掉。回归里只有这一处还要 python3（旧版本自己要它；别处调了 Python 最后有一条
+# 用例说）：这台机器上没有就跳过
 OLDCCA="$T/old-cca"
 if [ -n "${CCA_OLD_CCA:-}" ]; then cp "$CCA_OLD_CCA" "$OLDCCA"
 else git -C "$D/.." show "$(cut -d' ' -f1 "$D/../cli/PORTED_FROM" 2>/dev/null):cca" > "$OLDCCA" 2>/dev/null || rm -f "$OLDCCA"; fi
-if [ -s "$OLDCCA" ] && grep -q "^PY_SRC=" "$OLDCCA" && run python3 -c pass >/dev/null 2>&1; then
+if [ -s "$OLDCCA" ] && grep -q "^PY_SRC=" "$OLDCCA" && run CCA_PY_REAL=1 python3 -c pass >/dev/null 2>&1; then
 	OH="$T/oldhome"; mkdir -p "$OH/.cca/bin" "$G/v9.9.1"
 	oldv=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$OLDCCA")
 	sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$OLDCCA" > "$OH/.cca/bin/cca"; chmod 755 "$OH/.cca/bin/cca"
 	mkver 9.9.1 "$G/v9.9.1/cca"; ssh-keygen -Y sign -q -n cca-release -f "$T/relkey" "$G/v9.9.1/cca" 2>/dev/null
-	ro() { run HOME="$OH" CCA_HELPER= "$@"; }   # 旧版本用 PATH 里的 python3；新版本自己解辅助程序（不指定）
+	ro() { run HOME="$OH" CCA_HELPER= CCA_PY_REAL=1 "$@"; }   # 旧版本用 PATH 里的 python3（CCA_PY_REAL：沙箱里那个记账的假 python3 交给真的）；新版本自己解辅助程序（不指定）
 	v0=$(ro "$OH/.cca/bin/cca" version 2>&1)
 	out=$(ro "$OH/.cca/bin/cca" update 9.9.1 2>&1); rc=$?
 	out2=$(ro "$OH/.cca/bin/cca" _gui hello 2>/dev/null)
@@ -2643,7 +2642,7 @@ if sect 11b2; then
 # 11b2. 3.6.0 去掉了维护者的映射（cca policy、每台机器一把 deploy key、policy.sh）：Team 是唯一的通道。先是去掉的命令、升级上来的设备上
 #       留下的东西，再是 Team 给这台设备的账号怎么和账号表合并（以前映射的那一套照旧：节点由 Team 定、没有的加进来、别名、删掉的不再
 #       自动加回来；Team 不再给了收起来）。Team「阁楼组」：管理员是照 server/README.md 独立实现的那一头（tm_spec，根密钥 $GLROOT），
-#       服务器是真的 server/cca-presence.py --mode team（127.0.0.1 上固定的端口 $GLPORT）。这台 Mac 加入以后一直在里面：11b2b、11b2c、
+#       服务器是真的（辅助程序的 team-server --mode team，127.0.0.1 上固定的端口 $GLPORT）。这台 Mac 加入以后一直在里面：11b2b、11b2c、
 #       11b3c 接着用它（各节开头 gl_up 在同一个端口上重新起服务器），11b3c 结束时退出。这几节 config.json 里写着 "presence": false
 #       （设备统计、记下的 key、折合金额不经它同步，后台不起上报进程），11b3c 再打开
 # --- 3.6.0 去掉的命令
@@ -2994,7 +2993,7 @@ rm -rf "$R" "$H/.cca/core"; cp -R "$T/router.snap2" "$R"; cp "$T/config.snap2" "
 fi
 if sect 11b3c; then
 # 11b3c. 设备统计、记下的 API key、折合金额、远程会话的配对：Team 给的账号经这个 Team 的同步服务器和别的设备同步（「阁楼组」：真的
-#        server/cca-presence.py --mode team，ttl 是 STTL 秒，开着中转和网页端）。alice 是阁楼组给的：经 cca 用的时候这台 Mac 在后台起一个
+#        辅助程序的 team-server --mode team，ttl 是 STTL 秒，开着中转和网页端）。alice 是阁楼组给的：经 cca 用的时候这台 Mac 在后台起一个
 #        上报进程，把开着的会话报给服务器；cca devices 问服务器这个账号连着哪些设备。另一台设备 dan-air 是照 server/README.md 独立实现的
 #        那一头（拿管理员给的邀请加入）。测试里的会话没有终端：在跑就算在用。这一节结束时这台 Mac 退出阁楼组、停掉服务器，配置还原
 STTL=10   # 服务器这么多秒没收到上报就算离线。上报进程 60 秒才一次心跳，所以「在用」只在每次上报后的这几秒里看得到：
@@ -3204,7 +3203,7 @@ cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
 
 fi
 if sect 11b3d; then
-# 11b3d. Team（docs/dev/team.md）：cca team 的命令行一层（事情在辅助程序里：tests/team.rs 细测）。真的 server/cca-presence.py --mode team。
+# 11b3d. Team（docs/dev/team.md）：cca team 的命令行一层（事情在辅助程序里：tests/team.rs 细测）。服务器是真的（辅助程序的 team-server --mode team）。
 # 先是这台 Mac 当管理员（成员由照 server/README.md 独立实现的那一头 tm_spec 扮演），再是它当成员（管理员由它扮演）
 cp "$H/.cca/accounts.json" "$T/tm-accounts.bak"; cp "$H/.cca/config.json" "$T/tm-config.bak"   # 加入 Team 以后账号表照它的配置改：这一节结束时还原
 out=$(run cca team 2>&1); rc=$?
@@ -3582,7 +3581,7 @@ printf '#!/bin/sh\nexec %s "$@"\n' "$(PATH=/opt/homebrew/bin:/usr/bin:/bin comma
 NORUBY="$T/noruby:$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 rm -f "$CN/nodes.json"; : > "$T/noruby.log"; : > ssh.log
 run PATH="$NORUBY" cca _core-nodes >/dev/null 2>&1
-ok "拷节点定义：这台机器上不用 ruby（JSON 由路由器端写好，这边只用 Python 读）" '[ ! -s "$T/noruby.log" ] && grep -q "sh -s defs" ssh.log && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ "$(stat -f %Lp "$CN/nodes.json")" = 600 ]'
+ok "拷节点定义：这台机器上不用 ruby（JSON 由路由器端写好，这边由辅助程序读）" '[ ! -s "$T/noruby.log" ] && grep -q "sh -s defs" ssh.log && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ "$(stat -f %Lp "$CN/nodes.json")" = 600 ]'
 printf '#!/bin/sh\n%s "$@" | head -c 300\n' "$(PATH=/opt/homebrew/bin:/usr/bin:/bin command -v ruby)" > "$T/rbin/ruby"   # 路由器那边只输出了前 300 个字节（连接断了）
 rm -f "$CN/nodes.json"
 run PATH="$NORUBY" cca _core-nodes >/dev/null 2>&1
@@ -3985,7 +3984,7 @@ fi
 if sect 11b6; then
 # 11b6. 服务器上安装（CCA_REMOTE_LOGIN=1：Mac 上走服务器的流程）：从没配置过路由器、直连不通（假 curl：direct_down 连不上，direct_loc 是
 #       直连的出口地区）时，cca install、cca add 不问路由器，先问有没有 Team 的邀请链接（默认没有）。有就加入（Team 的服务器是真的
-#       server/cca-presence.py --mode team，管理员由照文档独立实现的那一头 tm_spec 扮演），导入 Team 的配置指定的安装节点和给这台设备的账号的节点，配置内置代理
+#       辅助程序的 team-server --mode team，管理员由照文档独立实现的那一头 tm_spec 扮演），导入 Team 的配置指定的安装节点和给这台设备的账号的节点，配置内置代理
 #       （假内核、假的界面 App），经安装节点装 Claude Code（不再先直连、不另外问），Team 给的账号自动加进来。没有、到了那一步留空：粘贴
 #       一条自己的代理当可选节点，配置内置代理。直连通的照旧问路由器。一键安装时带着 CCA_POLICY_REPO（3.6.0 以前打开维护者的共享）：
 #       只说一声去掉了。这一节结束时停掉 Team 的服务器，假命令还原
@@ -4320,4 +4319,6 @@ ok "suite 的每个模块上面都有一行（tests/suite.rs 里加了模块，�
 fi
 ok "断言里没有求值器不认识的写法（cca-test 的退出码 2；不认识的都记在沙箱旁边的 .trap 文件里：取反的断言遇到它会悄悄通过）" '[ ! -s "$CCA_TEST_TRAP" ]'
 [ ! -s "$CCA_TEST_TRAP" ] || sed 's/^/      | /' "$CCA_TEST_TRAP"
+ok "整个回归没人调过 Python（沙箱的 PATH 最前面是一个记账的假 python3；只有「换代的更新」里内嵌 Python 的旧版本用真的）" '[ -x "$T/bin/python3" ] && [ ! -s "$T/python3.log" ]'
+[ ! -s "$T/python3.log" ] || sed 's/^/      | /' "$T/python3.log"
 echo "---- $pass passed, $fail failed"

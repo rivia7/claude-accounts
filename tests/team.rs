@@ -1,5 +1,5 @@
 //! Team（cca team）：辅助程序（cca-core）这一头的建 Team、接上服务器、邀请、加入、同步配置、授权、移除、退出，对着真的服务器
-//! （127.0.0.1、随机端口；用哪一份跑照 CCA_TEST_SERVER，见 kit::server）。各台设备各一个临时 HOME（kit::fleet 的 Device）。
+//! （127.0.0.1、随机端口；辅助程序的 team-server，见 kit::server）。各台设备各一个临时 HOME（kit::fleet 的 Device）。
 //! 另一头有时由 kit::spec（照 server/README.md 独立实现的那一份）扮演：两份实现封的、签的要能互相解开、验过。不联网。
 //! 要 ssh-keygen、openssl、curl（和原来一样：没有就是失败，不跳过）。
 //!

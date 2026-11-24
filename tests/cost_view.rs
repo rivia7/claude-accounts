@@ -72,7 +72,7 @@ const WEEK: i64 = 7 * 86400;
 const COST_PRICES_DATE: &str = "2026-11-24";
 /// 传给别的设备的留这么久
 const COST_PUBLISH: i64 = 14 * WEEK;
-// server/cca-presence.py 的同名常量（服务器的上限；辅助程序里的 COST_BLOB_MAX、COST_BATCH 要和它们一样：seal_open 里核对）
+// 服务器（cli/src/server/mod.rs）的同名常量（服务器的上限；辅助程序里的 COST_BLOB_MAX、COST_BATCH 要和它们一样：seal_open 里核对）
 /// 一份密文（base64）最长多少个字符
 const MAX_COST_BLOB: usize = 98304;
 /// 一次上报 / 查询最多几个账号

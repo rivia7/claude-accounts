@@ -109,7 +109,7 @@
 
 ## 服务端（M1）
 
-`server/cca-presence.py --mode team --team-root 根公钥`（`CCA_TEAM_ROOT`）。op、邀请链接、设备的配置的格式在 server/README.md「Team 的同步服务器」，
+`cca-core team-server --team-root 根公钥`（`CCA_TEAM_ROOT`；代码在 `cli/src/server/`，`--mode team` 照旧认得）。op、邀请链接、设备的配置的格式在 server/README.md「Team 的同步服务器」，
 这里只写为什么这样：
 
 - 管理员的 op（`team_enroll`、`team_invite`、`team_put`、`team_members`、`team_revoke`）拿根密钥签，`key` 是根公钥的指纹；设备的 op

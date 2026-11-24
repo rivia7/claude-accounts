@@ -1,5 +1,5 @@
-//! Team 的同步服务器（`cca-core team-server`）和证书助手（`cca-core team-acme`）：`server/cca-presence.py`、
-//! `server/cca-acme.py` 的 Rust 版。
+//! Team 的同步服务器（`cca-core team-server`）和证书助手（`cca-core team-acme`）。3.6.x 及以前它们是两份 Python 程序
+//! （`server/cca-presence.py`、`server/cca-acme.py`），这里是照着移过来的；那两份已经不在仓库里了。
 //!
 //! 和别的子命令不一样的地方：
 //! - 它们是常驻的服务，跑在 Team 管理员的 Linux 服务器上（systemd 的专用用户、容器里），不是这台机器上 cca 的一部分：不认
@@ -11,8 +11,10 @@
 //! - 正则只用 `re!`（整个进程一份）；`py::re::compile` 的缓存是每个线程各一份的，这里不用。
 //! - 启动的路上不加东西：这里没有一上来就算的全局量，用到时才算。
 //!
-//! Python 那一份是规矩：行为、回的内容、日志里的每句话都照它。注释里的「Py:行号」指 server/cca-presence.py，
-//! 「Acme:行号」指 server/cca-acme.py。
+//! 移的时候 Python 那一份是规矩：行为、回的内容、日志里的每句话都照它（已经部署出去的服务器换成这一份，设备那头看不出来）。
+//! 注释里的「Python 那一份」「Py:行号」指 server/cca-presence.py，「Acme:行号」指 server/cca-acme.py，都是它们最后的样子：
+//! `git show v3.6.10:server/cca-presence.py`。对照数据（cli/tests/vectors/server_*.json）是那时候对着它们录的，现在是固定的
+//! 数据：有意改了行为就直接改数据。往后这一份自己就是规矩，线上的格式以 server/README.md 为准。
 //!
 //! 各个文件：
 //! - `limits`：各种上限（测试可以换小的）、限流的令牌桶、用过的 nonce、同时处理几个连接

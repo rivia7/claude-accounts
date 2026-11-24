@@ -591,6 +591,24 @@ exit 0
 S
 # 程序坞的设置（测试里是 plist 文件，cca 直接读写它）：cca-test dockpl dock.plist set 最近使用的 [固定的] [show-recents]（JSON 里写 App 名，
 # A:nobid 是不带 bundle id 的图标），get 列出最近使用的，add App 加一个
+# python3（python 也是它）：cca、辅助程序、这里的假命令都不用 Python 了。沙箱的 PATH 最前面放一个记账的：谁调了就在 $T/python3.log 里
+# 记一笔（谁调的、参数）、像没装一样失败（127）；回归最后有一条查这个文件是空的。只有「换代的更新」要真的（内嵌 Python 的旧版本
+# 自己要它）：环境里带着 CCA_PY_REAL=1 时交给 PATH 上后面那个真的。记在哪照脚本自己的位置算，不靠环境变量（调它的人不一定带着 CCA_T）
+cat > "$T/bin/python3" <<'S'
+#!/bin/bash
+me=$(cd "$(dirname "$0")" && pwd)
+if [ "${CCA_PY_REAL:-}" = 1 ]; then
+	IFS=:
+	for d in $PATH; do
+		[ "$d" = "$me" ] || [ ! -x "$d/python3" ] || exec "$d/python3" "$@"
+	done
+	exit 127
+fi
+echo "$(/bin/ps -o command= -p $PPID 2>/dev/null | cut -c1-200) :: python3 $*" >> "$me/../python3.log"
+echo "python3: command not found" >&2
+exit 127
+S
+chmod +x "$T/bin/python3"; ln -sf python3 "$T/bin/python"
 # defaults：真的不看 HOME（经系统的设置进程读写这个用户真的 ~/Library/Preferences），cca gui remove、cca restore 里的
 # defaults delete local.cca.app 会把这台 Mac 上真的 cca App 的设置删掉。换成只记一笔的（$T/defaults.log），读什么都说没有
 cat > "$T/bin/defaults" <<'S'

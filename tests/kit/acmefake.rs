@@ -1,5 +1,5 @@
 //! 假的证书机构（原来的 tests/acme_fake.py）：ACME（RFC 8555）+ 给 IP 地址签（RFC 8738）+ 证书种类（profile 的草案），
-//! 给证书助手（server/cca-acme.py、`cca-core team-acme`）的测试用。不是随便回几句的桩：客户端的每个请求都照规范核对——
+//! 给证书助手（`cca-core team-acme`）的测试用。不是随便回几句的桩：客户端的每个请求都照规范核对——
 //! JWS 的签名（拿 openssl 验）、nonce 只能用一次、url 要对、开账户用 jwk 之后用 kid、单子里的地址和证书种类、
 //! http-01 是真的去取那个文件比对内容、证书请求里的地址要和单子上的一样而且没有 Common Name（拿 openssl 读）——不对就照规范回错误。
 //! 签出来的证书由临时的测试机构签（证书里的地址照单子上的）。

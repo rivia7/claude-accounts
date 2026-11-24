@@ -474,8 +474,8 @@ else
 	echo "  （跳过 Team 和设备统计：没有 openssl，生成不了服务器的证书）"
 fi
 
-# suite_run 模块：跑测试程序 suite 的一个模块（tests/<模块>.rs：把辅助程序当黑盒，自己的临时 HOME，不碰上面的沙箱）。服务器用辅助程序里的
-# 那一份（CCA_TEST_SERVER=rust）；--setsid：自己一个会话，没有控制终端（在终端里跑、经 ssh 跑、在容器里跑都一样）。跑了、用例都过了才
+# suite_run 模块：跑测试程序 suite 的一个模块（tests/<模块>.rs：把辅助程序当黑盒，自己的临时 HOME，不碰上面的沙箱）。服务器是辅助程序里的
+# 那一份；--setsid：自己一个会话，没有控制终端（在终端里跑、经 ssh 跑、在容器里跑都一样）。跑了、用例都过了才
 # 返回 0，SN 是通过的用例数（有跳过的话后面带一句）；别的都算没过，SW 说哪里不对——suite 不认识这个模块（还没有这份测试）、一个
 # 用例都没跑也在里面：不能悄悄当成过了。结果和记录在 $D/suite-<模块>/
 suite_run() {
@@ -484,7 +484,7 @@ suite_run() {
 	mkdir -p "$d"
 	# 放到后台再等它：suite 自己一个会话，终端上按 Ctrl-C 的信号到不了它；bash 等前台的命令时要等它跑完才理这个信号，等后台的（wait）
 	# 马上就退出，退出时的清理再把它停掉（它的命令行里带着沙箱的路径）
-	CCA_HELPER="$HB" CCA_TEST_BIN="$KT" CCA_REPO="$R" CCA_TEST_SERVER=rust "$KS" --setsid --module "$m" --results "$d/results.tsv" --logs "$d/logs" > "$d/out" 2>&1 </dev/null &
+	CCA_HELPER="$HB" CCA_TEST_BIN="$KT" CCA_REPO="$R" "$KS" --setsid --module "$m" --results "$d/results.tsv" --logs "$d/logs" > "$d/out" 2>&1 </dev/null &
 	wait $!; rc=$?
 	[ ! -f "$d/results.tsv" ] || while IFS="$(printf '\t')" read -r name st p f s secs; do
 		[ "$name" = "$m" ] && got="$st $p $f $s"

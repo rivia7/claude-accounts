@@ -1,7 +1,8 @@
 # 远程会话的网页端（手机浏览器里的那一页）
 
-服务器（`server/cca-presence.py --web-url …`）把这个目录里的文件原样发给浏览器：只发 `.html`、`.js`、`.css`、`.png`、`.svg`、
-`.webmanifest`，这份说明、许可证、校验和不发。没有构建这一步，改了就是改了。设计、怎么测写在 `docs/dev/remote.md`「网页端」，
+服务器（`cca-core team-server --web-url …`）把这个目录里的文件原样发给浏览器：只发 `.html`、`.js`、`.css`、`.png`、`.svg`、
+`.webmanifest`，这份说明、许可证、校验和不发。没有打包、压缩这一步；文件是编进辅助程序的（`cli/src/server/web.rs` 的 `FILES`），改了
+要重新编（`cd cli && cargo build --release --locked`），开发时用 `--web-root 这个目录` 让服务器直接读这里的。设计、怎么测写在 `docs/dev/remote.md`「网页端」，
 线上的格式在 `server/README.md`「网页端」。
 
 | 文件 | 是什么 |

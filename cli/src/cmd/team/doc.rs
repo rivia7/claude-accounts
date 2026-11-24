@@ -23,7 +23,7 @@ const DOC_LABEL: &str = "cca-team-doc-v1";
 const SIGN_NS: &str = "cca-team";
 /// 明文补齐到这么长的整数倍
 const DOC_PAD: usize = 1024;
-/// 服务器收的一份密文（base64）最长这么多个字符（server/cca-presence.py 的 MAX_TEAM_DOC）
+/// 服务器收的一份密文（base64）最长这么多个字符（cli/src/server/mod.rs 的 MAX_TEAM_DOC）
 pub const DOC_MAX: usize = 131072;
 /// 序号比它小（服务器的 SEQ_MAX）
 pub const SEQ_MAX: i64 = 1 << 53;

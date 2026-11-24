@@ -1,11 +1,10 @@
-//! 证书助手（server/cca-acme.py、`cca-core team-acme`：给网页端申请、续上浏览器信得过的证书）对着假的证书机构（kit::acmefake：
+//! 证书助手（`cca-core team-acme`：给网页端申请、续上浏览器信得过的证书）对着假的证书机构（kit::acmefake：
 //! 照 ACME 的规范逐项核对请求，http-01 是真的来取文件）。看：给 IP 地址要的是短期的那一种、nonce 不对时自己再发、证书和私钥放对地方
 //! 而且权限对、没到时候不重复要、到时候续上而私钥不换、各种没成的情况说得清楚而且不留下半截的东西；几个 Team 共用的那种（--teams、
 //! --store）：同一个地址只要一张、登记的地址不对的跳过、各个 Team 的那一份权限对、手里已经有的（以前它自己的证书助手要的）接着用、
 //! 运行着时登记了新的马上去要。不联网（都在 127.0.0.1 上）。
 //!
-//! 原来是 tests/acme.py。证书助手用哪一份跑照 CCA_TEST_SERVER（kit::server::acme_argv：平常是 server/cca-acme.py，rust 是辅助程序的
-//! team-acme）；假的证书机构、“别的网站”在这个进程里跑（kit::acmefake、kit::httpd::files）。
+//! 证书助手经 kit::server::acme_argv 起（辅助程序的 team-acme）；假的证书机构、“别的网站”在这个进程里跑（kit::acmefake、kit::httpd::files）。
 
 use kit::acmefake::{self, FakeCa, Knobs};
 use kit::case;

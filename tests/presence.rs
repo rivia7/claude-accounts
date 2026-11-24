@@ -2,7 +2,7 @@
 //! 真的 ssh-keygen、真的 TLS 服务器（127.0.0.1，随机端口）；客户端是 cca 的辅助程序（cca-core，各台设备各一个临时 HOME），不联网。
 //! 要 ssh-keygen、openssl、curl（和原来一样：没有就是失败，不跳过）。
 //!
-//! 原来是 tests/presence.py。服务器用哪一份跑照 CCA_TEST_SERVER（kit::server）：这里只经网络和它打交道。夹具（服务器、Team、
+//! 服务器是辅助程序的 team-server（kit::server）：这里只经网络和它打交道。夹具（服务器、Team、
 //! 设备、假命令）在 kit::fleet、kit::pki，别的几份测试也用。
 //!
 //! 服务器进程里面的事不在这里，归服务器自己的单元测试：Store 的各个上限、邀请和成员的规矩、以前的版本留下的折合金额启动时
@@ -62,7 +62,7 @@ pub const MODULE: Module = Module {
     ],
 };
 
-// 服务器（server/cca-presence.py、辅助程序的 team-server）里的几个上限：测试照着它们发请求，两边要一起改
+// 服务器（辅助程序的 team-server，cli/src/server/mod.rs 的同名常量）里的几个上限：测试照着它们发请求，两边要一起改
 /// MAX_CONN_IP：同一个 IP 同时几个连接
 const MAX_CONN_IP: usize = 8;
 /// MAX_BODY：一般的请求最多这么大
