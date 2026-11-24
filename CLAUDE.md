@@ -62,6 +62,7 @@
 ## 要一起改的
 - `INHERITED_RE`（bash）↔ `CRED_ENV`（辅助程序，`cli/src/core/base.rs`）：同一份名单的两种写法。Claude Code 新增 provider 开关时补上（`strings` 二进制里的 `CLAUDE_CODE_USE_` 能查到）；`CRED_ENV` 加了名字时看看 `SETTINGS_KINDS` 要不要补
 - `CODEX_INHERITED_RE` ↔ `codex_settings_problems`：Codex 新增会改地址、换凭证的设置或环境变量时两边一起补
+- 让 agy 把登录存成文件的环境变量：bash 的 `agy_env` ↔ 辅助程序的 `AGY_FILE_ENV`（`cli/src/core/tool.rs`，探测和查额度用它）↔ `login/agy.rs` 的 `AGY_FILE_TOKENS`（探测时认的日志那几句）；探测的做法变了要换缓存的文件名 `PROBE_FILE`：旧版的 cca 还读原来那一份、只核对程序文件，新的结果写进去它会以为可以启动
 - `install.sh` 下载前查的 ↔ `cca install` 的 `need_deps`；两份 `pkg_hint`
 - 辅助程序的 `fill_plan` ↔ `router_rb` 的 `--fill-source`（Team 的配置带的节点（参考节点）的同一套规则）
 - `VIRTUAL_IFACE_RE`：bash ↔ 辅助程序（`cli/src/cmd/corenet/bind.rs`；回归 lint 核对）

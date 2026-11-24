@@ -906,6 +906,10 @@ func genericUsage(_ name: String, _ d: Data) -> UsageDoc? {
     if name.contains("codex") {
         check("\(name) Codex 的输出带 tool: codex", doc.tool == .codex)
     }
+    if name.contains("agy") {
+        check("\(name) Antigravity 的输出带 tool: agy，额度在 quota_groups 里、没有用量窗口", doc.tool == .agy
+              && doc.accounts.allSatisfy { $0.fiveHour == nil && $0.sevenDay == nil && $0.modelScoped.isEmpty })
+    }
     check("\(name) 有 generated_epoch", isNumber(raw["generated_epoch"]))
     knownEnums(name, auditUsage(doc))
     return doc

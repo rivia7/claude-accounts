@@ -711,7 +711,7 @@ final class AppModel {
         return a.login != .loggedIn || usage(for: a)?.errorCode != nil || usage(for: a)?.outdatedLoginPlan != nil
     }
 
-    /// 登录好了能不能查用量：除了“没登录”没有别的原因挡着。Antigravity 没有查用量的接口（`unsupported`），
+    /// 登录好了能不能查用量：除了“没登录”没有别的原因挡着。Antigravity 的额度 App 还不显示（`unsupported`），
     /// 没装命令的（`tool_missing`）登录了也查不了。
     private func usageAfterLogin(_ a: Account) -> Bool {
         guard features(a.tool).usage else { return false }
@@ -2405,7 +2405,7 @@ final class AppModel {
     /// 启用了的工具（Claude 一直有；Codex、Antigravity 有账号表时才有）
     var visibleTools: [ToolID] { hello?.enabledTools ?? [.claude] }
 
-    /// 这个工具有没有桌面 App、第三方 API 账号、查用量的接口（cca 给的 features；还没读到 state 时按工具认）
+    /// 这个工具有没有桌面 App、第三方 API 账号、App 里显示的用量（cca 给的 features；还没读到 state 时按工具认）
     func features(_ t: ToolID) -> ToolFeatures { toolState(t)?.features ?? .defaults(t) }
 
     func toolState(_ t: ToolID) -> ToolState? { state?.tool(t) }
@@ -2513,7 +2513,7 @@ final class AppModel {
         return out
     }
 
-    /// 用量统计页的分组：能查用量的工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有；Antigravity 没有查用量的接口，
+    /// 用量统计页的分组：能查用量的工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有；Antigravity 的额度 App 还不显示，
     /// 不在里面），和总览一样按用户排的顺序。第三方 API 账号没有订阅的额度，也不在里面。
     func officialGroups() -> [AccountGroup] {
         visibleTools.filter { features($0).usage }.map { Employee.Department.official($0) }

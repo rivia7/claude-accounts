@@ -2715,9 +2715,11 @@ codex_env() {   # 会话、记忆等数据库不靠链接共享：CODEX_SQLITE_H
 	# 直连：codex 没有代理变量时会改用 macOS 的系统代理，NO_PROXY=* 才是真的直连
 	[ -n "$ACC_PROXY" ] || SETS+=(no_proxy='*' NO_PROXY='*')
 }
-agy_env() {   # 数据目录经参数（--gemini_dir，见 AgyTool.run_args）。SSH_CONNECTION：agy 看到 SSH 会话就把登录存进数据目录里的文件、
-	# 不用钥匙串（钥匙串里只有一份，所有账号会共用它；agy_guard 核对这个版本确实这样）。agy 和它跑的命令都会看到这个变量
-	SETS=(SSH_CONNECTION="127.0.0.1 22 127.0.0.1 22" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
+agy_env() {   # 数据目录经参数（--gemini_dir，见 AgyTool.run_args）。登录要存成数据目录里的文件、不进钥匙串（钥匙串里只有一份，
+	# 所有账号会共用它；agy_guard 核对这个版本确实这样）：AGY_CLI_FORCE_FILE_TOKEN_STORAGE 是 agy 自己的开关（1.5.16 里有；这一版在
+	# macOS 上要钥匙串锁着才认 SSH 会话），SSH_CONNECTION 是以前的做法（1.5.5 看到 SSH 会话就存文件），留给不认开关的版本。
+	# 和辅助程序的 AGY_FILE_ENV 一样（一起改）。agy 和它跑的命令都会看到这两个变量
+	SETS=(SSH_CONNECTION="127.0.0.1 22 127.0.0.1 22" AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
 	[ -n "$ACC_PROXY" ] || SETS+=(no_proxy='*' NO_PROXY='*')
 }
 pyenv() { [ -x "$HELPER" ] || helper_find || return 127; env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }   # 在账号的环境里跑 py（先 child_env）
@@ -5632,8 +5634,8 @@ cmd_usage() {   # cca [codex] usage [账号…] [--json]（CCA_USAGE_JOBS：最�
 		esac
 		shift
 	done
-	[ "$TOOL" != agy ] || FAIL_CODE=unsupported die "${TOOL_LABEL} 没有能在 agy 外面查的用量接口：在 agy 里用 /usage 看"
 	need_bin
+	[ "$TOOL" != agy ] || agy_guard   # agy 的额度由 agy 自己查（打印模式的 /usage）：它读的登录要是账号自己目录里的那一份
 	if [ ${#wanted[@]} -gt 0 ]; then
 		for q in "${wanted[@]}"; do
 			key=$(py resolve "$q") || exit 1
@@ -7535,7 +7537,7 @@ tool_alias_ensure() {   # tool_alias_ensure codex|agy [账号名] [quiet]：没�
 	local bin="$HOME/.local/bin" other quiet="${3:-}" name more=""
 	case "$1" in
 		codex) name=$CODEX_ALIAS more="，${CODEX_ALIAS} usage 查用量" ;;
-		agy) name=$AGY_ALIAS ;;   # agy 没有查用量
+		agy) name=$AGY_ALIAS more="，${AGY_ALIAS} usage 查额度" ;;
 		*) return 0 ;;
 	esac
 	if [ -n "$quiet" ]; then { [ -e "$bin/$name" ] || [ -L "$bin/$name" ]; } && return 0; fi
@@ -8054,9 +8056,10 @@ Antigravity（Google 的 agy 命令行；账号表 ~/.cca/agy.json，和 Claude�
   aga [agy 参数]             等于 cca agy：aga @<账号>、aga add、aga ls 等都一样（cca install 时和 cca
                              一起建在 ~/.local/bin；添加 Antigravity 账号时没有的话也会补上）
   cca agy add                新增 Antigravity 账号（用 Google 账号登录，${aglogin}）
-  cca agy ls | edit | rm | key | login${mac:+ | web} | check
+  cca agy ls | edit | rm | key | login${mac:+ | web} | check | usage
                              和上面同名的命令一样，作用于 Antigravity 账号${mac:+（web 打开 gemini.google.com）}；
-                             没有查用量的接口，也没有第三方 API 账号和桌面 App
+                             usage 经各账号的端口让 agy 自己查额度（一组组的额度，用了多少、什么时候重置）。
+                             没有第三方 API 账号和桌面 App
 EOF
 	cat >&2 <<EOF
 

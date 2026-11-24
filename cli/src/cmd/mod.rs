@@ -4,6 +4,7 @@
 //! 加进那个模块的 `CMDS`，别的文件不用动。`NAMES` 是原来 Python 的 `CMDS` 里的全部名字（先后照它），测试拿它核对一个不少。
 
 pub mod accounts;
+pub mod agy;
 pub mod clients;
 pub mod codex;
 pub mod corenet;

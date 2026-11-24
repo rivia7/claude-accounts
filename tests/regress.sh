@@ -286,7 +286,7 @@ ok "install：建端口池前先问，提示重载约 20 秒" 'printf "%s" "$out
 ok "install：8 个槽位 7901-7908，CCA-1 默认 US-A，空槽位默认 REJECT" '[ "$(nl_)" = 8 ] && [ "$(first CCA-1)" = US-A ] && [ "$(first CCA-8)" = REJECT ] && [ "$(sel CCA-1)" = US-A ]'
 ok "install：只重载了一次" '[ "$(reloads)" = 1 ]'
 ok "install：同时建好 cxa（等于 cca codex），是指向同目录 cca 的相对链接" '[ "$(readlink "$H/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 cxa 代替 cca codex：cxa @别名 直接启动"'
-ok "install：同时建好 aga（等于 cca agy），也是相对链接；agy 没有查用量，说明里不提 aga usage" '[ "$(readlink "$H/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 aga 代替 cca agy：aga @别名 直接启动" && ! printf "%s" "$out" | grep -q "aga usage"'
+ok "install：同时建好 aga（等于 cca agy），也是相对链接；说明里提 aga usage 查额度" '[ "$(readlink "$H/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 aga 代替 cca agy：aga @别名 直接启动，aga usage 查额度"'
 python3 - > "$T/accounts.golden" <<'PY'
 import hashlib, json
 n = 'alice-example-com-' + hashlib.sha1(b'alice@example.com').hexdigest()[:6]
@@ -1696,9 +1696,10 @@ ok "（准备一键还原）dave 登录着、建过 git 工作树；另有一个
 fi
 if sect 10f2; then
 # 10f2. Antigravity（agy）账号：单独的账号表 agy.json，和 Claude、Codex 共用端口池；每个账号一个数据目录（--gemini_dir），
-# 设了 SSH_CONNECTION 让 agy 把登录 token 存进数据目录里的文件（不进钥匙串；cca 先在临时目录里探测这个版本确实这样，按程序缓存）；
-# ~/.gemini 里白名单上的条目共享；登录页在账号专属的 Chrome 里打开，授权码照常从 fd 3 问、交给 agy；没有查用量的接口、第三方 API
-# 账号和桌面 App。这一节最后删掉 agy 的账号和 agy.json（后面的用例照没用过 agy 写）
+# 设了 AGY_CLI_FORCE_FILE_TOKEN_STORAGE（和以前的 SSH_CONNECTION）让 agy 把登录 token 存进数据目录里的文件（不进钥匙串；cca 先在
+# 临时目录里探测这个版本确实这样，按程序缓存）；~/.gemini 里白名单上的条目共享；登录页在账号专属的 Chrome 里打开，授权码照常从 fd 3 问、
+# 交给 agy；cca agy usage 让 agy 自己查额度（打印模式的 /usage）；没有第三方 API 账号和桌面 App。这一节最后删掉 agy 的账号和 agy.json
+# （后面的用例照没用过 agy 写）
 G="$H/.gemini"; AGJ="$H/.cca/agy.json"
 alast() { lastline "$1" agy.log; }
 alk() { [ -L "$AG/$1" ] && [ "$(readlink "$AG/$1")" = "$G/$1" ]; }
@@ -1722,13 +1723,13 @@ out3=$(run aga ls 2>&1)
 ok "aga ls 就是 cca agy ls" '[ -n "$out3" ] && [ "$out3" = "$out" ]'
 rm -f "$H/.local/bin/aga"; out=$(run cca ls 2>&1); out2=$(run cca ls 2>&1)
 ok "用着 agy 的机器上 aga 不见了：下一次运行 cca（哪个子命令都行）就补上，只说一次" '[ "$(readlink "$H/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 aga 代替 cca agy" && ! printf "%s" "$out2" | grep -q "以后可以直接用 aga"'
-: > agy.log; : > open.log; : > curl.log; rm -f "$H/.cca/agy/probe.json"
-out=$(run CCA_TTY="$(ans good-ag1)" GEMINI_API_KEY=evil-1 GOOGLE_CLOUD_PROJECT=evil-proj ANTIGRAVITY_GEMINI_DIR=/evil AGY_ACCOUNT=evil@example.com AGY_CLI_THEME=light AGY_CA_CERT="$T/ca.pem" ALL_PROXY=socks5://evil.invalid cca agy @alice --version 2>&1); rc=$?
+: > agy.log; : > open.log; : > curl.log; rm -f "$H/.cca/agy/probe.json" "$H/.cca/agy/probe2.json"
+out=$(run CCA_TTY="$(ans good-ag1)" GEMINI_API_KEY=evil-1 GOOGLE_CLOUD_PROJECT=evil-proj ANTIGRAVITY_GEMINI_DIR=/evil AGY_ACCOUNT=evil@example.com AGY_CLI_THEME=light AGY_CA_CERT="$T/ca.pem" AGY_CLI_FORCE_FILE_TOKEN_STORAGE=0 ALL_PROXY=socks5://evil.invalid cca agy @alice --version 2>&1); rc=$?
 penv=$(grep -A1 "cca-agy-probe" agy.log | grep "^ENV: " | head -n 1)
-ok "agy 第一次用：先在临时的数据目录里跑一次 acp --login，确认这个版本设了 SSH_CONNECTION 时把登录存进文件；不联网（代理指向关着的端口），结果记下" 'grep -q "^ARGS: --gemini_dir=.*cca-agy-probe\..*/gemini acp --login$" agy.log && printf "%s" "$penv" | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=unset HTTPS_PROXY=http://127.0.0.1:9 " && printf "%s" "$penv" | grep -q "GEMINI_API_KEY=unset" && cfgok "json.load(open(\"$H/.cca/agy/probe.json\"))[\"files\"] is True"'
+ok "agy 第一次用：先在临时的数据目录里跑一次 acp --login，确认这个版本设了 AGY_CLI_FORCE_FILE_TOKEN_STORAGE（和 SSH_CONNECTION）时把登录存进文件（环境里继承来的开关不算）；不联网（代理指向关着的端口）；结果记在 probe2.json，以前的 cca 读的 probe.json 不写（它启动 agy 时不设开关）" 'grep -q "^ARGS: --gemini_dir=.*cca-agy-probe\..*/gemini acp --login$" agy.log && printf "%s" "$penv" | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=unset HTTPS_PROXY=http://127.0.0.1:9 " && printf "%s" "$penv" | grep -q "GEMINI_API_KEY=unset" && printf "%s" "$penv" | grep -q "AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 " && cfgok "(lambda p: p[\"files\"] is True)(json.load(open(\"$H/.cca/agy/probe2.json\")))" && [ ! -e "$H/.cca/agy/probe.json" ]'
 ok "agy 登录：在账号自己的数据目录里登录；Google 的登录网址补上 login_hint，在账号专属的 Chrome 里、经账号的端口打开" 'grep -q "^ARGS: --gemini_dir=$AG acp --login$" agy.log && grep -F "accounts.google.com/o/oauth2/auth" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && grep -F "accounts.google.com/o/oauth2/auth" open.log | grep -qF -- "--proxy-server=http://192.0.2.10:7902" && grep -F "accounts.google.com/o/oauth2/auth" open.log | grep -qF "login_hint=alice%40example.com"'
 ok "agy 登录：授权码从终端贴回、交给 agy，换 token 经账号的端口；token 只在账号自己的数据目录里，~/.gemini 原来的登录不动" 'grep -q "AGY-EXCHANGE code=good-ag1 https_proxy=http://192.0.2.10:7902" agy.log && [ -f "$AG/antigravity-cli/antigravity-oauth-token" ] && [ ! -L "$AG/antigravity-cli/antigravity-oauth-token" ] && grep -q master "$G/antigravity-cli/antigravity-oauth-token" && printf "%s" "$out" | grep -q "授权码（登录后页面上显示的那一段" && ! printf "%s" "$out" | grep -q "Open this link"'
-ok "agy 启动：--gemini_dir 指向账号自己的数据目录（写在最前面），设了 SSH_CONNECTION，走账号的端口" '[ $rc -eq 3 ] && alast ARGS | grep -qx "ARGS: --gemini_dir=$AG --version" && alast ENV | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=http://192.0.2.10:7902 HTTPS_PROXY=http://192.0.2.10:7902 "'
+ok "agy 启动：--gemini_dir 指向账号自己的数据目录（写在最前面），设了 AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1（环境里继承来的 0 不算）和 SSH_CONNECTION，走账号的端口；自动更新照旧" '[ $rc -eq 3 ] && alast ARGS | grep -qx "ARGS: --gemini_dir=$AG --version" && alast ENV | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=http://192.0.2.10:7902 HTTPS_PROXY=http://192.0.2.10:7902 " && alast ENV | grep -q "AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 AGY_CLI_DISABLE_AUTO_UPDATE=unset "'
 ok "agy 启动：继承来的 GEMINI_*、GOOGLE_*、ANTIGRAVITY_*、AGY_ACCOUNT（会换账号、数据目录）和 ALL_PROXY 不带进去并提示；界面开关 AGY_CLI_*、公司根证书 AGY_CA_CERT 留着；fd 3 关着" 'alast ENV | grep -q "GEMINI_API_KEY=unset GOOGLE_API_KEY=unset GOOGLE_CLOUD_PROJECT=unset ANTIGRAVITY_GEMINI_DIR=unset AGY_ACCOUNT=unset AGY_CA_CERT=$T/ca.pem AGY_CLI_THEME=light ALL_PROXY=unset " && alast ENV | grep -q "fd3=closed" && printf "%s" "$out" | grep -q "已为本次启动屏蔽环境里继承的"'
 ok "agy 启动前的出口检测：Google 没有 /cdn-cgi/trace，经 7902 看 www.cloudflare.com 看到的 IP" 'grep -q "CURL via :7902 https://www.cloudflare.com/cdn-cgi/trace" curl.log && grep -q "CURL via :7902 https://ip.net.coffee/api/iprisk/203.0.113.2" curl.log'
 ok "agy 启动：用的是 cca 固定的两个装机标识（agy 照用，没有换掉）" 'grep -q "AGY-DEVICE $agy_iid $agy_uuid @ $AG" agy.log && [ "$(cat "$AG/antigravity-cli/installation_id")" = "$agy_iid" ]'
@@ -1741,8 +1742,35 @@ ok "cca agy 菜单：标题是 Antigravity，账号已登录；没有添加第�
 n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
 run CCA_TTY="$(ans)" aga @alice --version >/dev/null 2>&1; rc=$?
 ok "aga @alice：启动的是 alice 的 agy（等于 cca agy @alice）" '[ $rc -eq 3 ] && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = $((n_args + 1)) ] && alast ARGS | grep -qx "ARGS: --gemini_dir=$AG --version"'
-out=$(run cca agy usage 2>&1); rc=$?; out2=$(run CCA_TTY="$(ans)" cca agy add api 2>&1); rc2=$?; out3=$(run cca agy app alice 2>&1 </dev/null); rc3=$?; out4=$(run cca agy billing alice 2>&1 </dev/null); rc4=$?
-ok "agy 没有查用量的接口、第三方 API 账号、桌面 App 和控制台账单页：说清楚，什么都不动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在 agy 里用 /usage 看" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有第三方 API 账号" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "没有桌面 App" && [ $rc4 -ne 0 ] && printf "%s" "$out4" | grep -q "没有控制台的账单页"'
+out2=$(run CCA_TTY="$(ans)" cca agy add api 2>&1); rc2=$?; out3=$(run cca agy app alice 2>&1 </dev/null); rc3=$?; out4=$(run cca agy billing alice 2>&1 </dev/null); rc4=$?
+ok "agy 没有第三方 API 账号、桌面 App 和控制台账单页：说清楚，什么都不动" '[ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有第三方 API 账号" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "没有桌面 App" && [ $rc4 -ne 0 ] && printf "%s" "$out4" | grep -q "没有控制台的账单页"'
+n_p=$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)
+out=$(run COLUMNS=120 cca agy usage 2>&1); rc=$?
+agy_ucwd=$(sed -n 's/^AGY-USAGE tty=.* cwd=\(.*\) @ .*$/\1/p' agy.log | tail -n 1)
+ok "cca agy usage：经账号的端口让 agy 自己查（打印模式的 /usage）：账号自己的数据目录，登录存成文件的开关，不顺带自动更新，没有控制终端（要授权码时读不到用户的键盘），工作目录是用完就删的空目录；探测结果照用缓存" '[ $rc -eq 0 ] && grep -qx "ARGS: --gemini_dir=$AG -p /usage --output-format json" agy.log && alast ENV | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=http://192.0.2.10:7902 " && alast ENV | grep -q "AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 AGY_CLI_DISABLE_AUTO_UPDATE=true " && grep -q "AGY-USAGE tty=no auto_update=true cwd=.*/cca-agy-usage\.[a-z0-9_]* @ $AG$" agy.log && [ -n "$agy_ucwd" ] && [ ! -e "$agy_ucwd" ] && grep -q "AGY-USAGE-AS alice@example.com https_proxy=http://192.0.2.10:7902" agy.log && [ "$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)" = "$n_p" ]'
+ok "cca agy usage 的表格：一个额度一行（组名 · 窗口，和 Claude 的叫法一样：5 小时、本周；agy 的桶名 …Limit Remaining 写在「已用」旁边会被看反，不显示），用了多少、什么时候重置；账号和套餐只写在第一行，停用的写不可用；查到的存进 usage.json" 'printf "%s" "$out" | grep -qE "alice@example.com +Google AI Pro +Gemini Pro · 5 小时 +13% +2小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Pro · 本周 +75% +周" && printf "%s" "$out" | grep -qE "^ +Claude · 5 小时 +95% +1小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Flash +不可用" && ! printf "%s" "$out" | grep -q "Remaining" && [ "$(printf "%s" "$out" | grep -c "alice@example.com")" = 1 ] && [ -f "$AGD/usage.json" ] && [ ! -e "$AGD/usage-weeks.json" ]'
+out=$(run cca agy usage --json 2>/dev/null); rc=$?; mkdir -p "$T/guifx"; printf '%s' "$out" > "$T/guifx/usage_agy.json"
+ok "cca agy usage --json：tool 是 agy；条目的 quota_groups 是 agy 给的几组额度（原样的几项，每个桶另加 utilization、resets_at、resets_epoch、reset），没有 5 小时、本周这些窗口（输出交给 10g 的契约测试解码）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and d[\"tool\"] == \"agy\" and (lambda a: a[\"source\"] == \"live\" and a[\"plan\"] == \"Google AI Pro\" and a[\"error_code\"] is None and \"five_hour\" not in a and \"credits\" not in a and a[\"quota_description\"] == \"Quota for Antigravity models\" and [g[\"name\"] for g in a[\"quota_groups\"]] == [\"Gemini Pro\", \"Claude\", \"Gemini Flash\"] and a[\"quota_groups\"][1][\"description\"] == \"Claude and GPT-OSS models\" and (lambda b: b[\"id\"] == \"gemini-pro-5h\" and b[\"utilization\"] == 13.0 and b[\"remaining_fraction\"] == 0.87 and b[\"window\"] == \"5h\" and b[\"reset\"] is False and b[\"resets_epoch\"] > d[\"generated_epoch\"] and b[\"resets_at\"].endswith(\"Z\"))(a[\"quota_groups\"][0][\"buckets\"][0]) and (lambda b: b[\"disabled\"] is True and b[\"utilization\"] is None and b[\"resets_epoch\"] is None)(a[\"quota_groups\"][2][\"buckets\"][0]))(d[\"accounts\"][0])"'
+out=$(run cca agy ls 2>&1)
+ok "cca agy ls：登录着的账号后面和 Claude、Codex 一样写 5h … · 周 …（各组里同一个窗口用得最多的那个；读缓存，不联网）" 'printf "%s" "$out" | grep -qE "1\. alice@example.com +已登录 +US-A +5h 95% · 周 75%"'
+echo "quota service unavailable" > "$T/agy_usage_error"
+out=$(run COLUMNS=160 cca agy usage 2>&1); rc=$?
+rm -f "$T/agy_usage_error"
+ok "agy 回 ERROR：用上次存下的额度，第一行后面注明原因（agy 的原话）和多久以前" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "Gemini Pro · 5 小时 +13% .*查询失败：quota service unavailable；缓存（1 分钟前）"'
+mv "$AG/antigravity-cli/antigravity-oauth-token" "$T/agy-token.bak"; n_u=$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)
+out=$(run cca agy usage --json 2>/dev/null); rc=$?
+mv "$T/agy-token.bak" "$AG/antigravity-cli/antigravity-oauth-token"
+ok "agy 账号没登录：不起 agy（它会等 60 秒的登录），说还没登录、退出码 1" '[ $rc -ne 0 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"login\" and d[\"accounts\"][0][\"source\"] == \"none\" and d[\"accounts\"][0][\"quota_groups\"] is None" && [ "$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)" = "$n_u" ]'
+touch "$T/agy_usage_auth"; t0=$(date +%s)
+out=$(run COLUMNS=160 cca agy usage 2>&1); rc=$?; t1=$(date +%s)   # 160 列：备注那一行放得下整句（窄的终端里照别的表格一样截短）
+rm -f "$T/agy_usage_auth"
+ok "agy 要重新登录（打出登录网址、等着授权）：马上停掉它，说登录已失效，网址不给出来；用上次的额度" '[ $((t1 - t0)) -lt 20 ] && [ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录已失效（比如改过密码）：cca agy login alice@example.com 重新登录" && ! printf "%s" "$out" | grep -q "accounts.google.com" && gone "fake_agy.py --gemini_dir=.* -p /usage"'
+touch "$T/agy_usage_old"; out=$(run cca agy usage --json 2>/dev/null); rm -f "$T/agy_usage_old"
+ok "打印模式还不认 /usage 的旧版 agy（当成一句话回答）：说这个版本查不了、升级后再试" 'printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"unsupported\" and d[\"accounts\"][0][\"error\"] == \"这个版本的 Antigravity 查不了用量（agy update 升级后再试）\" and d[\"accounts\"][0][\"source\"] == \"cache\""'
+touch "$T/agy_usage_hang"; t0=$(date +%s)
+out=$(run CCA_USAGE_TIMEOUT=2 cca agy usage --json 2>/dev/null); t1=$(date +%s)
+rm -f "$T/agy_usage_hang"
+ok "agy 一直不回：到点（CCA_USAGE_TIMEOUT）连同它起的进程一起停掉，说查询超时" '[ $((t1 - t0)) -lt 15 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"timeout\"" && gone "fake_agy.py --gemini_dir=.* -p /usage"'
 edit_table 'j["kimi"] = {"base_url": "https://api.example.com/v1"}' "$AGJ"
 n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
 out=$(run cca agy @alice --version 2>&1 </dev/null); rc=$?
@@ -1756,10 +1784,16 @@ out2=$(run CCA_TTY="$(ans)" cca agy @alice --gemini_dir=/tmp/elsewhere --version
 ok "共享的设置里给了 Google Cloud 项目（各账号会用同一个项目）、启动参数里另给 --gemini_dir（换掉账号的数据目录和登录）：拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "共享的 ~/.gemini 里有" && printf "%s" "$out" | grep -q "settings.json:gcp" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q -- "--gemini_dir" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
 n_p=$(grep -c "cca-agy-probe" agy.log); run CCA_TTY="$(ans)" cca agy @alice --version >/dev/null 2>&1; rc=$?
 ok "（探测结果按 agy 程序缓存，不每次都跑）" '[ $rc -eq 3 ] && [ "$(grep -c "cca-agy-probe" agy.log)" = "$n_p" ]'
-rm -f "$H/.cca/agy/probe.json"; touch "$T/agy_keychain"; n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
+# 从以前的 cca 升级上来：只有它记下的 probe.json（只设了 SSH_CONNECTION 探测，像 1.5.16 那样说不存文件；程序文件对得上）
+python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["files"]=False; json.dump(j, open(sys.argv[2], "w"))' "$H/.cca/agy/probe2.json" "$H/.cca/agy/probe.json"
+rm -f "$H/.cca/agy/probe2.json"; agy_old=$(cat "$H/.cca/agy/probe.json")
+touch "$T/agy_keychain"; n_p=$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)
 out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
-rm -f "$T/agy_keychain" "$H/.cca/agy/probe.json"
-ok "换了新版的 agy、设了 SSH_CONNECTION 也不把登录存进文件（各账号会共用钥匙串里的同一份）：停止，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再把登录存进账号自己的目录" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
+ok "像 1.5.16（钥匙串没锁时 SSH 会话不算数，认开关）、以前的 cca 记下的探测结果（probe.json）说不存文件：设着开关重新探测，照常启动；probe.json 原样留着（降级回去的 cca 启动 agy 时不设开关，照旧停下）" '[ $rc -eq 3 ] && [ "$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)" = $((n_p + 1)) ] && cfgok "(lambda p: p[\"files\"] is True)(json.load(open(\"$H/.cca/agy/probe2.json\")))" && [ "$(cat "$H/.cca/agy/probe.json")" = "$agy_old" ]'
+rm -f "$H/.cca/agy/probe.json" "$H/.cca/agy/probe2.json"; touch "$T/agy_noswitch"; n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log); n_u=$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)
+out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?; out2=$(run cca agy usage 2>&1); rc2=$?
+rm -f "$T/agy_keychain" "$T/agy_noswitch" "$H/.cca/agy/probe.json" "$H/.cca/agy/probe2.json"
+ok "换了新版的 agy、开关和 SSH_CONNECTION 都不让它把登录存进文件（各账号会共用钥匙串里的同一份）：停止，不启动，也不查用量" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再把登录存进账号自己的目录" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "不再把登录存进账号自己的目录" && [ "$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)" = "$n_u" ]'
 echo mallory@example.com > "$T/agy_login_as"
 out=$(run CCA_TTY="$(ans good-ag2 n)" cca agy login alice 2>&1); rc=$?
 ok "cca agy login：先退出原来的登录（删掉 token）；登成了别的邮箱就不用，问过之后不继续" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录的是 mallory@example.com，不是 alice@example.com"'
@@ -1787,7 +1821,7 @@ run CCA_TTY="$(ans)" cca agy web alice >/dev/null 2>&1
 out=$(run cca agy check alice 2>&1)
 ok "cca agy web 用账号专属的浏览器打开 gemini.google.com；cca agy check 经账号的端口检测出口" 'grep -F "https://gemini.google.com/" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && printf "%s" "$out" | grep -qE "alice@example.com +US-A +:7902"'
 GF0="$T/guifx"; mkdir -p "$GF0"; out=$(gj state); printf '%s' "$out" > "$GF0/state_agy.json"; out2=$(gj hello); printf '%s' "$out2" > "$GF0/hello_agy.json"
-ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API 和查用量；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": False, \"cost\": False} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is False and a[\"can_why\"][\"usage\"] == \"unsupported\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
+ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API 和 App 里显示的用量（cca agy usage 查到的额度 App 还不显示，usage 是 null）；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": False, \"cost\": False} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is False and a[\"can_why\"][\"usage\"] == \"unsupported\" and a[\"usage\"] is None and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
 ok "_gui hello：agy 已启用，找到了 agy 命令" 'printf "%s" "$out2" | jok "d[\"tools\"][\"agy\"][\"enabled\"] is True and d[\"tools\"][\"agy\"][\"bin\"]"'
 ok "agy 的登录 token 从没出现在 cca 写的文件、日志和命令行里（cca 只读里面的邮箱和档位）" '! grep -rqF -e ya29.test -e 1//test --exclude antigravity-oauth-token "$H/.cca" && ! grep -qF -e ya29.test -e 1//test agy.log open.log curl.log "$T/env.log"'
 out=$(run cca help 2>&1)

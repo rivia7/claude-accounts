@@ -415,7 +415,7 @@ enum Texts {
         case .noChrome: return "没装 Google Chrome：网页版要经账号的出口打开"
         case .notLoggedIn: return "还没登录，查不了用量"
         case .toolMissing: return "没装 \(cliCommand(tool)) 命令"
-        case .unsupported: return tool == .agy ? "Antigravity 账号没有桌面 App 和能查的用量接口" : "这种账号没有这个功能"
+        case .unsupported: return tool == .agy ? "Antigravity 账号没有桌面 App，App 里也还不显示它的额度" : "这种账号没有这个功能"
         default: return "现在不可用"
         }
     }
@@ -600,9 +600,9 @@ enum Texts {
         }
     }
 
-    /// 没有查用量接口的工具，用量那一节说去哪里看
+    /// App 里不显示用量的工具（`features.usage` 是 false），用量那一节说去哪里看
     static func noUsage(_ tool: ToolID) -> String {
-        tool == .agy ? "Antigravity 没有能在 agy 外面查的用量接口：在 agy 里用 /usage 看。" : "这种账号没有能查的用量接口。"
+        tool == .agy ? "App 里还不显示 Antigravity 的额度：在终端里用 cca agy usage 看，或者在 agy 里用 /usage。" : "这种账号没有能查的用量接口。"
     }
 
     /// 套餐档位的叫法（读屏用；界面上靠徽章的样子区分）。不知道的档位为 nil。

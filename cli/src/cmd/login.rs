@@ -18,7 +18,7 @@
 mod agy;
 mod catch;
 mod forward;
-mod sys;
+pub(super) mod sys;
 
 pub use agy::{cmd_agy_login, cmd_agy_probe};
 pub use catch::cmd_login_catch;

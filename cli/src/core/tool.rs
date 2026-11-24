@@ -82,6 +82,8 @@ pub struct Tool {
     pub install_shell: &'static str,
     pub has_app: bool,
     pub has_api: bool,
+    /// 图形界面显示不显示这个工具的用量（_gui state 的 features.usage、can.usage）。agy 是 false：`cca agy usage` 查得到，
+    /// 但格式不一样（几组额度，--json 的 quota_groups），App 还不显示
     pub has_usage: bool,
     pub has_cost: bool,
 }
@@ -235,10 +237,14 @@ pub const AGY_SHARED_CONFIG: &[&str] = &[
     "config/GEMINI.md",
     "config/AGENTS.md",
 ];
-/// 登录 token：设了 SSH_CONNECTION 时 agy 存进这个文件（不进钥匙串），cca 只读里面的邮箱和档位
+/// 登录 token：设了 AGY_FILE_ENV 时 agy 存进这个文件（不进钥匙串），cca 只读里面的邮箱和档位
 pub const AGY_TOKEN: &str = "antigravity-cli/antigravity-oauth-token";
 /// 给 agy 的 SSH_CONNECTION：它只看有没有，写本机地址不带出真实 IP
 pub const AGY_SSH: &str = "127.0.0.1 22 127.0.0.1 22";
+/// 让 agy 把登录存成数据目录里的文件（AGY_TOKEN）、不进钥匙串（钥匙串里只有一份，所有账号会共用它）的环境变量，
+/// 和 bash 的 agy_env 设的一样（一起改）。AGY_CLI_FORCE_FILE_TOKEN_STORAGE 是 agy 自己的开关（1.5.16 里有，值是 1 或 true；
+/// 这一版在 macOS 上要钥匙串锁着才认 SSH 会话）；SSH_CONNECTION 是以前的做法（1.5.5 看到 SSH 会话就存文件），留给不认开关的版本
+pub const AGY_FILE_ENV: [(&str, &str); 2] = [("SSH_CONNECTION", AGY_SSH), ("AGY_CLI_FORCE_FILE_TOKEN_STORAGE", "1")];
 /// agy 的档位 ID → (叫法, 档位)
 pub const AGY_TIERS: &[(&str, &str, &str)] = &[
     ("free-tier", "Free", "entry"),

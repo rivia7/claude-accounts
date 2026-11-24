@@ -23,9 +23,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   它的 stdout 只能经内存里的管道读，不能按 `runsToCompletion` 接到文件。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   Team 给这台设备的 Codex 账号随即被自动加进来、分走端口。`cca agy …`（Antigravity）同理，只在 `hello.tools.agy.enabled` 为真时调用。
-- 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App、第三方 API 账号、
-  查用量的接口和控制台账单页（`tools[].features`，2.2）：`usage`、`app`、`billing`、`limit-resets`、`reset`、`add api` 这些它都没有，
-  App 不调（调了 cca 也只回 `fail` 的 `unsupported`）。
+- 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App、第三方 API 账号
+  和控制台账单页（`tools[].features`，2.2）：`app`、`billing`、`limit-resets`、`reset`、`add api` 这些它都没有，App 不调（调了 cca 也只回
+  `fail` 的 `unsupported`）。`cca agy usage` 查得到它的额度，但格式和别的工具不一样（3.1 的 `quota_groups`），App 还不显示（`features.usage`
+  是 false），也不调；旧版 cca 的 `cca agy usage` 只回 `unsupported`。
 - 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `mail open` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live|mail-list`、`update --check --json`
   随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。`remote on|off|allow|unpair`
@@ -152,9 +153,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 工具（`tools[]`，顺序固定：claude、codex、agy；`codex.json`、`agy.json` 不存在时 `enabled` 为 false、`accounts` 是空的）：
 
-- `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）、折合金额（`cost`）。Claude、Codex 都是 true，
-  Antigravity 都是 false：不显示桌面 App、添加第三方 API 账号、用量（用量统计页也不算它）。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有
-  （`cost` 除外：没有这个键当作没有）。
+- `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`：5 小时、本周这些窗口，3.1）、
+  折合金额（`cost`）。Claude、Codex 都是 true，Antigravity 都是 false：不显示桌面 App、添加第三方 API 账号、用量（用量统计页也不算它；
+  `cca agy usage` 查得到的额度是另一种格式，3.1 的 `quota_groups`，App 还不显示，agy 账号的 `usage` 一直是 null）。旧版 cca 没有这一项：
+  Antigravity 当作都没有，别的都有（`cost` 除外：没有这个键当作没有）。
 
 账号（`tools[].accounts[]`，顺序就是账号表的顺序）：
 
@@ -617,6 +619,15 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `stale`：数据超过 10 分钟。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
 - 窗口：Claude 有 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_oauth_apps`；Codex 只有 `five_hour`、`seven_day`，
   另有 `credits`（`{"hasCredits": true, "unlimited": false, "balance": "12.5"}`）和 `reset_credits`（`{"availableCount": 2, "next_expires_epoch": …, …}`）。
+- Antigravity（`cca agy usage --json`，文档带 `"tool": "agy"`）没有固定的几个窗口：条目里没有 `five_hour`、`seven_day` 这些字段，额度在
+  `quota_groups`（没有数据时为 null）：agy 自己查到的几组额度（打印模式的 `/usage`），`[{"name", "description", "buckets": [...]}]`，每个额度
+  agy 给的几项原样：`id`、`name`、`description`、`window`（agy 的叫法，比如 `5h`、`weekly`）、`disabled`（停用了，不显示百分比）、
+  `remaining_fraction`、`remaining_amount`（没有百分比时可能有：还剩几次）；cca 另加和用量窗口一样的四项：`utilization`（用了百分之几，
+  `100 × (1 − remaining_fraction)`，两位小数；没有百分比为 null）、`resets_at`（agy 给的 UTC 时间，原样）、`resets_epoch`（认不出为 null）、
+  `reset`。agy 没给的几项为 null。`quota_description` 是 agy 对这些额度的说明（没有为 null）。agy 账号的 `error_code` 另有这几种意思：
+  `auth`（agy 要重新登录：它打出了登录网址，cca 马上停掉它）、`unsupported`（打印模式还不认 `/usage` 的旧版 agy，`agy update` 升级后再试）、
+  `error`（`error_detail` 是 agy 的原话）。App 还不显示这些（2.2 的 `features.usage`），`_gui state` 里 agy 账号的 `usage` 一直是 null。
+  旧版 cca 没有 `quota_groups`、`quota_description`（`cca agy usage` 只回 `unsupported`）。
 - 没有 5 小时限制的账号（Claude 的 Ultra 这类套餐，ChatGPT 的 Pro 500）：查到了用量（`source` 不是 `none`）、`seven_day` 有而 `five_hour` 是 null（接口没给 5 小时的窗口）。
   App 这时不画 5 小时那一行（侧栏、菜单栏面板、总览卡片、账号页）；没查到用量时照常画成“—”。5 小时的窗口还没开始计时（0%、没有重置时间）不算，照常画。
 - `model_scoped[]`：按模型的每周额度（Claude 的 Fable；Codex 另外计的额度）。Claude 的条目在 cca 认得出时**另有**它和本周总额度的关系：
@@ -784,7 +795,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）|
   `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
-  `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）|
+  `unsupported`（这种账号没有这个功能：Antigravity 的 `app`、`billing`、`limit-resets`、`add api`；旧版 cca 的 `cca agy usage` 也是它）|
   `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）|
   `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `node_pinned`（`node use`：Team 的配置锁定了这个账号的节点）|
   `hub_ssh`（`team deploy` 在 App 里问的服务器登录不上：密码错了三次、主机密钥和记下的不一样，4.6 的 `hub.deploy`、`hub.password`；

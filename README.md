@@ -338,18 +338,20 @@ Google 的 Antigravity 命令行（`agy`）也能多账号，用法和 Codex 一
 cca agy add            # 添加 Antigravity 账号：填 Google 账号的邮箱、别名（可选），选出口节点
 cca agy                # 选账号启动 agy（cca agy @工作 直接启动，后面的参数原样交给 agy）
 cca agy login 工作     # 重新登录
+cca agy usage          # 查各账号的额度（经各自的出口让 agy 自己查）
 aga @工作              # 简写：aga 就是 cca agy（aga、aga add、aga ls 也都行）
 ```
 
 - **账号表分开记**：记在 `~/.cca/agy.json`，格式和 `accounts.json` 一样（只有 Google 账号，值是节点名）。和 Claude、Codex 账号共用路由器（或本机 Clash）上的同一组端口，每个账号一个端口、一个出口。
 - **各自登录**：每个账号有自己的数据目录（`~/.cca/agy/accounts/…/gemini`，cca 启动 agy 时用 `--gemini_dir` 指过去）。第一次启动时，cca 让 agy 生成 Google 的登录网址，补上账号的邮箱（`login_hint`），在**这个账号专属的 Chrome 窗口**里、经它的出口打开；登录后页面上显示一段授权码，把它（或者整个网址）粘贴回终端，cca 核对过再交给 agy，换 token 也经这个账号的出口。登录后 cca 还会核对邮箱，登成别的号就不启动。你原来 `~/.gemini` 里的登录不受影响，直接敲 `agy` 用的还是它。
-- **登录存在账号自己的目录里**：agy 平时把登录存进 macOS 钥匙串，不管数据目录在哪都是同一份，没法分账号。cca 启动 agy 时设上 `SSH_CONNECTION`（值是本机地址），agy 看到 SSH 会话就把登录存成数据目录里的文件（`antigravity-cli/antigravity-oauth-token`，只有你能读）。这不是 agy 公开的做法：每换一个版本，cca 先在临时目录里试一次（不联网），确认它还这样才用，不是就停下、不启动。副作用是 agy 会当自己在 SSH 会话里运行。cca 只读这个文件里的邮箱和套餐档位，不碰里面的 token。
+- **登录存在账号自己的目录里**：agy 平时把登录存进 macOS 钥匙串，不管数据目录在哪都是同一份，没法分账号。cca 启动 agy 时设上 agy 自己的开关 `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1`（新版认它），也照旧设 `SSH_CONNECTION`（值是本机地址；旧版看到 SSH 会话才这样），agy 就把登录存成数据目录里的文件（`antigravity-cli/antigravity-oauth-token`，只有你能读）。每换一个版本，cca 先在临时目录里试一次（不联网），确认它还这样才用，不是就停下、不启动。副作用是 agy 会当自己在 SSH 会话里运行。cca 只读这个文件里的邮箱和套餐档位，不碰里面的 token。
 - **工作资料共用**：`~/.gemini` 里的会话（`conversations`）、记忆（`brain`）、历史、`settings.json`、`keybindings.json`、`GEMINI.md`、`AGENTS.md`，以及 `config/` 下的 MCP、技能、规则、工作流、插件等，所有账号共用一份；`--continue` 认的“这个目录上次的会话”也共用，换个账号照样接着聊。
 - **不共用的**：登录、两个装机标识（`installation_id` 和 `jetski_state.pbtxt` 里的 `installation_uuid`：添加账号时 cca 给每个账号各生成一份，之后固定不变）、日志、会话摘要的索引（`conversation_summaries.db` 等，agy 会按共享的会话重建）。
-- **没有的**：查用量的接口（在 agy 里用 `/usage` 看）、第三方 API 账号、桌面 App 和控制台的账单页；`cca agy usage`、`add api`、`app`、`billing` 会说清楚，什么都不做。
+- **查额度**：`cca agy usage [账号…] [--json]` 经各账号的出口让 agy 自己查（agy 的 `/usage`，要 agy 1.1.11 以上），一个额度一行：用了百分之几、什么时候重置；查不到时用上次的，注明原因。agy 要重新登录时 cca 马上停下、说清楚（`cca agy login 账号`）。查的时候不让 agy 顺带自动更新。图形界面里还不显示 Antigravity 的额度。
+- **没有的**：第三方 API 账号、桌面 App 和控制台的账单页；`add api`、`app`、`billing` 会说清楚，什么都不做。
 - **其它命令**：`cca agy ls`、`edit`、`check`（出口检测：Google 的网站没有 `/cdn-cgi/trace`，经同一个端口看 Cloudflare 看到的 IP）、`web`（用账号专属的浏览器打开 Gemini 网页版 gemini.google.com）、`rm`，和 Claude 账号的同名命令一样。服务器上登录和 Claude、Codex 一样：给出在 Mac 上运行的 `cca agy login-page …` 那一行，Mac 上打开登录页，授权码抄回服务器的终端。
 - **简写 `aga`**：`aga` 就是 `cca agy`，后面接什么都一样（`aga`、`aga @工作`、`aga add`……），和 Codex 的 `cxa` 一样：`cca install` 时和 `cca` 一起放进 `~/.local/bin`；用着 Antigravity 的机器上 `aga` 不见了（比如以前装的 cca 升级上来），下一次运行 cca 时自动补上。已经有别的 `aga` 命令时不会覆盖它。
-- **图形界面**：用过 `cca agy` 之后，总览和侧栏里多一组 Antigravity 账号（装了 `agy` 命令时，侧栏底部也能「启用 Antigravity 账号」），能打开终端、网页版、检测出口；没有用量和桌面 App。
+- **图形界面**：用过 `cca agy` 之后，总览和侧栏里多一组 Antigravity 账号（装了 `agy` 命令时，侧栏底部也能「启用 Antigravity 账号」），能打开终端、网页版、检测出口；没有桌面 App，额度也还不显示（在终端里用 `cca agy usage` 看）。
 
 启动前同样会检查：出口地区和纯净度；shell 里继承的 `GEMINI_*`、`ANTIGRAVITY_*`、`AGY_*`（例如会换掉账号的 `AGY_ACCOUNT`）、`GOOGLE_API_KEY`、`GOOGLE_APPLICATION_CREDENTIALS`、`GOOGLE_CLOUD_PROJECT` 这类会顶替登录或换项目的变量一律不带进去，只留界面开关 `AGY_CLI_*` 和公司网络根证书 `AGY_CA_CERT`；共享的 `~/.gemini/antigravity-cli/settings.json`（或这次的 `--settings`）里写了 Google Cloud 项目（`gcp`：各账号会记到同一个项目上），或者启动参数里另给了 `--gemini_dir`，cca 会拒绝启动并指出来。
 

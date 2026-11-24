@@ -4,6 +4,7 @@
 //! 这一块的子命令都移植了。`Tool` 里按工具分派、和用量 / 套餐有关的几个方法（who、plan、plan_tier、outdated_login_plan、
 //! usage_query、usage_caches）也在这里；Codex 那一半（app-server、登录身份）在 codex.rs。
 
+use super::agy::{agy_cell, agy_table_lines, agy_usage_query, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups};
 use super::codex::{
     agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query, json_loads_bytes, temp_file, Got, Piped,
 };
@@ -24,7 +25,7 @@ use crate::py::proc::env_or_empty;
 use crate::py::text::{self, fit};
 use crate::py::time::{self, timegm, Tm};
 use crate::py::uni;
-use crate::py::{die, exit, Fail, R};
+use crate::py::{exit, Fail, R};
 use crate::{dict, out, re};
 
 /// 这个模块移植好的子命令
@@ -155,13 +156,13 @@ fn floordiv_f(x: f64, y: f64) -> f64 {
 }
 
 /// `round(x)` 之后要的两样：`%d` 的写法（多大的数都写得出来）和它的值（比大小用）
-struct Rounded {
-    text: String,
-    val: f64,
+pub(super) struct Rounded {
+    pub(super) text: String,
+    pub(super) val: f64,
 }
 
 /// `round(x)`，x 是 JSON 里的数：整数原样，小数四舍六入五成双；NaN、无穷大是没人接的 ValueError / OverflowError
-fn py_round(x: &V) -> R<Rounded> {
+pub(super) fn py_round(x: &V) -> R<Rounded> {
     match x {
         V::Int(i) => Ok(Rounded { text: i.to_string(), val: *i as f64 }),
         V::Big(s) => Ok(Rounded { text: s.to_string(), val: s.parse().unwrap_or(f64::INFINITY) }),
@@ -978,6 +979,9 @@ pub fn usage_cell(key: &str, now: f64) -> R<String> {
 /// usage_cell 拿到缓存以后的那一步：u 是 usage_cached 的结果
 fn cell_text(u: Option<&Cached>, now: f64) -> R<String> {
     let Some(u) = u else { return Ok(String::new()) };
+    if t().kind == Kind::Agy {
+        return agy_cell(&u.rl, u.at, now); // agy 没有 5 小时、本周这两个窗口：写用得最多的那个额度
+    }
     let mut cells = Vec::new();
     for (label, k) in [("5h", "five_hour"), ("周", "seven_day")] {
         if let Some(w) = win(&u.rl.get(k).unwrap_or(V::None), now)? {
@@ -1382,13 +1386,21 @@ pub fn usage_entry(r: &Row, now: f64) -> R<Dict> {
     a.set("model_scoped", scoped);
     a.set("extra_usage", rl.dict("extra_usage"));
     a.set("use_first", use_first(rl, now, &r.why)?);
-    if t().kind == Kind::Claude {
+    match t().kind {
         // Claude Code 登录时记的套餐和账号现在的对不上（重新登录才会更新）：记的那个的叫法；对得上、不知道是 null
-        a.set("outdated_login_plan", if r.outdated_login_plan.is_empty() { V::None } else { V::from(&r.outdated_login_plan) });
-    } else {
+        Kind::Claude => {
+            a.set("outdated_login_plan", if r.outdated_login_plan.is_empty() { V::None } else { V::from(&r.outdated_login_plan) })
+        }
         // codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
-        a.set("credits", rl.dict("credits"));
-        a.set("reset_credits", reset_credits_view(rl.get("reset_credits"))?);
+        Kind::Codex => {
+            a.set("credits", rl.dict("credits"));
+            a.set("reset_credits", reset_credits_view(rl.get("reset_credits"))?);
+        }
+        // agy 没有固定的几个窗口：几组额度，每组几个桶（agy.rs 的 quota_groups）；没有数据时是 null
+        Kind::Agy => {
+            a.set("quota_groups", agy_quota_groups(rl, now));
+            a.set("quota_description", rl.str("description").filter(|s| !text::strip(s).is_empty()));
+        }
     }
     Ok(a)
 }
@@ -1396,6 +1408,9 @@ pub fn usage_entry(r: &Row, now: f64) -> R<Dict> {
 /// 查到的用量里至少有一个认得出的窗口：都没有的（接口的格式变了）不算查到，免得把好好的缓存换成空的
 pub fn usage_has_windows(rl: &V) -> R<bool> {
     let Some(rl) = rl.as_dict() else { return Ok(false) };
+    if t().kind == Kind::Agy {
+        return Ok(agy_has_buckets(&rl));
+    }
     for k in t().usage_windows {
         if win(&rl.get(k).unwrap_or(V::None), 0.0)?.is_some() {
             return Ok(true);
@@ -1455,7 +1470,7 @@ pub fn fit_note(parts: &[String], room: usize) -> String {
 }
 
 /// `max(int(cols) if str(cols).isdigit() else 80, 40)` 里的那个数
-fn cols_of(cols: &str) -> R<i64> {
+pub(super) fn cols_of(cols: &str) -> R<i64> {
     if !text::isdigit(cols) {
         return Ok(80);
     }
@@ -1491,6 +1506,9 @@ pub fn usage_table(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Strin
 
 /// usage_table 要打印的各行（表格是算完了才开始打印的，中途出错时一行也没有）
 fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[String]) -> R<Vec<String>> {
+    if t().kind == Kind::Agy {
+        return agy_table_lines(rows, now, cols, color); // 一个额度一行（agy.rs）；agy 没有第三方 API 账号
+    }
     let total = cols_of(cols)?.max(40) - 2; // 一行最多这么宽（留 2 格：… 和 — 在有的终端里占 2 格）
     let wide = total as usize;
     let paint = |s: &str, code: &str| -> String {
@@ -1963,7 +1981,7 @@ impl Tool {
         match self.kind {
             Kind::Claude => claude_usage_query(bin_, timeout),
             Kind::Codex => codex_usage_query(bin_, timeout),
-            Kind::Agy => die(format!("{} 没有查用量的接口", self.label)),
+            Kind::Agy => agy_usage_query(bin_, timeout),
         }
     }
 
@@ -1971,8 +1989,7 @@ impl Tool {
     pub fn usage_caches(&self, key: &str) -> R<Vec<Option<V>>> {
         Ok(match self.kind {
             Kind::Claude => vec![load_quiet(&usage_file(key)), acct_json(key)?.get("cachedUsageUtilization")],
-            Kind::Codex => vec![load_quiet(&usage_file(key))],
-            Kind::Agy => Vec::new(),
+            Kind::Codex | Kind::Agy => vec![load_quiet(&usage_file(key))],
         })
     }
 }

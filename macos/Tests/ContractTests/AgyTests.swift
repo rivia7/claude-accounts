@@ -1,7 +1,8 @@
 import Foundation
 
-// Antigravity（agy）：第三种工具。hello 的 tools.agy、state 的第三个工具和它的 features（没有桌面 App、第三方 API 账号、
-// 查用量的接口：can_why 是 unsupported），总览多一组、用量统计不算它，没启用时绝不调用 cca agy …
+// Antigravity（agy）：第三种工具。hello 的 tools.agy、state 的第三个工具和它的 features（没有桌面 App、第三方 API 账号，
+// App 里也还不显示它的额度：can_why 是 unsupported），总览多一组、用量统计不算它，没启用时绝不调用 cca agy …；
+// cca agy usage --json 的额度（quota_groups）照格式解码
 
 private func text(_ name: String) -> String? { fixture(name).map { String(decoding: $0, as: UTF8.self) } }
 
@@ -31,14 +32,30 @@ func agyFixtureTests() {
     check("henry：没登录也是 unsupported（不说“没登录查不了用量”）", hy?.login == .loggedOut && hy?.canWhy["usage"] == .unsupported)
     check("槽位、节点的使用者里有 agy 的账号", s.routing?.slots.first { $0.port == 7902 }?.tool == .agy
           && s.routing?.nodes.first { $0.name == "US-B" }?.users.contains { $0.tool == .agy && $0.key == gina.key } == true)
-    check("unsupported 的说法", Texts.canWhy(.unsupported, appLabel: "桌面 App", tool: .agy) == "Antigravity 账号没有桌面 App 和能查的用量接口"
+    check("unsupported 的说法", Texts.canWhy(.unsupported, appLabel: "桌面 App", tool: .agy) == "Antigravity 账号没有桌面 App，App 里也还不显示它的额度"
           && Texts.canWhy(.unsupported, appLabel: "Claude App", tool: .claude) == "这种账号没有这个功能")
     check("没装 agy 命令", Texts.canWhy(.toolMissing, appLabel: "", tool: .agy) == "没装 agy 命令"
           && Texts.canWhy(.toolMissing, appLabel: "", tool: .codex) == "没装 codex 命令"
           && Texts.canWhy(.toolMissing, appLabel: "", tool: .claude) == "没装 claude 命令")
     check("叫法", Texts.product(.agy) == "Antigravity" && Texts.department(.antigravity) == "Antigravity 账号"
           && Texts.cliName(.agy) == "agy" && Texts.cliName(.codex) == "Codex" && Texts.cliName(.claude) == "Claude Code")
-    check("用量那一节：说在 agy 里用 /usage 看", Texts.noUsage(.agy).contains("/usage"))
+    check("用量那一节：说在终端里用 cca agy usage 看（或者在 agy 里用 /usage）", Texts.noUsage(.agy).contains("cca agy usage")
+          && Texts.noUsage(.agy).contains("/usage"))
+
+    // cca agy usage --json：额度在 quota_groups 里（App 还不显示，先核对照格式解码得出来）
+    if let u = loadFixture(UsageDoc.self, "usage_agy.json") {
+        let a = u.accounts.first, h = u.accounts.last, groups = u.accounts.first?.quotaGroups ?? []
+        check("usage_agy：tool 是 agy；没有 5 小时、本周这些窗口（hasData 是 false）", u.tool == .agy && a?.source == .live
+              && a?.fiveHour == nil && a?.sevenDay == nil && a?.hasData == false)
+        check("usage_agy：三组额度和 agy 的说明", groups.map(\.name) == ["Gemini Pro", "Claude", "Gemini Flash"]
+              && groups.map(\.buckets.count) == [2, 2, 1] && a?.quotaDescription == "Quota for Antigravity models", "\(groups.map(\.name))")
+        let pro = groups.first?.buckets.first, requests = groups.count > 1 ? groups[1].buckets.last : nil, flash = groups.last?.buckets.first
+        check("usage_agy：用了百分之几、什么时候重置是 cca 算好的", pro?.used.utilization == 13 && pro?.used.resetsEpoch == 1794051000
+              && pro?.used.reset == false && pro?.window == "5h" && pro?.id == "gemini-pro-5h" && pro?.disabled == false)
+        check("usage_agy：没有百分比的额度带着还剩几次；停用的额度", requests?.remainingAmount == 12 && requests?.used.utilization == nil
+              && requests?.id == nil && flash?.disabled == true && flash?.used.utilization == nil)
+        check("usage_agy：没登录的账号没有额度", h?.source == UsageSource.none && h?.errorCode == .login && h?.quotaGroups.isEmpty == true)
+    }
     check("没有桌面 App：不给下载 App 的补救", Remedy.forCode(.appMissing, tool: .agy, key: gina.key) == Remedy.none
           && Remedy.forCode(.appMissing, tool: .claude, key: nil) != Remedy.none)
 
@@ -102,7 +119,7 @@ func agyGateTests() async {
     check("看得见的工具：Claude、Antigravity", m.visibleTools == [.claude, .agy], "\(m.visibleTools)")
     check("features 取 cca 给的", m.features(.agy) == ToolFeatures(app: false, api: false, usage: false) && m.features(.claude).usage)
     check("命令前缀、App 的叫法", m.prefix(.agy) == ["agy"] && m.appLabel(.agy) == "桌面 App")
-    check("用量统计只有 Claude 一组（agy 没有查用量的接口）", m.officialGroups().map(\.department) == [.claude],
+    check("用量统计只有 Claude 一组（agy 的额度 App 还不显示）", m.officialGroups().map(\.department) == [.claude],
           "\(m.officialGroups().map(\.department))")
     check("侧栏：agy 的官方账号一组", m.accountGroups(.agy).map(\.department) == [.antigravity]
           && m.accountGroups(.agy).first?.accounts.map(\.key) == ["工作(gina@example.com)", "henry@example.com"])
@@ -113,12 +130,12 @@ func agyGateTests() async {
     m.refreshUsage(tool: .agy, key: "工作(gina@example.com)", manual: true)
     _ = await waitUntil(1) { !m.isUsageRefreshing(AccountRef(tool: .claude, key: "alice@example.com")) }
     let agyUsage = t.requests.filter { $0.arguments.first == "agy" && $0.arguments.contains("usage") }
-    check("不查 agy 的用量（cca agy usage 只会说不支持）", agyUsage.isEmpty, "\(agyUsage.map(\.arguments))")
+    check("不查 agy 的用量（features.usage 是 false：App 还不显示它的额度）", agyUsage.isEmpty, "\(agyUsage.map(\.arguments))")
     check("Claude 的照常查", t.requests.contains { $0.arguments == ["usage", "--json"] })
     m.shutdown()
 
-    // 点了“登录”、等着登录好的那段时间（UsagePolling.reloginWatch）：agy 没有查用量的接口，后台不跑 cca agy usage
-    // （只会失败，留下一条“后台刷新 Antigravity 的用量没有成功”），按同样的间隔只重读 state，登录好了界面照样会变
+    // 点了“登录”、等着登录好的那段时间（UsagePolling.reloginWatch）：agy 的 features.usage 是 false，后台不跑 cca agy usage
+    // （旧版 cca 只会失败，留下一条“后台刷新 Antigravity 的用量没有成功”；新版的额度 App 也不显示），按同样的间隔只重读 state，登录好了界面照样会变
     let unsupported = EventLog.parseLine(Data(#"{"v":1,"ev":"fail","code":"unsupported","message":"Antigravity 没有能在 agy 外面查的用量接口：在 agy 里用 /usage 看"}"#.utf8))!
     let t3 = ScriptedTransport { request, _ in
         if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }

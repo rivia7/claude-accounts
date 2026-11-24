@@ -151,6 +151,53 @@ struct ResetCredits: Decodable, Sendable, Equatable {
     }
 }
 
+/// Antigravity 的一个额度（`quota_groups[].buckets[]`，PROTOCOL 3.1）：agy 给的几项原样，用了百分之几、什么时候重置、过没过重置时间
+/// 是 cca 算好的（`utilization`、`resets_epoch`、`reset`，和用量窗口一样，在 `used` 里）。
+struct QuotaBucket: Decodable, Sendable, Equatable {
+    var id: String?
+    var name: String?
+    var description: String?
+    /// agy 给的窗口的叫法（`5h`、`weekly`……），原样
+    var window: String?
+    /// agy 停用了这个额度：不显示百分比
+    var disabled: Bool
+    /// 没有百分比时 agy 可能给还剩几次
+    var remainingAmount: Int?
+    var used: UsageWindow
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, window, disabled
+        case remainingAmount = "remaining_amount"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = c.string(.id)
+        name = c.string(.name)
+        description = c.string(.description)
+        window = c.string(.window)
+        disabled = c.bool(.disabled) ?? false
+        remainingAmount = c.int(.remainingAmount)
+        used = try UsageWindow(from: decoder)
+    }
+}
+
+/// `quota_groups[]`：Antigravity 的一组额度（PROTOCOL 3.1）。App 还不显示（`features.usage` 是 false），先照格式解码。
+struct QuotaGroup: Decodable, Sendable, Equatable {
+    var name: String?
+    var description: String?
+    var buckets: [QuotaBucket]
+
+    enum CodingKeys: String, CodingKey { case name, description, buckets }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = c.string(.name)
+        description = c.string(.description)
+        buckets = c.lossyArray(QuotaBucket.self, .buckets) ?? []
+    }
+}
+
 /// 一个账号的用量（`usage --json` 的 `accounts[]`，也是 `_gui state` 里账号的 `usage`）。
 struct UsageEntry: Decodable, Sendable, Equatable {
     var account: String?
@@ -178,6 +225,11 @@ struct UsageEntry: Decodable, Sendable, Equatable {
     var outdatedLoginPlan: String?
     /// 本周额度快重置了、还剩不少：建议先用（旧版 cca 没有，是 nil）
     var useFirst: UseFirst?
+    /// Antigravity 的额度（`cca agy usage --json`）：几组，每组几个；别的工具、没有数据时是空的。没有 5 小时、本周这些窗口，
+    /// 所以 `hasData` 是 false
+    var quotaGroups: [QuotaGroup] = []
+    /// agy 对这些额度的说明（原样）
+    var quotaDescription: String?
 
     enum CodingKeys: String, CodingKey {
         case account, key, email, plan, source
@@ -197,6 +249,8 @@ struct UsageEntry: Decodable, Sendable, Equatable {
         case resetCredits = "reset_credits"
         case outdatedLoginPlan = "outdated_login_plan"
         case useFirst = "use_first"
+        case quotaGroups = "quota_groups"
+        case quotaDescription = "quota_description"
     }
 
     init(from decoder: Decoder) throws {
@@ -223,6 +277,8 @@ struct UsageEntry: Decodable, Sendable, Equatable {
         resetCredits = c.lossy(ResetCredits.self, .resetCredits)
         outdatedLoginPlan = nonEmpty(c.string(.outdatedLoginPlan))
         useFirst = c.lossy(UseFirst.self, .useFirst)
+        quotaGroups = c.lossyArray(QuotaGroup.self, .quotaGroups) ?? []
+        quotaDescription = nonEmpty(c.string(.quotaDescription))
     }
 
     /// 有没有可以显示的数据（`source` 为 none 时没有）。

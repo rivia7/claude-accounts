@@ -332,7 +332,7 @@ struct NodeUse: Decodable, Sendable, Equatable, Identifiable {
 }
 
 /// 一个工具（Claude / Codex）。
-/// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）、折合金额（`cost`）。
+/// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`）、折合金额（`cost`）。
 /// 旧版 cca 没有这个字段：那时只有 Claude 和 Codex，都有（折合金额除外：没有这个键当作没有）。
 struct ToolFeatures: Decodable, Sendable, Equatable {
     var app: Bool
@@ -377,7 +377,7 @@ struct ToolState: Decodable, Sendable, Equatable, Identifiable {
     var errors: [StateIssue]
     var last: String?
     var accounts: [Account]
-    /// 这个工具有没有桌面 App、第三方 API 账号、查用量的接口（Antigravity 都没有）
+    /// 这个工具有没有桌面 App、第三方 API 账号、App 里显示的用量（Antigravity 都没有：它的额度只在终端里看，cca agy usage）
     var features: ToolFeatures
 
     enum CodingKeys: String, CodingKey {

@@ -73,7 +73,7 @@ struct CanWhy: KnownValues {
     static let noChrome = CanWhy(rawValue: "no_chrome")
     static let notLoggedIn = CanWhy(rawValue: "not_logged_in")
     static let toolMissing = CanWhy(rawValue: "tool_missing")
-    /// 这种账号没有这个功能（Antigravity 账号没有桌面 App 和查用量的接口）
+    /// 这种账号没有这个功能（Antigravity 账号没有桌面 App，App 里也还不显示它的额度）
     static let unsupported = CanWhy(rawValue: "unsupported")
     static let allKnown: [CanWhy] = [.apiAccount, .appMissing, .noChrome, .notLoggedIn, .toolMissing, .unsupported]
 }

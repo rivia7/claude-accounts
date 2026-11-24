@@ -21,7 +21,7 @@ struct AccountDetail: View {
                         DetailHeader(account: a)
                         SectionColumns {
                             if !a.isAPI, !model.features(a.tool).usage {
-                                NoUsageSection(account: a)   // Antigravity：没有查用量的接口
+                                NoUsageSection(account: a)   // Antigravity：App 里还不显示它的额度
                             } else if !a.isAPI {
                                 // 按官方 API 的价格折成多少美元（cca 有折合金额、这个账号有时）
                                 let cost = model.costEnabled && a.can.cost

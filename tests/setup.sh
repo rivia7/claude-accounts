@@ -1055,18 +1055,23 @@ con.execute('INSERT INTO threads VALUES (?, ?, ?)', (tid, rollout, tag)); con.co
 PY
 exit 3
 S
-# 假的 agy（照 1.5.5 的行为）：--gemini_dir=目录 换数据目录（写在子命令前面）。acp --login 设了 SSH_CONNECTION 时在
-# antigravity-cli/log/acp-login-*.log 里写“Using file-based token storage because SSH session detected”（$CCA_T/agy_keychain：
-# 模拟不再这样的新版本），打印 Google 的登录网址（state 取 $CCA_T/agy_state）和问授权码的那一句（没有换行），从 stdin 读一行：
+# 假的 agy（照 1.5.16 的行为）：--gemini_dir=目录 换数据目录（写在子命令前面）。acp --login 在 antigravity-cli/log/acp-login-*.log 里
+# 说登录存成了文件：设了 AGY_CLI_FORCE_FILE_TOKEN_STORAGE（1 或 true）时说“…because AGY_CLI_FORCE_FILE_TOKEN_STORAGE is set”
+# （$CCA_T/agy_noswitch：模拟不认这个开关的旧版本），不然设了 SSH_CONNECTION 时说“…because SSH session detected”（1.5.5 的做法；
+# $CCA_T/agy_keychain：模拟 1.5.16 在钥匙串没锁时不再这样），打印 Google 的登录网址（state 取 $CCA_T/agy_state）和问授权码的那一句（没有换行），从 stdin 读一行：
 # 读到头说 login cancelled、退出码 1；授权码（或整个网址里的 code）以 good 开头算成功（不是就报错再问），token 写进
 # antigravity-cli/antigravity-oauth-token（id_token_email 取 CCA_ACCOUNT 里的邮箱，一次性的 $CCA_T/agy_login_as 模拟登错号，
 # $CCA_T/agy_noemail 时不写邮箱，档位取 $CCA_T/agy_tier），说 Logged in as 邮箱.；换 token 时的代理记进 agy.log。
+# -p /usage --output-format json 照 1.5.16 回额度（一行 JSON，额度在 command.data；按 token 里的邮箱取 $CCA_T/agy_usage/<邮箱>.json，
+# 没有就用一份默认的，重置时间按现在算），agy.log 里记 AGY-USAGE（有没有控制终端、自动更新关没关、工作目录）；没有 token 或者 $CCA_T/agy_usage_auth 时
+# 像没登录一样在 stderr 上打出登录网址、等 60 秒；$CCA_T/agy_usage_error（内容是原因）回 ERROR；$CCA_T/agy_usage_old 像不认 /usage
+# 的旧版本，当成一句话回答（没有 command）；$CCA_T/agy_usage_hang 一直不回
 # 其余（包括 cca 带着 --gemini_dir 传进来的 --version）当作一次会话：装机标识不是正好 36 个字符就重新生成（像真的），写共享的会话、历史、技能，设置用临时文件 + 改名保存，退出码 3
 cat > "$T/bin/agy" <<'S'
 #!/bin/bash
 LOG="$CCA_T/agy.log"
 echo "ARGS: $*" >> "$LOG"
-echo "ENV: SSH_CONNECTION=${SSH_CONNECTION-unset} https_proxy=${https_proxy-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} NO_PROXY=${NO_PROXY-unset} no_proxy=${no_proxy-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} CCA_PROXY=${CCA_PROXY-unset} GEMINI_API_KEY=${GEMINI_API_KEY-unset} GOOGLE_API_KEY=${GOOGLE_API_KEY-unset} GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT-unset} ANTIGRAVITY_GEMINI_DIR=${ANTIGRAVITY_GEMINI_DIR-unset} AGY_ACCOUNT=${AGY_ACCOUNT-unset} AGY_CA_CERT=${AGY_CA_CERT-unset} AGY_CLI_THEME=${AGY_CLI_THEME-unset} ALL_PROXY=${ALL_PROXY-unset} BROWSER=${BROWSER-unset} CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
+echo "ENV: SSH_CONNECTION=${SSH_CONNECTION-unset} https_proxy=${https_proxy-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} NO_PROXY=${NO_PROXY-unset} no_proxy=${no_proxy-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} CCA_PROXY=${CCA_PROXY-unset} GEMINI_API_KEY=${GEMINI_API_KEY-unset} GOOGLE_API_KEY=${GOOGLE_API_KEY-unset} GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT-unset} ANTIGRAVITY_GEMINI_DIR=${ANTIGRAVITY_GEMINI_DIR-unset} AGY_ACCOUNT=${AGY_ACCOUNT-unset} AGY_CA_CERT=${AGY_CA_CERT-unset} AGY_CLI_THEME=${AGY_CLI_THEME-unset} ALL_PROXY=${ALL_PROXY-unset} BROWSER=${BROWSER-unset} CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR-unset} AGY_CLI_FORCE_FILE_TOKEN_STORAGE=${AGY_CLI_FORCE_FILE_TOKEN_STORAGE-unset} AGY_CLI_DISABLE_AUTO_UPDATE=${AGY_CLI_DISABLE_AUTO_UPDATE-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
 exec python3 "$CCA_T/fake_agy.py" "$@"
 S
 cat > "$T/fake_agy.py" <<'S'
@@ -1092,9 +1097,11 @@ if args[:1] == ['--version'] and not gd:   # cca 启动时总带 --gemini_dir：
     sys.exit(0)
 if args[:2] == ['acp', '--login']:
     with open(os.path.join(cli, 'log', 'acp-login-%s-%d.log' % (time.strftime('%Y%m%d_%H%M%S'), os.getpid())), 'w') as f:
-        f.write('I1112 11:01:12.000000 1 main.go:1] agy 1.5.5\n')
-        if os.environ.get('SSH_CONNECTION') and not mark('agy_keychain'):
-            f.write('I1112 11:01:12.000001 1 composite_token_storage.go:125] Using file-based token storage because SSH session detected\n')
+        f.write('I1124 11:01:12.000000 1 main.go:1] agy 1.5.16\n')
+        if os.environ.get('AGY_CLI_FORCE_FILE_TOKEN_STORAGE', '').strip().lower() in ('1', 'true') and not mark('agy_noswitch'):
+            f.write('I1124 11:01:12.000001 1 composite_token_storage.go:207] Using file-based token storage because AGY_CLI_FORCE_FILE_TOKEN_STORAGE is set\n')
+        elif os.environ.get('SSH_CONNECTION') and not mark('agy_keychain'):
+            f.write('I1124 11:01:12.000001 1 composite_token_storage.go:125] Using file-based token storage because SSH session detected\n')
     state = mark('agy_state')
     state = state if isinstance(state, str) else 'st-agy'
     q = [('access_type', 'offline'), ('client_id', '000000000000-test.apps.googleusercontent.com'), ('code_challenge', 'chal-test'),
@@ -1137,6 +1144,52 @@ if args[:2] == ['acp', '--login']:
     os.replace(p + '.tmp', p)
     log('AGY-LOGIN %s @ %s' % (email, g))
     print('Logged in as %s.' % email, flush=True)
+    sys.exit(0)
+def answer(status, error='', command=None, response='', cid=''):
+    j = {'conversation_id': cid, 'status': status, 'response': response, 'error': error, 'duration_seconds': 0.4, 'num_turns': 0,
+         'usage': {'input_tokens': 0, 'output_tokens': 0, 'thinking_tokens': 0, 'cache_read_tokens': 0, 'total_tokens': 0}}
+    if command:
+        j['command'] = command
+    j['finished_reason'] = 'error' if status == 'ERROR' else 'stop'
+    print(json.dumps(j, separators=(',', ':')), flush=True)
+if args[:2] == ['-p', '/usage']:
+    try:
+        os.close(os.open('/dev/tty', os.O_RDWR))
+        tty = 'yes'
+    except OSError:
+        tty = 'no'
+    log('AGY-USAGE tty=%s auto_update=%s cwd=%s @ %s' % (tty, os.environ.get('AGY_CLI_DISABLE_AUTO_UPDATE', 'unset'), os.getcwd(), g))
+    tokp = os.path.join(cli, 'antigravity-oauth-token')
+    while mark('agy_usage_hang'):
+        time.sleep(0.1)
+    if not os.path.exists(tokp) or mark('agy_usage_auth'):
+        sys.stderr.write('Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?access_type=offline&state=st-usage\n\n'
+                         'Waiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n')
+        sys.stderr.flush()
+        time.sleep(60)
+        sys.stderr.write('Error: authentication timed out.\nerror: authentication failed or timed out\n')
+        answer('ERROR', 'authentication failed or timed out')
+        sys.exit(1)
+    if mark('agy_usage_old'):
+        answer('SUCCESS', response='I cannot look up your quota from here.', cid=str(uuid.uuid4()))
+        sys.exit(0)
+    bad = mark('agy_usage_error')
+    if bad:
+        answer('ERROR', bad if isinstance(bad, str) else 'quota service unavailable')
+        sys.exit(1)
+    email = json.load(open(tokp)).get('id_token_email', '')
+    log('AGY-USAGE-AS %s https_proxy=%s' % (email, os.environ.get('https_proxy', 'unset')))
+    p = os.path.join(t, 'agy_usage', email + '.json')
+    def at(hours):
+        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + hours * 3600))
+    data = json.load(open(p)) if os.path.exists(p) else {'description': 'Quota for Antigravity models', 'groups': [
+        {'name': 'Gemini Pro', 'buckets': [
+            {'id': 'gemini-pro-5h', 'name': 'Five Hour Limit Remaining', 'window': '5h', 'remaining_fraction': 0.87, 'reset_time': at(2.5)},
+            {'id': 'gemini-pro-week', 'name': 'Weekly Limit Remaining', 'window': 'weekly', 'remaining_fraction': 0.25, 'reset_time': at(80)}]},
+        {'name': 'Claude', 'description': 'Claude and GPT-OSS models', 'buckets': [
+            {'id': 'claude-5h', 'name': 'Five Hour Limit Remaining', 'window': '5h', 'remaining_fraction': 0.05, 'reset_time': at(1.2)}]},
+        {'name': 'Gemini Flash', 'buckets': [{'id': 'flash', 'name': 'Gemini Flash', 'disabled': True}]}]}
+    answer('SUCCESS', command={'name': 'usage', 'data': data}, cid=str(uuid.uuid4()))
     sys.exit(0)
 while os.path.exists(os.path.join(t, 'hold')):   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
     time.sleep(0.1)

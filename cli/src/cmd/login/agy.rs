@@ -9,7 +9,7 @@ use crate::cmd::{arg, arity};
 use crate::core::base::{EMAIL_RE, RO};
 use crate::core::ctx::ctx;
 use crate::core::model::{adir, cdir, name_of, node_of, parse_key};
-use crate::core::tool::{agy, t, AGY_SSH};
+use crate::core::tool::{agy, t, AGY_FILE_ENV};
 use crate::py::fs::{self, load_quiet, save_json};
 use crate::py::io;
 use crate::py::obj::{Dict, V};
@@ -33,7 +33,21 @@ static AGY_LOGGED_IN: LazyLock<Re> = LazyLock::new(|| Re::new(r"Logged in as (\S
 /// 原来是 `paste the authorization code` 加 re.I。Python 不分大小写时 i 还认 İ（U+0130）和 ı（U+0131），这里的正则库不认，
 /// 写明了才一样（s 认 ſ 两边都有）
 static AGY_CODE_PROMPT: LazyLock<Re> = LazyLock::new(|| Re::with_flags(r"paste the author[iİı]zat[iİı]on code", re::I));
-const AGY_FILE_TOKENS: &str = "Using file-based token storage because SSH session detected";
+/// agy 的日志里说登录存成了文件的那一句：因为设了开关（1.5.16 起认）、因为是 SSH 会话（以前的做法）。别的原因
+/// （钥匙串最近超时过、调用方要求的）不算：下次不一定还这样
+const AGY_FILE_TOKENS: [&str; 2] = [
+    "Using file-based token storage because AGY_CLI_FORCE_FILE_TOKEN_STORAGE is set",
+    "Using file-based token storage because SSH session detected",
+];
+/// 探测结果的缓存（~/.cca/agy/ 下）。以前的 cca 把只设了 SSH_CONNECTION 探测的结果记在 probe.json，读的时候只核对程序文件：
+/// 设着开关探测的结果（新版 agy 说存文件）要是也写进那一份，旧版的 cca（启动 agy 时不设开关）会以为可以启动，让各账号共用
+/// 钥匙串里的同一份登录。所以换了探测的环境（AGY_FILE_ENV）就换一个文件名；旧的那一份不读也不动（降级回去的 cca 照旧停下）
+const PROBE_FILE: &str = "probe2.json";
+
+/// 探测时 agy 的日志说没说登录存成了文件
+fn says_files(logs: &str) -> bool {
+    AGY_FILE_TOKENS.iter().any(|s| logs.contains(s))
+}
 /// 探测时不带给 agy 的环境变量（原来的 drop；I 的认法同上）
 static AGY_PROBE_DROP: LazyLock<Re> =
     LazyLock::new(|| Re::with_flags(r"^(AGY_|ANT[Iİı]GRAV[Iİı]TY_|GEM[Iİı]N[Iİı]_|GOOGLE_|SSH_|(HTTPS?|ALL|NO)_PROXY$)", re::I));
@@ -110,17 +124,17 @@ fn has_bracket_class(part: &str) -> bool {
     })
 }
 
-/// 这个版本的 agy 设了 SSH_CONNECTION 时是不是把登录存进数据目录里的文件（不进钥匙串）：cca 靠它让每个账号的登录分开，
-/// 这不是 agy 公开的做法，升级后可能变。在临时的数据目录里跑一次 acp --login（不联网：代理指向关着的端口，stdin 是空的，
-/// 它打出登录网址、读不到授权码就退出），看它的日志里有没有那一句。按 agy 程序文件（路径、大小、修改时间）缓存在
-/// ~/.cca/agy/probe.json。返回 {'files': bool, ...}
+/// 这个版本的 agy 设了 AGY_FILE_ENV 时是不是把登录存进数据目录里的文件（不进钥匙串）：cca 靠它让每个账号的登录分开，
+/// 升级后可能变（1.5.16 起只认开关，SSH 会话在 macOS 上不算数了）。在临时的数据目录里跑一次 acp --login（不联网：代理指向
+/// 关着的端口，stdin 是空的，它打出登录网址、读不到授权码就退出），看它的日志里有没有那一句（AGY_FILE_TOKENS）。按 agy
+/// 程序文件（路径、大小、修改时间）缓存在 ~/.cca/agy/ 下的 PROBE_FILE。返回 {'files': bool, ...}
 pub fn agy_probe(bin_: &str) -> R<Dict> {
     let real = if bin_.is_empty() { String::new() } else { path::realpath(bin_) };
     let Ok(st) = std::fs::metadata(&real) else {
         return Ok(dict! { "files" => false, "why" => "missing" });
     };
     let sig = list![&real, st.size() as i64, mtime_int(st.mtime(), st.mtime_nsec())];
-    let cache = path::join(&agy().sroot, "probe.json");
+    let cache = path::join(&agy().sroot, PROBE_FILE);
     if let Some(V::Dict(j)) = load_quiet(&cache) {
         if j.get("sig").is_some_and(|s| s.py_eq(&V::List(sig.clone()))) && j.get("files").is_some_and(|f| f.is_bool()) {
             return Ok(j);
@@ -133,9 +147,11 @@ pub fn agy_probe(bin_: &str) -> R<Dict> {
             env.push((k, v));
         }
     }
-    for (k, v) in
-        [("SSH_CONNECTION", AGY_SSH), ("HTTPS_PROXY", "http://127.0.0.1:9"), ("HTTP_PROXY", "http://127.0.0.1:9"), ("NO_PROXY", "")]
-    {
+    for (k, v) in AGY_FILE_ENV.into_iter().chain([
+        ("HTTPS_PROXY", "http://127.0.0.1:9"),
+        ("HTTP_PROXY", "http://127.0.0.1:9"),
+        ("NO_PROXY", ""),
+    ]) {
         proc::env_set(&mut env, k, v);
     }
     let logs = {
@@ -153,7 +169,7 @@ pub fn agy_probe(bin_: &str) -> R<Dict> {
             .run();
         read_logs(&path::join_all(&[&g, "antigravity-cli", "log"]))
     };
-    let j = dict! { "sig" => sig, "files" => logs.contains(AGY_FILE_TOKENS), "checked" => time() as i64 };
+    let j = dict! { "sig" => sig, "files" => says_files(&logs), "checked" => time() as i64 };
     if !*RO {
         save_json(&cache, &V::Dict(j.clone()), Some(0o600), true)?;
     }
@@ -569,6 +585,17 @@ mod tests {
     }
 
     #[test]
+    fn file_token_sentences() {
+        // 1.5.16 设了开关时日志里的原话（composite_token_storage.go:207），1.5.5 设了 SSH_CONNECTION 时的
+        assert!(says_files("I1124 18:03:00.989990 1 composite_token_storage.go:207] Using file-based token storage because AGY_CLI_FORCE_FILE_TOKEN_STORAGE is set\n"));
+        assert!(says_files("composite_token_storage.go:125] Using file-based token storage because SSH session detected"));
+        // 别的原因不算：钥匙串超时过、调用方要求的
+        assert!(!says_files("Using file-based token storage because a keyring timeout was recorded within the last 1h0m0s"));
+        assert!(!says_files("Using file-based token storage because the caller requested it"));
+        assert!(!says_files(""));
+    }
+
+    #[test]
     fn mtime_rounds_like_a_python_float() {
         // 右边是 Python 的 int(os.stat(f).st_mtime)（os.utime(f, ns=…) 设的时间）
         assert_eq!(mtime_int(1_700_000_000, 0), 1_700_000_000);
@@ -617,7 +644,7 @@ mod tests {
         std::fs::create_dir(path::join(&d.path, "dir.log")).unwrap();
         let logs = read_logs(&d.path);
         assert_eq!(logs, "x Using file-based token storage because SSH session detected\n\u{fffd} tail");
-        assert!(logs.contains(AGY_FILE_TOKENS)); // 两份日志接在一起才凑成的那一句也算（原来就这样）
+        assert!(says_files(&logs)); // 两份日志接在一起才凑成的那一句也算（原来就这样）
         assert_eq!(read_logs(&path::join(&d.path, "nowhere")), "");
         let odd = path::join(&d.path, "t[x]mp");
         std::fs::create_dir(&odd).unwrap();

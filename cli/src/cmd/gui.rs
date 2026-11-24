@@ -431,7 +431,8 @@ fn gui_account(
         let sub = or_none(cached.as_ref().and_then(|x| x.rl.get("plan")));
         let p = tool.plan(k, &sub)?;
         tier = tool.plan_tier(k, &sub)?;
-        if let Some(x) = &cached {
+        // Antigravity 的额度（quota_groups）App 还不显示：features.usage 是 false，usage 照旧是 null（PROTOCOL 2.2）
+        if let Some(x) = cached.as_ref().filter(|_| tool.has_usage) {
             let mut row = usage_row(k, p.as_str())?;
             row.source = "cache";
             row.at = Some(x.at);
