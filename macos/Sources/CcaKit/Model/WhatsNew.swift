@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.13", title: "Team 的同步服务器不再需要 Python", points: [
+            .init(symbol: "shippingbox",
+                  text: "部署到自己服务器上的同步服务器换成 cca 自带的程序：systemd 方式不再要 python3，Docker 方式也不再拉 python 镜像，部署时传过去约 10 MB。"),
+            .init(symbol: "arrow.uturn.backward.circle",
+                  text: "更新服务器时新的起不来，或者中途断开了，自动换回原来的程序和设置，原来的服务照常运行。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "已经部署的服务器照常能用，管理员「更新服务器」一次就换成新的。托管平台（cca team hosted）只剩 Railway。"),
+        ]),
         ReleaseNote(version: "3.6.12", title: "Antigravity 账号页不再显示英文", points: [
             .init(symbol: "text.bubble",
                   text: "额度的组名改成中文（Gemini 模型；Claude、GPT 模型），agy 给的英文说明不再显示，认不出时间窗口的额度叫「其他额度」。"),
