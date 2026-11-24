@@ -2333,7 +2333,7 @@ ok "统计不成（~/.cca/cost 不是目录）：退出码 1，fail 事件 cost_
 cp -p "$T/cost.aj.json" "$AJ"; cp -p "$T/cost.dave.json" "$DD/codex/auth.json"
 fi
 if sect 10h; then
-# 10h. 提问会话（macos/PROTOCOL.md 4.6）：App 开的封闭流程，提问发成 ask 事件，答案从 fd 3 的管道读（tests/gui_session.py 扮演 App）
+# 10h. 提问会话（macos/PROTOCOL.md 4.6）：App 开的封闭流程，提问发成 ask 事件，答案从 fd 3 的管道读（cca-test gui-session 扮演 App：tests/kit/gui_session.rs）
 sess() {   # sess 答案JSON [驱动的参数…] -- 命令…：带答案管道运行，stdin 接 /dev/null（App 就是这样开流程的）
 	local a="$1"; shift
 	: > "$T/ev.jsonl"
@@ -3719,7 +3719,7 @@ out=$(runev cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "cca team leave（成员）：App 里先发同意事件（team_leave，范围是 Team 的编号）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_leave\" and e[\"scope\"] == \"$TMBID\"" && [ -d "$H/.cca/teams/$TMBID" ]'
 out=$(runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "同意以后退出了（result 的 team_left）：本机记着的删掉，另一个 Team 还在" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMBID" ] && [ -d "$H/.cca/teams/$TMID" ]'
-# --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（tests/hub_box.py 建的假服务器：目录当根，假 systemctl 起真的
+# --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（cca-test hub-box 建的假服务器，tests/kit/hubbox.rs：目录当根，假 systemctl 起真的
 #     server/cca-presence.py；一台服务器上每个 Team 一个服务），装好了自动接上。Docker、拉不到镜像、网页端和证书助手、连不上、几个 Team 这些
 #     细的在 tests/hub_deploy.py。App 里新建问名字（team.new），部署问服务器（hub.deploy）、密码（hub.password）、怎么加公钥（hub.pubkey）
 "$TESTBIN" hub-box "$T/hubbox"

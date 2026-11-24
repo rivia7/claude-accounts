@@ -834,7 +834,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     目录里装的是别的 Team 的 `taken`、没装的 `install`，都不动；`--check` 什么都不动；卸好了 stdout 是目录、同一台上别的 Team 照旧）。
 - 服务端的托管预设、`--behind-proxy` 在 `tests/presence.py` 的 `TeamServerTest.test_cli`、`test_behind_proxy`；不写指纹的服务器（托管平台上的）
   照证书机构验在 `tests/team.py` 的 `test_ca_mode`。
-- 回归 11b3d 的部署（`hubbox`：`tests/hub_box.py` 建的假服务器，假 ssh 认得 `hubbox`、`*@hubbox`，交给它的 `enter`；`$T/hubbox/ssh_denied` 时
+- 回归 11b3d 的部署（`hubbox`：`cca-test hub-box` 建的假服务器（`tests/kit/hubbox.rs`），假 ssh 认得 `hubbox`、`*@hubbox`，交给它的 `enter`；`$T/hubbox/ssh_denied` 时
   登录不了，`$T/hubbox/password` 在时不认密钥、只认这个密码；`nohub` 是解析不了的主机名）：`--script`（带着版本、两段程序和网页端的文件原样、
   `dash -n` 过得去、没有 `CCA_HUB_MANAGED`）；App 里新建（`team.new` → `team.accounts` → `team_created`：选项和 `team-candidates` 的一样多、自己加的预先选好；都不勾是空的 Team，勾了的连同节点
   放进去），终端里按编号选（没有的编号重问），没有终端时不问，`--accounts` 写了这台设备上没有的是 `team_accounts`、什么都不建；没写服务器、`--reset` 是 `team_usage`，端口写错了也是、
