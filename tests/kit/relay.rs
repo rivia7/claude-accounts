@@ -622,13 +622,13 @@ impl Popen {
     }
 }
 
-/// 命令行里找得到 pattern 的进程（`pgrep -f pattern`，pattern 是扩展正则）：它们的进程号。并行跑的别的测试也起辅助程序：
-/// pattern 里要带上只有这个用例才有的东西（会话的编号、临时目录里的路径：[`helper`]）
+/// 命令行里找得到 pattern 的进程（就是 `pgrep -f pattern` 找的那些；pattern 是正则，路径这样要照字面找的先转义）：它们的
+/// 进程号。并行跑的别的测试也起辅助程序：pattern 里要带上只有这个用例才有的东西（会话的编号、临时目录里的路径：[`helper`]）。
+/// 自己看进程表（[`crate::proc::processes`]），不起 pgrep：最小安装的 Linux 上没有它
 pub fn pgrep(pattern: &str) -> Vec<i32> {
-    let mut cmd = Cmd::new("/usr/bin/pgrep");
-    cmd.args(["-f", pattern]).timeout(Duration::from_secs(30));
-    let out = cmd.output().unwrap_or_else(|e| panic!("{e}"));
-    out.out().split_whitespace().filter_map(|pid| pid.parse().ok()).collect()
+    let re = regex::Regex::new(pattern).unwrap_or_else(|e| panic!("pgrep 的正则写错了：{pattern}：{e}"));
+    let table = crate::proc::processes().unwrap_or_else(|e| panic!("进程表看不了：{e}"));
+    table.into_iter().filter(|(_, command)| re.is_match(command)).map(|(pid, _)| pid).collect()
 }
 
 // ---- 每个用例的准备 ----

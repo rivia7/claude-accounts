@@ -940,7 +940,7 @@ impl Device {
     /// 后台起过几次同步（每次的参数；先后不保证）。cca 在后台起东西经 taskpolicy -c background，机器的核都占满时这样的进程
     /// 一直轮不到跑（实测：占满多久它就等多久），所以起了、还没轮到往 kicks.log 记一笔的也算：进程表里命令行是这台设备的假 cca 的那些
     pub fn kicks(&self) -> Vec<String> {
-        let waiting = waiting_kicks(&self.env["CCA_SELF"]).unwrap_or_else(|e| panic!("/bin/ps 运行不了：{e}"));
+        let waiting = waiting_kicks(&self.env["CCA_SELF"]).unwrap_or_else(|e| panic!("进程表看不了：{e}"));
         // 先看进程表、再读文件：这中间记完退出了的在文件里；两边都有的（记了、还没退出）按进程号只算一次
         let log = fsx::try_read_text(self.home.join("kicks.log")).unwrap_or_default();
         let done: Vec<(&str, &str)> = sandbox::splitlines(&log).into_iter().map(|l| l.split_once(' ').unwrap_or((l, ""))).collect();
@@ -1123,12 +1123,8 @@ impl Drop for Device {
 /// 进程表里命令行是这个假 cca（me 是它的路径）的那些：{进程号: 它的参数}。经 taskpolicy 起、还没换成脚本的也算
 fn waiting_kicks(me: &str) -> std::io::Result<BTreeMap<String, String>> {
     let me = format!("{me} ");
-    let mut ps = Cmd::new("/bin/ps");
-    ps.args(["-axww", "-o", "pid=,command="]).stderr(Stdio::Null);
-    let table = ps.output()?.stdout;
     let mut waiting = BTreeMap::new();
-    for line in sandbox::splitlines(&String::from_utf8_lossy(&table)) {
-        let (pid, cmd) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+    for (pid, cmd) in crate::proc::processes()? {
         if let Some((_, args)) = cmd.split_once(&me) {
             waiting.insert(pid.to_string(), args.trim().to_string());
         }

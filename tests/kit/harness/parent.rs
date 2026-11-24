@@ -276,34 +276,11 @@ fn pull(run: &mut Run) {
     }
 }
 
-/// 命令行里带着 marker（一个模块的临时目录）的进程：这个模块的用例起的、没人管的后台进程。给出（进程号，命令行）
-#[cfg(target_os = "linux")]
+/// 命令行里带着 marker（一个模块的临时目录）的进程：这个模块的用例起的、没人管的后台进程。给出（进程号，命令行）；
+/// 进程表看不了就当没有
 fn strays(marker: &str) -> Vec<(i32, String)> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else { return found };
-    for entry in entries.flatten() {
-        let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<i32>().ok()) else { continue };
-        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else { continue };
-        let command = String::from_utf8_lossy(&raw).replace('\0', " ");
-        if pid != std::process::id() as i32 && command.contains(marker) {
-            found.push((pid, command.trim().to_string()));
-        }
-    }
-    found
-}
-
-#[cfg(not(target_os = "linux"))]
-fn strays(marker: &str) -> Vec<(i32, String)> {
-    let Ok(out) = Cmd::new("/bin/ps").args(["-axww", "-o", "pid=,command="]).timeout(Duration::from_secs(20)).output() else {
-        return Vec::new();
-    };
     let me = std::process::id() as i32;
-    let text = out.out();
-    let rows = text
-        .lines()
-        .filter_map(|line| line.trim_start().split_once(' '))
-        .filter_map(|(pid, command)| Some((pid.parse::<i32>().ok()?, command.trim().to_string())));
-    rows.filter(|(pid, command)| *pid != me && command.contains(marker)).collect()
+    proc::processes().unwrap_or_default().into_iter().filter(|(pid, command)| *pid != me && command.contains(marker)).collect()
 }
 
 /// 这个进程号还在不在

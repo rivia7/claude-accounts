@@ -480,6 +480,34 @@ fn resolve(prog: &OsStr, env: &[(OsString, OsString)], cwd: Option<&Path>) -> io
     search(prog, path, cwd)
 }
 
+/// 这台机器上现在的进程：（进程号，整条命令行：各个参数用空格接起来）。看不了是 Err。
+/// Linux 上读 /proc/<进程号>/cmdline：busybox 的 ps 不认 `-axww -o pid=,command=`，最小安装的发行版连 ps、pgrep 都没有
+/// （没有命令行的——内核线程——不算）
+#[cfg(target_os = "linux")]
+pub fn processes() -> io::Result<Vec<(i32, String)>> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/proc")?.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<i32>().ok()) else { continue };
+        // 列出来以后退出了的读不到：跳过
+        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else { continue };
+        let command = String::from_utf8_lossy(&raw).replace('\0', " ").trim().to_string();
+        if !command.is_empty() {
+            found.push((pid, command));
+        }
+    }
+    Ok(found)
+}
+
+/// 这台机器上现在的进程：（进程号，整条命令行）。看不了是 Err。问 `/bin/ps -axww -o pid=,command=`
+#[cfg(not(target_os = "linux"))]
+pub fn processes() -> io::Result<Vec<(i32, String)>> {
+    let mut ps = Cmd::new("/bin/ps");
+    ps.args(["-axww", "-o", "pid=,command="]).stderr(Stdio::Null).timeout(Duration::from_secs(20));
+    let table = ps.output()?.out();
+    let rows = table.lines().filter_map(|line| line.trim_start().split_once(' '));
+    Ok(rows.filter_map(|(pid, command)| Some((pid.parse::<i32>().ok()?, command.trim().to_string()))).collect())
+}
+
 /// 照**这个进程**的 PATH 找一个命令（`shutil.which`）：看机器上装没装 openssl、node 这些
 pub fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_else(|| DEFAULT_PATH.into());
