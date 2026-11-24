@@ -453,11 +453,11 @@ if sect 3b3; then
 # （一个端口同时认 SOCKS5 和 HTTP CONNECT）连，证书是测试的 CA（CCA_MAIL_CAFILE：只在连的是本机时才信）；系统代理由假 scutil 给
 # （$T/scutil.txt）。meml UID 收件人 记号 [选项…] 往所有邮件里放一封登录邮件（链接是 https://claude.ai/magic-link#记号）
 MB="$T/mailbox"
-python3 "$D/mail_fake.py" serve "$MB" >/dev/null 2>&1 & MBP=$!
+"$TESTBIN" mail serve "$MB" >/dev/null 2>&1 & MBP=$!
 for i in $(seq 1 100); do [ -f "$MB/ports.json" ] && break; sleep 0.1; done
 MPX=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$MB/ports.json")
 MENV=(CCA_MAIL_CAFILE="$MB/pki/ca.pem" CCA_MAIL_POLL=0.2 CCA_MAIL_RETRY=0.2)
-meml() { python3 "$D/mail_fake.py" eml "$MB/box/all/$1.eml" --to "$2" --link "https://claude.ai/magic-link#$3" "${@:4}"; }
+meml() { "$TESTBIN" mail eml "$MB/box/all/$1.eml" --to "$2" --link "https://claude.ai/magic-link#$3" "${@:4}"; }
 out=$(run cca mail 2>&1); rc=$?
 out2=$(run cca mail open alice --wait 0 2>&1); rc2=$?
 ok "邮箱助手：没配置时 cca mail 说怎么配置，cca mail open 说先配置" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还没配置邮箱助手：运行 cca mail setup" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "还没配置邮箱助手"'   # cca codex mail 在 10f 测：它会让 Codex 算用起来了
@@ -482,7 +482,7 @@ ok "mail open：没有这个账号的登录邮件：等一会儿（--wait），�
 # 登录时：假 claude 的 auth login 在 $T/mail_send 在时先跑它（像在登录页上点了用邮箱登录，Anthropic 发来登录邮件），等 open.log 里出现
 # $T/mail_login 里的链接才算登录好
 printf '%s\n' "https://claude.ai/magic-link#tok-L1" > "$T/mail_login"
-printf '#!/bin/bash\npython3 "%s/mail_fake.py" eml "%s/box/all/9.eml" --to alice@example.com --link "https://claude.ai/magic-link#tok-L1"\n' "$D" "$MB" > "$T/mail_send"; chmod 755 "$T/mail_send"
+printf '#!/bin/bash\n"%s" mail eml "%s/box/all/9.eml" --to alice@example.com --link "https://claude.ai/magic-link#tok-L1"\n' "$TESTBIN" "$MB" > "$T/mail_send"; chmod 755 "$T/mail_send"
 out=$(run "${MENV[@]}" CCA_TTY="$(ans)" cca login alice 2>&1); rc=$?
 rm -f "$T/mail_send" "$T/mail_login"
 ok "登录时：后台盯着 Gmail，登录邮件一到就在 alice 专属的 Chrome 里打开里面的链接，登录接着完成；登录结束就不再盯" '[ $rc -eq 0 ] && grep -q "MAIL-LOGIN opened" claude.log && grep -F "tok-L1" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && printf "%s" "$out" | grep -q "邮箱助手：已连上 inbox@example.com" && printf "%s" "$out" | grep -q "已在 alice@example.com 专属的浏览器里打开登录邮件里的链接" && printf "%s" "$out" | grep -q "已重新登录" && ! printf "%s" "$out" | grep -q "没通过核对" && gone "mail-watch alice@example.com" && ! grep -q VIOLATION "$MB/imap.log"'
@@ -500,7 +500,7 @@ handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | pyt
 out=$(run "${MENV[@]}" cca mail open "$akey" --msg "$handle" 2>&1); rc=$?
 ok "mail open --msg：按句柄重新取、再核对、打开指定的那一封（tok-T5），在 alice 的 Chrome 里经它的端口；链接不在输出里、不进 ~/.cca" '[ $rc -eq 0 ] && grep -F "https://claude.ai/magic-link#tok-T5" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -rqs "tok-T" "$H/.cca"'
 # 信任转发中转（不安全，默认关，每账号独立，PROTOCOL 4.11）：隐私别名/转发服务（像 relay.example.com）去掉 Anthropic 的 DKIM、用自己域名重签 → 默认拒；登记了才接受
-fwdeml() { python3 "$D/mail_fake.py" eml "$MB/box/all/$1.eml" --to inbox@example.com --from "\"$2\" <noreply@relay.example.com>" --dkim-d relay.example.com --sign from:to:subject:reply-to:date --reply-to "Anthropic <no-reply@mail.anthropic.com>" --link "https://claude.ai/magic-link#$3" "${@:4}"; }
+fwdeml() { "$TESTBIN" mail eml "$MB/box/all/$1.eml" --to inbox@example.com --from "\"$2\" <noreply@relay.example.com>" --dkim-d relay.example.com --sign from:to:subject:reply-to:date --reply-to "Anthropic <no-reply@mail.anthropic.com>" --link "https://claude.ai/magic-link#$3" "${@:4}"; }
 fwdeml 6 alice@example.com tok-F1 --at $((now - 60))
 fwdeml 7 alice@example.com tok-F2 --reply-to "X <evil@phisher.example.com>" --at $((now - 50))   # Reply-To 非 Anthropic（攻击变体）：登记了也拒
 aslug=$(basename "$AD")

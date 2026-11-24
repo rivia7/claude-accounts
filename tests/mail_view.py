@@ -19,11 +19,17 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mail_fake as mf  # noqa: E402
 from helper_bin import HELPER  # noqa: E402
+
+# CCA_TEST_MAILFAKE=rust：假 Gmail 和假代理换成 Rust 的那一份（cca-test mail serve，tests/kit/mailfake.rs），两份对照用；
+# cca-test 在 CCA_TEST_BIN，没有就是 cli/target/kit/cca-test（先 cd cli && cargo build --profile kit -p cca-tests）
+RUST_FAKE = os.environ.get('CCA_TEST_MAILFAKE') == 'rust'
+TESTBIN = os.environ.get('CCA_TEST_BIN') or str(Path(__file__).resolve().parents[1] / 'cli' / 'target' / 'kit' / 'cca-test')
 
 PW = 'abcdefghijklmnop'
 ALL = '"[Gmail]/All Mail"'
@@ -197,6 +203,17 @@ class Box(unittest.TestCase):
         cls.ca = os.path.join(cls.dir, 'pki', 'ca.pem')
         for k, _, _ in mf.FOLDERS:
             os.makedirs(os.path.join(cls.dir, 'box', k), exist_ok=True)
+        if RUST_FAKE:
+            cls.fake = subprocess.Popen([TESTBIN, 'mail', 'serve', cls.dir], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            ports, end = os.path.join(cls.dir, 'ports.json'), time.time() + 30
+            while not os.path.exists(ports):
+                if cls.fake.poll() is not None or time.time() > end:
+                    raise RuntimeError('cca-test mail serve 没起来')
+                time.sleep(0.02)
+            with open(ports) as f:
+                p = json.load(f)
+            cls.srv, cls.px = types.SimpleNamespace(port=p['imap']), types.SimpleNamespace(port=p['proxy'])
+            return
         cls.srv = mf.Server(cls.dir)
         cls.srv.start()
         cls.px = mf.Proxy(cls.srv)
@@ -204,8 +221,12 @@ class Box(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.srv.ls.close()
-        cls.px.ls.close()
+        if RUST_FAKE:
+            cls.fake.terminate()
+            cls.fake.wait(10)
+        else:
+            cls.srv.ls.close()
+            cls.px.ls.close()
         shutil.rmtree(cls.dir, ignore_errors=True)
 
     def setUp(self):
