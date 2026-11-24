@@ -451,9 +451,12 @@ struct AccountSubtitle: View {
         // 登录失效时不写套餐：徽章不截断，放在一行里会把这句话挤没
         let parts = expired ? [SubtitlePart.text(Texts.usageError(.auth))] + a.subtitleParts.filter { if case .plan = $0 { return false }; return true }
             : a.subtitleParts
+        let noNode = parts.filter { if case .node = $0 { return false }; return true }
+        // 最后一种：徽章也放不下（Antigravity 的 Google AI Pro 这类长名字，右边还有用量的小条）时让它截断，鼠标指着有全名
         ViewThatFits(in: .horizontal) {
             line(a, parts)
-            line(a, parts.filter { if case .node = $0 { return false }; return true })
+            line(a, noNode)
+            line(a, noNode, badgeFits: false)
         }
         .font(.caption)
         .foregroundStyle(.plainSecondary)
@@ -463,7 +466,16 @@ struct AccountSubtitle: View {
         .accessibilityLabel(parts.map(\.text).joined(separator: " · "))
     }
 
-    private func line(_ a: Account, _ parts: [SubtitlePart]) -> some View {
+    @ViewBuilder
+    private func badge(_ a: Account, _ s: String, fits: Bool) -> some View {
+        if fits {
+            PlanBadge(plan: s, tier: a.planTier, size: .compact).fixedSize().layoutPriority(1)
+        } else {
+            PlanBadge(plan: s, tier: a.planTier, size: .compact)
+        }
+    }
+
+    private func line(_ a: Account, _ parts: [SubtitlePart], badgeFits: Bool = true) -> some View {
         HStack(spacing: 4) {
             if let c = a.loginIssueColor ?? (expired ? .orange : nil) {
                 Circle().fill(c).frame(width: 6, height: 6).padding(.trailing, 1)
@@ -471,7 +483,7 @@ struct AccountSubtitle: View {
             ForEach(Array(parts.enumerated()), id: \.offset) { i, p in
                 if i > 0 { Text("·") }
                 if case .plan(let s) = p {
-                    PlanBadge(plan: s, tier: a.planTier, size: .compact).fixedSize().layoutPriority(1)
+                    badge(a, s, fits: badgeFits)
                 } else {
                     Text(p.text)
                 }

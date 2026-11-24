@@ -431,7 +431,7 @@ fn gui_account(
         let sub = or_none(cached.as_ref().and_then(|x| x.rl.get("plan")));
         let p = tool.plan(k, &sub)?;
         tier = tool.plan_tier(k, &sub)?;
-        // Antigravity 的额度（quota_groups）App 还不显示：features.usage 是 false，usage 照旧是 null（PROTOCOL 2.2）
+        // Antigravity 的额度在 quota_groups 里（几组，每组几个），没有 5 小时、本周这些窗口（PROTOCOL 3.1）
         if let Some(x) = cached.as_ref().filter(|_| tool.has_usage) {
             let mut row = usage_row(k, p.as_str())?;
             row.source = "cache";
@@ -462,7 +462,7 @@ fn gui_account(
             why.set("web", "no_chrome"); // 没有 Chrome 时 cca web 只能用默认浏览器打开，不经账号的出口
         }
         if !tool.has_usage {
-            why.set("usage", "unsupported"); // agy 没有查用量的接口
+            why.set("usage", "unsupported"); // 现在三种工具都有（旧版 cca 的 agy 是它）
         } else if !has_bin {
             why.set("usage", "tool_missing");
         } else if login != "logged_in" {
@@ -476,7 +476,8 @@ fn gui_account(
         .iter()
         .find(|(key, _)| &**key == k)
         .map(|(_, (label, color))| dict! { "label" => label.as_str(), "color" => *color });
-    let weeks = if api || !tool.has_usage { None } else { usage_weeks_view(k, now, cached.as_ref())? };
+    // 每周用量的统计按 5 小时、本周的窗口记：agy 没有这两个窗口，也就没有
+    let weeks = if api || !tool.has_usage || tool.kind == Kind::Agy { None } else { usage_weeks_view(k, now, cached.as_ref())? };
     let can_cost = env.cost.on && tool.has_cost && !api; // 折合金额（PROTOCOL 2.2 的 cost）
     let lower = e.to_lowercase();
     // Team 的配置里的官方账号：节点被它固定

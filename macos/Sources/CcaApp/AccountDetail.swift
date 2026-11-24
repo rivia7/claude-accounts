@@ -21,15 +21,18 @@ struct AccountDetail: View {
                         DetailHeader(account: a)
                         SectionColumns {
                             if !a.isAPI, !model.features(a.tool).usage {
-                                NoUsageSection(account: a)   // Antigravity：App 里还不显示它的额度
+                                NoUsageSection(account: a)   // 3.6.10 及以前的 cca：Antigravity 的额度 App 里还拿不到
                             } else if !a.isAPI {
                                 // 按官方 API 的价格折成多少美元（cca 有折合金额、这个账号有时）
                                 let cost = model.costEnabled && a.can.cost
                                 VStack(alignment: .leading, spacing: 32) {
                                     UsageSection(account: a)
-                                    // 图的右边留出和下面折合金额的纵轴一样宽的一栏：同一周的条上下对齐
-                                    WeeklyUsageSection(account: a, gutter: cost ? CostChart.gutterLabels(
-                                        a.cost, granularity: model.costGranularity, scope: model.costScopeShown(for: a.cost)) : [])
+                                    // Antigravity 没有每周用量的统计（cca 按 5 小时、本周的窗口记，agy 没有这两个窗口）
+                                    if a.tool != .agy {
+                                        // 图的右边留出和下面折合金额的纵轴一样宽的一栏：同一周的条上下对齐
+                                        WeeklyUsageSection(account: a, gutter: cost ? CostChart.gutterLabels(
+                                            a.cost, granularity: model.costGranularity, scope: model.costScopeShown(for: a.cost)) : [])
+                                    }
                                     if cost {
                                         CostSection(account: a).id(CostSection.anchor)
                                     }
@@ -242,7 +245,8 @@ struct DetailHeader: View {
     }
 }
 
-/// 没有查用量接口的工具（Antigravity）：用量这一节只说去哪里看，不画额度、没有刷新按钮。
+/// App 里拿不到用量的工具（3.6.10 及以前的 cca 给的 Antigravity：`features.usage` 是 false）：用量这一节只说去哪里看，不画额度、
+/// 没有刷新按钮。
 struct NoUsageSection: View {
     let account: Account
 

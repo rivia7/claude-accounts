@@ -73,7 +73,7 @@ struct CanWhy: KnownValues {
     static let noChrome = CanWhy(rawValue: "no_chrome")
     static let notLoggedIn = CanWhy(rawValue: "not_logged_in")
     static let toolMissing = CanWhy(rawValue: "tool_missing")
-    /// 这种账号没有这个功能（Antigravity 账号没有桌面 App，App 里也还不显示它的额度）
+    /// 这种账号没有这个功能（Antigravity 账号没有桌面 App；3.6.10 及以前的 cca 也拿它说 Antigravity 的用量 App 里拿不到）
     static let unsupported = CanWhy(rawValue: "unsupported")
     static let allKnown: [CanWhy] = [.apiAccount, .appMissing, .noChrome, .notLoggedIn, .toolMissing, .unsupported]
 }
@@ -366,7 +366,7 @@ struct FailCode: KnownValues {
     /// `cca [codex] key 账号 --show`：这个账号还没有存 API key / 钥匙串读不了（锁着、超时）。
     static let keyMissing = FailCode(rawValue: "key_missing")
     static let keychainUnavailable = FailCode(rawValue: "keychain_unavailable")
-    /// 这种账号没有这个功能（Antigravity 账号：桌面 App、查用量、第三方 API 账号、控制台的账单页、重置次数）。
+    /// 这种账号没有这个功能（Antigravity 账号：桌面 App、第三方 API 账号、控制台的账单页、重置次数；旧版 cca 的查用量）。
     static let unsupported = FailCode(rawValue: "unsupported")
     /// 统计折合金额（`cca cost sync --json`，PROTOCOL 3.5）：没统计成（message 是原因）/ 用不了（关掉了、没有 Claude / Codex 的官方账号）。
     static let costUnavailable = FailCode(rawValue: "cost_unavailable")

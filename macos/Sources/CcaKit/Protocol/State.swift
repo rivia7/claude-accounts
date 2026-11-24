@@ -377,7 +377,7 @@ struct ToolState: Decodable, Sendable, Equatable, Identifiable {
     var errors: [StateIssue]
     var last: String?
     var accounts: [Account]
-    /// 这个工具有没有桌面 App、第三方 API 账号、App 里显示的用量（Antigravity 都没有：它的额度只在终端里看，cca agy usage）
+    /// 这个工具有没有桌面 App、第三方 API 账号、App 里显示的用量（Antigravity 没有前两样；3.6.10 及以前的 cca 给它的用量也是 false）
     var features: ToolFeatures
 
     enum CodingKeys: String, CodingKey {

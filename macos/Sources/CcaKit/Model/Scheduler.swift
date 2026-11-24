@@ -13,6 +13,8 @@ struct SystemConditions: Sendable, Equatable {
 /// 自动刷新用量的节奏。查一次要经账号的出口起一个 Claude Code / Codex 进程，不便宜，所以只查到期的账号：
 /// 在用的（桌面 App 开着、命令行里有会话，额度在变）查得勤，没在用的很少查；App 看不见时放慢，低电量模式再慢一倍；
 /// 用户走开了、系统过热时不查（回来后下一分钟就补上）。查失败也按间隔重试，不会每分钟试一次。
+/// Antigravity（`slow`）查得更慢：查一次要经账号的出口起 agy，十几秒，它的额度又只有 5 小时、每周这样的长窗口；cca 也是过了
+/// 30 分钟才算它过时（不是 10 分钟）。
 enum UsagePolling {
     /// 这么久没碰电脑就不查了：没人看
     static let awayAfter: TimeInterval = 15 * 60
@@ -33,21 +35,24 @@ enum UsagePolling {
         /// 上次查到或者试过的时间（Unix 秒），0 是没查过
         var updated: Double
         var login: LoginWatch = .normal
+        /// Antigravity：间隔长一倍多（见上）
+        var slow = false
     }
 
     /// 看得见时没在用的账号 8 分钟一次：比 cca 算“过期”的 10 分钟短一点，数字不会变灰。
-    static func interval(inUse: Bool, visible: Bool, lowPower: Bool, login: LoginWatch = .normal) -> TimeInterval {
+    static func interval(inUse: Bool, visible: Bool, lowPower: Bool, login: LoginWatch = .normal, slow: Bool = false) -> TimeInterval {
         let minutes: Double
         switch login {
         case .relogging: return 55   // 定时器每分钟一次，留点余量
         case .expired: minutes = visible ? 15 : 60
+        case .normal where slow: minutes = visible ? (inUse ? 10 : 20) : (inUse ? 20 : 60)
         case .normal: minutes = visible ? (inUse ? 5 : 8) : (inUse ? 10 : 60)
         }
         return minutes * 60 * (lowPower ? 2 : 1)
     }
 
     static func dueKeys(_ items: [Item], visible: Bool, lowPower: Bool, now: Double) -> [String] {
-        items.filter { now - $0.updated >= interval(inUse: $0.inUse, visible: visible, lowPower: lowPower, login: $0.login) }.map(\.key)
+        items.filter { now - $0.updated >= interval(inUse: $0.inUse, visible: visible, lowPower: lowPower, login: $0.login, slow: $0.slow) }.map(\.key)
     }
 }
 

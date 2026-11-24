@@ -71,7 +71,9 @@ struct UsageSection: View {
 
     @ViewBuilder
     private func content(now: Double) -> some View {
-        if let u = model.usage(for: account), u.source != .none {
+        if let u = model.usage(for: account), u.hasQuota {
+            QuotaGroupsView(usage: u, now: now, dim: u.stale || (u.source == .cache && u.errorCode != nil))
+        } else if let u = model.usage(for: account), u.source != .none {
             // 数据旧了（过期，或者这次没查到、用的是缓存）就用灰色显示
             let dim = u.stale || (u.source == .cache && u.errorCode != nil)
             let models = u.modelQuotas
@@ -378,11 +380,20 @@ extension UsageEntry {
 
 /// 侧栏、菜单栏面板、总览卡片右边的几行小用量：5 小时、本周，分模型的每周额度（Claude 的 Fable）也各一行，和账号页的大块一一对应。
 /// 没有 5 小时限制的套餐（`noFiveHourLimit`：Claude 的 Ultra、ChatGPT 的 Pro 500）不画 5 小时那一行。
+/// Antigravity 的几组额度：5 小时、本周各一行，写各组里用得最多的那个（鼠标指着说是哪一组）。
 struct UsageStack: View {
     let usage: UsageEntry
     var width: CGFloat = 30
 
     var body: some View {
+        if usage.hasQuota {
+            QuotaStack(usage: usage, width: width)
+        } else {
+            windows
+        }
+    }
+
+    private var windows: some View {
         VStack(alignment: .trailing, spacing: 3) {
             if !usage.noFiveHourLimit {
                 MiniUsage(label: "5h", spoken: "5 小时用量", window: usage.fiveHour, stale: usage.stale, width: width)
@@ -443,5 +454,115 @@ struct MiniUsage: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken)
         .accessibilityValue((value == "—" ? "没有数据" : value) + (note.map { "，" + $0 } ?? ""))
+    }
+}
+
+/// Antigravity 的额度（账号页）：一组一块（组名，agy 对这一组的说明），下面照 Claude 的样子画 5 小时、本周的大块；认不出窗口的用 agy 给的
+/// 名字，停用的、只有剩几次的写成小行。最下面是 agy 对这些额度的说明。
+struct QuotaGroupsView: View {
+    let usage: UsageEntry
+    let now: Double
+    var dim = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(Array(usage.quotaGroups.enumerated()), id: \.offset) { _, g in
+                group(g)
+            }
+            if let d = usage.quotaDescription {
+                Text(d)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func group(_ g: QuotaGroup) -> some View {
+        let tiles = Self.tiles(g)
+        let minor = Self.minor(g)
+        return VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(nonEmpty(g.name) ?? "额度").font(.callout.weight(.semibold))
+                if let d = nonEmpty(g.description) {
+                    Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(d)
+                }
+            }
+            if !tiles.isEmpty {
+                QuotaGrid {
+                    ForEach(Array(tiles.enumerated()), id: \.offset) { _, t in
+                        QuotaTile(title: t.title, window: t.bucket.used, now: now, dim: dim)
+                    }
+                }
+            }
+            if !minor.isEmpty {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 28), GridItem(.flexible())], alignment: .leading, spacing: 10) {
+                    ForEach(minor) { $0 }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// 有百分比的额度：5 小时在前、本周其次（和 Claude 的一样叫），认不出窗口的照 agy 的顺序排在后面
+    static func tiles(_ g: QuotaGroup) -> [(title: String, bucket: QuotaBucket)] {
+        let shown = g.buckets.filter { !$0.disabled && ($0.used.utilization != nil || $0.used.reset) }
+        func rank(_ b: QuotaBucket) -> Int { b.slot.map { $0 == .fiveHour ? 0 : 1 } ?? 2 }
+        return shown.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map { (title($0.element), $0.element) }
+    }
+
+    static func title(_ b: QuotaBucket) -> String {
+        switch b.slot {
+        case .fiveHour?: return "5 小时"
+        case .sevenDay?: return "本周"
+        case nil: return nonEmpty(b.name) ?? "额度"
+        }
+    }
+
+    /// 没有百分比的：停用了的写“不可用”，agy 给了剩几次的写次数
+    static func minor(_ g: QuotaGroup) -> [MinorQuota] {
+        g.buckets.compactMap { b in
+            if b.disabled { return MinorQuota(title: title(b), value: "不可用") }
+            guard b.used.utilization == nil, !b.used.reset, let n = b.remainingAmount else { return nil }
+            return MinorQuota(title: title(b), value: "还剩 \(n) 次")
+        }
+    }
+}
+
+/// Antigravity 的小用量（侧栏、菜单栏面板、总览卡片）：5 小时、本周各一行，写各组里用得最多的那个；窗口都认不出时写用得最多的那个额度。
+struct QuotaStack: View {
+    let usage: UsageEntry
+    var width: CGFloat = 30
+
+    // 不另包 TimelineView（它会占满给的宽度，侧栏里百分比被挤出去）：挑哪个额度只在过了重置时间时会变，每行自己每 30 秒重算“已重置”
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            ForEach(Self.rows(usage, now: Date().timeIntervalSince1970), id: \.label) { r in
+                MiniUsage(label: r.label, spoken: r.spoken, window: r.window, stale: usage.stale, width: width, note: r.note)
+            }
+        }
+    }
+
+    struct Row {
+        var label: String
+        var spoken: String
+        var window: UsageWindow
+        var note: String?
+    }
+
+    static func rows(_ u: UsageEntry, now: Double) -> [Row] {
+        let named: [(QuotaSlot, String, String)] = [(.fiveHour, "5h", "5 小时"), (.sevenDay, "周", "本周")]
+        let rows = named.compactMap { slot, label, spoken -> Row? in
+            guard let m = u.quotaMost(slot, now: now) else { return nil }
+            let several = Set(u.quotaBuckets(slot).map { $0.group ?? "" }).count > 1
+            let note = several ? m.group.map { "用得最多的是 \($0)" } : nil
+            return Row(label: label, spoken: "\(spoken)用量", window: m.window, note: note)
+        }
+        if !rows.isEmpty { return rows }
+        // 窗口都认不出：写用得最多的那个额度（停用的、没有百分比的不算）
+        let all = u.quotaGroups.flatMap { g in g.buckets.filter { !$0.disabled && $0.used.utilization != nil }.map { (g, $0) } }
+        guard let (g, b) = all.max(by: { ($0.1.used.utilization ?? 0) < ($1.1.used.utilization ?? 0) }) else { return [] }
+        let name = [nonEmpty(g.name), nonEmpty(b.name)].compactMap { $0 }.joined(separator: " · ")
+        return [Row(label: "额度", spoken: "额度用量", window: b.used, note: name.isEmpty ? nil : name)]
     }
 }

@@ -6,7 +6,7 @@
 //! 那一格。查到的原样存进 usage.json（usage_save），显示的时候再算用了多少、过没过重置时间。
 
 use super::login::sys::{interrupted, trap};
-use super::usage::{ago, cols_of, dicts, float_arg, parse_ts, py_round, reset_short, usage_why, Row, WhyTable, USAGE_STALE};
+use super::usage::{ago, cols_of, dicts, float_arg, parse_ts, py_round, reset_short, usage_why, Row, WhyTable, AGY_STALE};
 use crate::core::model::cdir;
 use crate::core::tool::AGY_FILE_ENV;
 use crate::py::json;
@@ -234,7 +234,8 @@ fn text_of(d: &Dict, k: &str) -> V {
 }
 
 /// 一个桶在 --json 里的样子：agy 给的几项原样（id、name、description、window、disabled、remaining_fraction、remaining_amount），
-/// 另加和别的工具的用量窗口一样的四项：utilization（用了百分之几：100 × (1 − remaining_fraction)，两位小数）、resets_at
+/// 另加 slot（认得的窗口对应 Claude、Codex 的哪一个：five_hour、seven_day，认不出是 null；App 照它摆，不用认 agy 的叫法）
+/// 和别的工具的用量窗口一样的四项：utilization（用了百分之几：100 × (1 − remaining_fraction)，两位小数）、resets_at
 /// （agy 给的 reset_time）、resets_epoch（Unix 秒，认不出是 null）、reset（重置时间已经过了：缓存里的数不算数了）
 fn bucket_view(b: &Dict, now: f64) -> Dict {
     let frac = finite(&b.get("remaining_fraction"));
@@ -245,6 +246,7 @@ fn bucket_view(b: &Dict, now: f64) -> Dict {
         "name" => text_of(b, "name"),
         "description" => text_of(b, "description"),
         "window" => text_of(b, "window"),
+        "slot" => window_of(b).map(|i| V::from(WINDOWS[i].3)).unwrap_or(V::None),
         "disabled" => b.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false),
         "utilization" => used,
         "remaining_fraction" => frac,
@@ -282,13 +284,14 @@ fn label(group: &V, bucket: &V) -> String {
 
 /// agy 给的额度窗口（1.5.16 在真实账号上回的是 5h、weekly）→ 和 Claude、Codex 的用量一样的叫法：表格里的（5 小时、本周）、
 /// 菜单那一格里的（5h、周）。认得的窗口不显示桶名：真实的桶名是 Five Hour Limit Remaining 这种，写在「已用」旁边会被看反
-const WINDOWS: [(&str, &str, &str); 2] = [("5h", "5 小时", "5h"), ("weekly", "本周", "周")];
+/// 最后一项是 --json 里的 slot（和别的工具的窗口同名）
+const WINDOWS: [(&str, &str, &str, &str); 2] = [("5h", "5 小时", "5h", "five_hour"), ("weekly", "本周", "周", "seven_day")];
 
 /// 桶的 window 是 WINDOWS 里的哪一种（认不出是 None）
 fn window_of(b: &Dict) -> Option<usize> {
     let w = b.str("window")?;
     let w = text::strip(&w).to_ascii_lowercase();
-    WINDOWS.iter().position(|(k, _, _)| *k == w)
+    WINDOWS.iter().position(|(k, _, _, _)| *k == w)
 }
 
 /// 表格里一个桶的名字：组名 · 窗口（认得的），认不出窗口时组名 · 桶名
@@ -509,7 +512,7 @@ pub fn agy_cell(rl: &Dict, at: f64, now: f64) -> R<String> {
         }
     }
     let mut cells: Vec<String> = Vec::new();
-    for (i, (_, _, short)) in WINDOWS.iter().enumerate() {
+    for (i, (_, _, short, _)) in WINDOWS.iter().enumerate() {
         match &most[i] {
             Some((_, pct)) => cells.push(format!("{short} {pct}%")),
             None if reset[i] => cells.push(format!("{short} 已重置")),
@@ -520,7 +523,7 @@ pub fn agy_cell(rl: &Dict, at: f64, now: f64) -> R<String> {
         let Some((_, name, pct)) = best else { return Ok(String::new()) };
         cells.push(format!("{name} {pct}%"));
     }
-    let old = if now - at >= USAGE_STALE { format!("（{}前）", ago(now - at)?) } else { String::new() };
+    let old = if now - at >= AGY_STALE { format!("（{}前）", ago(now - at)?) } else { String::new() };
     Ok(format!("{}{}", cells.join(" · "), old))
 }
 
@@ -608,6 +611,8 @@ mod tests {
         assert_eq!(b[0].at("resets_epoch").as_num(), Some(1795532400.0));
         assert_eq!(b[0].at("reset").as_bool(), Some(false));
         assert_eq!(b[0].at("window").as_str(), Some("5h"));
+        // slot：认得的窗口对应 Claude、Codex 的哪一个（App 照它摆），认不出是 null
+        assert_eq!((b[0].at("slot").as_str(), b[1].at("slot").as_str()), (Some("five_hour"), Some("seven_day")));
         assert_eq!(b[1].at("utilization").as_num(), Some(95.0));
         let cl: Vec<Dict> = dicts(&g[1].as_dict().unwrap(), "buckets");
         assert_eq!(cl[0].at("utilization").as_num(), Some(0.0));

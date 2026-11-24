@@ -87,11 +87,13 @@ enum Diagnosis: Equatable, Sendable {
         return UsageLevel(percent: p) == .critical
     }
 
-    /// 5 小时、本周两个窗口里用完的、快用完的（模型级的窗口不算：一个模型用完了，别的模型照样能用）。
+    /// 5 小时、本周两个窗口里用完的、快用完的（模型级的窗口不算：一个模型用完了，别的模型照样能用；Antigravity 的几组额度
+    /// 也是这个道理，看各组里用得最少的那个，`UsageEntry.pressureWindows`）。
     static func quotaPressure(_ u: UsageEntry?, now: Double) -> [QuotaPressure] {
         guard let u, u.source != .none else { return [] }
         var out: [QuotaPressure] = []
-        for (window, w) in [(QuotaPressure.Window.fiveHour, u.fiveHour), (.week, u.sevenDay)] {
+        for (slot, w) in u.pressureWindows(now: now) {
+            let window: QuotaPressure.Window = slot == .fiveHour ? .fiveHour : .week
             guard let w, let p = w.utilization, !w.isReset(now: now) else { continue }
             let q = QuotaPressure(window: window, percent: p, resetsEpoch: w.resetsEpoch)
             if q.exhausted || (!u.stale && UsageLevel(percent: p) == .critical) { out.append(q) }

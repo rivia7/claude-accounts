@@ -969,6 +969,18 @@ fn weeks_view(mut weeks: Vec<Week>, now: f64, cached: Option<&Cached>) -> R<Opti
 
 /// 用量超过 10 分钟算旧：菜单里注明多久前，图形界面里变暗
 pub const USAGE_STALE: f64 = 600.0;
+/// agy 的额度过了多久算过时：App 查得比 Claude、Codex 慢（看得见时没在用的账号 20 分钟一次：查一次要经账号的出口起 agy，
+/// 十几秒），它的额度又只有 5 小时、每周这样的长窗口
+pub const AGY_STALE: f64 = 1800.0;
+
+/// 当前工具的用量过了多久算过时（--json 的 stale、菜单那一格注明多久前）
+pub fn stale_after() -> f64 {
+    if t().kind == Kind::Agy {
+        AGY_STALE
+    } else {
+        USAGE_STALE
+    }
+}
 
 /// 菜单里的一格（只读缓存，不联网；只给登录着的账号）：5h 13% · 周 41%；数据旧了注明多久前，
 /// 重置时间过了的窗口写已重置
@@ -1356,7 +1368,7 @@ pub fn usage_entry(r: &Row, now: f64) -> R<Dict> {
             None => V::None,
         },
     );
-    a.set("stale", at.is_some_and(|at| now - at >= USAGE_STALE));
+    a.set("stale", at.is_some_and(|at| now - at >= stale_after()));
     a.set("error", if failed { V::from(usage_why(r, WhyTable::Usage)?) } else { V::None });
     a.set("error_code", if failed { r.why.clone() } else { V::None });
     a.set("error_detail", if failed && r.msg.truthy() { r.msg.clone() } else { V::None });

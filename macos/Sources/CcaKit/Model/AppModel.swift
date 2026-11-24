@@ -711,7 +711,7 @@ final class AppModel {
         return a.login != .loggedIn || usage(for: a)?.errorCode != nil || usage(for: a)?.outdatedLoginPlan != nil
     }
 
-    /// 登录好了能不能查用量：除了“没登录”没有别的原因挡着。Antigravity 的额度 App 还不显示（`unsupported`），
+    /// 登录好了能不能查用量：除了“没登录”没有别的原因挡着。旧版 cca 给的 Antigravity 查不了（`unsupported`），
     /// 没装命令的（`tool_missing`）登录了也查不了。
     private func usageAfterLogin(_ a: Account) -> Bool {
         guard features(a.tool).usage else { return false }
@@ -721,7 +721,7 @@ final class AppModel {
 
     private func startDueUsageRuns(lowPower: Bool) {
         let now = Date().timeIntervalSince1970
-        // 在等登录、登录好了也查不了用量的账号（Antigravity）：不跑 cca … usage（只会失败，留下一条“后台刷新没有成功”），
+        // 在等登录、登录好了也查不了用量的账号（旧版 cca 给的 Antigravity）：不跑 cca … usage（只会失败，留下一条“后台刷新没有成功”），
         // 按同样的间隔只重读 state，看登录好了没有
         var watchOnly: [AccountRef] = []
         for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
@@ -741,7 +741,8 @@ final class AppModel {
             let items = accounts(t).filter { ($0.can.usage && $0.login == .loggedIn) || (isRelogging($0, now: now) && usageAfterLogin($0)) }.map { a in
                 UsagePolling.Item(key: a.key, inUse: a.appRunning || a.cliSessions > 0,
                                   updated: max(usage(for: a)?.fetchedEpoch ?? 0, usageAttempted[a.ref] ?? 0),
-                                  login: isRelogging(a, now: now) ? .relogging : loginExpired(a) ? .expired : .normal)
+                                  login: isRelogging(a, now: now) ? .relogging : loginExpired(a) ? .expired : .normal,
+                                  slow: t == .agy)
             }
             let keys = UsagePolling.dueKeys(items, visible: isVisible, lowPower: lowPower, now: now)
             if !keys.isEmpty { pollUsage(t, keys: keys, now: now) }
@@ -2513,10 +2514,10 @@ final class AppModel {
         return out
     }
 
-    /// 用量统计页的分组：能查用量的工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有；Antigravity 的额度 App 还不显示，
+    /// 用量统计页的分组：能查用量的工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有；Antigravity 没有每周用量的统计，
     /// 不在里面），和总览一样按用户排的顺序。第三方 API 账号没有订阅的额度，也不在里面。
     func officialGroups() -> [AccountGroup] {
-        visibleTools.filter { features($0).usage }.map { Employee.Department.official($0) }
+        visibleTools.filter { features($0).usage && $0 != .agy }.map { Employee.Department.official($0) }
             .map { AccountGroup(department: $0, accounts: arranged($0)) }
     }
 

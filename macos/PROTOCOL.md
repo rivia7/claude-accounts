@@ -25,8 +25,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   Team 给这台设备的 Codex 账号随即被自动加进来、分走端口。`cca agy …`（Antigravity）同理，只在 `hello.tools.agy.enabled` 为真时调用。
 - 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App、第三方 API 账号
   和控制台账单页（`tools[].features`，2.2）：`app`、`billing`、`limit-resets`、`reset`、`add api` 这些它都没有，App 不调（调了 cca 也只回
-  `fail` 的 `unsupported`）。`cca agy usage` 查得到它的额度，但格式和别的工具不一样（3.1 的 `quota_groups`），App 还不显示（`features.usage`
-  是 false），也不调；旧版 cca 的 `cca agy usage` 只回 `unsupported`。
+  `fail` 的 `unsupported`）。它的用量（`cca agy usage`）格式和别的工具不一样：几组额度（3.1 的 `quota_groups`），没有 5 小时、本周这些窗口，
+  也没有每周用量的统计（`usage_weeks`）。3.6.10 及以前的 cca 给它的 `features.usage` 是 false（App 不显示、不调），更早的 `cca agy usage` 只回 `unsupported`。
 - 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `mail open` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live|mail-list`、`update --check --json`
   随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。`remote on|off|allow|unpair`
@@ -154,9 +154,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 工具（`tools[]`，顺序固定：claude、codex、agy；`codex.json`、`agy.json` 不存在时 `enabled` 为 false、`accounts` 是空的）：
 
 - `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`：5 小时、本周这些窗口，3.1）、
-  折合金额（`cost`）。Claude、Codex 都是 true，Antigravity 都是 false：不显示桌面 App、添加第三方 API 账号、用量（用量统计页也不算它；
-  `cca agy usage` 查得到的额度是另一种格式，3.1 的 `quota_groups`，App 还不显示，agy 账号的 `usage` 一直是 null）。旧版 cca 没有这一项：
-  Antigravity 当作都没有，别的都有（`cost` 除外：没有这个键当作没有）。
+  折合金额（`cost`）。Claude、Codex 都是 true；Antigravity 只有 `usage`（几组额度，3.1 的 `quota_groups`，账号的 `usage` 是缓存里的这些；
+  没有每周用量的统计，用量统计页不算它）。3.6.10 及以前的 cca 给 Antigravity 的 `usage` 是 false：账号的 `usage` 一直是 null，`can_why.usage`
+  是 `unsupported`，App 不显示、不调 `cca agy usage`。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有（`cost` 除外：没有这个键当作没有）。
 
 账号（`tools[].accounts[]`，顺序就是账号表的顺序）：
 
@@ -214,7 +214,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   “在用”（总览里画成在用、头像右下角的绿点）由 App 自己判断：`app.running || cli.running`；账号有问题（没登录、端口连不上……）时照样算在用，问题跟在后面。
 - `can` / `can_why`：按钮可不可用、为什么不可用。原因码：`api_account`（第三方 API 账号没有 App / 网页版 / 订阅用量）、
   `app_missing`（没装对应的桌面 App）、`no_chrome`（没装 Google Chrome：网页版不能经账号的出口打开）、
-  `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex / agy）、`unsupported`（这个工具没有这个功能：Antigravity 的 `app`、`usage`）。`cli` 是能不能在终端里打开（`cca [codex] @账号`，
+  `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex / agy）、`unsupported`（这个工具没有这个功能：Antigravity 的 `app`；3.6.10 及以前的 cca 给它的 `usage` 也是）。`cli` 是能不能在终端里打开（`cca [codex] @账号`，
   第三方 API 账号也可以）；旧版 cca 没有这一项，当作不能。`policy_lock` 3.6.0 起总是 false（以前是能不能请求维护者把节点锁进映射，
   那时的 4.8；接口只加不删，cca 照旧给），App 不读。
   `billing` 是能不能打开控制台的账单页（`cca [codex] billing 账号`，用账号自己的浏览器实例和出口；订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，
@@ -514,7 +514,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     App 说明这几台的没有算进来；没有为 `[]`，旧版 cca 没有这一项，当作 `[]`。传过、没有这种用量的设备不在这里，也不在 `cost.devices[]` 里。
 
 `can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）| `unsupported`（Antigravity）；
-`web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in` | `unsupported`（Antigravity，登没登录都是它）；`cli`：`tool_missing`；`check` 总是可用。
+`web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in` | `unsupported`（3.6.10 及以前的 cca 给的 Antigravity，登没登录都是它）；`cli`：`tool_missing`；`check` 总是可用。
 
 ### 2.3 `cca _gui live`（只读，要联网：连路由器或本机内置代理的内核）
 
@@ -616,17 +616,20 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `error_code`（`error` 是给人看的文字）：`login` | `mismatch` | `route` | `port` | `region` | `trace` | `unsupported` | `timeout` | `nolimits` | `auth` | `error`，没出错为 null。
   `auth`：登录凭证失效了（Codex 说 token 刷新不了、服务器回 401；改过密码、在别处退出过都会这样），本地的登录信息还在，所以 `_gui state` 的 `login` 还是 `logged_in`，要重新登录（`cca [codex] login 账号`）。
   Claude 登录失效时 Claude Code 只回“没有用量”，分不清原因，是 `nolimits`。
-- `stale`：数据超过 10 分钟。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
+- `stale`：数据超过 10 分钟（Antigravity 是 30 分钟：查一次要经账号的出口起 agy、十几秒，App 查得比别的工具慢）。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
 - 窗口：Claude 有 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_oauth_apps`；Codex 只有 `five_hour`、`seven_day`，
   另有 `credits`（`{"hasCredits": true, "unlimited": false, "balance": "12.5"}`）和 `reset_credits`（`{"availableCount": 2, "next_expires_epoch": …, …}`）。
 - Antigravity（`cca agy usage --json`，文档带 `"tool": "agy"`）没有固定的几个窗口：条目里没有 `five_hour`、`seven_day` 这些字段，额度在
   `quota_groups`（没有数据时为 null）：agy 自己查到的几组额度（打印模式的 `/usage`），`[{"name", "description", "buckets": [...]}]`，每个额度
-  agy 给的几项原样：`id`、`name`、`description`、`window`（agy 的叫法，比如 `5h`、`weekly`）、`disabled`（停用了，不显示百分比）、
+  agy 给的几项原样：`id`、`name`、`description`、`window`（agy 的叫法，比如 `5h`、`weekly`）、`slot`（cca 认出的窗口：`five_hour` | `seven_day`，
+  认不出为 null；App 照它摆、叫法和别的工具一样，不认 agy 的叫法；3.6.10 及以前的 cca 没有这一项）、`disabled`（停用了，不显示百分比）、
   `remaining_fraction`、`remaining_amount`（没有百分比时可能有：还剩几次）；cca 另加和用量窗口一样的四项：`utilization`（用了百分之几，
   `100 × (1 − remaining_fraction)`，两位小数；没有百分比为 null）、`resets_at`（agy 给的 UTC 时间，原样）、`resets_epoch`（认不出为 null）、
   `reset`。agy 没给的几项为 null。`quota_description` 是 agy 对这些额度的说明（没有为 null）。agy 账号的 `error_code` 另有这几种意思：
   `auth`（agy 要重新登录：它打出了登录网址，cca 马上停掉它）、`unsupported`（打印模式还不认 `/usage` 的旧版 agy，`agy update` 升级后再试）、
-  `error`（`error_detail` 是 agy 的原话）。App 还不显示这些（2.2 的 `features.usage`），`_gui state` 里 agy 账号的 `usage` 一直是 null。
+  `error`（`error_detail` 是 agy 的原话）。`_gui state` 里 agy 账号的 `usage` 是缓存里的这些（3.6.10 及以前的 cca 一直是 null）。
+  App 怎么显示：账号页一组一块，每组照 Claude 的样子画 5 小时、本周；侧栏、菜单栏面板、总览卡片的小条写各组里同一个窗口用得最多的那个；
+  算不算额度用完（总览、账号页那句话、菜单栏图标的标记）看用得最少的那个：一组一般是一类模型，一组用完了别的组的模型照样能用。
   旧版 cca 没有 `quota_groups`、`quota_description`（`cca agy usage` 只回 `unsupported`）。
 - 没有 5 小时限制的账号（Claude 的 Ultra 这类套餐，ChatGPT 的 Pro 500）：查到了用量（`source` 不是 `none`）、`seven_day` 有而 `five_hour` 是 null（接口没给 5 小时的窗口）。
   App 这时不画 5 小时那一行（侧栏、菜单栏面板、总览卡片、账号页）；没查到用量时照常画成“—”。5 小时的窗口还没开始计时（0%、没有重置时间）不算，照常画。

@@ -151,6 +151,12 @@ struct ResetCredits: Decodable, Sendable, Equatable {
     }
 }
 
+/// agy 的额度对应 Claude、Codex 的哪一个窗口（cca 认的，`quota_groups[].buckets[].slot`）。
+enum QuotaSlot: String, Decodable, Sendable, CaseIterable {
+    case fiveHour = "five_hour"
+    case sevenDay = "seven_day"
+}
+
 /// Antigravity 的一个额度（`quota_groups[].buckets[]`，PROTOCOL 3.1）：agy 给的几项原样，用了百分之几、什么时候重置、过没过重置时间
 /// 是 cca 算好的（`utilization`、`resets_epoch`、`reset`，和用量窗口一样，在 `used` 里）。
 struct QuotaBucket: Decodable, Sendable, Equatable {
@@ -159,6 +165,8 @@ struct QuotaBucket: Decodable, Sendable, Equatable {
     var description: String?
     /// agy 给的窗口的叫法（`5h`、`weekly`……），原样
     var window: String?
+    /// cca 认出的窗口（5 小时、本周）；认不出、旧版 cca 是 nil，用 agy 给的名字
+    var slot: QuotaSlot?
     /// agy 停用了这个额度：不显示百分比
     var disabled: Bool
     /// 没有百分比时 agy 可能给还剩几次
@@ -166,7 +174,7 @@ struct QuotaBucket: Decodable, Sendable, Equatable {
     var used: UsageWindow
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, window, disabled
+        case id, name, description, window, slot, disabled
         case remainingAmount = "remaining_amount"
     }
 
@@ -176,13 +184,14 @@ struct QuotaBucket: Decodable, Sendable, Equatable {
         name = c.string(.name)
         description = c.string(.description)
         window = c.string(.window)
+        slot = c.lossy(QuotaSlot.self, .slot)
         disabled = c.bool(.disabled) ?? false
         remainingAmount = c.int(.remainingAmount)
         used = try UsageWindow(from: decoder)
     }
 }
 
-/// `quota_groups[]`：Antigravity 的一组额度（PROTOCOL 3.1）。App 还不显示（`features.usage` 是 false），先照格式解码。
+/// `quota_groups[]`：Antigravity 的一组额度（PROTOCOL 3.1），一般是一类模型（Gemini 的、Claude 和 GPT 的），各有 5 小时、本周的额度。
 struct QuotaGroup: Decodable, Sendable, Equatable {
     var name: String?
     var description: String?
@@ -225,8 +234,8 @@ struct UsageEntry: Decodable, Sendable, Equatable {
     var outdatedLoginPlan: String?
     /// 本周额度快重置了、还剩不少：建议先用（旧版 cca 没有，是 nil）
     var useFirst: UseFirst?
-    /// Antigravity 的额度（`cca agy usage --json`）：几组，每组几个；别的工具、没有数据时是空的。没有 5 小时、本周这些窗口，
-    /// 所以 `hasData` 是 false
+    /// Antigravity 的额度（`cca agy usage --json`、`_gui state`）：几组，每组几个；别的工具、没有数据时是空的。没有 5 小时、本周这些窗口
+    /// （`fiveHour`、`sevenDay` 是 nil，`hasData` 是 false），摆法、算不算用完见下面的 `quota…`
     var quotaGroups: [QuotaGroup] = []
     /// agy 对这些额度的说明（原样）
     var quotaDescription: String?
@@ -432,5 +441,42 @@ struct UsageWeeksSummary: Decodable, Sendable, Equatable {
         averagePercent = c.int(.averagePercent)
         maxed = max(c.int(.maxed) ?? 0, 0)
         underHalf = max(c.int(.underHalf) ?? 0, 0)
+    }
+}
+
+/// Antigravity 的额度（`quotaGroups`）。一组一般是一类模型：一组用完了，别的组的模型照样能用（和 Claude 分模型的每周额度一个道理），
+/// 所以小条画各组里用得最多的那个（提醒快用完了），算不算用完看用得最少的那个（都用完了才算）。
+extension UsageEntry {
+    /// 有 agy 的额度可以显示
+    var hasQuota: Bool { source != .none && !quotaGroups.isEmpty }
+
+    /// 各组里这个窗口的额度（停用的、没有百分比的不算），带着组名
+    func quotaBuckets(_ slot: QuotaSlot) -> [(group: String?, bucket: QuotaBucket)] {
+        quotaGroups.flatMap { g in
+            g.buckets.filter { $0.slot == slot && !$0.disabled && $0.used.utilization != nil }.map { (nonEmpty(g.name), $0) }
+        }
+    }
+
+    /// 这个窗口用得最多的那个（过了重置时间的算 0）：小条显示它，带着是哪一组
+    func quotaMost(_ slot: QuotaSlot, now: Double) -> (window: UsageWindow, group: String?)? {
+        let all = quotaBuckets(slot)
+        guard !all.isEmpty else { return nil }
+        func used(_ b: QuotaBucket) -> Double { b.used.isReset(now: now) ? -1 : b.used.utilization ?? 0 }
+        let top = all.max { used($0.bucket) < used($1.bucket) }!
+        return (top.bucket.used, top.group)
+    }
+
+    /// 这个窗口用得最少的那个（过了重置时间的算 0；一样多时先重置的那个）：它也用完了，这个窗口才算用完，到它重置时才能接着用
+    func quotaLeast(_ slot: QuotaSlot, now: Double) -> UsageWindow? {
+        let all = quotaBuckets(slot).map(\.bucket.used)
+        func used(_ w: UsageWindow) -> Double { w.isReset(now: now) ? 0 : w.utilization ?? 0 }
+        return all.min { a, b in
+            used(a) != used(b) ? used(a) < used(b) : (a.resetsEpoch ?? .infinity) < (b.resetsEpoch ?? .infinity)
+        }
+    }
+
+    /// 判断额度紧不紧的两个窗口（5 小时、本周）：Claude、Codex 是 `fiveHour`、`sevenDay`；agy 是各组里用得最少的那个
+    func pressureWindows(now: Double) -> [(slot: QuotaSlot, window: UsageWindow?)] {
+        hasQuota ? QuotaSlot.allCases.map { ($0, quotaLeast($0, now: now)) } : [(.fiveHour, fiveHour), (.sevenDay, sevenDay)]
     }
 }

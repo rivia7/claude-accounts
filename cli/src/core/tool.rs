@@ -82,8 +82,8 @@ pub struct Tool {
     pub install_shell: &'static str,
     pub has_app: bool,
     pub has_api: bool,
-    /// 图形界面显示不显示这个工具的用量（_gui state 的 features.usage、can.usage）。agy 是 false：`cca agy usage` 查得到，
-    /// 但格式不一样（几组额度，--json 的 quota_groups），App 还不显示
+    /// 图形界面显示不显示这个工具的用量（_gui state 的 features.usage、can.usage）。三种都显示：agy 的格式不一样（几组额度，
+    /// --json 的 quota_groups，没有 5 小时、本周这些窗口），也没有每周用量的统计（usage_weeks）
     pub has_usage: bool,
     pub has_cost: bool,
 }
@@ -379,7 +379,7 @@ pub static TOOLS: LazyLock<[Tool; 3]> = LazyLock::new(|| {
             install_shell: "bash",
             has_app: false,
             has_api: false,
-            has_usage: false,
+            has_usage: true,
             has_cost: false,
         },
     ]

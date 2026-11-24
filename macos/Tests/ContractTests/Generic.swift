@@ -773,10 +773,15 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
         }
         if t.id == .agy {
             check("\(name) agy 的 cli_prefix 是 [agy]", t.cliPrefix == ["agy"])
-            check("\(name) agy 没有桌面 App、第三方 API 账号、查用量的接口", t.features == ToolFeatures(app: false, api: false, usage: false))
-            check("\(name) agy 的账号都是官方账号，查不了用量（unsupported）、开不了 App，没有账单页、用量页",
-                  t.accounts.allSatisfy { !$0.isAPI && !$0.can.usage && $0.canWhy["usage"] == .unsupported && !$0.can.app
-                      && $0.canWhy["app"] == .unsupported && !$0.can.billing && !$0.can.limitResets && $0.usage == nil })
+            // 3.6.10 及以前的 cca 给的 features.usage 是 false（查不了用量：unsupported、usage 是 null），以后的是 true
+            check("\(name) agy 没有桌面 App、第三方 API 账号", t.features.app == false && t.features.api == false)
+            check("\(name) agy 的账号都是官方账号，开不了 App，没有账单页、用量页、每周用量的统计",
+                  t.accounts.allSatisfy { !$0.isAPI && !$0.can.app && $0.canWhy["app"] == .unsupported && !$0.can.billing && !$0.can.limitResets
+                      && $0.usageWeeks == nil })
+            check("\(name) agy 的用量：features.usage 是 false 时都查不了（unsupported）；是 true 时不说 unsupported，有的话是几组额度（没有 5 小时、本周这些窗口）",
+                  t.features.usage
+                      ? t.accounts.allSatisfy { $0.canWhy["usage"] != .unsupported && ($0.usage.map { $0.fiveHour == nil && $0.sevenDay == nil } ?? true) }
+                      : t.accounts.allSatisfy { !$0.can.usage && $0.canWhy["usage"] == .unsupported && $0.usage == nil })
         }
         if let last = t.last { check("\(name) \(t.id.rawValue) last 是表里的账号", t.accounts.contains { $0.key == last }, last) }
         for (j, a) in t.accounts.enumerated() {

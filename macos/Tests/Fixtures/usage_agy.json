@@ -10,17 +10,17 @@
       "use_first": null,
       "quota_groups": [
         {"name": "Gemini Pro", "description": null, "buckets": [
-          {"id": "gemini-pro-5h", "name": "5-hour limit", "description": null, "window": "5h", "disabled": false, "utilization": 13.0,
+          {"id": "gemini-pro-5h", "name": "5-hour limit", "description": null, "window": "5h", "slot": "five_hour", "disabled": false, "utilization": 13.0,
            "remaining_fraction": 0.87, "remaining_amount": null, "resets_at": "2026-11-07T11:30:00Z", "resets_epoch": 1794051000.0, "reset": false},
-          {"id": "gemini-pro-week", "name": "Weekly limit", "description": null, "window": "weekly", "disabled": false, "utilization": 75.0,
+          {"id": "gemini-pro-week", "name": "Weekly limit", "description": null, "window": "weekly", "slot": "seven_day", "disabled": false, "utilization": 75.0,
            "remaining_fraction": 0.25, "remaining_amount": null, "resets_at": "2026-11-10T00:00:00Z", "resets_epoch": 1794268800.0, "reset": false}]},
         {"name": "Claude", "description": "Claude and GPT-OSS models", "buckets": [
-          {"id": "claude-5h", "name": "Claude", "description": null, "window": "5h", "disabled": false, "utilization": 95.0,
+          {"id": "claude-5h", "name": "Claude", "description": null, "window": "5h", "slot": "five_hour", "disabled": false, "utilization": 95.0,
            "remaining_fraction": 0.05, "remaining_amount": null, "resets_at": "2026-11-07T10:12:00Z", "resets_epoch": 1794046320.0, "reset": false},
-          {"id": null, "name": "Requests", "description": null, "window": null, "disabled": false, "utilization": null,
+          {"id": null, "name": "Requests", "description": null, "window": null, "slot": null, "disabled": false, "utilization": null,
            "remaining_fraction": null, "remaining_amount": 12, "resets_at": null, "resets_epoch": null, "reset": false}]},
         {"name": "Gemini Flash", "description": null, "buckets": [
-          {"id": "flash", "name": "Gemini Flash", "description": null, "window": null, "disabled": true, "utilization": null,
+          {"id": "flash", "name": "Gemini Flash", "description": null, "window": null, "slot": null, "disabled": true, "utilization": null,
            "remaining_fraction": null, "remaining_amount": null, "resets_at": null, "resets_epoch": null, "reset": false}]}
       ],
       "quota_description": "Quota for Antigravity models"
