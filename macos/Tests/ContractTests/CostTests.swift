@@ -111,6 +111,8 @@ func costFixtureTests() {
         check("账号里的设备：都用过这个账号（used）", s.tools.flatMap(\.accounts).allSatisfy { $0.cost?.devices.allSatisfy(\.used) ?? true })
         check("cost_total：这台设备近 30 天认不出是哪个账号的（没有原因）", t.unattributed?.daysUSD == 12.3 && t.unattributed?.requests == 40
               && t.unattributed?.why == [] && t.unattributed?.claudeCode == "2.1.330" && t.unattributed?.claudeCodeOld == false)
+        // 3.6.9 起：这台设备记不记 Claude App 里 Code 会话的账号（cca cost hook）
+        check("cost_total.unattributed.app_hook：开着；没有 Claude App 的认不出的用量时不提", t.unattributed?.appHook == .on && Texts.costAppHook(t.unattributed) == nil)
         // 按模型（3.6.8 起）
         let bm = bob?.models ?? []
         check("bob：按模型（列出的周期的金额从多到少，没有公开价格的只计请求数，old-mini 传来的没按模型记下，在最后）",
@@ -176,6 +178,19 @@ func costFixtureTests() {
         check("state_cost：Codex 账号还没有记录，Codex 的平均是 null", x.account(AccountRef(tool: .codex, key: "dave@example.com"))?.cost == nil
               && x.costTotal?.all.byTool[.codex]?.averageUSD == nil && x.costTotal?.all.byTool[.codex]?.currentUSD == 0)
         let u = x.costTotal?.unattributed
+        check("state_cost（3.6.7 的样子）：没有 app_hook，不给「记下账号…」", u?.appHook == nil && u != nil && Texts.costAppHook(u) == nil)
+        if var off = u {
+            off.appHook = .off
+            var on = off
+            on.appHook = .on
+            var cli = off
+            cli.why = cli.why.filter { $0.code != .claudeApp }
+            var odd = off
+            odd.appHook = CostAppHook(rawValue: "later")
+            check("app_hook 是 off、有 Claude App 里认不出的会话时说一句（旁边是「记下账号…」）；开着、只有别的原因、不认识的值时不说",
+                  Texts.costAppHook(off) == "这台设备 Claude App 里的 Code 会话认不出是哪个账号的：可以让 cca 在会话开始时记下 App 登录的账号，以后的就算得进来。"
+                  && Texts.costAppHook(on) == nil && Texts.costAppHook(cli) == nil && Texts.costAppHook(odd) == nil && odd.appHook?.isKnown == false)
+        }
         check("state_cost：认不出的原因（Claude App、旧版 Claude Code），命令行里还在用旧版；这台设备的诊断是同一份",
               u?.why.map(\.code) == [.claudeApp, .oldClaudeCode] && u?.why.first?.claudeCode == nil && u?.claudeCode == "2.1.316" && u?.claudeCodeOld == true
               && alice?.me?.diag?.why == u?.why && alice?.me?.diag?.claudeCodeOld == true)

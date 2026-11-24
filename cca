@@ -6238,9 +6238,11 @@ team_hook() {   # 启动时：这台设备在 Team 里、距上次同步配置�
 	( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _team-sync </dev/null >/dev/null 2>&1 3<&- & )
 }
 
-cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增的会话记录、和别的设备同步），两个工具一起；--json 给 App（PROTOCOL 3.5）
+cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增的会话记录、和别的设备同步），两个工具一起；--json 给 App（PROTOCOL 3.5）。
+	# cca cost hook [on|off]：Claude App 里的 Code 会话记下账号（cost_hook）
 	local a out rc
-	[ "${1:-}" = sync ] || die "用法: cca cost sync [--now] [--json]"
+	[ "${1:-}" = hook ] && { shift; cost_hook "$@"; return; }
+	[ "${1:-}" = sync ] || die "用法: cca cost sync [--now] [--json] | cca cost hook [on | off]"
 	shift
 	for a in "$@"; do case "$a" in --now|--json) ;; *) die "不认识的参数: ${a}（用法: cca cost sync [--now] [--json]）" ;; esac; done
 	[ -f "$CFG" ] || { fail_warn cost_off "还没安装：请在终端里运行 $SELF install"; return 2; }   # 没有可统计的账号（PROTOCOL 3.5 的退出码 2）
@@ -6249,6 +6251,53 @@ cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增
 		0) printf '%s\n' "$out" ;;
 		2) fail_warn cost_off "$out"; return 2 ;;
 		*) FAIL_CODE=cost_unavailable die "${out:-统计折合金额没成}" ;;
+	esac
+}
+
+cost_hook() {   # cca cost hook [on|off]：Claude App 里的 Code 会话（会话记录里没有账号信息）开始时记下 App 登录的账号，折合金额按它算。
+	# 在共享的 ~/.claude/settings.json 里加一条 SessionStart hook（py cost-hook；只在 App 里的会话回调 cca _session-start --desktop）。
+	# 改的是 Claude Code 的全局设置：加之前问（consent cost_hook，范围为空）；关掉折合金额（cost-sync 时发现）、卸载时去掉
+	local out rc
+	mac_only "记下 Claude App 里 Code 会话的账号"
+	case "${1:-}" in
+		"")
+			out=$(py cost-hook status) || die "没能读取 Claude Code 的共享设置"
+			if [ "$out" = on ]; then
+				okay "开着：Claude App 里的 Code 会话开始时记下它登录的账号，折合金额按它算（~/.claude/settings.json 里 cca 加的 SessionStart hook）"
+			else
+				info "关着：Claude App 里 Code 会话的折合金额认不出是哪个账号的。要记下：${CMD} cost hook on"
+			fi ;;
+		on)
+			grep -Eq '"cost"[[:space:]]*:[[:space:]]*false' "$CFG" 2>/dev/null && FAIL_CODE=cost_off die "折合金额关掉了（config.json 里写着 \"cost\": false）：先打开它"
+			if [ "$(py cost-hook status)" != on ]; then
+				consent cost_hook "" "记下 Claude App 里 Code 会话的账号" "现在在 ~/.claude/settings.json 里加上这条 hook 吗？" \
+					"Claude App 里的 Code 会话不在会话记录里写账号，折合金额认不出是哪个账号的。cca 会在共享的 ~/.claude/settings.json 里加一条 SessionStart hook：App 里的会话开始时运行 cca，记下会话 id 和 App 登录的账号（不读对话的内容），折合金额按它算进那个账号；只认这台设备上 cca 里的官方账号，别的照旧算「认不出账号」。命令行里的会话不受影响。不想要了：${CMD} cost hook off；关掉折合金额、卸载 cca 时会自动去掉。" y
+				case $? in
+					0) ;;
+					1) info "没有改动"; gui_cancelled; return 1 ;;
+					*) die "要先同意：在终端里运行 ${CMD} cost hook on（会先问你）" ;;
+				esac
+			fi
+			out=$(py cost-hook on); rc=$?
+			case $rc in
+				0) ;;
+				2) FAIL_CODE=cost_off die "$out" ;;
+				4) die "$out" ;;
+				*) die "没能改 Claude Code 的共享设置" ;;
+			esac
+			if [ "$out" = same ]; then out="已经开着"; else out="已在 ~/.claude/settings.json 里加上"; fi
+			out="${out}：Claude App 里的 Code 会话开始时记下它登录的账号，折合金额按它算（加上以前的会话照旧认不出）"
+			okay "$out"; gui_done cost_hook "$out" ;;
+		off)
+			out=$(py cost-hook off); rc=$?
+			case $rc in
+				0) ;;
+				4) die "$out" ;;
+				*) die "没能改 Claude Code 的共享设置" ;;
+			esac
+			if [ "$out" = same ]; then out="本来就没有：~/.claude/settings.json 里没有 cca 加的这条 hook"; else out="已从 ~/.claude/settings.json 里去掉：以后 Claude App 里的 Code 会话不再记下账号"; fi
+			okay "$out"; gui_done cost_hook "$out" ;;
+		*) die "用法: ${CMD} cost hook [on | off]" ;;
 	esac
 }
 
@@ -7794,6 +7843,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	if [ -n "$backup" ]; then a="先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除"; else a="${C_Y}不留备份（--no-backup：账号表和配置删了找不回来）${C_0}，删除"; fi
 	say "  · 本机：${a} ~/.local/bin 里的 cca、${CODEX_ALIAS}、${AGY_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
 	say "  · cca 放在别处的也清掉：解出来的辅助程序和缓存$(on_linux || printf '、界面 App 的缓存和设置')、shell 启动文件里 cca 加的那两行（~/.local/bin 里还有别的命令时留着）"
+	[ "$(py cost-hook status 2>/dev/null)" != on ] || say "  · ~/.claude/settings.json：去掉 cca cost hook 加的那条 hook（Claude App 里的会话记下账号），别的设置不动"
 	say "  · ~/.claude、~/.claude.json、~/.codex 和 ~/.gemini 保持现状（共享主目录本来就是你的数据${backup:+；安装前的备份在打包里}）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
 	[ "$(ask "确认请输入 ${word}: " '')" = "$word" ] || { say "已取消"; return 0; }
@@ -7833,6 +7883,13 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	core_headless && core_boot off   # 开机起内核的那一行（Linux、macOS 26 以下才会加；上面关掉内置代理时已经删了，以前留下的也删）
 	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台机器停了；打包的时候也没人再往 ~/.cca 里写）
 	py cost-stop 2>/dev/null       # 正在统计折合金额的后台进程也停掉
+	# cca cost hook 加在 ~/.claude/settings.json 里的 hook（Claude App 里的会话记下账号）：cca 不在了它什么也不做，也去掉
+	out=$(py cost-hook off 2>/dev/null); rc=$?
+	if [ $rc -ne 0 ]; then
+		warn "${out:-没能读取 ~/.claude/settings.json}：里面 cca 加的 hook 没去掉（cca 删掉以后它什么也不做），要的话自己删掉 hooks.SessionStart 里带 _session-start --desktop 的那一条"
+	elif [ "$out" = changed ]; then
+		info "已去掉 ~/.claude/settings.json 里 cca 加的 hook（Claude App 里的会话记下账号）"
+	fi
 	bk=""; [ -z "$backup" ] || bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"   # --no-backup：不打包，直接删
 	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点；3.6.0 以前维护者的
 	# 参考节点和拉取映射时的临时文件：升级以后第一条命令就删掉，policy_leftovers，还原是第一条命令时还在）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
@@ -7933,6 +7990,8 @@ EOF
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）；
                              只用于官方账号
   cca billing [账号]         用该账号的浏览器实例打开控制台的账单页，看订阅附带的每月 API 额度和余额；只用于官方账号
+  cca cost hook [on|off]     Claude App 里的 Code 会话开始时记下它登录的账号（不开时折合金额认不出这些会话是谁的）：
+                             在共享的 ~/.claude/settings.json 里加一条 SessionStart hook（会先问你）；off 去掉
   cca limit-resets [账号]    用该账号的浏览器实例打开 claude.ai 的用量页，看重置次数和到期日；只用于 Claude 的官方账号
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
@@ -8125,7 +8184,7 @@ main() {
 			shift
 			if [ "${1:-}" = codex ]; then shift; use_tool codex; fi
 			py api-key-out "${1:-}" ;;
-		_session-start)   # Claude Code 的 SessionStart hook（启动时经 --settings 带上的）：会话 id 记进账号目录，折合金额按它认账号。stdout 会进 Claude 的上下文：什么都不说，总是成功
+		_session-start)   # Claude Code 的 SessionStart hook（启动时经 --settings 带上的；--desktop：cca cost hook 加在共享设置里的，Claude App 里的会话）：会话 id 记进账号目录（--desktop 带着 App 登录的账号记进 cost/），折合金额按它认账号。stdout 会进 Claude 的上下文：什么都不说，总是成功
 			shift
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
 		_update-fetch) cmd_update_fetch ;;

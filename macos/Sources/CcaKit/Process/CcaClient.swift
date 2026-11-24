@@ -56,6 +56,9 @@ enum CcaCommand: Sendable, Hashable {
     /// 的文档，金额本身在 `_gui state` 里。manual 是用户点的「刷新」：带 `--now`（上次同步失败了也不等重试的时间）、不降优先级；
     /// 定时的低优先级。全局一次一个。
     case costSync(manual: Bool)
+    /// Claude App 里的 Code 会话开始时记不记下 App 登录的账号（`cca cost hook on|off`）：改共享的 ~/.claude/settings.json，
+    /// 打开时 cca 先问同意（`consent.cost_hook`）。
+    case costHook(on: Bool)
     /// 在账号的浏览器里打开某封登录邮件（`cca mail open KEY --msg 文件夹:uid:uidvalidity`，PROTOCOL 4.11）：
     /// cca 重新取这封、再核对、打开里面的链接；要跑完为止，进 `launch:` 闸门。mail 只给 Claude。
     case mailOpen(ToolID, key: String, msg: String)
@@ -103,7 +106,7 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
-             .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
+             .costSync, .costHook, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock: return nil
         }
     }
@@ -114,7 +117,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _), .mailTrustForwarderOff(_, let k): return k
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
-             .clientAutoInstall, .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
+             .clientAutoInstall, .clientInstall, .costSync, .costHook, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock: return nil
         }
     }
@@ -160,6 +163,7 @@ enum CcaCommand: Sendable, Hashable {
         case .keyShow(_, let k): return prefix + ["key", k, "--show"]
         case .keyForget(_, let k): return prefix + ["key", k, "--forget"]
         case .costSync(let manual): return ["cost", "sync"] + (manual ? ["--now"] : []) + ["--json"]
+        case .costHook(let on): return ["cost", "hook", on ? "on" : "off"]
         case .mailOpen(_, let k, let msg): return prefix + ["mail", "open", k, "--msg", msg]
         case .mailForget(_, let k, let scope):
             switch scope {
@@ -201,6 +205,7 @@ enum CcaCommand: Sendable, Hashable {
         case .clientMode, .clientAutoInstall, .devices: return 30
         case .keyShow, .keyForget: return 40   // cca 读钥匙串最多等 30 秒
         case .costSync: return 300   // 第一次要把会话记录全读一遍
+        case .costHook: return 60   // 改共享的设置前等 ~/.cca/sync.lock（别的命令同步账号时拿着）
         case .remoteList, .remoteAllow, .remoteUnpair: return 40   // 问一次服务器（签名、直连），取消配对被限流时还要再试两次
         case .remoteSwitch: return 30
         case .remoteEnd: return 40   // 里面的程序不理会时 cca 等宿主强行结束它（5 秒），再等它收场
@@ -216,7 +221,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app, .web, .billing, .limitResets, .mailOpen, .routerSync, .reset, .clientInstall: return true
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
         case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .reorder, .update, .updateCheck, .clientMode,
-             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
+             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .costHook, .mailForget, .mailTrustForwarderOff,
              .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .teamDevices, .teamInvite, .teamRevoke, .teamRename: return false
         case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock: return true   // 改账号表、同步路由器：半路杀掉会留下一半
         }
@@ -237,6 +242,7 @@ enum CcaCommand: Sendable, Hashable {
         case .check, .checkPoll, .updateCheck, .devices: return nil   // devices：AppModel 已保证同一个账号一次一个
         case .keyShow(let t, let k), .keyForget(let t, let k): return "key:\(t.rawValue):\(k)"
         case .costSync: return "cost-sync"   // 定时的和手动的一个接一个
+        case .costHook: return "cost-hook"
         case .remoteList: return nil   // AppModel 保证一次一个
         case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return "remote"   // 改配对表、开关、结束会话：一个接一个
         case .teamDevices: return nil   // AppModel 保证一次一个

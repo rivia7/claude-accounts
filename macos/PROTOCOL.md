@@ -35,6 +35,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）、`cost sync --json` 300 秒（第一次要把会话记录全读一遍）。
   `cost sync` 全局一次一个。`remote list --json`、`remote allow`、`remote unpair` 40 秒（要问一次中转的服务器；取消配对被限流时 cca 自己再试两次），
   `remote on|off` 30 秒，`remote end` 40 秒（会话里的程序不理会时 cca 等宿主强行结束它，约 5 秒，再等它收场）。
+  `cost hook on|off` 60 秒（改共享的设置前要等别的命令同步完账号），一次一个。
 - `app`、`web`、`billing`、`limit-resets`、`mail open`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -469,7 +470,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
                  "days": {"usd": 5.0, "requests": 60, "unpriced_requests": 0}}]}
   ],
   "scan": {"state": "ready", "updated_epoch": 1794041000.0},
-  "unattributed": {"days_usd": 12.3, "requests": 40, "claude_code": "2.1.330", "claude_code_old": false,
+  "unattributed": {"days_usd": 12.3, "requests": 40, "claude_code": "2.1.330", "claude_code_old": false, "app_hook": "off",
                    "why": [{"code": "claude_app", "last_epoch": 1794031200.0, "claude_code": null}],
                    "cost": {"currency": "USD", "prices_date": "2026-11-13", "since_epoch": 1791158400.0, "weeks": […], "days": […],
                             "summary": {…}, "devices": […], "unpriced_models": [], "models": […], "sync": {…}},
@@ -497,6 +498,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息：旧版 Claude Code、桌面 App 里的会话），只给“另有多少没算进来”
   这一句用。`why`、`claude_code`、`claude_code_old` 和这台设备的 `devices[].diag` 一样（旧版 cca 没有：App 当作 `[]`、null、false，笼统地说原因）；
   `claude_code_old` 为真时 App 提醒这台设备更新 Claude Code（和有没有认不出的用量无关）。
+  `app_hook`（3.6.9 起）：这台设备记不记 Claude App 里 Code 会话的账号（`cca cost hook`，3.5）：`on` | `off`；不是 macOS 时是 null，
+  旧版 cca 没有。是 `off`、`why` 里又有 `claude_app` 时 App 在这一句旁边给「记下账号…」（运行 `cca cost hook on`）；没有这一项时不给。
   - `cost`（3.6.8 起）：认不出是哪个账号的用量，所有设备的：每台设备经它在的各个 Team（有它用的账号的那几个）的服务器传一份
     （和账号的那一份同一种密文、同一把密钥，账号摘要是固定的那一个，见 server/README.md「折合金额」），这里是这台设备的和别的设备传来的。
     和账号的 `cost` 一样的样子（`weeks[]` 都按日历周切：`basis` 都是 `calendar`，没有额度窗口），`summary`、`devices[]`、`models[]`、
@@ -745,12 +748,18 @@ cca 问这个账号走的那台服务器（账号的 `hub`：给它的那个 Tea
   看不见时每 30 分钟一次（低优先级；用户 15 分钟没碰电脑、过热时不跑）；`scan.state` 是 `never` 时马上跑一次。用户点「刷新」时带 `--now`，不降优先级。
   会话结束、`cca usage`、`cca devices` 时 cca 自己也会在后台统计（最多 5 分钟一次），App 看 `cost/` 里那几个文件变了就重读 `state`（见 1）。
 
+`cca cost hook on|off`（3.6.9 起，只有 macOS）：Claude App 里的 Code 会话不在会话记录里写账号（`why` 的 `claude_app`）。打开后 cca 在共享的
+`~/.claude/settings.json` 里加一条 SessionStart hook，App 里的会话开始时记下会话 id 和 App 登录的账号，之后的统计按它算进那个账号
+（只认这台设备上 cca 里的官方账号，别的照旧认不出；打开以前的会话照旧认不出）。打开要同意（`consent.cost_hook`，4.2）；成了 `result` 的 `cost_hook`，
+本来就是这样也是它。折合金额关掉了时 `on` 失败（`fail` 的 `cost_off`）；共享的设置不是合法的 JSON、是指向不存在的文件的链接、改不了时失败
+（`error`，`message` 说清楚），什么都不改。关掉折合金额以后（下一次统计时：会话结束、`cca usage` 时 cca 在后台起的那一次，或者 `cost sync`）、卸载 cca 时 cca 自己去掉这条 hook。现在开没开看 2.2 的 `unattributed.app_hook`。
+
 ## 4. 事件和同意（`CCA_EVENTS`、`CCA_GRANT`）
 
 ### 4.1 事件文件
 
 运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`、
-`key --forget`、`mail open`、`mail forget`、`remote on|off|allow|unpair`、`team sync|leave|invite|revoke|grant|map`）、检查更新（`update --check --json`）、查设备（`devices --json`、`team devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+`key --forget`、`mail open`、`mail forget`、`remote on|off|allow|unpair`、`team sync|leave|invite|revoke|grant|map`、`cost hook on|off`）、检查更新（`update --check --json`）、查设备（`devices --json`、`team devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -763,7 +772,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；Team（4.14）是 `team_created` / `team_deployed` / `team_joined` / `team_left` / `team_revoked`（`cca team new` / `deploy` / `join` / `leave` / `revoke`），`message` 是给人看的那句话（3.5.2 的 cca 还有自己的同步服务器的 `hub_joined`、`hub_removed`、`hub_left`、`hub_deployed`、`hub_hosted`，3.5.3 去掉了；3.6.0 以前还有
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；Team（4.14）是 `team_created` / `team_deployed` / `team_joined` / `team_left` / `team_revoked`（`cca team new` / `deploy` / `join` / `leave` / `revoke`），`message` 是给人看的那句话；`cost_hook`（3.6.9 起，`cost hook on|off` 改好了，3.5），`message` 是给人看的那句话，App 原样显示、再读一次 `state`（3.5.2 的 cca 还有自己的同步服务器的 `hub_joined`、`hub_removed`、`hub_left`、`hub_deployed`、`hub_hosted`，3.5.3 去掉了；3.6.0 以前还有
   维护者的共享的 `policy_on`、`policy_off`，3.6.0 去掉了，4.12）。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；Claude 的 `message` 说清楚是哪份文件、哪几项、怎么办，共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
@@ -808,6 +817,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `team_leave` | Team 的编号（32 个十六进制字符） | `cca team leave`（这台设备是成员）：服务器上移除这台设备，这台设备上这个 Team 的配置都删掉；以后要再加入要管理员重新发邀请 | no |
 | `team_delete` | Team 的编号 | `cca team leave`（这台设备是管理员）：删除这个 Team——部署过同步服务器的先经 SSH 卸掉它（`detail` 说登录哪台（端口、部署时写的私钥：App 里删除照它登录）、删掉哪个目录；没记下部署到哪的照部署的默认猜，也说怎么写清楚），这台设备上就没有这个 Team 的根密钥了，这个 Team 再没有谁能邀请、移除设备、改配置（别的设备照旧用着手里的配置）。App 里是提问会话（「删掉这个 Team…」，4.14），当场问 | no |
 | `team_revoke` | 设备在 Team 里的编号（16 个十六进制字符） | `cca team revoke`：管理员移除一台设备（或者撤回还没用掉的邀请）：服务器就此不认它的密钥，给它的配置、它同步过的折合金额删掉（3.6.6 起），管理员这边也不再列它；它已经拿到的节点凭证收不回来 | no |
+| `cost_hook` | 空 | `cca cost hook on`（3.5）：在共享的 `~/.claude/settings.json` 里加一条 SessionStart hook，Claude App 里的 Code 会话开始时运行 cca，记下会话 id 和 App 登录的账号（不读对话的内容），折合金额按它算；命令行里的会话不受影响。`detail` 里说怎么去掉 | yes |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
@@ -1014,6 +1024,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `remote attach [-r] <会话的 id>` | 「远程会话」页每个会话的「接入」「只看」 | 界面里的终端（App 开的伪终端，9.3） |
 | `remote end <会话的 id>` | 「远程会话」页这台 Mac 上的会话那一行的「结束…」（要 `hello.remote_end`） | 无交互命令，先 `consent.remote_end`（4.2、9.2） |
 | `remote`（`status`、`peers`、不带 `--json` 的 `list`） | 没有入口 | 终端里自己运行 |
+| `cost hook on` | 折合金额页「认不出账号」那一句旁边的「记下账号…」（`unattributed.app_hook` 是 `off`、`why` 里有 `claude_app` 时，2.2） | 无交互命令，先 `consent.cost_hook`（4.2）；`off` 和不带参数的 `cost hook`（看开没开）没有入口，终端里自己运行 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
 | `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |

@@ -17,6 +17,7 @@
   `{"hooks": …}`，第三方 API 账号和 apiKeyHelper、env 在同一份里；config.json 的 `cost: false` 时不带，见 cost.md）。实测 Claude Code 2.1.328：
   它和配置目录 settings.json 里的 hook 一起跑；用户自己再给一个 `--settings` 时只有后面那个生效（cca 的在用户参数前面，于是这次没有 hook，
   会话照旧认不出账号；第三方 API 账号不许用户给 `--settings`）
+- 共享的 `~/.claude/settings.json` cca 只在两处改：`cca settings fix`（下一节）和 `cca cost hook on`（3.6.9 起，问过同意；加一条只在 Claude App 里的会话起作用的 SessionStart hook，记下 App 登录的账号给折合金额用；关掉折合金额、`cca cost hook off`、卸载时去掉；见 cost.md）。两处都在 `Lock` 里、原子替换、保留权限，不合法的 JSON 不碰
 
 ## 共享设置的说明和修复
 - 共享设置的说明和修复（bash 的 `settings_warn`、`cmd_settings`，辅助程序的「共享设置的说明和修复」一节）：Claude 的问题由 `py settings-explain shared | launch [启动参数…]` 照 settings-check / launch-check 重新查（`settings_warn "$bad" -- "$@"` 带上同样的启动参数），按文件说是哪份、哪几项（`SETTINGS_KINDS` 分类：第三方 API、云厂商或网关、代理、账号目录或登录凭证，认不出的算 other）、带着它启动会怎样、怎么办，只说路径和名字、不说值；Codex、agy 照旧列出问题。`cca settings [check]` 照 launch-check 查（这个目录的项目设置也查）；`cca settings fix` 只改共享的 `~/.claude/settings.json`、`settings.local.json`（项目设置、`--settings` 不改，照实说要手动删）：`py settings-fix plan` 给出摘要和说明，`consent settings_fix <摘要>`（文件、原文的摘要、要去掉的几项：文件变了就对不上），`apply` 在 `Lock` 里重算、摘要对得上才改：原文整份备份在旁边（`<文件>.cca-backup-<日期时间>`，600、`O_EXCL`；是链接（dotfiles）时备份在链接旁边、改它指向的文件，不写进链接指向的目录），备份后再读一遍没变才原子替换（`save_json` 保留权限）。去掉的是 `claude_config_problems` 那一套（`SETTINGS_BAD`、`apiKeyHelper`），有第三方 API、云厂商或网关时连同官方账号用不了的模型名（`SETTINGS_MODEL_ENV` 的、顶层 `model`，值不是 `CLAUDE_MODEL_NAME` 的）和 `ANTHROPIC_CUSTOM_HEADERS`；`API_TIMEOUT_MS` 这类不碍事的留着。CRED_ENV 加了名字时看看 `SETTINGS_KINDS` 要不要补。`cca codex|agy settings` 不建账号表（`main` 里跳过 `py init`），fix 只给 Claude（`unsupported`）。测试在 regress 10c

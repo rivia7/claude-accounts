@@ -2260,6 +2260,7 @@
       "why": [],
       "claude_code": "2.1.330",
       "claude_code_old": false,
+      "app_hook": "on",
       "cost": {
         "currency": "USD",
         "prices_date": "2026-11-01",

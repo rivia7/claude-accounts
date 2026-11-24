@@ -466,6 +466,8 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
     if let u = raw["unattributed"], !isNull(u) {
         let o = u as? [String: Any]
         check("\(n) unattributed 是不小于 0 的金额和请求数", nonNegative(o?["days_usd"]) && wholeCount(o?["requests"]))
+        // 3.6.9 起：app_hook 是 on / off，不是 macOS 时 null（旧版 cca 没有）
+        check("\(n) unattributed.app_hook 是字符串或 null", o?["app_hook"] == nil || isNull(o?["app_hook"]) || o?["app_hook"] is String)
         // 3.6.8 起：所有设备的（和账号的 cost 一样的样子，按日历周切），设备菜单里还没传过它的设备
         if let rc = o?["cost"], !isNull(rc) {
             let c = t.unattributed?.cost
@@ -1484,6 +1486,7 @@ func auditState(_ s: StateDoc) -> [String] {
         }
     }
     a.add("cost_total.scan.state", s.costTotal?.scan.state)
+    a.add("cost_total.unattributed.app_hook", s.costTotal?.unattributed?.appHook)
     if let c = s.costTotal?.unattributed?.cost {
         for (i, w) in c.weeks.enumerated() { a.add("cost_total.unattributed.cost.weeks[\(i)].basis", w.basis) }
         a.add("cost_total.unattributed.cost.sync.state", c.sync?.state)

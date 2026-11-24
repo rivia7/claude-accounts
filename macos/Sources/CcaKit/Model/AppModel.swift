@@ -179,6 +179,8 @@ final class AppModel {
     private(set) var costRefreshing = false
     /// 最近一次统计没成的原因（cca 的 fail 事件）；统计好了、关掉了就清掉
     private(set) var costFailure: String?
+    /// 正在开 `cca cost hook`（折合金额页的「记下账号…」）
+    private(set) var costHookBusy = false
     /// 上次跑 `cost sync` 的时间（没成也按间隔重试，见 CostPolling）
     @ObservationIgnored private var costAttempted: Double?
     /// 折合金额页点了一行：打开账号页、滚到「折合金额」那一节（账号页滚过去以后清掉）
@@ -2014,6 +2016,21 @@ final class AppModel {
         guard CostPolling.isDue(lastAttempt: costAttempted, updated: scan?.updatedEpoch, never: scan?.state == .never,
                                 visible: costVisible, now: Date().timeIntervalSince1970) else { return }
         syncCost(manual: false)
+    }
+
+    /// 折合金额页的「记下账号…」：Claude App 里的 Code 会话开始时记下 App 登录的账号（`cca cost hook on`）。要改共享的
+    /// ~/.claude/settings.json，cca 先问同意（`consent.cost_hook`，对话框里的话都是 cca 给的）；做完再读一次 state
+    func enableCostHook() {
+        guard phase == .ready, let client, !costHookBusy else { return }
+        costHookBusy = true
+        let prompter = hooks.prompter
+        track { [weak self] in
+            let r = await client.execute(.costHook(on: true), prompter: prompter)
+            guard let self else { return }
+            self.costHookBusy = false
+            self.finish(r, failureTitle: "没能记下 Claude App 里会话的账号", success: nonEmpty(r.resultEvent?.message) ?? "改好了")
+            await self.loadState()
+        }
     }
 
     private func syncCost(manual: Bool) {

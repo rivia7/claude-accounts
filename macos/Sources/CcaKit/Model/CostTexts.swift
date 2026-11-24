@@ -422,6 +422,13 @@ extension Texts {
         return r.model == nil ? value + "\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开" : value
     }
 
+    /// 这台设备的 Claude App 里有 Code 会话认不出账号（`why` 里有 claude_app），又没开 `cca cost hook`（`app_hook` 是 off；旧版 cca
+    /// 没有这一项：不说）：说一句，旁边是「记下账号…」
+    static func costAppHook(_ u: CostUnattributed?) -> String? {
+        guard let u, u.appHook == .off, u.why.contains(where: { $0.code == .claudeApp }) else { return nil }
+        return "这台设备 Claude App 里的 Code 会话认不出是哪个账号的：可以让 cca 在会话开始时记下 App 登录的账号，以后的就算得进来。"
+    }
+
     /// 这台设备命令行里用的 Claude Code 太旧（cca 标的 claude_code_old，和有没有认不出的用量无关）：提醒更新，旁边是去「客户端更新」的按钮
     static func costUpdateClaudeCode(_ u: CostUnattributed?) -> String? {
         guard let u, u.claudeCodeOld else { return nil }

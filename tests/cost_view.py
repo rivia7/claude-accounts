@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,7 @@ U2 = 'aaaaaaaa-0000-4000-8000-000000000002'
 U3 = 'user-' + 'c' * 24
 BOB = 'b0b0b0b0b0b0b0b0'   # bob-mini 那台机器的 device_id（它传的 dv）
 U4 = 'user-' + 'd' * 24
+U5 = 'aaaaaaaa-0000-4000-8000-000000000005'
 M = 1000000   # 一美元 = 这么多个百万分之一美元
 WEEK = 7 * 86400
 # cli/src/cmd/cost.rs 的同名常量
@@ -485,6 +487,81 @@ class Scan(Base):
         self.assertEqual(self.scan().records, 0, '诊断不对：不要它，不为它从头重算')
         self.assertNotIn('diag', self.j)
 
+    def test_resume_other_account(self):
+        """换了账号续接（Claude Code 2.1.330 实测）：会话里照旧写原来那个账号的 session-owner。cca 记的续接比它起作用的时候新：从续接起
+        按 cca 记的认（子代理的也是）；以后 session-owner 真换了（比记录新）照它；又续接到第三方 API 账号下以后的不算"""
+        t0, A, B = self.t0, 'alice(alice@example.com)', 'bob(bob@example.com)'
+        self.dev.write(self.cca / 'accounts.json', {A: 'US-A', B: 'US-B', 'kimi': {'id': 'kimi1', 'base_url': 'https://api.example.com/anthropic'}})
+        for key, u in ((A, U1), (B, U2)):
+            self.dev.write(self.dev.cdir(key) / '.claude.json', {'oauthAccount': {'accountUuid': u, 'emailAddress': key.split('(')[1][:-1]}})
+        sid = 'sess-res0'
+        r = lambda ts, mid: self.reply(ts, mid, sid=sid, version='2.1.330', entrypoint='cli')
+        self.marks(self.dev.cdir(A).parent, (sid, t0 - 30))
+        self.marks(self.dev.cdir(B).parent, (sid, t0 + 3000))   # t0+3000 在 bob 下续接
+        own = lambda u: self.owner(u, sid)
+        (self.proj / (sid + '.jsonl')).write_text(jl(own(U1), r(t0, 'r1'), own(U1), r(t0 + 600, 'r2'), own(U1), r(t0 + 3600, 'r3'),
+                                                    own(U1), r(t0 + 4000, 'r4')))
+        sub = self.proj / sid / 'subagents'
+        sub.mkdir(parents=True)
+        (sub / 'agent-1.jsonl').write_text(jl(r(t0 + 300, 's1'), r(t0 + 3700, 's2')))
+        self.assertEqual(self.scan().records, 6)
+        one = [6000, 1, 1000, 100, 0, 0, 0]
+        self.assertEqual((self.total('claude:' + U1), self.total('claude:' + U2)), ([x * 3 for x in one], [x * 3 for x in one]),
+                         'alice：续接以前的 r1、r2 和子代理的 s1；bob：续接以后的 r3、r4（session-owner 还写着 alice）和子代理的 s2')
+        self.marks(self.cca / 'accounts' / ident('kimi1'), (sid, t0 + 6000))   # t0+6000 又在第三方 API 账号下续接
+        with open(self.proj / (sid + '.jsonl'), 'a') as f:
+            f.write(jl(own(U5), r(t0 + 5000, 'r5'), own(U5), r(t0 + 6100, 'r6')))
+        self.assertEqual(self.scan().records, 1, '第三方 API 账号下续接以后的 r6 不算')
+        self.assertEqual(self.total('claude:' + U5), one, 'session-owner 换了（比 bob 的记录新）：r5 照它')
+        self.assertEqual(self.total('claude:' + U2), [x * 3 for x in one])
+
+    def desktop(self, *rows):
+        """Claude App 的会话开始的记录（cost/desktop-sessions.jsonl）：rows 是 (会话 id, 时间, App 登录的账号的 accountUuid)"""
+        (self.cca / 'cost').mkdir(exist_ok=True)
+        with open(self.cca / 'cost' / 'desktop-sessions.jsonl', 'a') as f:
+            f.write(jl(*({'sid': s, 'at': at, 'source': 'startup', 'uuid': u} for s, at, u in rows)))
+
+    def desktop_hook(self, data, env):
+        """cca _session-start --desktop（cca cost hook 加的 hook，Claude App 里的会话）：环境变量只有 env 和 HOME 这些"""
+        r = subprocess.run([HELPER, 'session-start', '--desktop'], input=data, env=dict(self.dev.env, **env), capture_output=True, text=True,
+                           timeout=30)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''), 'hook 的 stdout 会进 Claude 的上下文：什么都不说')
+
+    def test_desktop_marks(self):
+        """Claude App 里的 Code 会话（不写 session-owner）：开着 cca cost hook 时按记下的 App 登录的账号认，不是这台设备账号表里的
+        官方账号的照旧认不出。cca _session-start --desktop 只在 App 的会话里、带着账号、开着折合金额时记"""
+        t0, A, B = self.t0, 'alice(alice@example.com)', 'bob(bob@example.com)'
+        self.dev.write(self.cca / 'accounts.json', {A: 'US-A', B: 'US-B'})
+        for key, u in ((A, U1), (B, U2)):
+            self.dev.write(self.dev.cdir(key) / '.claude.json', {'oauthAccount': {'accountUuid': u, 'emailAddress': key.split('(')[1][:-1]}})
+        log = self.cca / 'cost' / 'desktop-sessions.jsonl'
+        ev = json.dumps({'session_id': 'sess-app3', 'transcript_path': '/w/x.jsonl', 'hook_event_name': 'SessionStart', 'source': 'startup'})
+        app = {'CLAUDE_CODE_ENTRYPOINT': 'claude-desktop', 'CLAUDE_CODE_ACCOUNT_UUID': U1}
+        for env in ({}, dict(app, CLAUDE_CODE_ENTRYPOINT='cli'), dict(app, CLAUDE_CODE_ACCOUNT_UUID='bad uuid!'),
+                    {'CLAUDE_CODE_ENTRYPOINT': 'claude-desktop'}):
+            self.desktop_hook(ev, env)
+        self.desktop_hook('not json', app)
+        self.assertFalse(log.exists(), '不是 App 里的会话、没有账号、账号的样子不对、不是会话：不记')
+        t = time.time()
+        self.desktop_hook(ev, app)
+        rows = [json.loads(x) for x in log.read_text().splitlines()]
+        self.assertEqual([{k: v for k, v in x.items() if k != 'at'} for x in rows], [{'sid': 'sess-app3', 'source': 'startup', 'uuid': U1}])
+        self.assertTrue(t - 1 <= rows[0]['at'] <= time.time() + 1)
+        self.assertEqual(oct(log.stat().st_mode & 0o777), '0o600')
+        self.desktop(('sess-app1', t0 - 30, U2), ('sess-app2', t0 - 30, U5))
+        app_reply = {'version': '2.1.330', 'entrypoint': 'claude-desktop'}
+        (self.proj / 'sess-app1.jsonl').write_text(jl(self.reply(t0, 'p1', sid='sess-app1', **app_reply)))
+        (self.proj / 'sess-app2.jsonl').write_text(jl(self.reply(t0, 'p2', sid='sess-app2', **app_reply)))
+        self.scan()
+        one = [6000, 1, 1000, 100, 0, 0, 0]
+        self.assertEqual((self.total('claude:' + U2), self.total(None)), (one, one),
+                         'bob 登录的 App 里的 p1 算 bob 的；登录的不是账号表里的账号的 p2 照旧认不出')
+        self.assertNotIn('claude:' + U5, self.j['h'])
+        self.assertEqual(list(self.j['diag']), ['claude_app'], '认不出的 p2 照旧记下原因')
+        (self.cca / 'config.json').write_text('{"cost": false}')
+        self.desktop_hook(ev, app)
+        self.assertEqual(len(log.read_text().splitlines()), 3, '关了折合金额：不记')
+
     def test_sync_command(self):
         r = self.dev.run('cost-sync', '--json')
         self.assertEqual(r.returncode, 2, '没有官方账号：用不了')
@@ -525,6 +602,112 @@ class Scan(Base):
                     waiting.kill()
                     waiting.wait()
         self.assertEqual((waiting.returncode, err, json.loads(out)['scan']['records']), (0, '', 1), '放了锁以后照常统计')
+
+
+class Hook(Base):
+    """cca cost hook（py cost-hook status | on | off）：在共享的 ~/.claude/settings.json 里加上、去掉 Claude App 里的会话开始时回调
+    cca 的 SessionStart hook。别的设置原样；读不了、不是 JSON、样子不对的不改；关了折合金额时去掉"""
+    def setUp(self):
+        super().setUp()
+        self.settings = self.home / '.claude' / 'settings.json'
+        self.cca_bin = self.root / 'cca bin' / 'cca'   # CCA_SELF：hook 的命令里写的 cca（路径里有空格：命令里要加引号）
+        self.dev.env['CCA_SELF'] = str(self.cca_bin)
+
+    def hook(self, *argv, rc=0):
+        r = self.dev.run('cost-hook', *argv)
+        self.assertEqual((r.returncode, r.stderr), (rc, ''), r.stdout)
+        return r.stdout.strip()
+
+    @staticmethod
+    def mine(doc):
+        return [h for g in doc.get('hooks', {}).get('SessionStart', []) for h in g.get('hooks', [])
+                if '_session-start --desktop' in h.get('command', '')]
+
+    def command(self):
+        q = shlex.quote(str(self.cca_bin))
+        return '[ "$CLAUDE_CODE_ENTRYPOINT" = claude-desktop ] && [ -x %s ] && exec %s _session-start --desktop >/dev/null 2>&1; exit 0' % (q, q)
+
+    def test_on_off(self):
+        B = 'bob(bob@example.com)'
+        self.dev.write(self.cca / 'accounts.json', {B: 'US-A'})
+        self.dev.cdir(B).mkdir(parents=True)
+        self.assertEqual((self.hook('status'), self.hook('off')), ('off', 'same'))
+        self.assertFalse(self.settings.exists(), '没有设置文件：去掉时不建')
+        self.assertEqual(self.hook('on'), 'changed')
+        self.assertEqual(json.loads(self.settings.read_text()),
+                         {'hooks': {'SessionStart': [{'hooks': [{'type': 'command', 'command': self.command(), 'timeout': 10}]}]}})
+        self.assertEqual(oct(self.settings.stat().st_mode & 0o777), '0o600')
+        self.assertEqual(os.readlink(self.dev.cdir(B) / 'settings.json'), str(self.settings), '新建的：账号目录里也链上')
+        self.assertEqual((self.hook('status'), self.hook('on')), ('on', 'same'))
+        self.assertEqual(self.hook('off'), 'changed')
+        self.assertEqual((json.loads(self.settings.read_text()), self.hook('status')), ({}, 'off'))
+
+    def test_keeps_the_rest(self):
+        other = {'type': 'command', 'command': '~/.claude/hooks/notify.sh'}
+        old = {'type': 'command', 'command': '[ x ] && exec /old/place/cca _session-start --desktop; exit 0', 'timeout': 10}
+        doc = {'model': 'opus', 'env': {'FOO': '中文'}, 'hooks': {'Stop': [{'hooks': [other]}], 'SessionStart': [
+            {'matcher': 'startup', 'hooks': [other]}, {'hooks': [old]}, {'hooks': [other, old]}, {'hooks': []}]}, 'zeta': 1.5}
+        self.dev.write(self.settings, json.dumps(doc, indent=4), 0o644)
+        self.assertEqual(self.hook('status'), 'on', '以前的 cca（在别的地方）加的也算')
+        self.assertEqual(self.hook('on'), 'changed', '换成现在这个 cca，只留一条')
+        text = self.settings.read_text()
+        new = json.loads(text)
+        self.assertEqual(text, json.dumps(new, indent=2, ensure_ascii=False) + '\n', '缩进两格（和 Claude Code 自己写的一样），中文原样')
+        self.assertEqual(list(new), ['model', 'env', 'hooks', 'zeta'], '别的设置原样，先后不变')
+        rest = [{'matcher': 'startup', 'hooks': [other]}, {'hooks': [other]}, {'hooks': []}]
+        self.assertEqual(new['hooks']['SessionStart'], rest + [{'hooks': [{'type': 'command', 'command': self.command(), 'timeout': 10}]}],
+                         '只有它的那一组去掉，和别的在一组的只去掉它；本来就空着的组不动')
+        self.assertEqual(oct(self.settings.stat().st_mode & 0o777), '0o644', '权限照旧')
+        self.assertEqual(self.hook('off'), 'changed')
+        self.assertEqual(json.loads(self.settings.read_text()), dict(doc, hooks={'Stop': [{'hooks': [other]}], 'SessionStart': rest}))
+        self.assertEqual(self.hook('off'), 'same')
+
+    def test_refuses(self):
+        for text in ('{"hooks": ', '[1]', '{"hooks": []}', '{"hooks": {"SessionStart": {}}}', b'\xff'):
+            self.settings.parent.mkdir(exist_ok=True)
+            (self.settings.write_bytes if isinstance(text, bytes) else self.settings.write_text)(text)
+            for action in ('on', 'off'):
+                self.assertIn('cca 不改它', self.hook(action, rc=4))
+            self.assertEqual(self.hook('status'), 'off')
+            self.assertEqual(self.settings.read_bytes(), text if isinstance(text, bytes) else text.encode(), '原样没动')
+        self.settings.unlink()
+        self.settings.symlink_to(self.root / 'nowhere' / 'settings.json')
+        self.assertIn('链接', self.hook('on', rc=4))
+        self.assertFalse((self.root / 'nowhere').exists())
+        real = self.dev.write(self.root / 'dotfiles' / 'claude-settings.json', '{"model": "opus"}')
+        self.settings.unlink()
+        self.settings.symlink_to(real)
+        self.assertEqual(self.hook('on'), 'changed')
+        self.assertTrue(self.settings.is_symlink(), '是链接的：写到它指向的文件，链接还在')
+        self.assertEqual(len(self.mine(json.loads(real.read_text()))), 1)
+        (self.cca / 'config.json').write_text('{"cost": false}')
+        self.assertIn('"cost": false', self.hook('on', rc=2))
+        self.assertEqual(self.dev.run('cost-sync', '--json').returncode, 2)
+        self.assertEqual((self.hook('status'), self.mine(json.loads(real.read_text()))), ('off', []), '关了折合金额：统计时去掉')
+        doc = json.loads(real.read_text())
+        doc.setdefault('hooks', {}).setdefault('SessionStart', []).append({'hooks': [{'type': 'command', 'command': self.command()}]})
+        real.write_text(json.dumps(doc))
+        self.assertEqual(self.hook('status'), 'on')
+        r = self.dev.run('cost-worker')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''))
+        self.assertEqual((self.hook('status'), self.mine(json.loads(real.read_text()))), ('off', []),
+                         '后台的统计（cost_kick 在会话结束时起的）也去掉：关了以后 App 不再跑 cost sync')
+
+    def test_command(self):
+        """hook 的命令：只在 App 里的会话回调 cca（stdin 原样给它），不出声；命令行里的会话、cca 已经不在了都什么也不做"""
+        self.hook('on')
+        cmd = self.mine(json.loads(self.settings.read_text()))[0]['command']
+        log = self.root / 'called'
+        run = lambda entry: subprocess.run(['/bin/sh', '-c', cmd], input='{"session_id": "x"}', capture_output=True, text=True, timeout=30,
+                                           env={'PATH': '/usr/bin:/bin', 'CLAUDE_CODE_ENTRYPOINT': entry})
+        r = run('claude-desktop')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''), 'cca 不在了：什么也不做')
+        self.dev.write(self.cca_bin, '#!/bin/sh\necho "$@" > "%s"\ncat >> "%s"\necho noise; echo noise >&2\n' % (log, log), 0o755)
+        r = run('cli')
+        self.assertEqual((r.returncode, r.stdout, r.stderr, log.exists()), (0, '', '', False), '命令行里的会话：不回调')
+        r = run('claude-desktop')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''), 'cca 说什么都丢掉（SessionStart hook 的 stdout 会进 Claude 的上下文）')
+        self.assertEqual(log.read_text(), '_session-start --desktop\n{"session_id": "x"}')
 
 
 class Periods(Base):
@@ -874,6 +1057,11 @@ class View(Base):
         cv = self.view()
         cv.account('claude', 'alice(alice@example.com)', None, True)
         self.assertEqual(cv.total(['claude'])['unattributed']['why'], [], 'diag 不对：当没有')
+        mac = sys.platform == 'darwin'
+        self.assertEqual(cv.total(['claude'])['unattributed']['app_hook'], 'off' if mac else None, '没开 cca cost hook（Linux 上没有 Claude App：null）')
+        self.dev.write(self.home / '.claude' / 'settings.json',
+                       {'hooks': {'SessionStart': [{'hooks': [{'type': 'command', 'command': 'cca _session-start --desktop; exit 0'}]}]}})
+        self.assertEqual(cv.total(['claude'])['unattributed']['app_hook'], 'on' if mac else None)
 
     def test_models(self):
         """按模型分的（models）：local.json 的 hm、别的设备传来的 hm；合计减去各个模型的是没有按模型记下的（model 是 null：旧版 cca 的设备、

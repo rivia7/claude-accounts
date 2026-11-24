@@ -138,6 +138,18 @@ struct CostStatsContent: View {
                                 .help("到「客户端更新」更新 Claude Code")
                         }
                     }
+                    if !scope.isOtherDevice, let u = Texts.costAppHook(total.unattributed) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Label(u, systemImage: "info.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            RowAction("记下账号…", systemImage: "person.crop.circle.badge.checkmark") { model.enableCostHook() }
+                                .disabled(model.costHookBusy)
+                                .help("在 Claude Code 的共享设置（~/.claude/settings.json）里加一条 hook：App 里的会话开始时记下它登录的账号（会先问你）")
+                        }
+                    }
                     Text(Texts.costFootnote(tools, pricesDate: total.pricesDate))
                         .font(.caption)
                         .foregroundStyle(.secondary)

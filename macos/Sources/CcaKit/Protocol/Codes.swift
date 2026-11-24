@@ -313,9 +313,11 @@ struct ResultCode: KnownValues {
     /// 新建了一个 Team（还没接上同步服务器）；部署好了、更新了它的同步服务器（PROTOCOL 4.14）
     static let teamCreated = ResultCode(rawValue: "team_created")
     static let teamDeployed = ResultCode(rawValue: "team_deployed")
+    /// `cca cost hook on|off`：加上、去掉了 Claude App 里的会话记下账号的 hook（本来就是这样时也是它）。
+    static let costHook = ResultCode(rawValue: "cost_hook")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .teamJoined, .teamLeft, .teamRevoked, .teamCreated, .teamDeployed]
+                                         .teamJoined, .teamLeft, .teamRevoked, .teamCreated, .teamDeployed, .costHook]
 }
 
 struct FailCode: KnownValues {
@@ -430,9 +432,12 @@ struct ConsentItem: KnownValues {
     static let teamDelete = ConsentItem(rawValue: "team_delete")
     /// `cca team revoke`：管理员从 Team 里移除一台设备（范围是设备在 Team 里的编号，默认不同意）。
     static let teamRevoke = ConsentItem(rawValue: "team_revoke")
+    /// `cca cost hook on`：在共享的 ~/.claude/settings.json 里加一条 SessionStart hook，Claude App 里的 Code 会话开始时记下 App 登录的账号
+    /// （范围为空，默认同意；PROTOCOL 4.2）。
+    static let costHook = ConsentItem(rawValue: "cost_hook")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd,
-                                          .teamLeave, .teamDelete, .teamRevoke]
+                                          .teamLeave, .teamDelete, .teamRevoke, .costHook]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

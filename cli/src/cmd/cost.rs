@@ -3,10 +3,11 @@
 //! 这台设备上 Claude Code、Codex 的会话记录（共享的 ~/.claude/projects、~/.codex/sessions）里每一次请求的用量，按官方 API 的
 //! 标价折成美元，按登录的账号身份（Claude 的 accountUuid、Codex 的 chatgpt_user_id）、按小时累计。不是实际花费（订阅不按这个
 //! 收费）。只读用量的数字（token 数、模型、时间、账号身份），不读对话的内容。
-//! 会话记录里带账号信息才算得进来：Claude Code 在会话里写 session-owner（2.1.317 起；换了账号续接时它把会话复制成一个新的，
-//! 所以按位置认：这一行以后的回复都是这个账号的），子代理的记录按它所在的会话认；Codex 的 session_meta 写 creator_user_id
-//! （0.157 起；一个文件里第一个 session_meta 是它自己的，后面的是复制进来的历史），用量取 token_count 事件。更早的、Claude
-//! 桌面 App 里的会话算不进来；Codex 续接别的账号建的会话时，用量记在建它的账号上。
+//! 会话记录里带账号信息才算得进来：Claude Code 在会话里写 session-owner（2.1.317 起；按位置认：这一行以后的回复都是这个账号的。
+//! 换了账号续接时 2.1.330 照旧写原来的账号：cca 记的会话开始比它新时按 cca 记的认，见 Marks），子代理的记录按它所在的会话认；
+//! Codex 的 session_meta 写 creator_user_id（0.157 起；一个文件里第一个 session_meta 是它自己的，后面的是复制进来的历史），用量取
+//! token_count 事件。更早的 Claude Code 里不经 cca 启动的会话算不进来，Claude 桌面 App 里的会话要开着 cca cost hook（见
+//! cmd_cost_hook）；Codex 续接别的账号建的会话时，用量记在建它的账号上。
 //! 增量地读：每个文件记着读到哪（只读完整的行；文件被截短、换了、读过的末尾对不上就从头读），回复按消息 id 去重，Codex 的
 //! 按时间和累计的用量去重。
 //! Team 给的官方账号、开着设备统计时，各台设备算的经那个 Team 的同步服务器交换（op ledger，见 server/README.md）：一台设备
@@ -21,12 +22,14 @@ use super::hub::{host_name, hubs, Hub, HubKind, TeamTag};
 use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, share_ident, team_keys, Keys};
 use super::presence::{presence_aid, presence_post, presence_targets, presence_why, spawn_background};
 use super::session::{cli_alive, proc_starts};
+use super::settings::home_tilde;
 use super::usage::{parse_ts, WEEK, WEEKS_KEEP, WEEKS_SHOW};
 use super::{arity, Cmd};
-use crate::core::base::{CCA_HOME, CFG, EMAIL_RE, MASTER_JSON};
+use crate::core::base::{Lock, CCA_HOME, CFG, EMAIL_RE, MASTER_JSON, SELF_PATH};
 use crate::core::model::{adir, cdir, is_api, parse_key};
 use crate::core::tool::{claude, codex, Kind, Tool, Using};
-use crate::py::fs::{load_quiet, utime_now};
+use crate::py::fail::{errno_text, os_error_text};
+use crate::py::fs::{load_quiet, save_json, utime_now};
 use crate::py::hash::{sha1_hex, sha256_hex};
 use crate::py::obj::{Dict, List, V};
 use crate::py::proc::getenv;
@@ -47,14 +50,16 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("_cost-periods", cmd_cost_periods),
     Cmd::all("_cost-view", cmd_cost_view),
     Cmd::all("session-start", cmd_session_start),
+    Cmd::all("cost-hook", cmd_cost_hook),
 ];
 
 pub static COST_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "cost"));
 /// 价格表核实的日期（platform.claude.com/docs/en/about-claude/pricing、developers.openai.com/api/docs/pricing）
 pub const COST_PRICES_DATE: &str = "2026-11-24";
 /// 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算（COST_PRICES_DATE + "/第几版"；2026-11-13/2：按会话开始的
-/// 记录认账号、记下诊断；2026-11-24/1：补上 GPT-6.2 的标价，以前记成没有标价的请求按新价重算）
-pub const COST_BUILD: &str = "2026-11-24/1";
+/// 记录认账号、记下诊断；2026-11-24/1：补上 GPT-6.2 的标价，以前记成没有标价的请求按新价重算；2026-11-24/2：会话开始的记录比
+/// session-owner 新时按记录认（换了账号续接），认 Claude App 的记录）
+pub const COST_BUILD: &str = "2026-11-24/2";
 /// 后台统计最多隔这么久起一次
 pub const COST_EVERY: f64 = 300.0;
 /// 和别的设备同步最多隔这么久一次（cca cost sync --now 不等）
@@ -95,6 +100,11 @@ pub const COST_BATCH: usize = 64;
 pub const COST_WAIT: i64 = 240;
 /// 账号目录里记会话开始的文件（cmd_session_start 写，Marks 读）
 pub const SESSIONS_FILE: &str = "sessions.jsonl";
+/// Claude 桌面 App 里的 Code 会话开始的记录（cca cost hook 加的 hook 回调 cca _session-start --desktop 写，Marks 读）：在 COST_DIR 里，
+/// 和 sessions.jsonl 一样一行一个，多一项 uuid（App 登录的账号的 accountUuid）
+pub const DESKTOP_SESSIONS: &str = "desktop-sessions.jsonl";
+/// cca cost hook 加在共享的 ~/.claude/settings.json 里的 SessionStart hook：命令里有这一段的就是它（cca 的路径会变）
+const DESKTOP_HOOK_MARK: &str = " _session-start --desktop";
 /// sessions.jsonl 超过这么大时只留最后 SESSIONS_KEEP 字节（一行六七十字节：一天开两百次会话也留得下一个多月）
 const SESSIONS_MAX: u64 = 1 << 20;
 const SESSIONS_KEEP: usize = 512 << 10;
@@ -916,24 +926,43 @@ fn cost_load_scan() -> (Dict, Seen) {
     (base, Seen::new())
 }
 
-// --- 会话开始的记录（账号目录的 sessions.jsonl）--------------------------------------------------------------------------
-// Claude Code 2.1.316 及以前不在会话里写 session-owner，Claude 桌面 App 里的会话也不写：这些回复认不出是哪个账号的。cca 启动
-// Claude Code 时经 --settings 带一个 SessionStart hook（accounts.rs 的 session_hook），会话开始、续接、/clear、压缩以后回调
-// cca _session-start 账号目录名，在这个账号目录的 sessions.jsonl 末尾记一行 {"sid": 会话 id, "at": 时间, "source": 怎么开始的}。
-// 统计时没有 session-owner 的回复按它认：这个会话在回复以前最后一次是在哪个账号下开始的（续接到别的账号下也认得出）；
-// 第三方 API 账号下开始的不算（不是订阅的用量）。不经 cca 启动的（直接运行 claude、桌面 App、IDE）没有记录，照旧认不出。
+// --- 会话开始的记录（账号目录的 sessions.jsonl、Claude App 的 desktop-sessions.jsonl）---------------------------------------
+// Claude Code 2.1.316 及以前不在会话里写 session-owner，Claude 桌面 App 里的会话也不写：这些回复认不出是哪个账号的；换了账号
+// 续接的会话里 Claude Code（2.1.330 实测）照旧写原来的账号。cca 启动 Claude Code 时经 --settings 带一个 SessionStart hook
+// （accounts.rs 的 session_hook），会话开始、续接、/clear、压缩以后回调 cca _session-start 账号目录名，在这个账号目录的
+// sessions.jsonl 末尾记一行 {"sid": 会话 id, "at": 时间, "source": 怎么开始的}。Claude App 自己起 Claude Code，带不上
+// --settings：cca cost hook 问过以后在共享的 ~/.claude/settings.json 里加一条 SessionStart hook，只在 App 里的会话
+// （CLAUDE_CODE_ENTRYPOINT=claude-desktop）回调 cca _session-start --desktop，记进 COST_DIR 的 desktop-sessions.jsonl，多一项
+// uuid（App 在 CLAUDE_CODE_ACCOUNT_UUID 里给的、它登录的账号）。
+// 统计时按它认（Marks）：这个会话在回复以前最后一次是在哪个账号下开始的——没有 session-owner 的回复，和记录比 session-owner
+// 起作用的时候新的（换了账号续接）；第三方 API 账号下开始的不算（不是订阅的用量）。不经 cca 启动的（直接运行 claude、IDE，
+// 没开 cca cost hook 时的桌面 App）没有记录，照旧按 session-owner 认，没有就认不出。
 
-/// cca _session-start 账号目录名（Claude Code 的 SessionStart hook）：stdin 是 hook 的输入（JSON：session_id、source……），
-/// 会话 id 记进 ~/.cca/accounts/<账号目录名>/sessions.jsonl（600，追加，flock 排队；超过 SESSIONS_MAX 先只留最后 SESSIONS_KEEP）。
+/// cca _session-start 账号目录名 | --desktop（Claude Code 的 SessionStart hook）：stdin 是 hook 的输入（JSON：session_id、source……），
+/// 会话 id 记进 ~/.cca/accounts/<账号目录名>/sessions.jsonl；--desktop（cca cost hook 加的，Claude App 里的会话）记进 COST_DIR 的
+/// desktop-sessions.jsonl，带上 App 登录的账号（CLAUDE_CODE_ACCOUNT_UUID；不是 App 里的会话、没有它、关了折合金额都不记）。
+/// 600，追加，flock 排队；超过 SESSIONS_MAX 先只留最后 SESSIONS_KEEP。
 /// 出什么错都不说（bash 把 stdout、stderr 都丢掉、总是成功：hook 的 stdout 会进 Claude 的上下文）
 pub fn cmd_session_start(args: &[String]) -> R<()> {
     arity("cmd_session_start", args, 1, 1)?;
     let id = args[0].as_str();
-    let dir = path::join_all(&[&claude().sroot, "accounts", id]);
     // SAFETY: 只是问 fd 0 是不是终端（手动运行时不等输入）
-    if !re!(r"^[a-z0-9][a-z0-9-]{0,63}$").matches(id) || !path::isdir(&dir) || unsafe { libc::isatty(0) } == 1 {
+    if unsafe { libc::isatty(0) } == 1 {
         return Ok(());
     }
+    let (file, uuid) = if id == "--desktop" {
+        let app = getenv("CLAUDE_CODE_ENTRYPOINT").as_deref() == Some("claude-desktop");
+        match getenv("CLAUDE_CODE_ACCOUNT_UUID").filter(|u| re!(r"^[0-9A-Za-z][0-9A-Za-z_-]{7,63}$").matches(u)) {
+            Some(u) if app && cost_on() && cost_dir().is_ok() => (path::join(&COST_DIR, DESKTOP_SESSIONS), Some(u)),
+            _ => return Ok(()),
+        }
+    } else {
+        let dir = path::join_all(&[&claude().sroot, "accounts", id]);
+        if !re!(r"^[a-z0-9][a-z0-9-]{0,63}$").matches(id) || !path::isdir(&dir) {
+            return Ok(());
+        }
+        (path::join(&dir, SESSIONS_FILE), None)
+    };
     let mut raw = Vec::new();
     if std::io::stdin().lock().take(64 << 10).read_to_end(&mut raw).is_err() {
         return Ok(());
@@ -941,8 +970,12 @@ pub fn cmd_session_start(args: &[String]) -> R<()> {
     let Ok(d) = line_doc(&raw) else { return Ok(()) };
     let Some(sid) = d.str("session_id").filter(|s| re!(r"^[0-9A-Za-z][0-9A-Za-z_-]{7,63}$").matches(s)) else { return Ok(()) };
     let source = d.str("source").filter(|s| re!(r"^[a-z_]{1,16}$").matches(s)).map_or(String::new(), |s| s.to_string());
-    let line = json::dumps(&V::Dict(dict! { "sid" => &*sid, "at" => time(), "source" => source }), json::Fmt::new().compact());
-    let _ = sessions_append(&path::join(&dir, SESSIONS_FILE), format!("{line}\n").as_bytes());
+    let rec = dict! { "sid" => &*sid, "at" => time(), "source" => source };
+    if let Some(u) = uuid {
+        rec.set("uuid", u);
+    }
+    let line = json::dumps(&V::Dict(rec), json::Fmt::new().compact());
+    let _ = sessions_append(&file, format!("{line}\n").as_bytes());
     Ok(())
 }
 
@@ -966,6 +999,201 @@ fn sessions_append(p: &str, line: &[u8]) -> std::io::Result<()> {
     f.write_all(line)
 }
 
+/// 这条 hook 的命令：只在 Claude App 里的 Code 会话里（CLAUDE_CODE_ENTRYPOINT=claude-desktop）回调 cca；命令行里的会话、
+/// cca 已经不在了，都什么也不做。不出声（SessionStart hook 的 stdout 会进 Claude 的上下文）
+fn desktop_hook_command() -> String {
+    let cca = text::sh_quote(&SELF_PATH);
+    format!(
+        "[ \"$CLAUDE_CODE_ENTRYPOINT\" = claude-desktop ] && [ -x {cca} ] && exec {cca}{DESKTOP_HOOK_MARK} >/dev/null 2>&1; exit 0"
+    )
+}
+
+/// 共享的 Claude Code 设置（各账号目录里的 settings.json 链到它）
+fn desktop_hook_file() -> String {
+    path::join(&claude().master, "settings.json")
+}
+
+/// hooks.SessionStart 里这条 hook 的命令（每一组的 hooks 里命令带着 DESKTOP_HOOK_MARK 的）
+fn desktop_hook_commands(groups: &List) -> Vec<String> {
+    let mut found = Vec::new();
+    for g in groups.items() {
+        for h in g.as_dict().and_then(|g| g.list("hooks")).map(|l| l.items()).unwrap_or_default() {
+            if let Some(c) = h.as_dict().and_then(|h| h.str("command")).filter(|c| c.contains(DESKTOP_HOOK_MARK)) {
+                found.push(c.to_string());
+            }
+        }
+    }
+    found
+}
+
+/// 共享设置里有没有这条 hook（cost-hook status、App 的 unattributed.app_hook）：读不了、不是 JSON 算没有
+fn desktop_hook_on() -> bool {
+    let data = load_quiet(&desktop_hook_file()).and_then(|d| d.as_dict());
+    data.and_then(|d| d.dict("hooks")).and_then(|h| h.list("SessionStart")).is_some_and(|g| !desktop_hook_commands(&g).is_empty())
+}
+
+/// 去掉 groups（hooks.SessionStart）里这条 hook；一组里只有它的，整组去掉（别的组原样留着，连同本来就空着的）
+fn desktop_hook_strip(groups: &List) {
+    let mine = |h: &V| h.as_dict().and_then(|h| h.str("command")).is_some_and(|c| c.contains(DESKTOP_HOOK_MARK));
+    let kept: Vec<V> = groups
+        .items()
+        .into_iter()
+        .filter(|g| {
+            let Some(list) = g.as_dict().and_then(|g| g.list("hooks")) else { return true };
+            let items = list.items();
+            if !items.iter().any(mine) {
+                return true;
+            }
+            list.clear();
+            for h in items.into_iter().filter(|h| !mine(h)) {
+                list.push(h);
+            }
+            !list.is_empty()
+        })
+        .collect();
+    groups.clear();
+    for g in kept {
+        groups.push(g);
+    }
+}
+
+/// 加上（on）、去掉这条 hook：Ok(改没改)；共享设置读不了、不是 JSON、hooks 的样子不对、写不了时 Ok(Err(说明))，什么都不改。
+/// 拿着 sync.lock（py link 也在锁里改共享的配置）；是链接的照旧写到它指向的文件，原来没有这个文件时新建（600）。别的设置不动
+/// （照 JSON 重新写一遍：缩进两格，和 Claude Code 自己写的一样）
+fn desktop_hook_set(on: bool) -> R<Result<bool, String>> {
+    let file = desktop_hook_file();
+    let _lock = Lock::acquire()?;
+    let raw = match std::fs::read(&file) {
+        Ok(raw) => Some(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if path::lexists(&file) {
+                return Ok(Err(format!("{} 是个指向不存在的文件的链接，cca 不改它", home_tilde(&file))));
+            }
+            None
+        }
+        Err(_) => return Ok(Err(format!("{} 读不了，cca 不改它", home_tilde(&file)))),
+    };
+    let created = raw.is_none();
+    let data = match raw {
+        None if !on => return Ok(Ok(false)),
+        None => Dict::new(),
+        Some(raw) => match std::str::from_utf8(&raw).ok().and_then(|t| json::loads(t).ok()).and_then(|d| d.as_dict()) {
+            Some(d) => d,
+            None => {
+                return Ok(Err(format!("{} 不是合法的 JSON 设置，cca 不改它：先把它改对（或者挪走）再试", home_tilde(&file))));
+            }
+        },
+    };
+    let shape = |what: &str| Ok(Err(format!("{} 里的 {what}，cca 不改它", home_tilde(&file))));
+    let hooks = match data.get("hooks") {
+        None => None,
+        Some(V::Dict(h)) => Some(h),
+        Some(_) => return shape("hooks 不是对象"),
+    };
+    let groups = match hooks.as_ref().and_then(|h| h.get("SessionStart")) {
+        None => None,
+        Some(V::List(g)) => Some(g),
+        Some(_) => return shape("hooks.SessionStart 不是列表"),
+    };
+    let want = desktop_hook_command();
+    let mine = groups.as_ref().map(desktop_hook_commands).unwrap_or_default();
+    if (on && mine.len() == 1 && mine[0] == want) || (!on && mine.is_empty()) {
+        return Ok(Ok(false)); // 本来就是这样
+    }
+    // 先都去掉（cca 换了路径的、多出来的），要的话再在最后加一条
+    if let (Some(hooks), Some(groups)) = (&hooks, &groups) {
+        desktop_hook_strip(groups);
+        if !on && groups.is_empty() {
+            hooks.pop("SessionStart");
+            if hooks.is_empty() {
+                data.pop("hooks");
+            }
+        }
+    }
+    if on {
+        let hooks = hooks.unwrap_or_else(|| {
+            let h = Dict::new();
+            data.set("hooks", h.clone());
+            h
+        });
+        let groups = groups.unwrap_or_else(|| {
+            let g = List::new();
+            hooks.set("SessionStart", g.clone());
+            g
+        });
+        groups.push(dict! { "hooks" => list![dict! { "type" => "command", "command" => want, "timeout" => 10 }] });
+    }
+    match save_json(&file, &V::Dict(data), None, true) {
+        Ok(()) => {}
+        Err(Fail::Os(e)) => {
+            let why = e.raw_os_error().map_or_else(|| os_error_text(&e), errno_text);
+            return Ok(Err(format!("{} 改不了（{}），什么都没改", home_tilde(&file), why)));
+        }
+        Err(e) => return Err(e),
+    }
+    if created {
+        desktop_hook_link(&file);
+    }
+    Ok(Ok(true))
+}
+
+/// 共享的 settings.json 是刚新建的：各个 Claude 账号目录里还没链到它，链上（py link 下次启动这个账号时也会，那就晚了：开着的
+/// Claude App 新开的会话就要用上）
+fn desktop_hook_link(shared: &str) {
+    let tool = claude();
+    let Some(table) = load_quiet(&tool.table).and_then(|t| t.as_dict()) else { return };
+    tool.set_ids(&table);
+    let _using = Using::tool(tool);
+    for k in table.keys() {
+        let dir = cdir(&k);
+        let p = path::join(&dir, "settings.json");
+        if path::isdir(&dir) && !path::lexists(&p) {
+            let _ = shutil::symlink(shared, &p);
+        }
+    }
+}
+
+/// py cost-hook status | on | off（cca cost hook）：Claude App 里的 Code 会话开始时记下 App 登录的账号——在共享的
+/// ~/.claude/settings.json 里加上、去掉一条 SessionStart hook（desktop_hook_command）。status 打印 on 或 off；on、off 改了打印
+/// changed，本来就是这样打印 same；on 时折合金额关着退出码 2；改不了（读不了、不是 JSON、hooks 的样子不对、写不了）退出码 4，
+/// stdout 是说明
+pub fn cmd_cost_hook(args: &[String]) -> R<()> {
+    arity("cmd_cost_hook", args, 1, 1)?;
+    let on = match args[0].as_str() {
+        "status" => {
+            out!("{}", if desktop_hook_on() { "on" } else { "off" });
+            return Ok(());
+        }
+        "on" => true,
+        "off" => false,
+        other => {
+            out!("不认识的操作: {other}（status、on、off）");
+            return exit(1);
+        }
+    };
+    if on && !cost_on() {
+        out!("折合金额关掉了（config.json 里写着 \"cost\": false）：先打开它");
+        return exit(2);
+    }
+    match desktop_hook_set(on)? {
+        Ok(changed) => out!("{}", if changed { "changed" } else { "same" }),
+        Err(why) => {
+            out!("{why}");
+            return exit(4);
+        }
+    }
+    Ok(())
+}
+
+/// 这台设备记不记 Claude App 里 Code 会话的账号（PROTOCOL 2.2 的 unattributed.app_hook）：on | off；不是 macOS（没有 Claude App）为 null
+fn app_hook_view() -> V {
+    if cfg!(target_os = "macos") {
+        V::from(if desktop_hook_on() { "on" } else { "off" })
+    } else {
+        V::None
+    }
+}
+
 /// 一次会话开始是在谁下面
 enum MarkWho {
     /// 官方账号：它现在登录的 accountUuid（读不出是 None：认不出）
@@ -974,15 +1202,18 @@ enum MarkWho {
     Api,
 }
 
-/// Claude 各账号目录的 sessions.jsonl：会话 id → [(时间, 是谁)]（按时间排好）
+/// Claude 各账号目录的 sessions.jsonl 和 Claude App 的 desktop-sessions.jsonl：会话 id → [(时间, 是谁)]（按时间排好）
 struct Marks {
-    /// (路径, 是谁, 上次读时的大小和修改时间)
-    files: Vec<(String, std::rc::Rc<MarkWho>, Option<(u64, i64, i64)>)>,
+    /// (路径, 是谁（None：Claude App 的记录，每一行带着 App 登录的账号）, 上次读时的大小和修改时间)
+    files: Vec<(String, Option<std::rc::Rc<MarkWho>>, Option<(u64, i64, i64)>)>,
+    /// 账号表里官方账号的身份 → 它的 MarkWho。Claude App 的记录只认这些：别的身份（不在这台设备的账号表里）算进去也没有
+    /// 哪个账号显示它，不如照旧留在「认不出账号」里
+    known: std::collections::HashMap<String, std::rc::Rc<MarkWho>>,
     by_sid: std::collections::HashMap<String, Vec<(f64, std::rc::Rc<MarkWho>)>>,
 }
 
 impl Marks {
-    /// 账号表里各 Claude 账号的（官方账号的身份读它配置目录的 .claude.json；读不了账号表是空的）
+    /// 账号表里各 Claude 账号的（官方账号的身份读它配置目录的 .claude.json；读不了账号表是空的），和 Claude App 的
     fn load() -> Marks {
         let tool = claude();
         let table = if path::exists(&tool.table) { load_quiet(&tool.table).and_then(|t| t.as_dict()) } else { None };
@@ -990,16 +1221,20 @@ impl Marks {
             tool.set_ids(t); // 第三方 API 账号的目录按它的 id 起名
         }
         let _using = Using::tool(tool);
-        let mut files = Vec::new();
+        let (mut files, mut known) = (Vec::new(), std::collections::HashMap::new());
         for (k, v) in table.map(|t| t.items()).unwrap_or_default() {
-            let who = if is_api(&v) {
+            let who = std::rc::Rc::new(if is_api(&v) {
                 MarkWho::Api
             } else {
                 MarkWho::Official(ident_str(oauth_ident(&path::join(&cdir(&k), ".claude.json")).0))
-            };
-            files.push((path::join(&adir(&k), SESSIONS_FILE), std::rc::Rc::new(who), None));
+            });
+            if let MarkWho::Official(Some(u)) = &*who {
+                known.insert(u.py_str(), who.clone());
+            }
+            files.push((path::join(&adir(&k), SESSIONS_FILE), Some(who), None));
         }
-        let mut m = Marks { files, by_sid: Default::default() };
+        files.push((path::join(&COST_DIR, DESKTOP_SESSIONS), None, None));
+        let mut m = Marks { files, known, by_sid: Default::default() };
         m.refresh();
         m
     }
@@ -1017,8 +1252,9 @@ impl Marks {
         if !changed {
             return false;
         }
-        self.by_sid.clear();
-        for (p, who, _) in &self.files {
+        let Marks { files, known, by_sid } = self;
+        by_sid.clear();
+        for (p, who, _) in files.iter() {
             let Ok(mut f) = std::fs::File::open(p) else { continue };
             // SAFETY: f 开着，fd 有效；锁在 f 关上时放开（等正在写、正在截短的写完）
             unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH) };
@@ -1034,18 +1270,20 @@ impl Marks {
                 else {
                     continue;
                 };
-                self.by_sid.entry(sid.to_string()).or_default().push((at, who.clone()));
+                // Claude App 的记录：照 App 登录的账号认（不是这台设备账号表里的官方账号的不认）
+                let Some(who) = who.clone().or_else(|| d.str("uuid").and_then(|u| known.get(&*u).cloned())) else { continue };
+                by_sid.entry(sid.to_string()).or_default().push((at, who));
             }
         }
-        for v in self.by_sid.values_mut() {
+        for v in by_sid.values_mut() {
             v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         }
         true
     }
 
-    /// 会话 sid 在 ts（回复的时间）以前最后一次是在谁下面开始的
-    fn at(&self, sid: &str, ts: f64) -> Option<std::rc::Rc<MarkWho>> {
-        self.by_sid.get(sid)?.iter().rev().find(|(at, _)| *at <= ts + MARK_SLACK).map(|(_, w)| w.clone())
+    /// 会话 sid 在 ts（回复的时间）以前最后一次是在谁下面开始的，和那一次的时间
+    fn at(&self, sid: &str, ts: f64) -> Option<(f64, std::rc::Rc<MarkWho>)> {
+        self.by_sid.get(sid)?.iter().rev().find(|(at, _)| *at <= ts + MARK_SLACK).map(|(at, w)| (*at, w.clone()))
     }
 }
 
@@ -1223,8 +1461,8 @@ impl CostScan {
         }
     }
 
-    /// 会话 sid 在 ts 以前最后一次是在谁下面开始的（会话开始的记录）；这个文件里还没重读过记录时，找不到就重读一次再找
-    fn mark_who(&mut self, sid: &str, ts: f64) -> Option<std::rc::Rc<MarkWho>> {
+    /// 会话 sid 在 ts 以前最后一次是在谁下面开始的、是什么时候（会话开始的记录）；这个文件里还没重读过记录时，找不到就重读一次再找
+    fn mark_who(&mut self, sid: &str, ts: f64) -> Option<(f64, std::rc::Rc<MarkWho>)> {
         if self.marks.is_none() {
             self.marks = Some(Marks::load());
             self.marks_fresh = true;
@@ -1423,6 +1661,10 @@ impl CostScan {
             let d = line_doc(raw)?;
             let owner = d.get("type").is_some_and(|t| t.as_str() == Some("session-owner"));
             let u = ident_str(d.get("accountUuid").filter(|_| owner));
+            // 换了（这个文件里头一回有、和上一行的不一样）：从这以后的第一条回复起作用，那时再记下时间（own_at）
+            if !cur.get("own").unwrap_or(V::None).py_eq(u.as_ref().unwrap_or(&V::None)) {
+                cur.pop("own_at");
+            }
             cur.set("own", u.clone());
             if kind != FileKind::Main {
                 return Ok(());
@@ -1464,9 +1706,20 @@ impl CostScan {
             _ => (b'c', sha1_head(raw)),
         };
         let mut who = cur.get("own").unwrap_or(V::None);
+        // who 从什么时候起是它：这个文件里的 session-owner 换了以后的第一条回复的时间；子代理的记录按会话的 owners 里的时间
+        let mut since = 0.0;
         if kind == FileKind::Main {
             cur.set("ts", ts);
-        } else if !who.truthy() {
+        }
+        if who.truthy() {
+            since = match cur.get("own_at").and_then(|a| a.as_pynum()) {
+                Some(at) => at,
+                None => {
+                    cur.set("own_at", ts);
+                    ts
+                }
+            };
+        } else if kind != FileKind::Main {
             // for at, x in self.j['owners'].get(sid) or []：项不是两样东西、时间比不了原来是 ValueError / TypeError（跳过这一行）
             let tl = match self.j.dict("owners").expect("scan.json 核对过").get(sid).filter(|t| t.truthy()) {
                 None => Vec::new(),
@@ -1478,15 +1731,19 @@ impl CostScan {
                 let Some(at) = pair.at(0).as_pynum() else { return bad_line() };
                 if at <= ts {
                     who = pair.at(1);
+                    since = at;
                 }
             }
         }
-        if !who.truthy() {
-            // 没有 session-owner：按会话开始的记录认（见 Marks）
-            match self.mark_who(sid, ts).as_deref() {
-                Some(MarkWho::Api) => return Ok(()), // 第三方 API 账号的会话：不是订阅的用量，不算
-                Some(MarkWho::Official(Some(u))) => who = u.clone(),
-                _ => {}
+        // 会话开始的记录（见 Marks）：没有 session-owner，或者记录比 session-owner 起作用的时候新（换了账号续接以后 Claude Code
+        // 照旧写原来的账号），按记录认
+        if let Some((at, m)) = self.mark_who(sid, ts) {
+            if !who.truthy() || at > since {
+                match &*m {
+                    MarkWho::Api => return Ok(()), // 第三方 API 账号的会话：不是订阅的用量，不算
+                    MarkWho::Official(Some(u)) => who = u.clone(),
+                    MarkWho::Official(None) => {} // 读不出是谁：照 session-owner（没有就认不出）
+                }
             }
         }
         let model = cost_model(m.get("model").as_ref());
@@ -2420,9 +2677,13 @@ fn cost_put(cfg: &Dict, puts: &Dict) -> R<String> {
 }
 
 /// 在后台跑一次 cca _cost-sync（读新增的会话记录、和别的设备同步）；上次起过还不到 COST_EVERY 就不起。静默。
-/// CCA_COST=off（回归测试）不起
+/// CCA_COST=off（回归测试）不起。关掉了折合金额时不统计，只在 cca cost hook 加的 hook 还在时起它去掉 hook（关掉以后 App 和
+/// 这里都不再统计，不然要等手动 cost sync；调这里的可能拿着 sync.lock，所以在后台改）
 pub fn cost_kick() {
-    if getenv("CCA_COST").as_deref() == Some("off") || !path::isfile(&CFG) || !cost_on() {
+    if getenv("CCA_COST").as_deref() == Some("off") || !path::isfile(&CFG) {
+        return;
+    }
+    if !cost_on() && !(cfg!(target_os = "macos") && desktop_hook_on()) {
         return;
     }
     if let Some(stamp) = cost_mtime("last").filter(|s| *s != 0.0) {
@@ -2438,9 +2699,16 @@ pub fn cost_kick() {
     spawn_background(&["_cost-sync"]);
 }
 
-/// cca _cost-sync：cost_kick 在后台起的；有别的统计在跑就走。出什么错都安静地退出（下次再来）
+/// cca _cost-sync：cost_kick 在后台起的；有别的统计在跑就走。出什么错都安静地退出（下次再来）。关掉了折合金额时只去掉
+/// cca cost hook 加的 hook（见 cost_kick）
 pub fn cmd_cost_worker(_args: &[String]) -> R<()> {
-    if !(path::isfile(&CFG) && cost_on()) {
+    if !path::isfile(&CFG) {
+        return Ok(());
+    }
+    if !cost_on() {
+        if desktop_hook_on() {
+            let _ = desktop_hook_set(false);
+        }
         return Ok(());
     }
     match cost_run(false, 0.0) {
@@ -2472,6 +2740,10 @@ fn cost_accounts() -> usize {
 pub fn cmd_cost_sync(args: &[String]) -> R<()> {
     let flag = |f: &str| args.iter().any(|a| a == f);
     if !cost_on() {
+        // cca cost hook 加的 hook 也去掉（关掉折合金额时去掉；改不了就算了，cca cost hook off 会说为什么）
+        if desktop_hook_on() {
+            let _ = desktop_hook_set(false);
+        }
         out!("折合金额关掉了（config.json 里写着 \"cost\": false）");
         return exit(2);
     }
@@ -3457,7 +3729,7 @@ impl CostView {
                 "days_usd" => usd(orphan_micro), "requests" => count_v(orphan_requests),
                 "why" => diag.get("why").unwrap_or_else(|| V::List(List::new())), "claude_code" => diag.get("claude_code").unwrap_or(V::None),
                 "claude_code_old" => diag.get("claude_code_old").unwrap_or(V::Bool(false)),
-                "cost" => orphan.map_or(V::None, V::Dict), "unsynced" => unsynced,
+                "cost" => orphan.map_or(V::None, V::Dict), "unsynced" => unsynced, "app_hook" => app_hook_view(),
             },
         );
         V::Dict(out)
