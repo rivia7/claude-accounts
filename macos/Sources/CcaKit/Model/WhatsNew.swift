@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.11", title: "App 里显示 Antigravity 的额度", points: [
+            .init(symbol: "gauge.with.dots.needle.33percent",
+                  text: "Antigravity 账号的账号页按组显示额度（Gemini 模型和 Claude、GPT 模型），每组照 Claude 的样子画 5 小时、本周；侧栏、菜单栏和总览卡片写各组里用得最多的那个。"),
+            .init(symbol: "square.stack.3d.up",
+                  text: "一组用完了，别的组的模型照样能用：所有组都用完才算额度用完。每查一次要十几秒，App 查得比 Claude、Codex 慢一些。"),
+            .init(symbol: "sidebar.left",
+                  text: "侧栏里套餐名太长时截断（比如 Google AI Pro），不再把用量的百分比挤出侧栏。"),
+        ]),
         ReleaseNote(version: "3.6.10", title: "Antigravity 更新到 1.5.16 以后照样能用，还能查额度", points: [
             .init(symbol: "key",
                   text: "agy 更新到 1.5.16 以后 cca agy 会停下：新版会让各账号共用钥匙串里的同一份登录。现在 cca 让它照旧把登录存在各账号自己的目录里，以前的登录接着用。"),
