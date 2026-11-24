@@ -764,6 +764,39 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   （同一组里有账号在用的节点当对照）→ 好了 `cca team map`，不好 `rm` 撤回；不再碰映射仓库、不签名推送。要这台 Mac 装着有 `cca team node`
   的版本。
 
+## 导出、导入、修改配置（`cca team export|import|edit`，3.6.14 起）
+
+管理员把一个 Team 的配置整份写成 JSON 文件、照这样一个文件整份换掉（备份、搬到另一个 Team、一次改很多项）。辅助程序在 `cmd/team/admin/config.rs`
+（`py team-config`），bash 是 `team_export`、`team_import`、`team_edit`、`team_config_apply`：
+
+- 文件：`{"kind": "cca-team-config", "version": 1, "team": 名字, "accounts": {工具: {邮箱: {"node", "alias"}}}, "alias_lock", "install_node", "nodes": {"group", "proxies"} | null}`。
+  `team` 只给人看（导入时不管：名字用 `cca team name` 改）；设备、每台设备能用哪些账号不在里面（它们是这个 Team 自己的），导入时照旧。
+  导出时各工具都列出来（没有账号的是 `{}`），每个账号带着现在的别名（没起过的是默认编的 `team-N`，`alias_plan`）。账号的值也可以只写节点；
+  没写别名的：原来就在的照原来的（和文件里写了的撞了就不留），新加的照 `default_aliases` 编（用过的号不再用）。账号的先后照原来的，新加的接在后面
+  （先后变了不算改动，各台设备的配置不会白白重新发布）。
+- 节点的定义带着密钥：导出的文件 600（`save_json(…, 600, follow_symlinks=false)`：放在那里的链接换成普通文件，不写到它指的地方），文件已经有了
+  不覆盖（`--force` 才覆盖：App 的保存面板问过）；bash 说一句和密码一样保管。
+- 查得严：`kind` 不对、`version` 比 1 新（说先更新 cca）、不认得的项（顶层、账号、`nodes` 里）、不是邮箱、同一个工具里一个邮箱写两次（大小写、首尾空格
+  规整以后）、没写节点、节点写 `-`、别名不合规（`alias_ok`）或者同一个工具里重名、`install_node` 不是这份配置里定义的节点、节点的定义过不了
+  `fill_problems`，都不导（原因码 `file`，一处处说，最多 8 处）：免得改动悄悄丢了。
+- `check`：照文件换会改什么（不改）：加、去掉、换节点、改别名的账号，节点的定义加 / 改 / 去掉，策略组、锁定别名、安装客户端用的节点；一种一行，多了说
+  「等 N 个」。`! ` 开头的是提醒、不算改动：新加或者换了节点的账号走的节点这份配置里没有定义、这台设备（config.json 的 `nodes`）上也没有
+  （这台设备没有可选节点时不说：说不准）；新定义的节点和这台设备上已有的节点同名（有同名节点的设备照它自己的那个走，`policy_fill` 同名的不换）；
+  `--base`（`cca team edit` 打开时 `export` 给的配置摘要）对不上：这中间配置在别处改过，照这份换掉那些改动就没了。stdout 开头几行是 Team 的编号、
+  名字、改了几项、去掉几个账号、文件的 SHA-256、新加和改了的节点定义有几个。
+- 新加、改了的节点定义不是 0 个时，bash 先拿内核校验（`team_config_validate`：`py team-config testconfig` 把文件里全部的节点定义拼成一份最小配置，
+  `dialer-proxy` 连着的一起，`mktemp -d` 里 `core_bin -t`，和 `cca team node add` 一样：内核认不出的节点发出去，各台设备的路由器、内置代理整份配置都
+  载不进去），过不了是 `team_file`、不问。
+- 一样的不问、不换（`team_imported`）。不一样的：终端里先列出来（提醒用 `warn`），`consent team_config <编号>:<文件的 SHA-256 前 16 位>`（`detail` 是同样的几项，一项一句，提醒放在最后的「注意：」后面——事件里的换行会变成空格，
+  不能一行一项；要去掉账号时默认答「不」；范围带着文件的摘要：App 里同意以后、重跑之前文件又改过，范围对不上，照新的内容再问），同意以后 `apply … --sha <check 时的 SHA-256>`：问过同意的不是这一份了（中间又改过）不换。换掉 `config` 和 `alias_n`、存盘，接上了服务器的
+  发布（和 `map` 一样只给配置变了的设备发新的一版），再 `team_settle`。
+- `cca team edit Team`：`export --edit` 写到 Team 的目录里的 `edit.json`（`teams/**` 在 `CCA_DIR_PRIVATE` 里，`cca restore` 的备份不带它），
+  `${EDITOR:-vi}` 打开（和 `cca edit` 一样），内容没变说「没有改动」；查不过说哪里不对、问要不要重新编辑；过了照上面的换。换在子 shell 里做：中途
+  `die` 了照样删掉那一份。提问会话里不编辑：`terminal` 事件（`team_edit`），App 交给终端。
+- App（要 `hello.team_config`）：管理员的「更多」里「导出配置…」（`NSSavePanel`，`cca team export … --force`）、「导入配置…」（`NSOpenPanel`，
+  `cca team import` 照 4.3 问同意、重跑）、「在终端里修改配置…」（`Handoff.teamEdit`）。
+- 以前的 `cca team import Team policy.json`（维护者的映射，3.6.0 去掉了，那时说用法）现在照这个流程查：不是导出的配置，说清楚、不导。`--mine` 照旧。
+
 ## 测试
 
 - `tests/presence.rs` 里 Team 的服务器那几条（`flow`、`records_lost`、`cli`、`behind_proxy`；回归的 unit 一节收整个模块的结果）：真的服务器进程、真的 `ssh-keygen` 签名，客户端是照文档独立实现的
@@ -813,6 +846,13 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `install`（没有的节点、空的、成员设备不行；换了每台设备的配置带着新的、原来的不再带，没变不发布，`-` 不再指定）；
   `testconfig` 的入站、带上的节点、权限、要测的网站、不写节点是全部；`verdict` 的几种结果和 `--json`；没接上服务器的 Team 只改本机。
   `cargo test nodes`：`judge` 的各种情况。
+- 导出、导入、修改配置（`tests/team.rs` 的 `config_file`）：导出的文件 600、各工具都列出来、账号带着别名，已经有了不覆盖、成员不能导出；原样的没有改动；
+  改过的那份 `check` 说的几行（加、去掉、换节点、改别名、锁定）、不改，`--sha` 对不上不换，换了以后 admin.json、发布了两台、成员同步到的那一版；
+  写错了的几种都是 `file`、说哪一处；`--edit` 的那一份在 Team 的目录里（600），`--base` 对不上时提醒；`testconfig` 带着全部的节点定义。
+  `cargo test config`（`config.rs` 的单元测试）：规整（邮箱、节点的空格）、查出的每一种问题、`candidate` 的先后和别名（留、撞了换、新编的号）、
+  `changes` 的每一种说法和提醒、和自己比没有改动。regress 11b3d：导出（600、提醒、事件）、不覆盖 / `--force`、一样的不问、App 里的同意事件
+  （`detail` 逐行）和带着 `CCA_GRANT` 重跑、终端里先列出来、去掉账号时直接回车是不换、内核认不出的节点（`$T/core/reject_text`）不问不换、
+  `cca team edit`（假的编辑器：先写坏再改好、没改、提问会话里交给终端），测完换回导出的那一份（下面的用例照原来的别名号）。
 - 账号表照配置改（`tests/team.rs` 的 `accounts_follow`）：加入以后 alice 的节点照 Team 的（说「按「测试组」的配置固定」）、补上别名，本来就有的
   账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了收起来（`parked`），再给回来照原来的键；不再给本来就有的
   那个，账号留着；被移除以后 Team 加的收起来。

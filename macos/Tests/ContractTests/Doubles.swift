@@ -155,6 +155,11 @@ final class TriggerSink: @unchecked Sendable {
     var activated: [String] = []
     /// “选文件夹”面板要返回的结果。
     var pickedDirectory: String?
+    /// 保存面板、打开面板要返回的结果（nil 是取消）；保存面板先填的文件名、打开面板弹了几次
+    var savePath: String?
+    var openPath: String?
+    var saveNames: [String] = []
+    var openAsked = 0
     var installed: [TerminalApp] = [.system]
     var conditions = SystemConditions()
     var urls: [URL] = []
@@ -172,6 +177,7 @@ final class TriggerSink: @unchecked Sendable {
              openTerminalApp: { app, done in log.activated.append(app.id); done(log.openSucceeds) },
              systemConditions: { log.conditions },
              installedTerminals: { log.installed }, chooseDirectory: { _ in log.pickedDirectory },
+             chooseSaveFile: { log.saveNames.append($0); return log.savePath }, chooseOpenFile: { log.openAsked += 1; return log.openPath },
              openURL: { log.urls.append($0) },
              copy: { log.copied.append($0) }, copySecret: { log.copiedSecrets.append($0) },
              showMainWindow: { log.shown += 1 }, terminate: { log.terminated += 1 },

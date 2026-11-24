@@ -212,6 +212,13 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                 message: "在终端里删除：先经 SSH 卸掉它的同步服务器（ssh 要的密码、私钥的密码在那里输），再删掉这台 Mac 上的根密钥。", inApp: true, needsForms: true)
     }
 
+    /// 在终端里用编辑器改一个 Team 的配置（`cca team edit <Team>`，要 `hello.team_config`，PROTOCOL 4.14）：存盘退出以后 cca 列出会改什么、
+    /// 问过再换、发布。编辑器在终端里，不在 App 里问
+    static func teamEdit(team: String) -> Handoff {
+        Handoff(arguments: ["team", "edit", team], title: "修改 Team 的配置",
+                message: "在终端里用编辑器改这个 Team 的配置（存盘退出以后列出会改什么，问过你再换、发布）。")
+    }
+
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
     static func installCLI(prefix: [String], tool: ToolID) -> Handoff {
         Handoff(arguments: prefix + ["install-cli"], title: "安装 \(Texts.cliCommand(tool)) 命令",

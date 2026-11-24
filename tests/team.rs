@@ -50,6 +50,7 @@ pub const MODULE: Module = Module {
         case!(delete_plan),
         case!(invite_for_a_key),
         case!(import_mine),
+        case!(config_file),
         case!(new_with_accounts),
         case!(server_lies),
     ],
@@ -1991,6 +1992,123 @@ fn import_mine(t: &mut Ctx) {
     lines(&admin, &["team-attach", tid, &url, &pin]);
     assert_eq!(sorted_items(&doc(&admin, tid).1["accounts"]["claude"]), ["me@example.com", "plain@example.com"]);
     assert_eq!(code(&admin, &["team-import", tid, "--mine", "x"]), "usage");
+}
+
+/// 导出、导入、修改 Team 的配置（team-config：cca team export / import / edit 用）：导出的文件只给自己读写、各工具都列出来、每个账号带着
+/// 别名；check 说会改什么（不改），apply 照文件整份换掉、发布（拿着这些账号的设备同步到新的一版）；check 之后文件又改过了不换；写错了的
+/// 不导；--edit 那一份在 Team 的目录里，--base 提醒这中间在别处改过；testconfig 拼的内核配置带着全部的节点定义
+fn config_file(t: &mut Ctx) {
+    let fx = fx(t);
+    let (admin, tid, _root, _srv, _url, _pin) = fx.new_team();
+    let tid = tid.as_str();
+    load(&admin, tid);
+    let member = fx.device("member");
+    let (link, _) = invite(&admin, tid, "member", &["--accounts", "claude:alice@example.com,claude:bob@example.com"]);
+    assert_eq!(lines_in(&member, &["team-join", "--name", "member"], &link)[5], "ok");
+    let seq0 = doc(&member, tid).0;
+    // 导出
+    let out = fx.d.join("conf.json");
+    let file = path_str(&out);
+    assert_eq!(lines(&admin, &["team-config", "export", tid, file])[..5], [file, tid, "测试组", "3", "5"]);
+    assert_eq!(fsx::mode(&out), 0o600, "有节点的密钥：只给自己读写");
+    let e = fsx::read_json(&out);
+    assert_eq!(
+        list![&e["kind"], &e["version"], &e["team"], &e["alias_lock"], &e["install_node"]],
+        list!["cca-team-config", 1, "测试组", false, "US-D"]
+    );
+    assert_eq!(key_list(&e["accounts"]), ["claude", "codex", "agy"], "各工具都列出来（没有账号的是空的）");
+    assert_eq!(
+        e["accounts"]["claude"],
+        obj! {
+            "alice@example.com" => obj! { "node" => "US-A", "alias" => "alice" },
+            "bob@example.com" => obj! { "node" => "US-B", "alias" => "team-1" },
+        }
+    );
+    assert_eq!(e["nodes"], config()["nodes"]);
+    assert_eq!(code(&admin, &["team-config", "export", tid, file]), "file", "文件已经有了：不覆盖");
+    lines(&admin, &["team-config", "export", tid, file, "--force"]);
+    assert_eq!(code(&member, &["team-config", "export", tid, path_str(&fx.d.join("m.json"))]), "not_admin");
+    assert_eq!(code(&admin, &["team-config", "nope"]), "usage");
+    // 原样导入：没有要改的
+    let same = lines(&admin, &["team-config", "check", tid, file]);
+    assert_eq!((same[2].as_str(), same[3].as_str(), same[5].as_str(), same.len()), ("0", "0", "0", 6));
+    // 改：去掉 alice、bob 换到 US-E、Codex 的 carol 改名、加 dave（只写节点：编成 team-2）、锁定别名
+    let mut e2 = e.clone();
+    sub(&mut e2, &["accounts", "claude"]).remove("alice@example.com");
+    sub(&mut e2, &["accounts", "claude", "bob@example.com"]).insert("node", "US-E");
+    sub(&mut e2, &["accounts", "codex", "carol@example.com"]).insert("alias", "小李");
+    sub(&mut e2, &["accounts", "claude"]).insert("dave@example.com", "US-A");
+    sub(&mut e2, &[]).insert("alias_lock", true);
+    let f2 = fx.d.join("conf2.json");
+    put(&f2, &e2);
+    let chk = lines(&admin, &["team-config", "check", tid, path_str(&f2)]);
+    assert_eq!(chk[..4], [tid, "测试组", "5", "1"]);
+    assert_eq!((chk[4].len(), chk[5].as_str()), (64, "0"), "文件的 SHA-256、没有新的节点定义");
+    assert_eq!(
+        chk[6..],
+        [
+            "加 1 个账号：Claude dave@example.com（US-A）",
+            "去掉 1 个账号：Claude alice@example.com（各台设备上收起来，登录留着）",
+            "换节点：Claude bob@example.com：US-B → US-E",
+            "改别名：Codex carol@example.com：team-1 → 小李",
+            "锁定别名（各台设备上照 Team 给的别名用，自己改不了）",
+        ]
+    );
+    assert_eq!(fsx::read_json(tdir(&admin, tid).join("admin.json"))["config"]["accounts"], config()["accounts"], "check 不改");
+    assert_eq!(code(&admin, &["team-config", "apply", tid, path_str(&f2), "--sha", "0"]), "file", "问过同意的不是这一份：不换");
+    assert_eq!(
+        lines(&admin, &["team-config", "apply", tid, path_str(&f2), "--sha", &chk[4]]),
+        ["2"],
+        "两台的配置都变了（别名锁定了）"
+    );
+    let a = fsx::read_json(tdir(&admin, tid).join("admin.json"));
+    assert_eq!(
+        list![&a["config"]["accounts"], &a["config"]["tool_aliases"], &a["config"]["alias_lock"], &a["config"]["install_node"]],
+        list![
+            obj! { "claude" => obj! { "bob@example.com" => "US-E", "dave@example.com" => "US-A" }, "codex" => obj! { "carol@example.com" => "US-A" } },
+            obj! { "claude" => obj! { "bob@example.com" => "team-1", "dave@example.com" => "team-2" }, "codex" => obj! { "carol@example.com" => "小李" } },
+            true,
+            "US-D"
+        ]
+    );
+    member.ok(&["team-sync"]);
+    let (seq1, d1) = doc(&member, tid);
+    assert!(seq1 > seq0, "拿着这些账号的设备同步到新的一版：{seq0} → {seq1}");
+    assert_eq!(list![&d1["accounts"], &d1["alias_lock"]], list![obj! { "claude" => obj! { "bob@example.com" => "US-E" } }, true]);
+    // 写错了的不导：说是哪一处
+    let bad = fx.d.join("bad.json");
+    for (v, why) in [
+        (with(&e, "accounts", obj! { "claude" => obj! { "nope" => "US-A" } }), "Claude 的 nope：不是邮箱"),
+        (with(&e, "version", 2), "这份配置是新版本的 cca 导出的（version 2）：先更新 cca（cca update）"),
+        (with(&e, "install_node", "US-Z"), "install_node「US-Z」不是 nodes 里定义的节点"),
+        (with(&e, "extra", 1), "不认得「extra」"),
+        (obj! { "version" => 1, "claude" => obj! { "alice@example.com" => "US-A" } }, "不是 cca team export 导出的 Team 配置"),
+    ] {
+        put(&bad, &v);
+        let r = admin.run_with(&["team-config", "check", tid, path_str(&bad)], "", &[]);
+        assert_eq!((r.code, r.out.split('\t').next()), (1, Some("file")), "{}", r.out);
+        assert_in(why, &r.out);
+    }
+    // --edit：Team 的目录里那一份（只给自己读写）；这中间在别处改过的提醒一句
+    let ed = lines(&admin, &["team-config", "export", tid, "--edit"]);
+    assert!(ed[0].ends_with(&format!("/teams/{tid}/edit.json")), "{ed:?}");
+    assert_eq!(fsx::mode(&ed[0]), 0o600);
+    assert_eq!(lines(&admin, &["team-config", "check", tid, &ed[0], "--base", &ed[5]])[2], "0", "没有在别处改过：不提醒");
+    lines(&admin, &["team-map", tid, "claude", "erin@example.com", "US-A"]);
+    let chk = lines(&admin, &["team-config", "check", tid, &ed[0], "--base", &ed[5]]);
+    assert_eq!(
+        chk[6..],
+        [
+            "去掉 1 个账号：Claude erin@example.com（各台设备上收起来，登录留着）",
+            "! 打开以后「测试组」的配置在别处改过（App 里、别的命令）：照这份换掉的话，那些改动就没了",
+        ]
+    );
+    // testconfig：全部的节点定义（经 dialer-proxy 连着的一起：一起校验）
+    let tc = jl(&admin, &["team-config", "testconfig", path_str(&f2)]);
+    assert_eq!(
+        list![&tc["proxies"], &tc["proxy-groups"][0]["proxies"]],
+        list![&config()["nodes"]["proxies"], list!["US-A", "US-B", "US-C", "US-D", "US-E"]]
+    );
 }
 
 /// 新建 Team 时放进这台设备上的账号（team-candidates 列出来、team-new --accounts 选）：自己加的，和这台设备当管理员的 Team 里的

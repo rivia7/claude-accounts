@@ -104,6 +104,18 @@ func teamFixtureTests() {
           && Handoff.teamDeploy(team: teamA).arguments == ["team", "deploy", teamA] && Handoff.teamDeploy(team: teamA).needsForms
           && Handoff.teamDelete(team: teamA).arguments == ["team", "leave", teamA] && Handoff.teamDelete(team: teamA).inApp
           && ResultCode.allKnown.contains(.teamCreated) && ResultCode.allKnown.contains(.teamDeployed) && ResultCode.allKnown.contains(.teamLeft))
+    check("hello 的 team_config；旧版 cca 没有", (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"team":1,"team_config":1}"#
+        .utf8)))?.teamConfig == TeamAPI.config
+          && (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"team":1}"#.utf8)))?.teamConfig == nil)
+    let file = "/Users/me/书房组 Team 配置.json"
+    check("命令：导出（保存面板问过覆盖：带 --force；只读配置、写一个文件）、导入（跑完为止、和同步路由器排队）、在终端里修改；结果码、同意项",
+          CcaCommand.teamExport(team: teamA, path: file).arguments == ["team", "export", teamA, file, "--force"]
+          && !CcaCommand.teamExport(team: teamA, path: file).runsToCompletion
+          && CcaCommand.teamExport(team: teamA, path: file).gate == CcaCommand.teamRevoke(team: teamA, device: "d").gate
+          && CcaCommand.teamImport(team: teamA, path: file).arguments == ["team", "import", teamA, file]
+          && CcaCommand.teamImport(team: teamA, path: file).runsToCompletion && CcaCommand.teamImport(team: teamA, path: file).gate == CcaCommand.routerSync.gate
+          && Handoff.teamEdit(team: teamA).arguments == ["team", "edit", teamA] && !Handoff.teamEdit(team: teamA).inApp && Handoff.teamEdit(team: teamA).systemTerminal
+          && ResultCode.allKnown.contains(.teamExported) && ResultCode.allKnown.contains(.teamImported) && ConsentItem.allKnown.contains(.teamConfig))
 }
 
 /// Team 在界面模型里：筛选（侧栏、菜单栏面板、总览共用），管理员看设备、发邀请（链接只进剪贴板）、改授权
@@ -142,6 +154,23 @@ func teamFixtureTests() {
         check("旧版 cca（hello 没有 team）：没有 Team（state 里有也不认）、不筛选（记着的选择不生效）、不调 cca team、不开会话",
               !m.teamAvailable && m.teams.isEmpty && !m.teamFilterAvailable && m.activeTeamFilter == .all
               && m.shownAccounts(.claude).count == m.arrangedAccounts(.claude).count && teamRuns(t).isEmpty && t.started.isEmpty)
+        m.shutdown()
+    }
+    // cca 有 Team、没有导出导入（3.6.13 及以前）：不弹面板、不调 cca team export|import、不开终端
+    do {
+        let t = transport(hello.replacingOccurrences(of: #" "team_config": 1,"#, with: ""))
+        let log = HookLog()
+        log.savePath = "/Users/me/a.json"
+        log.openPath = "/Users/me/a.json"
+        let m = makeModel(t, log: log)
+        await m.start()
+        m.exportTeamConfig(m.teams[0])
+        m.importTeamConfig(m.teams[0])
+        m.editTeamConfig(m.teams[0])
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        check("cca 没有 team_config（旧版）：管理员的 Team 也不导出、不导入、不在终端里改",
+              m.teamAvailable && !m.teamConfigAvailable && log.saveNames.isEmpty && log.openAsked == 0
+              && !teamRuns(t).contains { ["export", "import", "edit"].contains($0.dropFirst().first ?? "") } && m.toast == nil, "\(teamRuns(t))")
         m.shutdown()
     }
 
@@ -242,6 +271,30 @@ func teamFixtureTests() {
     m.setTeamAlias(a, acct)
     check("改别名：去掉首尾空白，按 工具:邮箱 改（只改这个工具里的）；改成了收起输入框",
           await waitUntil { !m.teamBusy && m.teamAlias == nil } && teamRuns(t).contains(["team", "alias", teamA, acct.spec, "书房-1"]))
+    // 导出、导入（hello.team_config）：先弹面板，取消了不发命令；不是管理员的 Team 都不做
+    check("cca 有 team_config", m.teamConfigAvailable)
+    m.exportTeamConfig(a)
+    _ = await waitUntil { !log.saveNames.isEmpty }
+    try? await Task.sleep(nanoseconds: 60_000_000)
+    check("导出：保存面板里先填 Team 的名字；取消了不发命令", log.saveNames == ["书房组 Team 配置.json"] && !teamRuns(t).contains { $0.prefix(2) == ["team", "export"] })
+    log.savePath = "/Users/me/书房组 Team 配置.json"
+    m.exportTeamConfig(a)
+    check("导出：选好了文件：cca team export … --force", await waitUntil { !m.teamBusy && teamRuns(t).contains(["team", "export", teamA, "/Users/me/书房组 Team 配置.json", "--force"]) })
+    m.importTeamConfig(a)
+    _ = await waitUntil { log.openAsked == 1 }
+    try? await Task.sleep(nanoseconds: 60_000_000)
+    check("导入：取消了不发命令", log.openAsked == 1 && !teamRuns(t).contains { $0.prefix(2) == ["team", "import"] })
+    log.openPath = "/Users/me/改过的.json"
+    m.importTeamConfig(a)
+    check("导入：选好了文件：cca team import（同意由 cca 问）", await waitUntil { !m.teamBusy && teamRuns(t).contains(["team", "import", teamA, "/Users/me/改过的.json"]) })
+    let runs = teamRuns(t).count
+    m.exportTeamConfig(m.teams[1])
+    m.importTeamConfig(m.teams[1])
+    m.editTeamConfig(m.teams[1])
+    try? await Task.sleep(nanoseconds: 80_000_000)
+    check("不是管理员的 Team：不导出、不导入、不改", teamRuns(t).count == runs && log.saveNames.count == 2 && log.openAsked == 2 && t.started.isEmpty)
+    m.editTeamConfig(a)
+    check("在终端里修改：不开提问会话，交给终端（测试里没有 cca 的路径：说找不到 cca）", t.started.isEmpty && m.toast?.text == "找不到 cca", "\(m.toast?.text ?? "")")
     m.joinTeam()
     check("「粘贴邀请链接…」：开提问会话 cca team join", await waitUntil { !t.started.isEmpty } && t.started == [["team", "join"]], "\(t.started)")
     m.shutdown()

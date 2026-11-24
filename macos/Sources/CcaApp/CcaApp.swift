@@ -147,6 +147,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.hooks.installedTerminals = { Platform.installedTerminals() }
         model.hooks.systemConditions = { Platform.systemConditions() }
         model.hooks.chooseDirectory = { await Platform.chooseDirectory(startingAt: $0) }
+        model.hooks.chooseSaveFile = { await Platform.chooseSaveFile(suggestedName: $0) }
+        model.hooks.chooseOpenFile = { await Platform.chooseOpenFile() }
         model.hooks.openURL = { NSWorkspace.shared.open($0) }
         model.hooks.copy = { Platform.copy($0) }
         model.hooks.copySecret = { Platform.secrets.copy($0) }

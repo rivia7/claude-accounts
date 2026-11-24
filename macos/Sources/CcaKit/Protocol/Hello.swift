@@ -34,6 +34,9 @@ struct HelloDoc: CcaDocument, Equatable {
     /// 有 Team（`cca team …`，PROTOCOL 4.14；state 的 `config.teams`、账号的 `team`）；旧版 cca 没有这个字段，App 不显示 Team 的那一块、
     /// 不按 Team 筛选、不调 `cca team`（版本不是 TeamAPI.version 时也一样）
     var team: Int?
+    /// 有导出、导入、修改 Team 的配置（`cca team export|import|edit`，PROTOCOL 4.14）；旧版 cca 没有这个字段，App 不给「导出配置…」
+    /// 「导入配置…」「在终端里修改配置…」（旧版 cca 的 `team import` 只认 `--mine`）
+    var teamConfig: Int?
     var ccaVersion: String?
     var devMode: Bool
     /// 缺这个字段时当作已安装（不无故显示安装引导）。
@@ -48,6 +51,7 @@ struct HelloDoc: CcaDocument, Equatable {
         case installCLI = "install_cli"
         case remoteEnd = "remote_end"
         case remoteWeb = "remote_web"
+        case teamConfig = "team_config"
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
         case installed
@@ -71,6 +75,7 @@ struct HelloDoc: CcaDocument, Equatable {
         remoteEnd = c.int(.remoteEnd)
         remoteWeb = c.int(.remoteWeb)
         team = c.int(.team)
+        teamConfig = c.int(.teamConfig)
         ccaVersion = c.string(.ccaVersion)
         devMode = c.bool(.devMode) ?? false
         installed = c.bool(.installed) ?? true

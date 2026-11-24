@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! prompts cca脚本 PROTOCOL.md    提问只能经提问的基元：cca 里读 fd 3（写着 <&3）的行，除了注释、“: <&3” 这种只是接上的，都得在
-//!                                ask、ask_secret、arrow_menu、gui_ask、gui_answer、gui_answer_wait、cmd_edit、node_read_block 这几个函数里
+//!                                ask、ask_secret、arrow_menu、gui_ask、gui_answer、gui_answer_wait、cmd_edit、team_edit、node_read_block 这几个函数里
 //!                                （一行开头的 “名字() {” 起算到下一个这样的行）；cca 里的题号（q=a.b 和 ask_fields a.b 后面跟空格的）
 //!                                都要在 PROTOCOL.md 里写成 `a.b`。都对（而且找得到题号）：打出 ok；不然打出
 //!                                “：读 fd 3 的 [函数名…]；PROTOCOL 里没写的题号 [题号…]”（两个列表是 Python 打印列表的样子，题号排过序）
@@ -55,8 +55,8 @@ fn py_list(items: &[&str]) -> String {
 // ---- prompts ----
 
 /// 能直接读 fd 3 的函数：提问的基元
-const ASKERS: [&str; 8] =
-    ["ask", "ask_secret", "arrow_menu", "gui_ask", "gui_answer", "gui_answer_wait", "cmd_edit", "node_read_block"];
+const ASKERS: [&str; 9] =
+    ["ask", "ask_secret", "arrow_menu", "gui_ask", "gui_answer", "gui_answer_wait", "cmd_edit", "team_edit", "node_read_block"];
 
 /// Python 的 \b 眼里 c 算不算词的一部分（字母、数字、下划线：str.isalnum() 或者 _）
 fn py_word(c: char) -> R<bool> {

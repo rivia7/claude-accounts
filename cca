@@ -6047,7 +6047,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/agy.json" ] && ag=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"remote_end":1,"remote_web":1,"team":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"remote_end":1,"remote_web":1,"team":1,"team_config":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s},"agy":{"enabled":%s,"bin":%s}},' \
 		"$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")" "$ag" "$(jopt "$AGY_BIN")"
@@ -6347,6 +6347,10 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
       cca team rename Team 设备 新名字             给一台设备改名字（它在服务器上的名字跟着改）
       cca team name Team 新名字                    改这个 Team 的名字（各台设备下次同步配置时跟着改）
+      cca team export Team 文件 [--force]          把这个 Team 的配置（账号走哪个节点、别名、节点的定义……）导出成 JSON 文件；
+                                                   有节点的密钥（只给自己读写）：当密码保管。--force 覆盖已有的文件
+      cca team import Team 文件                    照导出（改过）的文件整份换掉这个 Team 的配置：先说会改什么，问过你再换、发布
+      cca team edit Team                           在编辑器里改这个 Team 的配置（存盘退出以后同上）
       cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
       cca team node Team [ls [--json]]            这个 Team 的节点定义（不显示密钥）、各有哪些账号在用
@@ -6421,11 +6425,9 @@ cmd_team() {
 			else
 				okay "改好了：「${rn_old}」现在叫「${rn_new}」。${rn_why}"
 			fi ;;
-		import)
-			out=$(py team-import "$@") || team_fail "$out" "没导入成"
-			{ local n nodes stored; IFS= read -r n; IFS= read -r nodes; IFS= read -r stored; } <<< "$out"
-			okay "导入了 ${n} 个账号、${nodes} 个节点；$(team_stored "$stored")"
-			team_settle ;;
+		import) team_import "$@" ;;
+		export) team_export "$@" ;;
+		edit) team_edit "$@" ;;
 		map)
 			out=$(py team-map "$@") || team_fail "$out" "没改成"
 			okay "改好了；$(team_stored "$out")"
@@ -6451,6 +6453,112 @@ cmd_team() {
 		node) team_node "$@" ;;
 		*) die "$TEAM_USAGE" ;;
 	esac
+}
+
+team_import() {   # team_import Team 文件 | Team --mine
+	local out n nodes stored
+	case "$#:${2:-}" in
+		2:--mine)
+			out=$(py team-import "$@") || team_fail "$out" "没导入成"
+			{ IFS= read -r n; IFS= read -r nodes; IFS= read -r stored; } <<< "$out"
+			okay "导入了 ${n} 个账号、${nodes} 个节点；$(team_stored "$stored")"
+			team_settle ;;
+		2:-*) FAIL_CODE=team_usage die "用法: cca team import Team 文件 | cca team import Team --mine" ;;
+		2:*) team_config_apply "$1" "$2" ;;
+		*) FAIL_CODE=team_usage die "用法: cca team import Team 文件 | cca team import Team --mine" ;;
+	esac
+}
+
+team_export() {   # team_export Team 文件 [--force]：把这个 Team 的配置写成 JSON 文件（600；辅助程序的 team-config export）
+	local out file tid name n nodes
+	case "$#:${3:-}" in
+		2:|3:--force) ;;
+		*) FAIL_CODE=team_usage die "用法: cca team export Team 文件 [--force]" ;;
+	esac
+	case "$2" in -*) FAIL_CODE=team_usage die "用法: cca team export Team 文件 [--force]" ;; esac
+	out=$(py team-config export "$@") || team_fail "$out" "没导出成"
+	{ IFS= read -r file; IFS= read -r tid; IFS= read -r name; IFS= read -r n; IFS= read -r nodes; } <<< "$out"
+	okay "导出了「${name}」的配置（${n} 个账号、${nodes} 个节点）：${file}"
+	[ "$nodes" = 0 ] || warn "文件里有节点的密钥（密码、uuid）：只给自己读写，和密码一样保管，别发给不该看的人"
+	say "  改好以后导入回去（先说会改什么、问过你再换）：cca team import ${tid:0:8} 文件"
+	gui_done team_exported "导出了「${name}」的配置（${n} 个账号、${nodes} 个节点）"
+}
+
+team_edit() {   # team_edit Team：导出到这个 Team 的目录里（edit.json：只给自己读写，备份不带它）→ 编辑器 → 照它换（team_config_apply）；用完删掉
+	local out f tid name n nodes base before rc
+	[ $# -eq 1 ] || FAIL_CODE=team_usage die "用法: cca team edit Team"
+	need_tty
+	if [ -n "$PROMPT_GUI" ]; then
+		gui_terminal team_edit "Team 的配置要在终端里用编辑器改" team edit "$1"
+		die "Team 的配置要在终端里用编辑器改：cca team edit $1"
+	fi
+	out=$(py team-config export "$1" --edit) || team_fail "$out" "没打开"
+	{ IFS= read -r f; IFS= read -r tid; IFS= read -r name; IFS= read -r n; IFS= read -r nodes; IFS= read -r base; } <<< "$out"
+	before=$(sha256_of "$f")
+	while :; do
+		${EDITOR:-vi} "$f" <&3 3<&-
+		if [ "$(sha256_of "$f")" = "$before" ]; then rm -f "$f"; info "没有改动"; return 0; fi
+		rc=0
+		out=$(py team-config check "$tid" "$f" --base "$base") || rc=$?
+		[ $rc -eq 0 ] && break
+		case "$out" in file$'\t'*) ;; *) rm -f "$f"; team_fail "$out" "没改成" ;; esac
+		warn "${out#*$'\t'}"
+		confirm "重新编辑？（不改了就答 n）" y || { rm -f "$f"; say "已取消"; return 1; }
+	done
+	# 在子 shell 里换：中途 die 了也照样删掉那份（里面有节点的密钥）
+	( team_config_apply "$tid" "$f" "$base" ); rc=$?
+	rm -f "$f"
+	[ $rc -eq 0 ] || exit $rc
+}
+
+team_config_apply() {   # team_config_apply Team 文件 [打开时的摘要]：照文件整份换掉这个 Team 的配置。先说会改什么（py team-config check），新加、改了的
+	                      # 节点定义拿内核校验，问过同意（consent team_config，范围是 Team 的编号和文件的摘要：App 里同意以后文件又改过的话对不上、
+	                      # 照新的内容重问；去掉账号的默认答「不」）再换、发布，然后照新的配置对一遍账号表。
+	                      # 摘要：cca team edit 打开时的（这中间在别处改过的话提醒一句）。一样的不问、不换
+	local team="$1" f="$2" out tid name count removed sha defs summary l detail="" warns="" def=y
+	out=$(py team-config check "$team" "$f" ${3:+--base "$3"}) || team_fail "$out" "没导入成"
+	{ IFS= read -r tid; IFS= read -r name; IFS= read -r count; IFS= read -r removed; IFS= read -r sha; IFS= read -r defs; summary=$(cat); } <<< "$out"
+	if [ "$count" = 0 ]; then
+		okay "「${name}」的配置和这份一样，没有要改的"
+		gui_done team_imported "「${name}」的配置和这份一样，没有要改的"
+		return 0
+	fi
+	[ "$defs" = 0 ] || team_config_validate "$f"
+	# 给同意的说明：一项一句，提醒放在最后（事件里的换行会变成空格：不能一行一项）
+	while IFS= read -r l; do
+		case "$l" in "") ;; "! "*) warns="${warns}${l#! }。" ;; *) detail="${detail}${l}。" ;; esac
+	done <<< "$summary"
+	[ -z "$warns" ] || detail="${detail}注意：${warns}"
+	if [ -z "$PROMPT_GUI" ]; then
+		say "照这份换掉「${name}」的配置会："
+		while IFS= read -r l; do
+			case "$l" in "") ;; "! "*) warn "${l#! }" ;; *) say "  · ${l}" ;; esac
+		done <<< "$summary"
+	fi
+	[ "$removed" = 0 ] || def=n
+	consent team_config "${tid}:${sha:0:16}" "导入 Team 的配置" "照这份换掉「${name}」的配置吗？" "$detail" "$def"
+	case $? in
+		0) ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 cca team import（会先问你）" ;;
+	esac
+	out=$(py team-config apply "$team" "$f" --sha "$sha") || team_fail "$out" "没换成"
+	okay "换好了「${name}」的配置；$(team_stored "$out")"
+	gui_done team_imported "换好了「${name}」的配置；$(team_stored "$out")"
+	team_settle
+}
+
+team_config_validate() {   # team_config_validate 文件：文件里全部的节点定义拼成一份配置，拿内核 -t 校验（和 cca team node add 一样；dialer-proxy 连着的一起）
+	local dir out
+	node_custom_ok || FAIL_CODE=team_file die "这份配置里有新的节点定义，要用内置代理的内核校验，这台机器用不了（内置代理的内核没有 $(uname -m) 这个架构）"
+	core_fetch || FAIL_CODE=team_file die "下载内置代理的内核失败，没法校验这份配置里的节点：${FETCH_ERR}"
+	dir=$(mktemp -d "${TMPDIR:-/tmp}/cca-nodet.XXXXXX") || die "建临时目录失败"
+	if ! py team-config testconfig "$1" > "$dir/config.yaml" 2>/dev/null; then rm -rf "$dir"; die "生成校验配置失败"; fi
+	chmod 600 "$dir/config.yaml" 2>/dev/null
+	info "正在用内核校验这份配置里的节点…"
+	if out=$("$(core_bin)" -t -d "$dir" -f "$dir/config.yaml" 2>&1); then rm -rf "$dir"; return 0; fi
+	rm -rf "$dir"
+	FAIL_CODE=team_file die "这份配置里有内核认不出的节点，校验没通过：$(printf '%s' "$out" | tail -n 1)"
 }
 
 team_settle() {   # Team 的配置变了以后（加入、同步到新的一版、退出、管理员发布）：账号表下一条命令就照它改，这里马上做完——没配置过路由器的
@@ -7891,7 +7999,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	[ -z "$bk" ] || ( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/custom-nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
 		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' --exclude 'hub/hub.json' --exclude 'hub-hosted.json' \
 		--exclude 'teams/*/secret' --exclude 'teams/*/root_ed25519' --exclude 'teams/*/admin.json' --exclude 'teams/*/doc.json' \
-		--exclude 'teams/*/*.tmp' --exclude 'teams/.new.*' \
+		--exclude 'teams/*/*.tmp' --exclude 'teams/*/edit.json' --exclude 'teams/.new.*' \
 		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/own.remote.json' --exclude 'cost/team.*.remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \

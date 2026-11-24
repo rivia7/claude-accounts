@@ -90,6 +90,12 @@ private struct TeamBlock: View {
                         Button("更新服务器、搬到别的服务器…") { model.deployTeam(team) }
                         Divider()
                     }
+                    if team.isAdmin, model.teamConfigAvailable {
+                        Button("导出配置…") { model.exportTeamConfig(team) }
+                        Button("导入配置…") { model.importTeamConfig(team) }
+                        Button("在终端里修改配置…") { model.editTeamConfig(team) }
+                        Divider()
+                    }
                     Button(team.isAdmin ? "删掉这个 Team…" : "退出这个 Team…", role: .destructive) { model.leaveTeam(team) }
                 } label: {
                     Label("更多", systemImage: "ellipsis.circle")

@@ -1719,7 +1719,7 @@ out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state.json"
 ok "_gui state：Claude、Codex 的账号和账号表一样（顺序也一样），端口和 config.json 一样，账号目录名是 cca 算的" '[ $rc -eq 0 ] && jok "[a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]] == list(tab(\"accounts.json\")) and [a[\"key\"] for a in d[\"tools\"][1][\"accounts\"]] == list(tab(\"codex.json\")) and all(a[\"port\"] == cfg[\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][0][\"accounts\"]) and all(a[\"port\"] == cfg[\"codex\"][\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][1][\"accounts\"]) and acct(0, \"alice@example.com\")[\"id\"] == \"${AD##*/}\"" < "$GF/state.json"'
 ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存），槽位 1；Codex 的 dave 在槽位 3；路由器已同步" 'jok "(lambda a, x: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Max\" and a[\"slot\"] == 1 and a[\"group\"] == \"CCA-1\" and a[\"usage\"][\"source\"] == \"cache\" and a[\"usage\"][\"five_hour\"][\"utilization\"] >= 0 and isinstance(a[\"usage\"][\"five_hour\"][\"resets_epoch\"], float) and a[\"badge\"][\"label\"] == \"A\" and a[\"app\"] == {\"running\": False, \"pid\": None} and x[\"login\"] == \"logged_in\" and x[\"slot\"] == 3)(acct(0, \"alice@example.com\"), acct(1, \"dave@example.com\")) and d[\"routing\"][\"sync\"] == \"ok\" and d[\"routing\"][\"slots\"][2][\"tool\"] == \"codex\" and d[\"routing\"][\"pool_size\"] % 8 == 0" < "$GF/state.json"'
 ok "_gui state：共享默认关着（config.policy 的 state 是 off，账号表里没有共享的账号，没有收起来的）" 'jok "d[\"config\"][\"policy\"] == {\"configured\": False, \"repo\": None, \"next_check_epoch\": None, \"state\": \"off\", \"accounts\": 0, \"parked\": 0}" < "$GF/state.json"'
-ok "_gui hello 没有 hub 了（3.5.3 去掉了自己的同步服务器），说有 Team（team 是 1）；_gui state：共享关着、不在 Team 里时 config.hubs 是空的，账号都不经服务器同步（hub 是 null，没有「设备」）" 'jok "\"hub\" not in d and d[\"team\"] == 1" < "$GF/hello.json" && jok "d[\"config\"][\"hubs\"] == [] and all(a[\"hub\"] is None and not a[\"can\"][\"devices\"] for t in d[\"tools\"] for a in t[\"accounts\"])" < "$GF/state.json"'
+ok "_gui hello 没有 hub 了（3.5.3 去掉了自己的同步服务器），说有 Team（team 是 1）；_gui state：共享关着、不在 Team 里时 config.hubs 是空的，账号都不经服务器同步（hub 是 null，没有「设备」）" 'jok "\"hub\" not in d and d[\"team\"] == 1 and d[\"team_config\"] == 1" < "$GF/hello.json" && jok "d[\"config\"][\"hubs\"] == [] and all(a[\"hub\"] is None and not a[\"can\"][\"devices\"] for t in d[\"tools\"] for a in t[\"accounts\"])" < "$GF/state.json"'
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
 # 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cca-core pack），第一次用时解到
 # 这个用户的临时目录（TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面）的 cca-helper 里，文件名是它的 SHA-256。
@@ -3234,13 +3234,56 @@ out=$(run cca team grant 书房组 书房的Mac none 2>&1); rc=$?
 ok "cca team grant：管理员自己这台不要 Team 的账号（下面加进 Team 的账号不进这台 Mac 的账号表）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是0 个账号"'
 printf '%s' '{"version": 1, "claude": {"alice@example.com": "US-A"}}' > "$T/tm-policy.json"
 out=$(runev cca team import 书房组 "$T/tm-policy.json" 2>&1); rc=$?
-ok "cca team import Team 映射文件（3.6.0 起没有维护者的映射了，只剩 --mine）：说用法（fail 事件 team_usage），Team 的配置不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && printf "%s" "$out" | grep -q "用法: cca team import Team --mine" && [ "$(tmacc "$TMID")" = "{}" ]'
+ok "cca team import Team 文件：以前维护者的映射文件不是导出的 Team 配置：不导（fail 事件 team_file，说清楚），Team 的配置不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_file\"" && printf "%s" "$out" | grep -q "不是 cca team export 导出的 Team 配置" && [ "$(tmacc "$TMID")" = "{}" ]'
 # Team 的节点用 JP-A、JP-B：这台 Mac 自己的节点（路由器上的 US-A…US-D）的名字 cca team node add 会避开（起成 US-A-2 这样）
 out=$(run cca team node 书房组 add 'socks5://192.0.2.10:1080#JP-A' 2>&1); rc=$?; out2=$(run cca team node 书房组 add 'socks5://192.0.2.10:1081#JP-B' 2>&1); rc2=$?
 out3=$(run cca team map 书房组 claude alice@example.com JP-A 2>&1); rc3=$?
 run cca team map 书房组 claude bob@example.com JP-B >/dev/null 2>&1 && run cca team map 书房组 codex carol@example.com JP-A >/dev/null 2>&1; rc4=$?
 TMACC0='{"claude": {"alice@example.com": "JP-A", "bob@example.com": "JP-B"}, "codex": {"carol@example.com": "JP-A"}}'
 ok "cca team node add、cca team map：管理员加两个节点、三个账号（还没有设备要这些账号：各台设备的配置不变），这台 Mac 的账号表不动" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -eq 0 ] && [ $rc4 -eq 0 ] && printf "%s" "$out2" | grep -q "加上了节点「JP-B」；各台设备的配置没有变" && printf "%s" "$out3" | grep -q "改好了；各台设备的配置没有变" && [ "$(tmacc "$TMID")" = "$TMACC0" ] && [ "$(shasum < "$H/.cca/accounts.json")" = "$(shasum < "$T/tm-accounts.bak")" ]'
+# cca team export / import / edit：整份导出 Team 的配置（有节点的密钥：600）、照改过的文件换掉（先说会改什么、内核校验新的节点定义、
+# 问过同意、发布）。测完换回导出的那一份（下面的用例照原来的配置：别名 team-N 的号、节点）
+tmst() {   # 这几项现在是什么：alice 走的节点、bob 走的节点、Codex 的 carol 的别名、别名锁定着没有
+	"$TESTBIN" val -f "j=$H/.cca/teams/$TMID/admin.json" '" ".join([j["config"]["accounts"]["claude"].get("alice@example.com", "-"), j["config"]["accounts"]["claude"].get("bob@example.com", "-"), j["config"]["tool_aliases"].get("codex", {}).get("carol@example.com", "-"), str(j["config"].get("alias_lock", False))])' 2>/dev/null
+}
+tmal() { "$TESTBIN" val -f "j=$H/.cca/teams/$TMID/admin.json" 'json.dumps(j["config"]["tool_aliases"], sort_keys=True)' 2>/dev/null; }   # 各工具的别名
+TMST0=$(tmst); TMAL0=$(tmal)
+out=$(runev cca team export 书房组 "$T/tm-conf.json" 2>&1); rc=$?
+ok "cca team export：导出了（3 个账号、2 个节点），文件只给自己读写，提醒里面有节点的密钥、说怎么导入回去（结果事件 team_exported）；各工具都列出来，账号带着别名" '[ "$TMST0" = "JP-A JP-B team-1 False" ] && [ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "导出了「书房组」的配置（3 个账号、2 个节点）：$T/tm-conf.json" && printf "%s" "$out" | grep -q "文件里有节点的密钥" && printf "%s" "$out" | grep -q "cca team import ${TMID:0:8} 文件" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_exported\"" && [ "$(stat -f %Lp "$T/tm-conf.json")" = 600 ] && jok "d[\"kind\"] == \"cca-team-config\" and d[\"version\"] == 1 and list(d[\"accounts\"]) == [\"claude\", \"codex\", \"agy\"] and d[\"accounts\"][\"claude\"][\"bob@example.com\"] == {\"node\": \"JP-B\", \"alias\": \"team-2\"} and d[\"accounts\"][\"agy\"] == {} and d[\"alias_lock\"] is False and d[\"install_node\"] == \"\" and [p[\"name\"] for p in d[\"nodes\"][\"proxies\"]] == [\"JP-A\", \"JP-B\"]" < "$T/tm-conf.json"'
+out=$(runev cca team export 书房组 "$T/tm-conf.json" 2>&1); rc=$?; out2=$(run cca team export 书房组 "$T/tm-conf.json" --force 2>&1); rc2=$?
+ok "cca team export：文件已经有了不覆盖（fail 事件 team_file），--force 覆盖" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_file\"" && printf "%s" "$out" | grep -q "已经有了：换一个文件名，或者加 --force 覆盖它" && [ $rc2 -eq 0 ]'
+out=$(runev cca team import 书房组 "$T/tm-conf.json" 2>&1); rc=$?
+ok "cca team import：和现在的配置一样：不问、不换（结果事件 team_imported）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「书房组」的配置和这份一样，没有要改的" && ! evq "e[\"ev\"] == \"consent\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_imported\""'
+# 改过的一份：alice 换到 JP-B、Codex 的 carol 改名「小李」、锁定别名
+sed -e '/"alice@example.com"/,/}/ s/"JP-A"/"JP-B"/' -e '/"carol@example.com"/,/}/ s/"team-1"/"小李"/' -e 's/"alias_lock": false/"alias_lock": true/' "$T/tm-conf.json" > "$T/tm-conf-b.json"
+TMSHA=$(shasum -a 256 < "$T/tm-conf-b.json" | cut -c1-16)
+out=$(runev CCA_GRANT="team_config:$TMID" cca team import 书房组 "$T/tm-conf-b.json" 2>&1); rc=$?; st=$(tmst)
+ok "cca team import（App 里：没有终端）：consent 事件（team_config，范围是 Team 的编号和这份文件的摘要：只同意了这个 Team 的不算；默认同意；说明里一项一句），没同意之前不换" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_config\" and e[\"scope\"] == \"$TMID:$TMSHA\" and e[\"grant\"] == \"team_config:$TMID:$TMSHA\" and e[\"default\"] == \"yes\" and e[\"question\"] == \"照这份换掉「书房组」的配置吗？\" and e[\"detail\"] == \"换节点：Claude alice@example.com：JP-A → JP-B。改别名：Codex carol@example.com：team-1 → 小李。锁定别名（各台设备上照 Team 给的别名用，自己改不了）。\"" && [ "$st" = "$TMST0" ]'
+cp "$T/tm-conf-b.json" "$T/tm-conf-b2.json"; printf ' ' >> "$T/tm-conf-b2.json"
+out=$(runev CCA_GRANT="team_config:$TMID:$TMSHA" cca team import 书房组 "$T/tm-conf-b2.json" 2>&1); rc=$?; st=$(tmst)
+ok "同意以后文件又改过（摘要对不上）：不换，照新的内容再发一次 consent 事件" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_config\" and e[\"scope\"] != \"$TMID:$TMSHA\"" && [ "$st" = "$TMST0" ]'
+out=$(runev CCA_GRANT="team_config:$TMID:$TMSHA" cca team import 书房组 "$T/tm-conf-b.json" 2>&1); rc=$?; st=$(tmst)
+ok "带着同意（CCA_GRANT）再运行：换好了、发布（结果事件 team_imported），admin.json 照文件改了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "换好了「书房组」的配置；" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_imported\"" && [ "$st" = "JP-B JP-B 小李 True" ]'
+printf '%s' '{"kind": "cca-team-config", "version": 1, "accounts": {"claude": {"alice@example.com": "JP-B"}}, "nodes": null}' > "$T/tm-conf-rm.json"
+out=$(run CCA_TTY="$(ans "")" cca team import 书房组 "$T/tm-conf-rm.json" 2>&1); rc=$?; st=$(tmst)
+ok "cca team import（终端里）：先列出会改什么；要去掉账号的默认答「不」：直接回车是不换" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "照这份换掉「书房组」的配置会：" && printf "%s" "$out" | grep -qF "去掉 2 个账号：Claude bob@example.com、Codex carol@example.com（各台设备上收起来，登录留着）" && printf "%s" "$out" | grep -q "节点的定义：去掉 JP-A、JP-B" && printf "%s" "$out" | grep -q "已取消" && [ "$st" = "JP-B JP-B 小李 True" ]'
+sed 's/1081/1089/' "$T/tm-conf.json" > "$T/tm-conf-c.json"; echo 1089 > "$T/core/reject_text"
+out=$(runev cca team import 书房组 "$T/tm-conf-c.json" 2>&1); rc=$?; st=$(tmst)
+rm -f "$T/core/reject_text"
+ok "cca team import：改了的节点定义内核认不出：不问、不换（fail 事件 team_file）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_file\"" && printf "%s" "$out" | grep -q "这份配置里有内核认不出的节点" && ! evq "e[\"ev\"] == \"consent\"" && [ "$st" = "JP-B JP-B 小李 True" ]'
+out=$(run CCA_TTY="$(ans y)" cca team import 书房组 "$T/tm-conf.json" 2>&1); rc=$?; st=$(tmst); al=$(tmal)
+ok "cca team import（终端里答 y）：换回导出的那一份（账号、别名、锁定都回到原来的）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "换节点：Claude alice@example.com：JP-B → JP-A" && printf "%s" "$out" | grep -qF "改别名：Codex carol@example.com：小李 → team-1" && printf "%s" "$out" | grep -q "解开别名" && [ "$(tmacc "$TMID")" = "$TMACC0" ] && [ "$st" = "$TMST0" ] && [ "$al" = "$TMAL0" ]'
+# cca team edit：假的编辑器，第一次写坏（说哪里不对、问要不要重新编辑），第二次换成改过的那一份
+printf '#!/bin/bash\nn=$(cat %q 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > %q\n[ "$n" = 1 ] && { echo "{" > "$1"; exit 0; }\ncp %q "$1"\n' "$T/tm-ed.n" "$T/tm-ed.n" "$T/tm-conf-b.json" > "$T/tm-editor"; chmod 755 "$T/tm-editor"; rm -f "$T/tm-ed.n"
+out=$(run CCA_TTY="$(ans y y)" EDITOR="$T/tm-editor" cca team edit 书房组 2>&1); rc=$?; st=$(tmst)
+ok "cca team edit：编辑器里改坏了说哪里不对、重新编辑，改好以后列出会改什么、问过再换；改的那一份（在 Team 的目录里）用完删掉" '[ $rc -eq 0 ] && [ "$(cat "$T/tm-ed.n")" = 2 ] && printf "%s" "$out" | grep -q "不是合法的 JSON" && printf "%s" "$out" | grep -qF "换节点：Claude alice@example.com：JP-A → JP-B" && printf "%s" "$out" | grep -q "换好了「书房组」的配置" && [ "$st" = "JP-B JP-B 小李 True" ] && [ ! -e "$H/.cca/teams/$TMID/edit.json" ]'
+out=$(run CCA_TTY="$(ans)" EDITOR=true cca team edit 书房组 2>&1); rc=$?; st=$(tmst)
+ok "cca team edit：没改就退出：说没有改动，不换、删掉那一份" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "没有改动" && [ ! -e "$H/.cca/teams/$TMID/edit.json" ] && [ "$st" = "JP-B JP-B 小李 True" ]'
+out=$(sess '{}' -- cca team edit 书房组 2>&1); rc=$?
+ok "cca team edit（App 的提问会话里）：要在终端里改（terminal 事件 team_edit）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"team_edit\" and e[\"argv\"] == [\"team\", \"edit\", \"书房组\"]"'
+run CCA_TTY="$(ans y)" cca team import 书房组 "$T/tm-conf.json" >/dev/null 2>&1; st=$(tmst); al=$(tmal)
+ok "换回导出的那一份" '[ "$(tmacc "$TMID")" = "$TMACC0" ] && [ "$st" = "$TMST0" ] && [ "$al" = "$TMAL0" ]'
+rm -f "$T/tm-conf-b.json" "$T/tm-conf-b2.json" "$T/tm-conf-c.json" "$T/tm-conf-rm.json" "$T/tm-editor" "$T/tm-ed.n"
 out=$(run CLAUDECODE=1 cca team invite 书房组 dan-air 2>&1); rc=$?
 ok "cca team invite：在 Claude Code 的会话里不给邀请链接（会进对话记录）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在 Claude Code 里不显示邀请链接" && ! printf "%s" "$out" | grep -q "cca-team1\."'
 : > "$T/curl.argv"; : > "$T/env.log"

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 要用户同意的事（PROTOCOL 4.2）：先把 App 切到前面，再弹原生对话框。对话框只用事件里的
 /// title / question / detail / severity / default：warn → 警告样式；default 决定哪个是默认按钮（回车）。
@@ -218,6 +219,32 @@ enum Platform {
         panel.prompt = "在这里打开"
         panel.message = "选择在哪个文件夹里打开（下次默认还是这里）"
         if let path { panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true) }
+        return await panel.begin() == .OK ? panel.url?.path : nil
+    }
+
+    /// 选导出到哪个文件（Team 的配置）；取消时是 nil。已经有这个文件时面板自己问要不要换掉
+    @MainActor
+    static func chooseSaveFile(suggestedName: String) async -> String? {
+        NSApp.activate()
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.prompt = "导出"
+        panel.message = "文件里有节点的密钥（密码、uuid）：别放进会同步、会分享出去的文件夹"
+        return await panel.begin() == .OK ? panel.url?.path : nil
+    }
+
+    /// 选一个要导入的文件（Team 的配置）；取消时是 nil
+    @MainActor
+    static func chooseOpenFile() async -> String? {
+        NSApp.activate()
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "导入"
+        panel.message = "选一份 Team 的配置（导出的、改过的）：换之前先列出会改什么，问过你再换"
         return await panel.begin() == .OK ? panel.url?.path : nil
     }
 

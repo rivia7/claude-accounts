@@ -3,6 +3,8 @@ import Foundation
 /// Team（PROTOCOL 4.14）的版本：`hello.team` 是它时 App 才显示 Team 的那一块、按 Team 筛选账号，才调 `cca team`。
 enum TeamAPI {
     static let version = 1
+    /// `hello.team_config`（导出、导入、修改 Team 的配置：`cca team export|import|edit`，PROTOCOL 4.14）↔ bash `gui_hello` 的 `"team_config":1`
+    static let config = 1
 }
 
 /// 这台设备在一个 Team 里是什么（`config.teams[].role`）。不认识的值当成员

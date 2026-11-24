@@ -91,6 +91,10 @@ struct AppHooks {
     var installedTerminals: @MainActor () -> [TerminalApp] = { [.system] }
     /// 选一个文件夹（从这里开始看）；取消时是 nil。
     var chooseDirectory: @MainActor (String?) async -> String? = { _ in nil }
+    /// 选保存到哪个文件（先填着这个文件名）；取消时是 nil。已经有这个文件时面板自己问过要不要换掉
+    var chooseSaveFile: @MainActor (String) async -> String? = { _ in nil }
+    /// 选一个要打开的文件；取消时是 nil
+    var chooseOpenFile: @MainActor () async -> String? = { nil }
     var openURL: @MainActor (URL) -> Void = { _ in }
     var copy: @MainActor (String) -> Void = { _ in }
     /// 复制密文（API key）：剪贴板标成机密，过一会儿还是它就清掉（App 里是 SecretClipboard）。不进提示、不进读屏。
@@ -1512,6 +1516,8 @@ final class AppModel {
     /// cca 有 Team（`hello.team` 是 App 认识的版本；旧版 cca 没有：没有「共享与同步」这一页、不按 Team 筛选、不调 `cca team`）。
     /// 3.6.0 以前这一页看的是 `config.policy`（维护者的共享），现在只看这一项
     var teamAvailable: Bool { hello?.team == TeamAPI.version }
+    /// cca 能导出、导入、修改 Team 的配置（`hello.team_config`，PROTOCOL 4.14；3.6.13 及以前的 cca 的 `team import` 只认 `--mine`）
+    var teamConfigAvailable: Bool { teamAvailable && hello?.teamConfig == TeamAPI.config }
     /// 这台设备在的 Team，照加入的先后
     var teams: [TeamEntry] { teamAvailable ? state?.config?.teams ?? [] : [] }
 
@@ -1620,6 +1626,40 @@ final class AppModel {
     func deployTeam(_ t: TeamEntry) {
         guard phase == .ready, teamAvailable, t.isAdmin else { return }
         run(.teamDeploy(team: t.id))
+    }
+
+    /// 「导出配置…」：保存面板选好文件（面板问过要不要换掉已有的），`cca team export <Team> <文件> --force`。文件里有节点的密钥：
+    /// cca 写成只给自己读写，提示里的话（几个账号、几个节点、怎么导入回去）是 cca 给的
+    func exportTeamConfig(_ t: TeamEntry) {
+        guard phase == .ready, teamConfigAvailable, t.isAdmin, !teamBusy else { return }
+        let name = Self.teamConfigFileName(t)
+        Task { [weak self] in
+            guard let self, let path = await self.hooks.chooseSaveFile(name) else { return }
+            self.runTeam(.teamExport(team: t.id, path: path), failureTitle: "没能导出「\(t.name)」的配置", success: "导出了", refresh: nil)
+        }
+    }
+
+    /// 「导入配置…」：打开面板选一个文件，`cca team import <Team> <文件>`：cca 先列出会改什么、问同意（`consent.team_config`，对话框里的话都是 cca 给的），
+    /// 换好以后发布、照它对一遍账号表。展开着「设备和账号」时跟着重新问一次
+    func importTeamConfig(_ t: TeamEntry) {
+        guard phase == .ready, teamConfigAvailable, t.isAdmin, !teamBusy else { return }
+        Task { [weak self] in
+            guard let self, let path = await self.hooks.chooseOpenFile() else { return }
+            self.runTeam(.teamImport(team: t.id, path: path), failureTitle: "没能导入「\(t.name)」的配置", success: "换好了",
+                         refresh: self.teamExpanded.contains(t.id) ? t : nil)
+        }
+    }
+
+    /// 「在终端里修改配置…」：`cca team edit <Team>`（编辑器在终端里：存盘退出以后 cca 列出会改什么、问过再换）
+    func editTeamConfig(_ t: TeamEntry) {
+        guard phase == .ready, teamConfigAvailable, t.isAdmin, !teamBusy else { return }
+        run(Handoff.teamEdit(team: t.id))
+    }
+
+    /// 导出时保存面板里先填的文件名：Team 的名字（`/`、`:` 换成 `-`；没有名字时用编号的前 8 位）
+    static func teamConfigFileName(_ t: TeamEntry) -> String {
+        let name = (nonEmpty(t.name) ?? String(t.id.prefix(8))).replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        return name + " Team 配置.json"
     }
 
     /// 各个 Team 同步一次配置：同步到新的，账号表马上照它改

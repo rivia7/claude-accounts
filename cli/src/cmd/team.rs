@@ -47,6 +47,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-grant", admin::cmd_team_grant),
     Cmd::all("team-rename", admin::cmd_team_rename),
     Cmd::all("team-import", admin::cmd_team_import),
+    Cmd::all("team-config", admin::config::cmd_team_config),
     Cmd::all("team-map", admin::cmd_team_map),
     Cmd::all("team-node-ls", admin::nodes::cmd_team_node_ls),
     Cmd::all("team-node-add", admin::nodes::cmd_team_node_add),
