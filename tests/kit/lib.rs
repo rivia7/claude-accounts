@@ -1,6 +1,7 @@
 //! 测试的支持库：回归用的小工具（tests/tool）和各份测试（tests/*.rs）共用。
 //! 不用辅助程序（cli/src）的代码——把它当黑盒；协议那一头照 server/README.md 独立实现。
 
+pub mod bash;
 pub mod cca_src;
 pub mod crypto;
 pub mod fsx;
