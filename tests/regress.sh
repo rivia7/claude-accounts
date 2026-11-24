@@ -2338,7 +2338,7 @@ sess() {   # sess 答案JSON [驱动的参数…] -- 命令…：带答案管道
 	local a="$1"; shift
 	: > "$T/ev.jsonl"
 	printf '%s' "$a" > "$T/sess.answers"
-	run CCA_EVENTS="$T/ev.jsonl" CCA_PROMPT=1 python3 -I "$D/gui_session.py" "$T/ev.jsonl" "$T/sess.answers" "$@" </dev/null
+	run CCA_EVENTS="$T/ev.jsonl" CCA_PROMPT=1 "$TESTBIN" gui-session "$T/ev.jsonl" "$T/sess.answers" "$@" </dev/null
 }
 asks() { python3 -I -c 'import json,sys; print(" ".join(e["q"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "ask"))' "$T/ev.jsonl"; }   # 问过的题号，按顺序
 lastres() { python3 -I -c 'import json,sys; print(([e["code"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "result"] or [""])[-1])' "$T/ev.jsonl"; }   # 最后一个 result 事件的 code（App 照它收场）
@@ -3722,7 +3722,7 @@ ok "同意以后退出了（result 的 team_left）：本机记着的删掉，�
 # --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（tests/hub_box.py 建的假服务器：目录当根，假 systemctl 起真的
 #     server/cca-presence.py；一台服务器上每个 Team 一个服务），装好了自动接上。Docker、拉不到镜像、网页端和证书助手、连不上、几个 Team 这些
 #     细的在 tests/hub_deploy.py。App 里新建问名字（team.new），部署问服务器（hub.deploy）、密码（hub.password）、怎么加公钥（hub.pubkey）
-python3 "$D/hub_box.py" "$T/hubbox"
+"$TESTBIN" hub-box "$T/hubbox"
 out=$(run cca team deploy --script 2>/dev/null); rc=$?
 HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$(printf '%s\n' "$out" | head -n 1)
 hbdoc() { printf '%s\n' "$out" | sed -n "/^	cat <<'$1'\$/,/^$1\$/p" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1; }   # hbdoc 结束行：安装脚本里那一段 here-document 的 SHA-256

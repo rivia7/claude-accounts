@@ -31,6 +31,29 @@ WEB = ROOT / 'server' / 'web'
 IMAGES = ['public.ecr.aws/docker/library/python:3.13-slim', 'mirror.ccs.tencentyun.com/library/python:3.13-slim']
 UNITS = Path('etc') / 'systemd' / 'system'
 ASVC = 'cca-team-acme'   # 这台服务器上几个 Team 共用的证书助手（/opt/cca-team-acme）
+if os.environ.get('CCA_TEST_BOX') == 'rust':
+    # 假服务器换成 Rust 的那一份（cca-test hub-box，tests/kit/hubbox.rs）：同一套用例对照着跑。cca-test 是 CCA_TEST_BIN，没设就是
+    # cli/target/kit 下编出来的；compose 里的服务用的还是这个 python3（HUB_BOX_PYTHON）
+    import hub_box as _hub_box
+
+    class Box(_hub_box.Box):   # noqa: F811
+        def __init__(self, d, docker=False, systemd=True, ip='203.0.113.7', any_ip=False):
+            tool = os.environ.get('CCA_TEST_BIN') or str(ROOT / 'cli' / 'target' / 'kit' / 'cca-test')
+            flags = ['--docker'] * docker + ['--no-systemd'] * (not systemd) + ['--any-ip'] * any_ip
+            subprocess.run([tool, 'hub-box', str(d), '--ip', ip] + flags, env=dict(os.environ, HUB_BOX_PYTHON=sys.executable), check=True)
+            d = Path(d)
+            self.d, self.root, self.bin = d, d / 'root', d / 'bin'
+            self.dir = self.root / 'opt' / 'cca-hub'
+            self.env = {'PATH': '%s:/usr/bin:/bin' % self.bin, 'CCA_HUB_ROOT': str(self.root), 'HUB_BOX': str(d), 'HOME': str(d),
+                        'LANG': 'en_US.UTF-8', 'CCA_HUB_CERT_WAIT': '4'}
+            if any_ip:
+                self.env['CCA_HUB_ANY_IP'] = '1'
+            self.env['HUB_BOX_PYTHON'] = sys.executable
+            if os.environ.get('HUB_BOX_SERVER'):
+                self.env['HUB_BOX_SERVER'] = os.environ['HUB_BOX_SERVER']
+            self.enter = d / 'enter'
+            env = ' '.join("%s='%s'" % kv for kv in self.env.items())
+            assert 'exec env -i %s /bin/sh' % env in self.enter.read_text(), '两边算的假服务器的环境不一样'
 # 设备上的 ssh：-G 说这台假服务器在 127.0.0.1（$HUB_SSH_HOST 换一个：ssh 走的是内网地址）；别的把最后一个参数（在服务器上运行的命令）
 # 交给假服务器的 enter（stdin 是安装脚本）
 SSH = r'''printf '%s\n' "$*" >> "$HOME/ssh.argv"
