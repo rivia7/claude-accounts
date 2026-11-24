@@ -1,0 +1,3944 @@
+{
+ "about": "Recorded from a running server/cca-presence.py (team mode, relay and web side on): signed requests over HTTPS and raw bytes on the data port, in this order. Random values are written as their shape (<hex32>, <b64:32>, <age>, <time>); @label = the ticket or token an earlier step saved. roster = who is on the list from here on (everybody else signs with a key the server does not know).",
+ "port": 18444,
+ "web": "https://relay.example.com:8443/",
+ "devices": {
+  "a": {
+   "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+   "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIG2lipUB/rD9GizFxwI0jIErecd68AnGJsggTPlUqdX"
+  },
+  "b": {
+   "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+   "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExBPWdahsACx5HMXACBbLBTOljo7IJQTh3OiEaFRH+Z"
+  },
+  "c": {
+   "fp": "SHA256:BumhLptipcx5hIPWlwdepfvfViibs32jkPM8yuqYcTM",
+   "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILLt1fTBVGf1H4Emh69Eww2w0W1UL3Y4I2lW2mjKEa32"
+  },
+  "x": {
+   "fp": "SHA256:IFUx53Pv7etou0vHx/xAtSycwZT/ZS7WrmWX/NlZOzM",
+   "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMCbcDlc8p+iPwuOr0YpCpwKdTL3fF/CE1REAOlq0xUp"
+  },
+  "g": {
+   "fp": "SHA256:TAGXF0mzp1GWVaWlgVXG2IHqEWLxZoSM0phogpZcMK4",
+   "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKavSffRP5/PfpzgmXBS9AZg87f1+ha21HCMsbBsplNK"
+  },
+  "g2": {
+   "fp": "SHA256:yBjAZ7UT2QCabNHIIzgZlBv8MztGZzk3oCrw89ljXDg",
+   "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH9LdFfTwptSHbbBJWmeIYF1OgF9XTLl7SUvnP+Rjelk"
+  }
+ },
+ "steps": [
+  {
+   "do": "roster",
+   "members": {
+    "a": "box",
+    "b": "laptop",
+    "c": "mini"
+   }
+  },
+  {
+   "do": "op",
+   "who": "x",
+   "op": "relay_list",
+   "req": {
+    "pids": []
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": []
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {},
+    "sessions": {}
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_open",
+   "req": {
+    "rid": "nope"
+   },
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007001",
+    "m": {
+     "n": "oBRUBmo5rYdGvq/c1uSlYA==",
+     "c": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79F",
+     "t": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79FKR/AsKJv16o="
+    }
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007001",
+    "m": {
+     "n": "NgECkKsf+1Q902afIwaJzg==",
+     "c": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO",
+     "t": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO4N9gUbOVk3Y="
+    }
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "oBRUBmo5rYdGvq/c1uSlYA==",
+     "c": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79F",
+     "t": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79FKR/AsKJv16o="
+    },
+    "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+    "name": "laptop",
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007001",
+    "wait": 5
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "NgECkKsf+1Q902afIwaJzg==",
+     "c": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO",
+     "t": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO4N9gUbOVk3Y="
+    },
+    "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+    "name": "box",
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_commit",
+   "req": {
+    "rid": "00000000000000000000000000007001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_commit",
+   "req": {
+    "rid": "00000000000000000000000000007001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007001",
+    "until": "done",
+    "wait": 5
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "oBRUBmo5rYdGvq/c1uSlYA==",
+     "c": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79F",
+     "t": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79FKR/AsKJv16o="
+    },
+    "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+    "name": "laptop",
+    "done": true
+   }
+  },
+  {
+   "do": "file",
+   "json": {
+    "v": 1,
+    "edges": {
+     "00000000000000000000000000001001": {
+      "a": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "b": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "at": "<time>",
+      "used": "<time>"
+     }
+    },
+    "guests": {}
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007002"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007002",
+    "m": {
+     "n": "GB13MOyCNAALW0R4b5rA0A==",
+     "c": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeV",
+     "t": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeVvOKIhxK96Bk="
+    }
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007002",
+    "m": {
+     "n": "NgECkKsf+1Q902afIwaJzg==",
+     "c": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO",
+     "t": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO4N9gUbOVk3Y="
+    }
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007002"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "GB13MOyCNAALW0R4b5rA0A==",
+     "c": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeV",
+     "t": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeVvOKIhxK96Bk="
+    },
+    "fp": "SHA256:BumhLptipcx5hIPWlwdepfvfViibs32jkPM8yuqYcTM",
+    "name": "mini",
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007002",
+    "wait": 5
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "NgECkKsf+1Q902afIwaJzg==",
+     "c": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO",
+     "t": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO4N9gUbOVk3Y="
+    },
+    "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+    "name": "box",
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_commit",
+   "req": {
+    "rid": "00000000000000000000000000007002",
+    "pid": "00000000000000000000000000001002"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "pair_commit",
+   "req": {
+    "rid": "00000000000000000000000000007002",
+    "pid": "00000000000000000000000000001002"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007002",
+    "until": "done",
+    "wait": 5
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "GB13MOyCNAALW0R4b5rA0A==",
+     "c": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeV",
+     "t": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeVvOKIhxK96Bk="
+    },
+    "fp": "SHA256:BumhLptipcx5hIPWlwdepfvfViibs32jkPM8yuqYcTM",
+    "name": "mini",
+    "done": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007003"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007003"
+   },
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007003",
+    "m": {
+     "n": "GB13MOyCNAALW0R4b5rA0A==",
+     "c": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeV",
+     "t": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeVvOKIhxK96Bk="
+    }
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007003",
+    "m": {
+     "n": "NgECkKsf+1Q902afIwaJzg==",
+     "c": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO",
+     "t": "NgECkKsf+1Q902afIwaJzi7n0ybPHZnO4N9gUbOVk3Y="
+    }
+   },
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_close",
+   "req": {
+    "rid": "00000000000000000000000000007003"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007003"
+   },
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007004"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007004",
+    "wait": 0.1
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007004",
+    "wait": 8
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "GB13MOyCNAALW0R4b5rA0A==",
+     "c": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeV",
+     "t": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeVvOKIhxK96Bk="
+    },
+    "fp": "SHA256:BumhLptipcx5hIPWlwdepfvfViibs32jkPM8yuqYcTM",
+    "name": "mini",
+    "done": false
+   },
+   "meanwhile": {
+    "do": "op",
+    "who": "c",
+    "op": "pair_put",
+    "req": {
+     "rid": "00000000000000000000000000007004",
+     "m": {
+      "n": "GB13MOyCNAALW0R4b5rA0A==",
+      "c": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeV",
+      "t": "GB13MOyCNAALW0R4b5rA0O9Srn13SbeVvOKIhxK96Bk="
+     }
+    },
+    "status": 200,
+    "reply": {
+     "v": 1,
+     "ok": true
+    }
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007004",
+    "wait": 8,
+    "until": "done"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "meanwhile": {
+    "do": "op",
+    "who": "b",
+    "op": "pair_close",
+    "req": {
+     "rid": "00000000000000000000000000007004"
+    },
+    "status": 200,
+    "reply": {
+     "v": 1,
+     "ok": true
+    }
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pids": [
+     "00000000000000000000000000001001",
+     "00000000000000000000000000001002",
+     "00000000000000000000000000001008"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t1"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   }
+  },
+  {
+   "do": "enter",
+   "conn": "h1",
+   "role": "host",
+   "ident": "@t1",
+   "key": "@t1",
+   "cn": "045450ec63b1561d",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h1",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMSI6eyJuIjoiVmhKaG9XT1FiWnhOZnNQanNvRDkwUT09IiwiYyI6IlZoSmhvV09RYlp4TmZzUGpzb0Q5MFNMUDJPUkl5UXR5IiwidCI6IlZoSmhvV09RYlp4TmZzUGpzb0Q5MFNMUDJPUkl5UXR5a0VpYU5uazMwQjQ9In0sIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxMDAyIjp7Im4iOiI5NEFMejA5NEkySlZBeUQ1S0JVVkVBPT0iLCJjIjoiOTRBTHowOTRJMkpWQXlENUtCVVZFR2o0R3ZXN1dOSnMiLCJ0IjoiOTRBTHowOTRJMkpWQXlENUtCVVZFR2o0R3ZXN1dOSnNaMldMckp5K1ExRT0ifSwiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEwMDgiOiJpZ25vcmVkIn0="
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001",
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005001",
+       "blob": {
+        "n": "VhJhoWOQbZxNfsPjsoD90Q==",
+        "c": "VhJhoWOQbZxNfsPjsoD90SLP2ORIyQty",
+        "t": "VhJhoWOQbZxNfsPjsoD90SLP2ORIyQtykEiaNnk30B4="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001002": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001002": [
+      {
+       "sid": "00000000000000000000000000005001",
+       "blob": {
+        "n": "94ALz094I2JVAyD5KBUVEA==",
+        "c": "94ALz094I2JVAyD5KBUVEGj4GvW7WNJs",
+        "t": "94ALz094I2JVAyD5KBUVEGj4GvW7WNJsZ2WLrJy+Q1E="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t2"
+  },
+  {
+   "do": "enter",
+   "conn": "v1",
+   "role": "view",
+   "ident": "@t2",
+   "key": "@t2",
+   "cn": "213566a527485a71",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 2,
+   "save": "k1",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "enter",
+   "conn": "j1",
+   "role": "join",
+   "ident": "@k1",
+   "key": "@t1",
+   "cn": "497f3064d67263d9",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "v1"
+  },
+  {
+   "do": "bytes",
+   "from": "v1",
+   "to": "j1",
+   "data_b64": "a2V5cyAA/yBmcm9tIHRoZSB2aWV3ZXI="
+  },
+  {
+   "do": "bytes",
+   "from": "j1",
+   "to": "v1",
+   "data_b64": "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"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001002": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001002": [
+      {
+       "sid": "00000000000000000000000000005001",
+       "blob": {
+        "n": "94ALz094I2JVAyD5KBUVEA==",
+        "c": "94ALz094I2JVAyD5KBUVEGj4GvW7WNJs",
+        "t": "94ALz094I2JVAyD5KBUVEGj4GvW7WNJsZ2WLrJy+Q1E="
+       },
+       "age": "<age>",
+       "viewers": 1,
+       "online": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "do": "frame",
+   "conn": "h1",
+   "kind": 6,
+   "payload_b64": "MDEyMzQ1Njc4OWFiY2RlZlhZWg=="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 7,
+   "payload_b64": "MDEyMzQ1Njc4OWFiY2RlZg=="
+  },
+  {
+   "do": "frame",
+   "conn": "h1",
+   "kind": 85,
+   "payload_b64": "bm9ib2R5IGtub3dzIHRoaXMgb25l"
+  },
+  {
+   "do": "frame",
+   "conn": "h1",
+   "kind": 6,
+   "payload_b64": ""
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 7,
+   "payload_b64": ""
+  },
+  {
+   "do": "say",
+   "note": "not a preamble",
+   "send_b64": "aGVsbG8K",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "an empty line",
+   "send_b64": "Cg==",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "HTTP",
+   "send_b64": "R0VUIC8gSFRUUC8xLjENCkhvc3Q6IHgNCg0K",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "CR LF",
+   "send_b64": "Q0NBLVJFTEFZLzEgaG9zdCBhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiAwMTIzNDU2Nzg5YWJjZGVmIEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUENCg==",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "another version",
+   "send_b64": "Q0NBLVJFTEFZLzIgaG9zdCBhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiAwMTIzNDU2Nzg5YWJjZGVmIEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEK",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "an unknown role",
+   "send_b64": "Q0NBLVJFTEFZLzEgcGVlayBhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiAwMTIzNDU2Nzg5YWJjZGVmIEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEK",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "a short code",
+   "send_b64": "Q0NBLVJFTEFZLzEgaG9zdCBhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiAwMTIzNDU2Nzg5YWJjZGVmIEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQo=",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "257 bytes and no end of line",
+   "send_b64": "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "not UTF-8",
+   "send_b64": "//4K",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "say",
+   "note": "a long line",
+   "send_b64": "eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5Cg==",
+   "recv": "CCA-RELAY/1 ERR bad\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "host",
+   "ident": "abababababababababababababababab",
+   "key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+   "cn": "9af04a96f9014ac5",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "view",
+   "ident": "abababababababababababababababab",
+   "key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+   "cn": "50b791a91bcce1e4",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "join",
+   "ident": "abababababababababababababababab",
+   "key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+   "cn": "ae6a9e6165e32a97",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005002",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t3"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "host",
+   "ident": "@t3",
+   "key": "@t3",
+   "cn": "c126de674982f192",
+   "mac": false,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "view",
+   "ident": "@t3",
+   "key": "@t3",
+   "cn": "9a125aa3122e684b",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "h2",
+   "role": "host",
+   "ident": "@t3",
+   "key": "@t3",
+   "cn": "a0f08002eca63a41",
+   "mac": true,
+   "extra_b64": "BgACaGk=",
+   "recv": "ok"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h2",
+   "kind": 7,
+   "payload_b64": "aGk="
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "host",
+   "ident": "@t3",
+   "key": "@t3",
+   "cn": "df2e130710d9fe7b",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t4"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "host",
+   "ident": "@t4",
+   "key": "@t4",
+   "cn": "e78a8daf6a6229d7",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "view",
+   "ident": "@t4",
+   "key": "@t4",
+   "cn": "2ea072817441ccf6",
+   "mac": false,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "view",
+   "ident": "@t4",
+   "key": "@t4",
+   "cn": "41a048ba933e1823",
+   "mac": true,
+   "extra_b64": "dG9vIGVhcmx5",
+   "recv": ""
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 2,
+   "save": "k2",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "join",
+   "ident": "@k2",
+   "key": "@t1",
+   "cn": "2a3912e5374463ee",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t5"
+  },
+  {
+   "do": "enter",
+   "conn": "v2",
+   "role": "view",
+   "ident": "@t5",
+   "key": "@t5",
+   "cn": "4ace39b93accf007",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 2,
+   "save": "k3",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "join",
+   "ident": "@k3",
+   "key": "@t5",
+   "cn": "3a93812bbbb75949",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "join",
+   "ident": "@k3",
+   "key": "@t1",
+   "cn": "bce5ae44a84ab757",
+   "mac": false,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "enter",
+   "conn": "j2",
+   "role": "join",
+   "ident": "@k3",
+   "key": "@t1",
+   "cn": "9adea342f2c9b6f6",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "v2"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "join",
+   "ident": "@k3",
+   "key": "@t1",
+   "cn": "87112acf19fe602e",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "bytes",
+   "from": "j2",
+   "to": "v2",
+   "data_b64": "bGFzdCB3b3Jkcw=="
+  },
+  {
+   "do": "close",
+   "conn": "j2"
+  },
+  {
+   "do": "eof",
+   "conn": "v2",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005002",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t14"
+  },
+  {
+   "do": "enter",
+   "conn": "h2b",
+   "role": "host",
+   "ident": "@t14",
+   "key": "@t14",
+   "cn": "d8a2a204596b4081",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "eof",
+   "conn": "h2",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "h2b",
+   "kind": 6,
+   "payload_b64": "dGhlIG5ldyBvbmU="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h2b",
+   "kind": 7,
+   "payload_b64": "dGhlIG5ldyBvbmU="
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t6"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t7"
+  },
+  {
+   "do": "enter",
+   "conn": "h3",
+   "role": "host",
+   "ident": "@t7",
+   "key": "@t7",
+   "cn": "4e60a9d437c6491b",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "host",
+   "ident": "@t6",
+   "key": "@t6",
+   "cn": "b3025c7f0e59206c",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR taken\n"
+  },
+  {
+   "do": "frame",
+   "conn": "h3",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMSI6eyJuIjoiUVNRcm42NVcrdFRtNTMzK004c1kwUT09IiwiYyI6IlFTUXJuNjVXK3RUbTUzMytNOHNZMGNQOFdEK1lqUEplIiwidCI6IlFTUXJuNjVXK3RUbTUzMytNOHNZMGNQOFdEK1lqUEplK2ZMWnZnMUVDN3M9In19"
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005003",
+       "blob": {
+        "n": "QSQrn65W+tTm533+M8sY0Q==",
+        "c": "QSQrn65W+tTm533+M8sY0cP8WD+YjPJe",
+        "t": "QSQrn65W+tTm533+M8sY0cP8WD+YjPJe+fLZvg1EC7s="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t8"
+  },
+  {
+   "do": "close",
+   "conn": "h3"
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005003",
+       "blob": {
+        "n": "QSQrn65W+tTm533+M8sY0Q==",
+        "c": "QSQrn65W+tTm533+M8sY0cP8WD+YjPJe",
+        "t": "QSQrn65W+tTm533+M8sY0cP8WD+YjPJe+fLZvg1EC7s="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": false
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "view",
+   "ident": "@t8",
+   "key": "@t8",
+   "cn": "e212709fe4e6f7dd",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR nohost\n"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t9"
+  },
+  {
+   "do": "enter",
+   "conn": "h3",
+   "role": "host",
+   "ident": "@t9",
+   "key": "@t9",
+   "cn": "77e5c5aa7954ddb2",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005003",
+       "blob": {
+        "n": "QSQrn65W+tTm533+M8sY0Q==",
+        "c": "QSQrn65W+tTm533+M8sY0cP8WD+YjPJe",
+        "t": "QSQrn65W+tTm533+M8sY0cP8WD+YjPJe+fLZvg1EC7s="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "do": "frame",
+   "conn": "h3",
+   "kind": 8,
+   "payload_b64": "eyJub3QganNvbg=="
+  },
+  {
+   "do": "eof",
+   "conn": "h3",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t90"
+  },
+  {
+   "do": "enter",
+   "conn": "h3",
+   "role": "host",
+   "ident": "@t90",
+   "key": "@t90",
+   "cn": "55a6db513ba77797",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h3",
+   "kind": 8,
+   "payload_b64": "W10="
+  },
+  {
+   "do": "eof",
+   "conn": "h3",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t91"
+  },
+  {
+   "do": "enter",
+   "conn": "h3",
+   "role": "host",
+   "ident": "@t91",
+   "key": "@t91",
+   "cn": "65557dc35c485e6a",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h3",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMSI6eyJuIjoieCJ9fQ=="
+  },
+  {
+   "do": "eof",
+   "conn": "h3",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t92"
+  },
+  {
+   "do": "enter",
+   "conn": "h3",
+   "role": "host",
+   "ident": "@t92",
+   "key": "@t92",
+   "cn": "4440e07cb6ee6369",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h3",
+   "kind": 8,
+   "payload_b64": "//4="
+  },
+  {
+   "do": "eof",
+   "conn": "h3",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t93"
+  },
+  {
+   "do": "enter",
+   "conn": "h3",
+   "role": "host",
+   "ident": "@t93",
+   "key": "@t93",
+   "cn": "4cc3ca30a9cf09b2",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "raw",
+   "conn": "h3",
+   "data_b64": "BoAB"
+  },
+  {
+   "do": "eof",
+   "conn": "h3",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005003",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t10"
+  },
+  {
+   "do": "enter",
+   "conn": "h3",
+   "role": "host",
+   "ident": "@t10",
+   "key": "@t10",
+   "cn": "c66a84ef3a24e966",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h3",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "h3",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": []
+    }
+   }
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "0000000000000000000000000000500a",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s0"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "0000000000000000000000000000500b",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s1"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "0000000000000000000000000000500c",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s2"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "0000000000000000000000000000500d",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s3"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "0000000000000000000000000000500e",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s4"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "0000000000000000000000000000500f",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s5"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005010",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s6"
+  },
+  {
+   "do": "enter",
+   "conn": "c0",
+   "role": "host",
+   "ident": "@s0",
+   "key": "@s0",
+   "cn": "02001857706e445c",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "c1",
+   "role": "host",
+   "ident": "@s1",
+   "key": "@s1",
+   "cn": "61aa4a3f288d3dce",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "c2",
+   "role": "host",
+   "ident": "@s2",
+   "key": "@s2",
+   "cn": "01f94e61c7856dd5",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "c3",
+   "role": "host",
+   "ident": "@s3",
+   "key": "@s3",
+   "cn": "9ee3410c138efbc9",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "c4",
+   "role": "host",
+   "ident": "@s4",
+   "key": "@s4",
+   "cn": "11466f9c2aa536f5",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "c5",
+   "role": "host",
+   "ident": "@s5",
+   "key": "@s5",
+   "cn": "3df52ae751172492",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "c6",
+   "role": "host",
+   "ident": "@s6",
+   "key": "@s6",
+   "cn": "b64d69b55ca81369",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005014",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s7"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005015",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "s8"
+  },
+  {
+   "do": "enter",
+   "conn": "c7",
+   "role": "host",
+   "ident": "@s7",
+   "key": "@s7",
+   "cn": "eb9a6fc22b14c747",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "host",
+   "ident": "@s8",
+   "key": "@s8",
+   "cn": "ec8106adbe1bbb39",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR sessions\n"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "0000000000000000000000000000501e",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 429,
+   "reply": {
+    "error": "sessions"
+   }
+  },
+  {
+   "do": "frame",
+   "conn": "c0",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c0",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "c1",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c1",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "c2",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c2",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "c3",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c3",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "c4",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c4",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "c5",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c5",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "c6",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c6",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "c7",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "c7",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007005",
+    "web": true
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007005",
+    "m": {
+     "n": "V53No8lgsJq8E0ksQIxe6A==",
+     "c": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6M",
+     "t": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6MYahUKz2JqhQ="
+    },
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKavSffRP5/PfpzgmXBS9AZg87f1+ha21HCMsbBsplNK"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007005",
+    "m": {
+     "n": "oBRUBmo5rYdGvq/c1uSlYA==",
+     "c": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79F",
+     "t": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79FKR/AsKJv16o="
+    }
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007005"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "V53No8lgsJq8E0ksQIxe6A==",
+     "c": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6M",
+     "t": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6MYahUKz2JqhQ="
+    },
+    "fp": "SHA256:TAGXF0mzp1GWVaWlgVXG2IHqEWLxZoSM0phogpZcMK4",
+    "name": null,
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007005",
+    "wait": 5
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "oBRUBmo5rYdGvq/c1uSlYA==",
+     "c": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79F",
+     "t": "oBRUBmo5rYdGvq/c1uSlYDZ2E/18F79FKR/AsKJv16o="
+    },
+    "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+    "name": "laptop",
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_commit",
+   "req": {
+    "rid": "00000000000000000000000000007005",
+    "pid": "00000000000000000000000000001003"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "pair_commit",
+   "req": {
+    "rid": "00000000000000000000000000007005",
+    "pid": "00000000000000000000000000001003"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007005",
+    "until": "done",
+    "wait": 5
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "V53No8lgsJq8E0ksQIxe6A==",
+     "c": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6M",
+     "t": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6MYahUKz2JqhQ="
+    },
+    "fp": "SHA256:TAGXF0mzp1GWVaWlgVXG2IHqEWLxZoSM0phogpZcMK4",
+    "name": null,
+    "done": true
+   }
+  },
+  {
+   "do": "file",
+   "json": {
+    "v": 1,
+    "edges": {
+     "00000000000000000000000000001001": {
+      "a": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "b": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "at": "<time>",
+      "used": "<time>"
+     },
+     "00000000000000000000000000001002": {
+      "a": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "b": "SHA256:BumhLptipcx5hIPWlwdepfvfViibs32jkPM8yuqYcTM",
+      "at": "<time>",
+      "used": "<time>"
+     },
+     "00000000000000000000000000001003": {
+      "a": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "b": "SHA256:TAGXF0mzp1GWVaWlgVXG2IHqEWLxZoSM0phogpZcMK4",
+      "at": "<time>",
+      "used": "<time>"
+     }
+    },
+    "guests": {
+     "SHA256:TAGXF0mzp1GWVaWlgVXG2IHqEWLxZoSM0phogpZcMK4": {
+      "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKavSffRP5/PfpzgmXBS9AZg87f1+ha21HCMsbBsplNK",
+      "at": "<time>"
+     }
+    }
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007006",
+    "web": true
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g2",
+   "op": "pair_get",
+   "req": {
+    "rid": "00000000000000000000000000007006"
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g2",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007006",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKavSffRP5/PfpzgmXBS9AZg87f1+ha21HCMsbBsplNK",
+    "m": {
+     "n": "ExpqJL3i0mWJELFxJU4chw==",
+     "c": "ExpqJL3i0mWJELFxJU4chyUhQp4ZrVKK",
+     "t": "ExpqJL3i0mWJELFxJU4chyUhQp4ZrVKKiJuagh320zg="
+    }
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g2",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007006",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH9LdFfTwptSHbbBJWmeIYF1OgF9XTLl7SUvnP+Rjelk",
+    "m": {
+     "n": "ExpqJL3i0mWJELFxJU4chw==",
+     "c": "ExpqJL3i0mWJELFxJU4chyUhQp4ZrVKK",
+     "t": "ExpqJL3i0mWJELFxJU4chyUhQp4ZrVKKiJuagh320zg="
+    }
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   },
+   "signer": "g"
+  },
+  {
+   "do": "op",
+   "who": "g2",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007006",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH9LdFfTwptSHbbBJWmeIYF1OgF9XTLl7SUvnP+Rjelk",
+    "m": {
+     "bad": 1
+    }
+   },
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "pair_put",
+   "req": {
+    "rid": "00000000000000000000000000007006",
+    "m": {
+     "n": "V53No8lgsJq8E0ksQIxe6A==",
+     "c": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6M",
+     "t": "V53No8lgsJq8E0ksQIxe6AYzICoQKE6MYahUKz2JqhQ="
+    }
+   },
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g2",
+   "op": "pair_close",
+   "req": {
+    "rid": "00000000000000000000000000007006"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "op",
+   "who": "g2",
+   "op": "relay_list",
+   "req": {
+    "pids": []
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001003",
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001003": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001003": []
+    }
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001003"
+    ]
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   },
+   "signer": "g2"
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005004",
+    "pids": [
+     "00000000000000000000000000001003"
+    ]
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "pair_open",
+   "req": {
+    "rid": "00000000000000000000000000007007"
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005004",
+    "pids": [
+     "00000000000000000000000000001003",
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t11"
+  },
+  {
+   "do": "enter",
+   "conn": "h4",
+   "role": "host",
+   "ident": "@t11",
+   "key": "@t11",
+   "cn": "90e8a294ee2ae20a",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h4",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMyI6eyJuIjoiSTZ2Z3pvRHZweFJva2g4bWFweU5jZz09IiwiYyI6Ikk2dmd6b0R2cHhSb2toOG1hcHlOY3M5M3FoeE85ZHR1IiwidCI6Ikk2dmd6b0R2cHhSb2toOG1hcHlOY3M5M3FoeE85ZHR1ZzlBbjVQWTViYUU9In0sIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxMDAxIjp7Im4iOiJBaGgrSXpZRW1vMndBRkdROGxUR2Z3PT0iLCJjIjoiQWhoK0l6WUVtbzJ3QUZHUThsVEdmNFpWc09FdmYraEMiLCJ0IjoiQWhoK0l6WUVtbzJ3QUZHUThsVEdmNFpWc09FdmYraENLT1c1T2VsZER3WT0ifX0="
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001003"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001003": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001003": [
+      {
+       "sid": "00000000000000000000000000005004",
+       "blob": {
+        "n": "I6vgzoDvpxRokh8mapyNcg==",
+        "c": "I6vgzoDvpxRokh8mapyNcs93qhxO9dtu",
+        "t": "I6vgzoDvpxRokh8mapyNcs93qhxO9dtug9An5PY5baE="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005004",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   }
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005004",
+    "pid": "00000000000000000000000000001003"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t12"
+  },
+  {
+   "do": "enter",
+   "conn": "v4",
+   "role": "view",
+   "ident": "@t12",
+   "key": "@t12",
+   "cn": "c457ffb4a174ef7f",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h4",
+   "kind": 2,
+   "save": "k4",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001003\"}"
+  },
+  {
+   "do": "enter",
+   "conn": "j4",
+   "role": "join",
+   "ident": "@k4",
+   "key": "@t11",
+   "cn": "7f4671a421442ad0",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "v4"
+  },
+  {
+   "do": "bytes",
+   "from": "v4",
+   "to": "j4",
+   "data_b64": "ZnJvbSB0aGUgcGhvbmU="
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "pair_drop",
+   "req": {
+    "pid": "00000000000000000000000000001003"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   }
+  },
+  {
+   "do": "eof",
+   "conn": "v4",
+   "recv_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "j4",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "h4",
+   "kind": 6,
+   "payload_b64": "dGhlIGhvc3Qgc3RheXM="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h4",
+   "kind": 7,
+   "payload_b64": "dGhlIGhvc3Qgc3RheXM="
+  },
+  {
+   "do": "op",
+   "who": "g",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001003"
+    ]
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "file",
+   "json": {
+    "v": 1,
+    "edges": {
+     "00000000000000000000000000001001": {
+      "a": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "b": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "at": "<time>",
+      "used": "<time>"
+     },
+     "00000000000000000000000000001002": {
+      "a": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "b": "SHA256:BumhLptipcx5hIPWlwdepfvfViibs32jkPM8yuqYcTM",
+      "at": "<time>",
+      "used": "<time>"
+     }
+    },
+    "guests": {}
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005004",
+       "blob": {
+        "n": "Ahh+IzYEmo2wAFGQ8lTGfw==",
+        "c": "Ahh+IzYEmo2wAFGQ8lTGf4ZVsOEvf+hC",
+        "t": "Ahh+IzYEmo2wAFGQ8lTGf4ZVsOEvf+hCKOW5OeldDwY="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "do": "bytes",
+   "from": "v1",
+   "to": "j1",
+   "data_b64": "Lg=="
+  },
+  {
+   "do": "bytes",
+   "from": "j1",
+   "to": "v1",
+   "data_b64": "Lg=="
+  },
+  {
+   "do": "frame",
+   "conn": "h1",
+   "kind": 6,
+   "payload_b64": "aDE="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 7,
+   "payload_b64": "aDE="
+  },
+  {
+   "do": "frame",
+   "conn": "h2b",
+   "kind": 6,
+   "payload_b64": "aDJi"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h2b",
+   "kind": 7,
+   "payload_b64": "aDJi"
+  },
+  {
+   "do": "frame",
+   "conn": "h4",
+   "kind": 6,
+   "payload_b64": "aDQ="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h4",
+   "kind": 7,
+   "payload_b64": "aDQ="
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005005",
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t15"
+  },
+  {
+   "do": "enter",
+   "conn": "h5",
+   "role": "host",
+   "ident": "@t15",
+   "key": "@t15",
+   "cn": "d11e6165851b90dc",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h5",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMiI6eyJuIjoibjVDSVdBSTV2dXZaQ1JET3RFVDU3UT09IiwiYyI6Im41Q0lXQUk1dnV2WkNSRE90RVQ1N2QwMlBmSHg0SFlGIiwidCI6Im41Q0lXQUk1dnV2WkNSRE90RVQ1N2QwMlBmSHg0SFlGSjFIQXpYcVBVdHM9In19"
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001002": {
+      "fp": "SHA256:BumhLptipcx5hIPWlwdepfvfViibs32jkPM8yuqYcTM",
+      "name": "mini"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001002": [
+      {
+       "sid": "00000000000000000000000000005005",
+       "blob": {
+        "n": "n5CIWAI5vuvZCRDOtET57Q==",
+        "c": "n5CIWAI5vuvZCRDOtET57d02PfHx4HYF",
+        "t": "n5CIWAI5vuvZCRDOtET57d02PfHx4HYFJ1HAzXqPUts="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005005",
+    "pid": "00000000000000000000000000001002"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t16"
+  },
+  {
+   "do": "enter",
+   "conn": "v6",
+   "role": "view",
+   "ident": "@t16",
+   "key": "@t16",
+   "cn": "c48896224e87c3a8",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h5",
+   "kind": 2,
+   "save": "k6",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001002\"}"
+  },
+  {
+   "do": "enter",
+   "conn": "j6",
+   "role": "join",
+   "ident": "@k6",
+   "key": "@t15",
+   "cn": "1f87392d56dbbd2d",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "v6"
+  },
+  {
+   "do": "bytes",
+   "from": "v6",
+   "to": "j6",
+   "data_b64": "YmVmb3JlIGMgaXMgcmVtb3ZlZA=="
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005005",
+    "pid": "00000000000000000000000000001002"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t17"
+  },
+  {
+   "do": "enter",
+   "conn": "v7",
+   "role": "view",
+   "ident": "@t17",
+   "key": "@t17",
+   "cn": "b593f4e4bf3d0a25",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h5",
+   "kind": 2,
+   "save": "k7",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001002\"}"
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005005",
+    "pid": "00000000000000000000000000001002"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t18"
+  },
+  {
+   "do": "roster",
+   "members": {
+    "a": "box",
+    "b": "laptop"
+   }
+  },
+  {
+   "do": "eof",
+   "conn": "h5",
+   "recv_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "v6",
+   "recv_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "j6",
+   "recv_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "v7",
+   "recv_b64": ""
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "view",
+   "ident": "@t18",
+   "key": "@t18",
+   "cn": "b17a53f1dea87007",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR nohost\n"
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "join",
+   "ident": "@k7",
+   "key": "@t15",
+   "cn": "4f73eb11f8efae46",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "op",
+   "who": "c",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 403,
+   "reply": {
+    "error": "unknown_device",
+    "gen": "<hex32>"
+   }
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001",
+     "00000000000000000000000000001002"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005004",
+       "blob": {
+        "n": "Ahh+IzYEmo2wAFGQ8lTGfw==",
+        "c": "Ahh+IzYEmo2wAFGQ8lTGf4ZVsOEvf+hC",
+        "t": "Ahh+IzYEmo2wAFGQ8lTGf4ZVsOEvf+hCKOW5OeldDwY="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "do": "file",
+   "json": {
+    "v": 1,
+    "edges": {
+     "00000000000000000000000000001001": {
+      "a": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "b": "SHA256:UMJAWeBiWFePfQ2ilXQhPCkEJy0RPt/oC7JamC1sW9s",
+      "at": "<time>",
+      "used": "<time>"
+     }
+    },
+    "guests": {}
+   }
+  },
+  {
+   "do": "bytes",
+   "from": "v1",
+   "to": "j1",
+   "data_b64": "Lg=="
+  },
+  {
+   "do": "bytes",
+   "from": "j1",
+   "to": "v1",
+   "data_b64": "Lg=="
+  },
+  {
+   "do": "frame",
+   "conn": "h1",
+   "kind": 6,
+   "payload_b64": "aDE="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 7,
+   "payload_b64": "aDE="
+  },
+  {
+   "do": "frame",
+   "conn": "h2b",
+   "kind": 6,
+   "payload_b64": "aDJi"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h2b",
+   "kind": 7,
+   "payload_b64": "aDJi"
+  },
+  {
+   "do": "frame",
+   "conn": "h4",
+   "kind": 6,
+   "payload_b64": "aDQ="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h4",
+   "kind": 7,
+   "payload_b64": "aDQ="
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t13"
+  },
+  {
+   "do": "enter",
+   "conn": "v5",
+   "role": "view",
+   "ident": "@t13",
+   "key": "@t13",
+   "cn": "fb66e7e9bddf6826",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h1",
+   "kind": 2,
+   "save": "k5",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "stall",
+   "conn": "v5",
+   "recv_b64": "Q0NBLVJFTEFZLzEgRVJSIG5vaG9zdAo="
+  },
+  {
+   "do": "enter",
+   "conn": "x",
+   "role": "join",
+   "ident": "@k5",
+   "key": "@t1",
+   "cn": "f494326e75d5ef3f",
+   "mac": true,
+   "recv": "CCA-RELAY/1 ERR ticket\n"
+  },
+  {
+   "do": "frame",
+   "conn": "h1",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "h1",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": []
+    }
+   }
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005001",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   }
+  },
+  {
+   "do": "bytes",
+   "from": "j1",
+   "to": "v1",
+   "data_b64": "d2hhdCBpcyBhdHRhY2hlZCBzdGF5cyBhdHRhY2hlZA=="
+  },
+  {
+   "do": "close",
+   "conn": "v1"
+  },
+  {
+   "do": "eof",
+   "conn": "j1",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "h2b",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "h2b",
+   "recv_b64": ""
+  },
+  {
+   "do": "frame",
+   "conn": "h4",
+   "kind": 9,
+   "payload_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "h4",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "a",
+   "op": "relay_host",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "u0"
+  },
+  {
+   "do": "enter",
+   "conn": "h7",
+   "role": "host",
+   "ident": "@u0",
+   "key": "@u0",
+   "cn": "fc85e1a1401a6c8d",
+   "mac": true,
+   "split": 20,
+   "recv": "ok"
+  },
+  {
+   "do": "frame",
+   "conn": "h7",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMSI6eyJuIjoiRTlLUDdadnN2bVkzNzJzQmY3Nys5dz09IiwiYyI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEiLCJ0IjoiRTlLUDdadnN2bVkzNzJzQmY3Nys5enNya0g0bDZ3QTViM3dtZFdJK2gvWT0ifX0="
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005007",
+       "blob": {
+        "n": "E9KP7ZvsvmY372sBf77+9w==",
+        "c": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "t": "E9KP7ZvsvmY372sBf77+9zsrkH4l6wA5b3wmdWI+h/Y="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "frame",
+   "conn": "h7",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMSI6eyJuIjoiSTByT0FQdnRpREJyV290cWs1NVd2UT09IiwiYyI6Ikkwck9BUHZ0aURCcldvdHFrNTVXdmRBMDlyazJkaVJlIiwidCI6Ikkwck9BUHZ0aURCcldvdHFrNTVXdmRBMDlyazJkaVJlenJmNjNXdFkvVFk9In0sIjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAxMDAyIjp7Im4iOiJaejA0aHNLZ2c3Y3dXdU9abk9YM3p3PT0iLCJjIjoiWnowNGhzS2dnN2N3V3VPWm5PWDN6eTlmMlluYm9SUEoiLCJ0IjoiWnowNGhzS2dnN2N3V3VPWm5PWDN6eTlmMlluYm9SUEpKK3R1VkZUTWhSUT0ifX0="
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005007",
+       "blob": {
+        "n": "I0rOAPvtiDBrWotqk55WvQ==",
+        "c": "I0rOAPvtiDBrWotqk55WvdA09rk2diRe",
+        "t": "I0rOAPvtiDBrWotqk55WvdA09rk2diRezrf63WtY/TY="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "u1"
+  },
+  {
+   "do": "enter",
+   "conn": "w0",
+   "role": "view",
+   "ident": "@u1",
+   "key": "@u1",
+   "cn": "61d83c2f39b658b4",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 2,
+   "save": "q0",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "u2"
+  },
+  {
+   "do": "enter",
+   "conn": "w1",
+   "role": "view",
+   "ident": "@u2",
+   "key": "@u2",
+   "cn": "921200eae0bb630b",
+   "mac": true,
+   "split": 40,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 2,
+   "save": "q1",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "u3"
+  },
+  {
+   "do": "enter",
+   "conn": "w2",
+   "role": "view",
+   "ident": "@u3",
+   "key": "@u3",
+   "cn": "01bc85ae8e836043",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 2,
+   "save": "q2",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "u4"
+  },
+  {
+   "do": "enter",
+   "conn": "w3",
+   "role": "view",
+   "ident": "@u4",
+   "key": "@u4",
+   "cn": "15801bbfd03b1b82",
+   "mac": true,
+   "recv": "wait"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 2,
+   "save": "q3",
+   "payload": "{\"token\":\"<hex32>\",\"pid\":\"00000000000000000000000000001001\"}"
+  },
+  {
+   "do": "enter",
+   "conn": "y2",
+   "role": "join",
+   "ident": "@q2",
+   "key": "@u0",
+   "cn": "8604849f29255680",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "w2"
+  },
+  {
+   "do": "enter",
+   "conn": "y0",
+   "role": "join",
+   "ident": "@q0",
+   "key": "@u0",
+   "cn": "c21f9a555a67e0c6",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "w0"
+  },
+  {
+   "do": "enter",
+   "conn": "y3",
+   "role": "join",
+   "ident": "@q3",
+   "key": "@u0",
+   "cn": "e31d1b12c0fec199",
+   "mac": true,
+   "split": 64,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "w3"
+  },
+  {
+   "do": "enter",
+   "conn": "y1",
+   "role": "join",
+   "ident": "@q1",
+   "key": "@u0",
+   "cn": "c05e81f0b45472e7",
+   "mac": true,
+   "recv": "ok"
+  },
+  {
+   "do": "ok",
+   "conn": "w1"
+  },
+  {
+   "do": "bytes",
+   "from": "w0",
+   "to": "y0",
+   "data_b64": "dmlld2VyIDA="
+  },
+  {
+   "do": "bytes",
+   "from": "y0",
+   "to": "w0",
+   "data_b64": "aG9zdCBmb3IgMA=="
+  },
+  {
+   "do": "bytes",
+   "from": "w1",
+   "to": "y1",
+   "data_b64": "dmlld2VyIDE="
+  },
+  {
+   "do": "bytes",
+   "from": "y1",
+   "to": "w1",
+   "data_b64": "aG9zdCBmb3IgMQ=="
+  },
+  {
+   "do": "bytes",
+   "from": "w2",
+   "to": "y2",
+   "data_b64": "dmlld2VyIDI="
+  },
+  {
+   "do": "bytes",
+   "from": "y2",
+   "to": "w2",
+   "data_b64": "aG9zdCBmb3IgMg=="
+  },
+  {
+   "do": "bytes",
+   "from": "w3",
+   "to": "y3",
+   "data_b64": "dmlld2VyIDM="
+  },
+  {
+   "do": "bytes",
+   "from": "y3",
+   "to": "w3",
+   "data_b64": "aG9zdCBmb3IgMw=="
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005007",
+       "blob": {
+        "n": "I0rOAPvtiDBrWotqk55WvQ==",
+        "c": "I0rOAPvtiDBrWotqk55WvdA09rk2diRe",
+        "t": "I0rOAPvtiDBrWotqk55WvdA09rk2diRezrf63WtY/TY="
+       },
+       "age": "<age>",
+       "viewers": 4,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 429,
+   "reply": {
+    "error": "busy"
+   }
+  },
+  {
+   "do": "shut",
+   "conn": "w0"
+  },
+  {
+   "do": "eof",
+   "conn": "y0",
+   "recv_b64": ""
+  },
+  {
+   "do": "eof",
+   "conn": "w0",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005007",
+       "blob": {
+        "n": "I0rOAPvtiDBrWotqk55WvQ==",
+        "c": "I0rOAPvtiDBrWotqk55WvdA09rk2diRe",
+        "t": "I0rOAPvtiDBrWotqk55WvdA09rk2diRezrf63WtY/TY="
+       },
+       "age": "<age>",
+       "viewers": 3,
+       "online": true
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "u5"
+  },
+  {
+   "do": "raw",
+   "conn": "h7",
+   "data_b64": "BgADb25ldwABPwYAA3R3bw=="
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 7,
+   "payload_b64": "b25l"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 7,
+   "payload_b64": "dHdv"
+  },
+  {
+   "do": "raw",
+   "conn": "h7",
+   "data_b64": "BgANaW4gdA==",
+   "pause": true
+  },
+  {
+   "do": "raw",
+   "conn": "h7",
+   "data_b64": "d28gcGllY2Vz"
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 7,
+   "payload_b64": "aW4gdHdvIHBpZWNlcw=="
+  },
+  {
+   "do": "frame",
+   "conn": "h7",
+   "kind": 6,
+   "payload_b64": "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY=",
+   "times": 1024
+  },
+  {
+   "do": "recv_frame",
+   "conn": "h7",
+   "kind": 7,
+   "payload_b64": "MDEyMzQ1Njc4OWFiY2RlZg=="
+  },
+  {
+   "do": "frame",
+   "conn": "h7",
+   "kind": 8,
+   "payload_b64": "eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMTAwMSI6eyJuIjoiRTlLUDdadnN2bVkzNzJzQmY3Nys5dz09IiwiYyI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwidCI6IkU5S1A3WnZzdm1ZMzcyc0JmNzcrOXpzcmtINGw2d0E1YjN3bWRXSStoL1k9In19"
+  },
+  {
+   "do": "eof",
+   "conn": "h7",
+   "recv_b64": ""
+  },
+  {
+   "do": "bytes",
+   "from": "y1",
+   "to": "w1",
+   "data_b64": "dGhlIGhvc3QgaXMgc3RpbGwgdGFsa2luZyB0byB0aGlzIG9uZQ=="
+  },
+  {
+   "do": "close",
+   "conn": "w1"
+  },
+  {
+   "do": "eof",
+   "conn": "y1",
+   "recv_b64": ""
+  },
+  {
+   "do": "close",
+   "conn": "y2"
+  },
+  {
+   "do": "eof",
+   "conn": "w2",
+   "recv_b64": ""
+  },
+  {
+   "do": "close",
+   "conn": "w3"
+  },
+  {
+   "do": "eof",
+   "conn": "y3",
+   "recv_b64": ""
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": [
+      {
+       "sid": "00000000000000000000000000005007",
+       "blob": {
+        "n": "I0rOAPvtiDBrWotqk55WvQ==",
+        "c": "I0rOAPvtiDBrWotqk55WvdA09rk2diRe",
+        "t": "I0rOAPvtiDBrWotqk55WvdA09rk2diRezrf63WtY/TY="
+       },
+       "age": "<age>",
+       "viewers": 0,
+       "online": false
+      }
+     ]
+    }
+   },
+   "retry": true
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_list",
+   "req": {
+    "pids": [
+     "00000000000000000000000000001001"
+    ]
+   },
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000001001": {
+      "fp": "SHA256:8D4dLrwAzAb5DvT7RzhKzd2CYxkKc+4rf7cv/8P5q6s",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000001001": []
+    }
+   },
+   "retry": true,
+   "tune": "grace"
+  },
+  {
+   "do": "op",
+   "who": "b",
+   "op": "relay_attach",
+   "req": {
+    "sid": "00000000000000000000000000005007",
+    "pid": "00000000000000000000000000001001"
+   },
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   }
+  },
+  {
+   "do": "hold",
+   "n": 32
+  },
+  {
+   "do": "say",
+   "note": "one more than an address may have",
+   "send_b64": "",
+   "recv": ""
+  },
+  {
+   "do": "release"
+  },
+  {
+   "do": "slow",
+   "note": "connected and silent",
+   "send_b64": "",
+   "recv": "CCA-RELAY/1 ERR slow\n"
+  },
+  {
+   "do": "slow",
+   "note": "half a preamble",
+   "send_b64": "Q0NBLVJFTEFZLzEgaG9zdA==",
+   "recv": "CCA-RELAY/1 ERR slow\n"
+  },
+  {
+   "do": "slow",
+   "note": "as many bytes as a line may have, and no end of line",
+   "send_b64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
+   "recv": "CCA-RELAY/1 ERR slow\n"
+  }
+ ]
+}

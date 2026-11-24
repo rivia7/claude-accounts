@@ -1,0 +1,7650 @@
+{
+ "about": "Recorded from server/cca-presence.py (class Remote called directly, times given). Each step: what was asked and what it answered; file = remote.json after the step when it changed; n = how many slots, tickets, sessions, edges, guests it holds afterwards. Ticket numbers and keys are random: <hex32>, <b64:32>; @label = the ticket a step saved.",
+ "port": 18444,
+ "web": "https://relay.example.com:8443/",
+ "limits": {
+  "pair_slots": 2,
+  "edges_dev": 3,
+  "edges_max": 4,
+  "tickets_dev": 3,
+  "sessions_dev": 2,
+  "viewers": 2
+ },
+ "names": {
+  "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA": "box",
+  "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs": "laptop",
+  "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ": "mini",
+  "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw": "studio",
+  "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY": "测试机"
+ },
+ "steps": [
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_x",
+   "j": {},
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "not_found"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "",
+   "j": {},
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "not_found"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000000.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 403,
+   "reply": {
+    "error": "denied"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000001",
+    "pids": [
+     "00000000000000000000000000000002"
+    ]
+   },
+   "now": 1794000000.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 403,
+   "reply": {
+    "error": "denied"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_x",
+   "j": {},
+   "now": 1794000000.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 403,
+   "reply": {
+    "error": "denied"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {},
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "xyz"
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "ABABABABABABABABABABABABABABABAB"
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000000"
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": 5
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000001x"
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": [
+     "00000000000000000000000000000001"
+    ]
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": " 0000000000000000000000000000001"
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000001.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000001.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000002",
+    "web": "yes"
+   },
+   "now": 1794000002.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    2,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000003"
+   },
+   "now": 1794000003.0,
+   "gkey": null,
+   "status": 429,
+   "reply": {
+    "error": "rate"
+   },
+   "n": [
+    2,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000004",
+    "web": true
+   },
+   "now": 1794000003.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   },
+   "n": [
+    3,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000005\n",
+    "web": 1
+   },
+   "now": 1794000003.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000005\n"
+   },
+   "now": 1794000003.5,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000005"
+   },
+   "now": 1794000003.5,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000009",
+    "m": {
+     "n": "Yqh0Tp0gHP1lgVuhxNVz9g==",
+     "c": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DI",
+     "t": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DIzDaVje7h/Mw="
+    },
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000009",
+    "m": {
+     "n": "Yqh0Tp0gHP1lgVuhxNVz9g==",
+     "c": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DI",
+     "t": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DIzDaVje7h/Mw="
+    },
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000009",
+    "m": {
+     "n": "Yqh0Tp0gHP1lgVuhxNVz9g==",
+     "c": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DI",
+     "t": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DIzDaVje7h/Mw="
+    },
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_close",
+   "j": {
+    "rid": "00000000000000000000000000000009",
+    "m": {
+     "n": "Yqh0Tp0gHP1lgVuhxNVz9g==",
+     "c": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DI",
+     "t": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DIzDaVje7h/Mw="
+    },
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_x",
+   "j": {
+    "rid": "00000000000000000000000000000009",
+    "m": {
+     "n": "Yqh0Tp0gHP1lgVuhxNVz9g==",
+     "c": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DI",
+     "t": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DIzDaVje7h/Mw="
+    },
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+    "m": {
+     "n": "G7QUXUn5C8mhnYM2tMD8Bw==",
+     "c": "G7QUXUn5C8mhnYM2tMD8B3Ed42DtYWN7",
+     "t": "G7QUXUn5C8mhnYM2tMD8B3Ed42DtYWN7xBFmi9tOzA0="
+    }
+   },
+   "now": 1794000004.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 403,
+   "reply": {
+    "error": "denied"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_close",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_x",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_x",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000004.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "not_found"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "x"
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "Yqh0Tp0gHP1lgVuhxNVz9g==",
+     "c": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DI",
+     "t": "Yqh0Tp0gHP1lgVuhxNVz9kCJiMZUF5DIzDaVje7h/Mw="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": "text"
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": []
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY=",
+     "x": "AAAA"
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK"
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2"
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "AAA",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "AA=",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": 5,
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "!!!!!!!!!!!!!!!!!!!!!!!!",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000005.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "+FkUF725/XyHxWeDZt8Jfg==",
+     "c": "+FkUF725/XyHxWeDZt8JfnfFvmBW+c98",
+     "t": "+FkUF725/XyHxWeDZt8JfnfFvmBW+c98p5rllE49ioU="
+    }
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    },
+    "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "name": "laptop",
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "wait": 0.05
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "wait": "x",
+    "until": "done"
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "wait": true
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "wait": -1
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "wait": null,
+    "until": "x"
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "wait": 400000000.0
+   },
+   "now": 1794000006.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "m": {
+     "n": "VYBMYdYBXR8Z0sqN4IxFHw==",
+     "c": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "t": "VYBMYdYBXR8Z0sqN4IxFH+WSOdv8DKmVBHbpGT0x1PM="
+    }
+   },
+   "now": 1794000007.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000007.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "VYBMYdYBXR8Z0sqN4IxFHw==",
+     "c": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "t": "VYBMYdYBXR8Z0sqN4IxFH+WSOdv8DKmVBHbpGT0x1PM="
+    },
+    "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+    "name": "box",
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "until": "done",
+    "wait": 0.05
+   },
+   "now": 1794000007.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    },
+    "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "name": "laptop",
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000002",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000008.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000008.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "zz"
+   },
+   "now": 1794000008.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": 7
+   },
+   "now": 1794000008.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "ABABABABABABABABABABABABABABABAB"
+   },
+   "now": 1794000008.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000008.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "00000000000000000000000000000065"
+   },
+   "now": 1794000008.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    4,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000001",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794000009.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "mismatch"
+   },
+   "n": [
+    3,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000001"
+   },
+   "now": 1794000009.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    3,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000004"
+   },
+   "now": 1794000603.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": null,
+    "fp": null,
+    "name": null,
+    "done": false
+   },
+   "n": [
+    2,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000004"
+   },
+   "now": 1794000603.5,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000000b"
+   },
+   "now": 1794001000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000000b",
+    "m": {
+     "n": "Iji5Tesr45fLOIudBbKxcg==",
+     "c": "Iji5Tesr45fLOIudBbKxcoHrQCYBibml",
+     "t": "Iji5Tesr45fLOIudBbKxcoHrQCYBibmlcYUpa2npPvc="
+    }
+   },
+   "now": 1794001000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000b",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794001000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000b",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794001000.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"00000000000000000000000000000064\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1794001000.25,\"used\":1794001000.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_get",
+   "j": {
+    "rid": "0000000000000000000000000000000b",
+    "until": "done",
+    "wait": 5
+   },
+   "now": 1794001001.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "Iji5Tesr45fLOIudBbKxcg==",
+     "c": "Iji5Tesr45fLOIudBbKxcoHrQCYBibml",
+     "t": "Iji5Tesr45fLOIudBbKxcoHrQCYBibmlcYUpa2npPvc="
+    },
+    "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "name": "laptop",
+    "done": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000b",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794001001.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000b",
+    "pid": "000000000000000000000000000003e7"
+   },
+   "now": 1794001001.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_get",
+   "j": {
+    "rid": "0000000000000000000000000000000b"
+   },
+   "now": 1794001060.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "Iji5Tesr45fLOIudBbKxcg==",
+     "c": "Iji5Tesr45fLOIudBbKxcoHrQCYBibml",
+     "t": "Iji5Tesr45fLOIudBbKxcoHrQCYBibmlcYUpa2npPvc="
+    },
+    "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "name": "laptop",
+    "done": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_get",
+   "j": {
+    "rid": "0000000000000000000000000000000b"
+   },
+   "now": 1794001060.5,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000000c"
+   },
+   "now": 1794001100.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000000c",
+    "m": {
+     "n": "LnpKddmt9aAeiyK1DkNjUA==",
+     "c": "LnpKddmt9aAeiyK1DkNjUMO+RlFThnja",
+     "t": "LnpKddmt9aAeiyK1DkNjUMO+RlFThnjaxMF4x4Ay7m8="
+    }
+   },
+   "now": 1794001100.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000c",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794001100.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000c",
+    "pid": "00000000000000000000000000000064"
+   },
+   "now": 1794001100.25,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "mismatch"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000000d"
+   },
+   "now": 1794001200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000000d",
+    "m": {
+     "n": "TjPiC2haCQuWtbXqgNR8JQ==",
+     "c": "TjPiC2haCQuWtbXqgNR8JSFmxQUKGVBZ",
+     "t": "TjPiC2haCQuWtbXqgNR8JSFmxQUKGVBZkLJ3VJx3U90="
+    }
+   },
+   "now": 1794001200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794001200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794001200.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000000e"
+   },
+   "now": 1794001300.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000000e",
+    "m": {
+     "n": "PGANWMKyzaA45MNBylsq9A==",
+     "c": "PGANWMKyzaA45MNBylsq9IZTmHfGH7b/",
+     "t": "PGANWMKyzaA45MNBylsq9IZTmHfGH7b/jrYfb8D1SSg="
+    }
+   },
+   "now": 1794001300.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000e",
+    "pid": "00000000000000000000000000000078"
+   },
+   "now": 1794001300.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000e",
+    "pid": "00000000000000000000000000000078"
+   },
+   "now": 1794001300.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000000f"
+   },
+   "now": 1794001400.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000000f",
+    "m": {
+     "n": "LnpKddmt9aAeiyK1DkNjUA==",
+     "c": "LnpKddmt9aAeiyK1DkNjUMO+RlFThnja",
+     "t": "LnpKddmt9aAeiyK1DkNjUMO+RlFThnjaxMF4x4Ay7m8="
+    }
+   },
+   "now": 1794001400.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000f",
+    "pid": "00000000000000000000000000000082"
+   },
+   "now": 1794001400.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000000f",
+    "pid": "00000000000000000000000000000082"
+   },
+   "now": 1794001400.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"00000000000000000000000000000082\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1794001400.25,\"used\":1794001400.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000010"
+   },
+   "now": 1794001500.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000010",
+    "m": {
+     "n": "TjPiC2haCQuWtbXqgNR8JQ==",
+     "c": "TjPiC2haCQuWtbXqgNR8JSFmxQUKGVBZ",
+     "t": "TjPiC2haCQuWtbXqgNR8JSFmxQUKGVBZkLJ3VJx3U90="
+    }
+   },
+   "now": 1794001500.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000010",
+    "pid": "0000000000000000000000000000008c"
+   },
+   "now": 1794001500.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000010",
+    "pid": "0000000000000000000000000000008c"
+   },
+   "now": 1794001500.25,
+   "gkey": null,
+   "status": 429,
+   "reply": {
+    "error": "edges"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000010"
+   },
+   "now": 1794001501.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000011"
+   },
+   "now": 1794001600.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000011",
+    "m": {
+     "n": "PGANWMKyzaA45MNBylsq9A==",
+     "c": "PGANWMKyzaA45MNBylsq9IZTmHfGH7b/",
+     "t": "PGANWMKyzaA45MNBylsq9IZTmHfGH7b/jrYfb8D1SSg="
+    }
+   },
+   "now": 1794001600.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000011",
+    "pid": "00000000000000000000000000000096"
+   },
+   "now": 1794001600.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000011",
+    "pid": "00000000000000000000000000000096"
+   },
+   "now": 1794001600.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"00000000000000000000000000000082\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1794001400.25,\"used\":1794001400.25},\"00000000000000000000000000000096\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001600.25,\"used\":1794001600.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000012"
+   },
+   "now": 1794001700.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000012",
+    "m": {
+     "n": "LnpKddmt9aAeiyK1DkNjUA==",
+     "c": "LnpKddmt9aAeiyK1DkNjUMO+RlFThnja",
+     "t": "LnpKddmt9aAeiyK1DkNjUMO+RlFThnjaxMF4x4Ay7m8="
+    }
+   },
+   "now": 1794001700.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000012",
+    "pid": "000000000000000000000000000000a0"
+   },
+   "now": 1794001700.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000012",
+    "pid": "000000000000000000000000000000a0"
+   },
+   "now": 1794001700.25,
+   "gkey": null,
+   "status": 507,
+   "reply": {
+    "error": "full"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000012",
+    "pid": "000000000000000000000000000000a0"
+   },
+   "now": 1794001701.0,
+   "gkey": null,
+   "status": 507,
+   "reply": {
+    "error": "full"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_drop",
+   "j": {},
+   "now": 1794001701.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_drop",
+   "j": {
+    "pid": "nope"
+   },
+   "now": 1794001701.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_drop",
+   "j": {
+    "pid": 9
+   },
+   "now": 1794001701.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_drop",
+   "j": {
+    "pid": "000000000000000000000000000003e7"
+   },
+   "now": 1794001701.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_drop",
+   "j": {
+    "pid": "00000000000000000000000000000096"
+   },
+   "now": 1794001701.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_drop",
+   "j": {
+    "pid": "00000000000000000000000000000096"
+   },
+   "now": 1794001701.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"00000000000000000000000000000082\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1794001400.25,\"used\":1794001400.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000012",
+    "pid": "000000000000000000000000000000a0"
+   },
+   "now": 1794001702.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"00000000000000000000000000000082\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1794001400.25,\"used\":1794001400.25},\"000000000000000000000000000000a0\":{\"a\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1794001702.0,\"used\":1794001702.0}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_drop",
+   "j": {
+    "pid": "000000000000000000000000000000a0"
+   },
+   "now": 1794001703.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"00000000000000000000000000000082\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1794001400.25,\"used\":1794001400.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_drop",
+   "j": {
+    "pid": "00000000000000000000000000000082"
+   },
+   "now": 1794001704.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25}},\"guests\":{}}",
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_drop",
+   "j": {
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794001704.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "web": true
+   },
+   "now": 1794001800.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000017"
+   },
+   "now": 1794001800.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\n"
+   },
+   "now": 1794001800.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAA"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": 7
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": 21,
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000016",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000017",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794002400.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794002400.5,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+    "m": {
+     "n": "G7QUXUn5C8mhnYM2tMD8Bw==",
+     "c": "G7QUXUn5C8mhnYM2tMD8B3Ed42DtYWN7",
+     "t": "G7QUXUn5C8mhnYM2tMD8B3Ed42DtYWN7xBFmi9tOzA0="
+    }
+   },
+   "now": 1794001800.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000015"
+   },
+   "now": 1794001800.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000015"
+   },
+   "now": 1794001800.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {
+    "rid": "00000000000000000000000000000015"
+   },
+   "now": 1794001800.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_host",
+   "j": {
+    "rid": "00000000000000000000000000000015"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_get",
+   "j": {},
+   "now": 1794001800.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+    "m": {
+     "n": "7oEJ+f5NQO8uEMsm0DFVzg==",
+     "c": "7oEJ+f5NQO8uEMsm0DFVzoxhJfCUaBpD",
+     "t": "7oEJ+f5NQO8uEMsm0DFVzoxhJfCUaBpDvOO7VxZt9hY="
+    }
+   },
+   "now": 1794001800.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    }
+   },
+   "now": 1794001800.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000015"
+   },
+   "now": 1794001800.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    },
+    "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "name": "laptop",
+    "done": false
+   },
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000015"
+   },
+   "now": 1794001800.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "G7QUXUn5C8mhnYM2tMD8Bw==",
+     "c": "G7QUXUn5C8mhnYM2tMD8B3Ed42DtYWN7",
+     "t": "G7QUXUn5C8mhnYM2tMD8B3Ed42DtYWN7xBFmi9tOzA0="
+    },
+    "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+    "name": null,
+    "done": false
+   },
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pid": "000000000000000000000000000000aa"
+   },
+   "now": 1794001800.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    2,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "pid": "000000000000000000000000000000aa"
+   },
+   "now": 1794001800.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794001800.25,\"used\":1794001800.25}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1794001800.25}}}",
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_get",
+   "j": {
+    "rid": "00000000000000000000000000000015",
+    "until": "done",
+    "wait": 3
+   },
+   "now": 1794001801.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "m": {
+     "n": "WzRlxR5DddVD2nuxb7L7CA==",
+     "c": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoK",
+     "t": "WzRlxR5DddVD2nuxb7L7CDxXLpQ2pWoKWfH/poP2xjY="
+    },
+    "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "name": "laptop",
+    "done": true
+   },
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794001801.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_attach",
+   "j": {},
+   "now": 1794001801.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_drop",
+   "j": {},
+   "now": 1794001801.0,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_host",
+   "j": {},
+   "now": 1794001801.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_open",
+   "j": {},
+   "now": 1794001801.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794001801.0,
+   "key": null,
+   "n": [
+    2,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_close",
+   "j": {
+    "rid": "00000000000000000000000000000017"
+   },
+   "now": 1794001801.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000018",
+    "web": true
+   },
+   "now": 1794001900.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000018",
+    "m": {
+     "n": "ICsdOeyEy2/iCeVwlcEnDg==",
+     "c": "ICsdOeyEy2/iCeVwlcEnDuO61vuMrSy9",
+     "t": "ICsdOeyEy2/iCeVwlcEnDuO61vuMrSy9LlZQMj9xpT0="
+    },
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1794001900.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000018",
+    "pid": "000000000000000000000000000000b4"
+   },
+   "now": 1794001900.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000018",
+    "pid": "000000000000000000000000000000b4"
+   },
+   "now": 1794001900.25,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794001200.25},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794001800.25,\"used\":1794001800.25},\"000000000000000000000000000000b4\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\",\"at\":1794001900.25,\"used\":1794001900.25}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1794001800.25},\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\",\"at\":1794001900.25}}}",
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000001f"
+   },
+   "now": 1794002000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000001f",
+    "m": {
+     "n": "YtFuLMQgzsu0+V8qMmLMGw==",
+     "c": "YtFuLMQgzsu0+V8qMmLMGza7QrxdTkZ1",
+     "t": "YtFuLMQgzsu0+V8qMmLMGza7QrxdTkZ1ZNOmTZYqLKw="
+    }
+   },
+   "now": 1794002000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_close",
+   "j": {
+    "rid": "0000000000000000000000000000001f"
+   },
+   "now": 1794002000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_get",
+   "j": {
+    "rid": "0000000000000000000000000000001f"
+   },
+   "now": 1794002000.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000020"
+   },
+   "now": 1794002000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_close",
+   "j": {
+    "rid": "00000000000000000000000000000020"
+   },
+   "now": 1794002000.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "pair_close",
+   "j": {
+    "rid": "00000000000000000000000000000020"
+   },
+   "now": 1794002000.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {},
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "x",
+    "pids": [
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032"
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032",
+    "pids": "0000000000000000000000000000006e"
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032",
+    "pids": []
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032",
+    "pids": [
+     "0000000000000000000000000000006e",
+     "x"
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032",
+    "pids": [
+     "00000000000000000000000000000001",
+     "00000000000000000000000000000002",
+     "00000000000000000000000000000003",
+     "00000000000000000000000000000004"
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032",
+    "pids": [
+     "0000000000000000000000000000006e",
+     null
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": 50,
+    "pids": [
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032",
+    "pids": [
+     "000000000000000000000000000000aa",
+     "000000000000000000000000000003e7"
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_pairing"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000032",
+    "pids": [
+     "00000000000000000000000000000078",
+     "000000000000000000000000000000aa",
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t1",
+   "n": [
+    0,
+    1,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000033",
+    "pids": [
+     "0000000000000000000000000000006e",
+     "0000000000000000000000000000006e",
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002101.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t2",
+   "n": [
+    0,
+    2,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000034",
+    "pids": [
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002102.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t3",
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "00000000000000000000000000000035",
+    "pids": [
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002103.0,
+   "gkey": null,
+   "status": 429,
+   "reply": {
+    "error": "rate"
+   },
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "ws_claim",
+   "tid": "@t1",
+   "now": 1794002103.0,
+   "ok": false,
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t1",
+   "role": "view",
+   "now": 1794002103.0,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t1",
+   "role": "join",
+   "now": 1794002103.0,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t1",
+   "role": "host",
+   "now": 1794002103.0,
+   "proof": false,
+   "took": null,
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "0000000000000000000000000000004d",
+   "role": "host",
+   "now": 1794002103.0,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t2",
+   "role": "host",
+   "now": 1794002131.5,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    3,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t1",
+   "role": "host",
+   "now": 1794002130.0,
+   "proof": true,
+   "took": {
+    "exp": 1794002130.0,
+    "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+    "pids": [
+     "00000000000000000000000000000078",
+     "0000000000000000000000000000006e"
+    ],
+    "role": "host",
+    "sid": "00000000000000000000000000000032"
+   },
+   "n": [
+    0,
+    2,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t1",
+   "role": "host",
+   "now": 1794002130.0,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    2,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t2",
+   "role": "host",
+   "now": 1794002131.0,
+   "proof": true,
+   "took": {
+    "exp": 1794002131.0,
+    "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+    "pids": [
+     "0000000000000000000000000000006e"
+    ],
+    "role": "host",
+    "sid": "00000000000000000000000000000033"
+   },
+   "n": [
+    0,
+    1,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_list",
+   "j": {
+    "pids": []
+   },
+   "now": 1794002132.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {},
+    "sessions": {}
+   },
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t3",
+   "role": "host",
+   "now": 1794002120.0,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    0,
+    0,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "0000000000000000000000000000003c",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "pids": [
+    "00000000000000000000000000000078"
+   ],
+   "blobs": {
+    "00000000000000000000000000000078": {
+     "n": "sWXXJnWY9gwVjTe/1qsG7w==",
+     "c": "sWXXJnWY9gwVjTe/1qsG78Rfb1al8mYl",
+     "t": "sWXXJnWY9gwVjTe/1qsG78Rfb1al8mYlc1/z2fxqKBI="
+    }
+   },
+   "since": 1794002190.0,
+   "viewers": 0,
+   "online": true,
+   "n": [
+    0,
+    0,
+    1,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "0000000000000000000000000000003c",
+    "pids": [
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 409,
+   "reply": {
+    "error": "taken"
+   },
+   "n": [
+    0,
+    0,
+    1,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "0000000000000000000000000000003d",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "pids": [
+    "0000000000000000000000000000006e",
+    "00000000000000000000000000000078"
+   ],
+   "blobs": {
+    "0000000000000000000000000000006e": {
+     "n": "WMOY6m9hqnS2VSFLX9wmyg==",
+     "c": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZa",
+     "t": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZaKjtMnyfNh0Y="
+    }
+   },
+   "since": 1794002197.5,
+   "viewers": 1,
+   "online": true,
+   "n": [
+    0,
+    0,
+    2,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "0000000000000000000000000000003e",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "pids": [
+    "000000000000000000000000000000b4"
+   ],
+   "blobs": {
+    "000000000000000000000000000000b4": {
+     "n": "PrtydRutRsR47/5f4Ni6Pw==",
+     "c": "PrtydRutRsR47/5f4Ni6P1cw36NGoUte",
+     "t": "PrtydRutRsR47/5f4Ni6P1cw36NGoUteMG5M0tjOQJE="
+    }
+   },
+   "since": 1794002196.5,
+   "viewers": 0,
+   "online": false,
+   "n": [
+    0,
+    0,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "0000000000000000000000000000003f",
+    "pids": [
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 429,
+   "reply": {
+    "error": "sessions"
+   },
+   "n": [
+    0,
+    0,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_host",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pids": [
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t4",
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {},
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "x",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "x"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000045",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003c",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   },
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t5",
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "00000000000000000000000000000078"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t6",
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "ws_claim",
+   "tid": "@t5",
+   "now": 1794002230.0,
+   "ok": true,
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "ws_claim",
+   "tid": "@t5",
+   "now": 1794002230.0,
+   "ok": false,
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "ws_claim",
+   "tid": "@t6",
+   "now": 1794002230.5,
+   "ok": false,
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "ws_claim",
+   "tid": "zz",
+   "now": 1794002200.0,
+   "ok": false,
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "ws_claim",
+   "tid": "00000000000000000000000000000001",
+   "now": 1794002200.0,
+   "ok": false,
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t5",
+   "role": "host",
+   "now": 1794002200.0,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t5",
+   "role": "view",
+   "now": 1794002200.0,
+   "proof": true,
+   "took": {
+    "exp": 1794002230.0,
+    "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "pid": "0000000000000000000000000000006e",
+    "role": "view",
+    "sid": "0000000000000000000000000000003d",
+    "ws": true
+   },
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "ws_claim",
+   "tid": "@t5",
+   "now": 1794002200.0,
+   "ok": false,
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "0000000000000000000000000000003d",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "pids": [
+    "0000000000000000000000000000006e",
+    "00000000000000000000000000000078"
+   ],
+   "blobs": {
+    "0000000000000000000000000000006e": {
+     "n": "WMOY6m9hqnS2VSFLX9wmyg==",
+     "c": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZa",
+     "t": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZaKjtMnyfNh0Y="
+    }
+   },
+   "since": 1794002197.5,
+   "viewers": 2,
+   "online": true,
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 429,
+   "reply": {
+    "error": "busy"
+   },
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003e",
+    "pid": "000000000000000000000000000000b4"
+   },
+   "now": 1794002200.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t7",
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003e",
+    "pid": "000000000000000000000000000000b4"
+   },
+   "now": 1794002200.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 404,
+   "reply": {
+    "error": "no_session"
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": "x"
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "00000000000000000000000000000001",
+     "x"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "00000000000000000000000000000001",
+     "00000000000000000000000000000002",
+     "00000000000000000000000000000003",
+     "00000000000000000000000000000004"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": {}
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 400,
+   "reply": {
+    "error": "bad"
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": []
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {},
+    "sessions": {}
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "0000000000000000000000000000006e",
+     "000000000000000000000000000003e7",
+     "0000000000000000000000000000006e"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "0000000000000000000000000000006e": {
+      "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "0000000000000000000000000000006e": [
+      {
+       "sid": "0000000000000000000000000000003d",
+       "blob": {
+        "n": "WMOY6m9hqnS2VSFLX9wmyg==",
+        "c": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZa",
+        "t": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZaKjtMnyfNh0Y="
+       },
+       "age": 2,
+       "viewers": 2,
+       "online": true
+      }
+     ]
+    }
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "00000000000000000000000000000078"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000000078": {
+      "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000000078": []
+    }
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "00000000000000000000000000000078",
+     "0000000000000000000000000000006e",
+     "000000000000000000000000000000b4"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "00000000000000000000000000000078": {
+      "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+      "name": "mini"
+     },
+     "0000000000000000000000000000006e": {
+      "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+      "name": "laptop"
+     },
+     "000000000000000000000000000000b4": {
+      "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+      "name": null
+     }
+    },
+    "sessions": {
+     "00000000000000000000000000000078": [
+      {
+       "sid": "0000000000000000000000000000003c",
+       "blob": {
+        "n": "sWXXJnWY9gwVjTe/1qsG7w==",
+        "c": "sWXXJnWY9gwVjTe/1qsG78Rfb1al8mYl",
+        "t": "sWXXJnWY9gwVjTe/1qsG78Rfb1al8mYlc1/z2fxqKBI="
+       },
+       "age": 10,
+       "viewers": 0,
+       "online": true
+      }
+     ],
+     "0000000000000000000000000000006e": [],
+     "000000000000000000000000000000b4": []
+    }
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000b4"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000b4": {
+      "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000b4": [
+      {
+       "sid": "0000000000000000000000000000003e",
+       "blob": {
+        "n": "PrtydRutRsR47/5f4Ni6Pw==",
+        "c": "PrtydRutRsR47/5f4Ni6P1cw36NGoUte",
+        "t": "PrtydRutRsR47/5f4Ni6P1cw36NGoUteMG5M0tjOQJE="
+       },
+       "age": 4,
+       "viewers": 0,
+       "online": false
+      }
+     ]
+    }
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000b4"
+    ]
+   },
+   "now": 1794002201.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000b4": {
+      "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000b4": [
+      {
+       "sid": "0000000000000000000000000000003e",
+       "blob": {
+        "n": "PrtydRutRsR47/5f4Ni6Pw==",
+        "c": "PrtydRutRsR47/5f4Ni6P1cw36NGoUte",
+        "t": "PrtydRutRsR47/5f4Ni6P1cw36NGoUteMG5M0tjOQJE="
+       },
+       "age": 4,
+       "viewers": 0,
+       "online": false
+      }
+     ]
+    }
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000b4"
+    ]
+   },
+   "now": 1794002100.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000b4": {
+      "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+      "name": "box"
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000b4": [
+      {
+       "sid": "0000000000000000000000000000003e",
+       "blob": {
+        "n": "PrtydRutRsR47/5f4Ni6Pw==",
+        "c": "PrtydRutRsR47/5f4Ni6P1cw36NGoUte",
+        "t": "PrtydRutRsR47/5f4Ni6P1cw36NGoUteMG5M0tjOQJE="
+       },
+       "age": 0,
+       "viewers": 0,
+       "online": false
+      }
+     ]
+    }
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000aa",
+     "000000000000000000000000000000b4"
+    ]
+   },
+   "now": 1794002200.0,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000aa": {
+      "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000aa": []
+    }
+   },
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "0000000000000000000000000000003d",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "pids": [
+    "0000000000000000000000000000006e",
+    "00000000000000000000000000000078"
+   ],
+   "blobs": {
+    "0000000000000000000000000000006e": {
+     "n": "WMOY6m9hqnS2VSFLX9wmyg==",
+     "c": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZa",
+     "t": "WMOY6m9hqnS2VSFLX9wmypyvB6i1JAZaKjtMnyfNh0Y="
+    }
+   },
+   "since": 1794002197.5,
+   "viewers": 0,
+   "online": true,
+   "n": [
+    0,
+    3,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794088400.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t8",
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794088400.0},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794001800.25,\"used\":1794001800.25},\"000000000000000000000000000000b4\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\",\"at\":1794001900.25,\"used\":1794001900.25}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1794001800.25},\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\",\"at\":1794001900.25}}}",
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794092200.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t9",
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003d",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794092210.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t10",
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "op": "relay_host",
+   "j": {
+    "sid": "0000000000000000000000000000003c",
+    "pids": [
+     "00000000000000000000000000000078"
+    ]
+   },
+   "now": 1794092300.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t11",
+   "n": [
+    0,
+    1,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003e",
+    "pid": "000000000000000000000000000000b4"
+   },
+   "now": 1794092300.5,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t12",
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794088400.0},\"00000000000000000000000000000078\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":1794001300.25,\"used\":1794001300.25},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794001800.25,\"used\":1794001800.25},\"000000000000000000000000000000b4\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\",\"at\":1794001900.25,\"used\":1794092300.5}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1794001800.25},\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\",\"at\":1794001900.25}}}",
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "keep_only",
+   "fps": [
+    "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+    "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+    "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+    "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY"
+   ],
+   "now": 1794092300.5,
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "sessions",
+   "want": {
+    "0000000000000000000000000000003c": {
+     "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+     "pids": [
+      "00000000000000000000000000000078"
+     ],
+     "blobs": [
+      "00000000000000000000000000000078"
+     ],
+     "viewers": 0
+    },
+    "0000000000000000000000000000003d": {
+     "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+     "pids": [
+      "0000000000000000000000000000006e",
+      "00000000000000000000000000000078"
+     ],
+     "blobs": [
+      "0000000000000000000000000000006e"
+     ],
+     "viewers": 0
+    },
+    "0000000000000000000000000000003e": {
+     "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+     "pids": [
+      "000000000000000000000000000000b4"
+     ],
+     "blobs": [
+      "000000000000000000000000000000b4"
+     ],
+     "viewers": 0
+    }
+   },
+   "n": [
+    0,
+    2,
+    3,
+    4,
+    2
+   ]
+  },
+  {
+   "do": "keep_only",
+   "fps": [
+    "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+    "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+    "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+    "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY"
+   ],
+   "now": 1794092300.5,
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794088400.0},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794001800.25,\"used\":1794001800.25},\"000000000000000000000000000000b4\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\",\"at\":1794001900.25,\"used\":1794092300.5}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1794001800.25},\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\",\"at\":1794001900.25}}}",
+   "n": [
+    0,
+    1,
+    2,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "sessions",
+   "want": {
+    "0000000000000000000000000000003d": {
+     "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+     "pids": [
+      "0000000000000000000000000000006e"
+     ],
+     "blobs": [
+      "0000000000000000000000000000006e"
+     ],
+     "viewers": 0
+    },
+    "0000000000000000000000000000003e": {
+     "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+     "pids": [
+      "000000000000000000000000000000b4"
+     ],
+     "blobs": [
+      "000000000000000000000000000000b4"
+     ],
+     "viewers": 0
+    }
+   },
+   "n": [
+    0,
+    1,
+    2,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t11",
+   "role": "host",
+   "now": 1794092300.5,
+   "proof": true,
+   "took": null,
+   "n": [
+    0,
+    1,
+    2,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@t12",
+   "role": "view",
+   "now": 1794092300.5,
+   "proof": true,
+   "took": {
+    "exp": 1794092330.5,
+    "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+    "pid": "000000000000000000000000000000b4",
+    "role": "view",
+    "sid": "0000000000000000000000000000003e"
+   },
+   "n": [
+    0,
+    0,
+    2,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_attach",
+   "j": {
+    "sid": "0000000000000000000000000000003e",
+    "pid": "000000000000000000000000000000b4"
+   },
+   "now": 1794092300.5,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t13",
+   "n": [
+    0,
+    1,
+    2,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "reopen",
+   "web": "https://relay.example.com:8443/",
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "0000000000000000000000000000006e",
+     "00000000000000000000000000000078",
+     "000000000000000000000000000000b4"
+    ]
+   },
+   "now": 1794092301.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "0000000000000000000000000000006e": {
+      "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+      "name": "laptop"
+     },
+     "000000000000000000000000000000b4": {
+      "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+      "name": null
+     }
+    },
+    "sessions": {
+     "0000000000000000000000000000006e": [],
+     "000000000000000000000000000000b4": []
+    }
+   },
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794092301.5,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "reopen",
+   "web": null,
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794092301.5,
+   "key": null,
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000029",
+    "web": true
+   },
+   "now": 1794092301.5,
+   "gkey": null,
+   "status": 404,
+   "reply": {
+    "error": "no_web"
+   },
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000029",
+    "web": null
+   },
+   "now": 1794092301.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_drop",
+   "j": {
+    "pid": "000000000000000000000000000000b4"
+   },
+   "now": 1794092302.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"at\":1794001200.25,\"used\":1794088400.0},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794001800.25,\"used\":1794001800.25}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1794001800.25}}}",
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    1
+   ]
+  },
+  {
+   "do": "reopen",
+   "web": "https://relay.example.com:8443/",
+   "write": "{\n  \"v\": 1,\n  \"note\": {\n    \"x\": [\n      1,\n      2.5,\n      \"é\",\n      null\n    ]\n  },\n  \"edges\": {\n    \"0000000000000000000000000000006e\": {\n      \"b\": \"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\n      \"a\": \"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\n      \"at\": 1794000300,\n      \"extra\": {\n        \"k\": [\n          true\n        ]\n      },\n      \"used\": null\n    },\n    \"not a pid\": {\n      \"a\": \"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\n      \"b\": \"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\"\n    },\n    \"0000000000000000000000000000006f\": {\n      \"a\": \"nope\",\n      \"b\": \"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\"\n    },\n    \"00000000000000000000000000000070\": {\n      \"a\": \"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\"\n    },\n    \"00000000000000000000000000000071\": \"x\",\n    \"000000000000000000000000000000aa\": {\n      \"a\": \"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\n      \"b\": \"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\n      \"at\": 1794000900.25,\n      \"used\": 1794090000.5\n    },\n    \"00000000000000000000000000000072\": {\n      \"a\": \"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\n      \"b\": \"SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY\",\n      \"used\": 1500000000.0,\n      \"at\": 1794000000\n    }\n  },\n  \"guests\": {\n    \"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\": {\n      \"key\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\n      \"at\": 5,\n      \"more\": 1\n    },\n    \"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\": {\n      \"key\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\"\n    },\n    \"junk\": 1,\n    \"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\": {\n      \"key\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\"\n    }\n  },\n  \"zz\": null\n}",
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794092303.5,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_list",
+   "j": {},
+   "now": 1794092303.5,
+   "key": null,
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "0000000000000000000000000000006e",
+     "00000000000000000000000000000072",
+     "000000000000000000000000000000aa"
+    ]
+   },
+   "now": 1794092303.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "0000000000000000000000000000006e": {
+      "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+      "name": "laptop"
+     }
+    },
+    "sessions": {
+     "0000000000000000000000000000006e": []
+    }
+   },
+   "n": [
+    0,
+    0,
+    0,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "00000000000000000000000000000040",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "pids": [
+    "0000000000000000000000000000006e",
+    "000000000000000000000000000000aa"
+   ],
+   "blobs": {
+    "0000000000000000000000000000006e": {
+     "n": "C8KJdpE5T83ml/Wa9C7zJQ==",
+     "c": "C8KJdpE5T83ml/Wa9C7zJZ95gsgZE/zK",
+     "t": "C8KJdpE5T83ml/Wa9C7zJZ95gsgZE/zK6CnjOPK7iJw="
+    },
+    "000000000000000000000000000000aa": {
+     "n": "KEWdDkJjQeISsftwHNlZvg==",
+     "c": "KEWdDkJjQeISsftwHNlZvngbxsemhSHa",
+     "t": "KEWdDkJjQeISsftwHNlZvngbxsemhSHaVAxexCoNofI="
+    }
+   },
+   "since": 1794092300.5,
+   "viewers": 0,
+   "online": true,
+   "n": [
+    0,
+    0,
+    1,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000040",
+    "pid": "0000000000000000000000000000006e"
+   },
+   "now": 1794092303.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "t14",
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1794000300,\"extra\":{\"k\":[true]},\"used\":1794092303.5},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794000900.25,\"used\":1794090000.5},\"00000000000000000000000000000072\":{\"a\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"b\":\"SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY\",\"used\":1500000000.0,\"at\":1794000000}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":5}},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    0,
+    1,
+    1,
+    3,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_drop",
+   "j": {
+    "pid": "00000000000000000000000000000072"
+   },
+   "now": 1794092304.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"0000000000000000000000000000006e\":{\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1794000300,\"extra\":{\"k\":[true]},\"used\":1794092303.5},\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794000900.25,\"used\":1794090000.5}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":5}},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    0,
+    1,
+    1,
+    2,
+    1
+   ]
+  },
+  {
+   "do": "keep_only",
+   "fps": [
+    "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs"
+   ],
+   "now": 1794092305.5,
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000aa\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1794000900.25,\"used\":1794090000.5}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":5}},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    0,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "sessions",
+   "want": {
+    "00000000000000000000000000000040": {
+     "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+     "pids": [
+      "000000000000000000000000000000aa"
+     ],
+     "blobs": [
+      "000000000000000000000000000000aa"
+     ],
+     "viewers": 0
+    }
+   },
+   "n": [
+    0,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000aa"
+    ]
+   },
+   "now": 1809642000.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000aa": {
+      "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+      "name": null
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000aa": []
+    }
+   },
+   "n": [
+    0,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000aa"
+    ]
+   },
+   "now": 1809642001.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {},
+    "sessions": {}
+   },
+   "file": "{\"v\":1,\"edges\":{},\"guests\":{},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    0,
+    0,
+    1,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "sessions",
+   "want": {
+    "00000000000000000000000000000040": {
+     "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+     "pids": [],
+     "blobs": [],
+     "viewers": 0
+    }
+   },
+   "n": [
+    0,
+    0,
+    1,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000047"
+   },
+   "now": 1809643000.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    1,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000047",
+    "m": {
+     "n": "Iji5Tesr45fLOIudBbKxcg==",
+     "c": "Iji5Tesr45fLOIudBbKxcoHrQCYBibml",
+     "t": "Iji5Tesr45fLOIudBbKxcoHrQCYBibmlcYUpa2npPvc="
+    }
+   },
+   "now": 1809643000.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    1,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000047",
+    "pid": "000000000000000000000000000000c8"
+   },
+   "now": 1809643000.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    1,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000047",
+    "pid": "000000000000000000000000000000c8"
+   },
+   "now": 1809643000.75,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000c8\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1809643000.75,\"used\":1809643000.75}},\"guests\":{},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    1,
+    0,
+    1,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "00000000000000000000000000000050",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "pids": [
+    "000000000000000000000000000000c8"
+   ],
+   "blobs": {
+    "000000000000000000000000000000c8": {
+     "n": "1SCVdbudkzJ3u3o/oc4U6Q==",
+     "c": "1SCVdbudkzJ3u3o/oc4U6RSI/y3J75wm",
+     "t": "1SCVdbudkzJ3u3o/oc4U6RSI/y3J75wm4KqGx+NAnZA="
+    }
+   },
+   "since": 1809643000.5,
+   "viewers": 0,
+   "online": true,
+   "n": [
+    1,
+    0,
+    2,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000050",
+    "pid": "000000000000000000000000000000c8"
+   },
+   "now": 1809729400.75,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "b1",
+   "n": [
+    0,
+    1,
+    2,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000050",
+    "pid": "000000000000000000000000000000c8"
+   },
+   "now": 1809729401.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "b2",
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000c8\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1809643000.75,\"used\":1809729401.25}},\"guests\":{},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    0,
+    2,
+    2,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000048",
+    "web": true
+   },
+   "now": 1809743000.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   },
+   "n": [
+    1,
+    0,
+    2,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000048",
+    "m": {
+     "n": "z1BoWUo5UK1NDK26XlQFJw==",
+     "c": "z1BoWUo5UK1NDK26XlQFJ6DMUqB1/Ytd",
+     "t": "z1BoWUo5UK1NDK26XlQFJ6DMUqB1/YtdG97jGbnommw="
+    },
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ"
+   },
+   "now": 1809743000.5,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    2,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000048",
+    "pid": "000000000000000000000000000000d2"
+   },
+   "now": 1809743000.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    2,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000048",
+    "pid": "000000000000000000000000000000d2"
+   },
+   "now": 1809743000.75,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000c8\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1809643000.75,\"used\":1809729401.25},\"000000000000000000000000000000d2\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1809743000.75,\"used\":1809743000.75}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1809743000.75}},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    1,
+    0,
+    2,
+    2,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_open",
+   "j": {
+    "rid": "00000000000000000000000000000049",
+    "web": true
+   },
+   "now": 1809743100.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   },
+   "n": [
+    1,
+    0,
+    2,
+    2,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_put",
+   "j": {
+    "rid": "00000000000000000000000000000049",
+    "m": {
+     "n": "ICsdOeyEy2/iCeVwlcEnDg==",
+     "c": "ICsdOeyEy2/iCeVwlcEnDuO61vuMrSy9",
+     "t": "ICsdOeyEy2/iCeVwlcEnDuO61vuMrSy9LlZQMj9xpT0="
+    },
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx"
+   },
+   "now": 1809743100.5,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    2,
+    2,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000049",
+    "pid": "000000000000000000000000000000dc"
+   },
+   "now": 1809743100.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    2,
+    2,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "pair_commit",
+   "j": {
+    "rid": "00000000000000000000000000000049",
+    "pid": "000000000000000000000000000000dc"
+   },
+   "now": 1809743100.75,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000c8\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1809643000.75,\"used\":1809729401.25},\"000000000000000000000000000000d2\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1809743000.75,\"used\":1809743000.75},\"000000000000000000000000000000dc\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\",\"at\":1809743100.75,\"used\":1809743100.75}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1809743000.75},\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\",\"at\":1809743100.75}},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    1,
+    0,
+    2,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "00000000000000000000000000000051",
+   "fp": "SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs",
+   "pids": [
+    "000000000000000000000000000000dc"
+   ],
+   "blobs": {
+    "000000000000000000000000000000dc": {
+     "n": "rdJaVw1IEb/88CtlLcc/2A==",
+     "c": "rdJaVw1IEb/88CtlLcc/2PhUkxbP+5ZV",
+     "t": "rdJaVw1IEb/88CtlLcc/2PhUkxbP+5ZVloPQiC6ea7k="
+    }
+   },
+   "since": 1809743100.5,
+   "viewers": 0,
+   "online": true,
+   "n": [
+    1,
+    0,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000051",
+    "pid": "000000000000000000000000000000dc"
+   },
+   "now": 1809743100.5,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "b3",
+   "n": [
+    1,
+    1,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000004a",
+    "web": true
+   },
+   "now": 1809743200.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600,
+    "web": "https://relay.example.com:8443/"
+   },
+   "n": [
+    1,
+    0,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000004a",
+    "m": {
+     "n": "z1BoWUo5UK1NDK26XlQFJw==",
+     "c": "z1BoWUo5UK1NDK26XlQFJ6DMUqB1/Ytd",
+     "t": "z1BoWUo5UK1NDK26XlQFJ6DMUqB1/YtdG97jGbnommw="
+    },
+    "pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ"
+   },
+   "now": 1809743200.5,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000004a",
+    "pid": "000000000000000000000000000000e6"
+   },
+   "now": 1809743200.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000004a",
+    "pid": "000000000000000000000000000000e6"
+   },
+   "now": 1809743200.75,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000c8\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"at\":1809643000.75,\"used\":1809729401.25},\"000000000000000000000000000000dc\":{\"a\":\"SHA256:Ee7cUal4klWDacRGE4Os4XccstNEnmZM+5PVTvzCibs\",\"b\":\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\",\"at\":1809743100.75,\"used\":1809743100.75},\"000000000000000000000000000000e6\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1809743200.75,\"used\":1809743200.75}},\"guests\":{\"SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx\",\"at\":1809743100.75},\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1809743200.75}},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    1,
+    0,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {},
+   "now": 1809743201.5,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    1,
+    0,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000051",
+    "pid": "000000000000000000000000000000dc"
+   },
+   "now": 1809743201.5,
+   "gkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINmBr1myDvoMi7DOK+MddYPJQ6sheFmK7MW7iK+2y9lx",
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "b4",
+   "n": [
+    1,
+    1,
+    3,
+    3,
+    2
+   ]
+  },
+  {
+   "do": "keep_only",
+   "fps": [
+    "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+    "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+    "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+    "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY"
+   ],
+   "now": 1809743202.5,
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000e6\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\",\"at\":1809743200.75,\"used\":1809743200.75}},\"guests\":{\"SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo\":{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ\",\"at\":1809743200.75}},\"note\":{\"x\":[1,2.5,\"é\",null]},\"zz\":null}",
+   "n": [
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "sessions",
+   "want": {
+    "00000000000000000000000000000050": {
+     "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+     "pids": [],
+     "blobs": [],
+     "viewers": 0
+    }
+   },
+   "n": [
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "take",
+   "tid": "@b4",
+   "role": "view",
+   "now": 1809743202.5,
+   "proof": true,
+   "took": null,
+   "n": [
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:UxI9D4ANqY4Woh6PJyRI5c88cWcmZAFR7gqZ3HIt+N8",
+   "op": "relay_list",
+   "j": {},
+   "now": 1809743202.5,
+   "key": null,
+   "n": [
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "guest_key",
+   "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+   "op": "relay_list",
+   "j": {},
+   "now": 1809743202.5,
+   "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIPwbaScuhjrO6Af2qKhDk2XMfw7pAKVLiX754wecbGZ",
+   "n": [
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000c8",
+     "000000000000000000000000000000e6"
+    ]
+   },
+   "now": 1809743203.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000e6": {
+      "fp": "SHA256:ClhyQV8A4NGh8EO10NYLmHwfuY1SYTKkl66XeD/KRqo",
+      "name": null
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000e6": []
+    }
+   },
+   "n": [
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "do": "reopen",
+   "web": "https://relay.example.com:8443/",
+   "write": "{\"edges\": {\"000000000000000000000000000000f0\": {\"a\": \"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\", \"b\": \"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\", \"at\": 99999999999999999999}, \"000000000000000000000000000000f1\": {\"a\": \"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\", \"b\": \"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\", \"at\": 1809700000.0, \"used\": -0.0}}, \"v\": 1.0}",
+   "n": [
+    0,
+    0,
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "00000000000000000000000000000052",
+   "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+   "pids": [
+    "000000000000000000000000000000f0"
+   ],
+   "blobs": {
+    "000000000000000000000000000000f0": {
+     "n": "e6VMrH/SQClZU5/MvAZtIw==",
+     "c": "e6VMrH/SQClZU5/MvAZtI/+U/KJFOQ0W",
+     "t": "e6VMrH/SQClZU5/MvAZtI/+U/KJFOQ0W2RE7yNWaPSo="
+    }
+   },
+   "since": 1809743200.5,
+   "viewers": 0,
+   "online": true,
+   "n": [
+    0,
+    0,
+    1,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "session",
+   "sid": "00000000000000000000000000000053",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "pids": [
+    "000000000000000000000000000000f1"
+   ],
+   "blobs": {
+    "000000000000000000000000000000f1": {
+     "n": "f2e8GdtrHa3EtaI+OI0Dfg==",
+     "c": "f2e8GdtrHa3EtaI+OI0DfpYb1BxL4FUl",
+     "t": "f2e8GdtrHa3EtaI+OI0DfpYb1BxL4FUlKXUFzFb5R58="
+    }
+   },
+   "since": 1809743200.5,
+   "viewers": 0,
+   "online": true,
+   "n": [
+    0,
+    0,
+    2,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000052",
+    "pid": "000000000000000000000000000000f0"
+   },
+   "now": 1809743204.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "b5",
+   "file": "{\"v\":1.0,\"edges\":{\"000000000000000000000000000000f0\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":99999999999999999999,\"used\":1809743204.5},\"000000000000000000000000000000f1\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1809700000.0,\"used\":-0.0}},\"guests\":{}}",
+   "n": [
+    0,
+    1,
+    2,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_attach",
+   "j": {
+    "sid": "00000000000000000000000000000053",
+    "pid": "000000000000000000000000000000f1"
+   },
+   "now": 1809743204.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "tid": "<hex32>",
+    "tkey": "<b64:32>",
+    "port": 18444,
+    "ttl": 30
+   },
+   "save": "b6",
+   "file": "{\"v\":1.0,\"edges\":{\"000000000000000000000000000000f0\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":99999999999999999999,\"used\":1809743204.5},\"000000000000000000000000000000f1\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"at\":1809700000.0,\"used\":1809743204.5}},\"guests\":{}}",
+   "n": [
+    0,
+    2,
+    2,
+    2,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000f0",
+     "000000000000000000000000000000f1"
+    ]
+   },
+   "now": 1825381600.5,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000f0": {
+      "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+      "name": "mini"
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000f0": [
+      {
+       "sid": "00000000000000000000000000000052",
+       "blob": {
+        "n": "e6VMrH/SQClZU5/MvAZtIw==",
+        "c": "e6VMrH/SQClZU5/MvAZtI/+U/KJFOQ0W",
+        "t": "e6VMrH/SQClZU5/MvAZtI/+U/KJFOQ0W2RE7yNWaPSo="
+       },
+       "age": 15638400,
+       "viewers": 0,
+       "online": true
+      }
+     ]
+    }
+   },
+   "file": "{\"v\":1.0,\"edges\":{\"000000000000000000000000000000f0\":{\"a\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"b\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":99999999999999999999,\"used\":1809743204.5}},\"guests\":{}}",
+   "n": [
+    0,
+    0,
+    2,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting value: line 1 column 10 (char 9)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting value: line 1 column 1 (char 0)），从空的开始"
+   ],
+   "raw_b64": "",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（'utf-8' codec can't decode byte 0xff in position 0: invalid start byte），从空的开始"
+   ],
+   "raw_b64": "/3t9",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)），从空的开始"
+   ],
+   "raw_b64": "77u/e30=",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [],
+   "raw_b64": "W10=",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [],
+   "raw_b64": "eyJlZGdlcyI6W119",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [],
+   "raw_b64": "eyJ2IjoxfQ==",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting value: line 1 column 1 (char 0)），从空的开始"
+   ],
+   "raw_b64": "bnVs",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Extra data: line 1 column 13 (char 12)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6e319eA==",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Illegal trailing comma before end of object: line 1 column 12 (char 11)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6e30sfQ==",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting property name enclosed in double quotes: line 1 column 2 (char 1)），从空的开始"
+   ],
+   "raw_b64": "eydlZGdlcyc6e319",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [],
+   "raw_b64": "eyJlZGdlcyI6eyJhIjoxfX0gCgkg",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting value: line 1 column 1 (char 0)），从空的开始"
+   ],
+   "raw_b64": "AA==",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Invalid \\uXXXX escape: line 1 column 20 (char 19)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6e30sICJ4IjoiXHUxMiJ9",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Invalid control character at: line 1 column 18 (char 17)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6e30sImsiOiIBIn0=",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（'utf-8' codec can't decode bytes in position 11-12: unexpected end of data），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6eyLkuA==",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting ',' delimiter: line 1 column 18 (char 17)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6e30sIm4iOjAxfQ==",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting ',' delimiter: line 1 column 18 (char 17)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6e30sIm4iOjEufQ==",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（Expecting ',' delimiter: line 1 column 12 (char 11)），从空的开始"
+   ],
+   "raw_b64": "eyJlZGdlcyI6e30=",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [],
+   "raw_b64": "ICB7ImVkZ2VzIiA6IHsgfSB9ICA=",
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [
+    "cca-presence: <path> 读不了（[Errno 21] Is a directory: '<path>'），从空的开始"
+   ],
+   "dir": true,
+   "n": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "do": "open",
+   "web": "https://relay.example.com:8443/",
+   "said": [],
+   "raw_b64": "eyJlZGdlcyI6eyIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDBmYSI6eyJhIjoiU0hBMjU2OmFOMURlYkJpRDMrQngxWXZNVmg3elNDcHJYVDBDNEtxQmhoWGNpL3B1VkEiLCJiIjoiU0hBMjU2OkVlN2NVYWw0a2xXRGFjUkdFNE9zNFhjY3N0TkVubVpNKzVQVlR2ekNpYnMiLCJhdCI6MUUzLCJ1c2VkIjoyZTQwMCwieCI6Ilx1MDBlOVx1ZDgzZFx1ZGUwMCJ9fSwiZWRnZXMyIjoxLCJ4IjpbTmFOLEluZmluaXR5LC1JbmZpbml0eSwtMWUtNDAwLDAuMWUxLDEuMEUrMiwtMCwxZTIyLDFlMTYsMTIzNDU2Nzg5LjEyMzQ1Njc4OSwwLjAwMDAwMSwxZS03XSwgImVkZ2VzIjp7IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMGZiIjp7ImIiOiJTSEEyNTY6YU4xRGViQmlEMytCeDFZdk1WaDd6U0NwclhUMEM0S3FCaGhYY2kvcHVWQSIsImEiOiJTSEEyNTY6K0RpcnByQzZDRm1mbkZnT1pqR1Q0OGJmOENnK085b1MwM1ljTU5oMW1GUSIsImF0IjotNX19LCLDqVxuIjp7ImsiOiJcLyJ9fQ==",
+   "n": [
+    0,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA",
+   "op": "relay_list",
+   "j": {
+    "pids": [
+     "000000000000000000000000000000fa",
+     "000000000000000000000000000000fb"
+    ]
+   },
+   "now": 100.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "peers": {
+     "000000000000000000000000000000fb": {
+      "fp": "SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ",
+      "name": "mini"
+     }
+    },
+    "sessions": {
+     "000000000000000000000000000000fb": []
+    }
+   },
+   "n": [
+    0,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_open",
+   "j": {
+    "rid": "0000000000000000000000000000004b"
+   },
+   "now": 200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "ttl": 600
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY",
+   "op": "pair_put",
+   "j": {
+    "rid": "0000000000000000000000000000004b",
+    "m": {
+     "n": "XZNZKBB9eqK6rtgXUAvf1A==",
+     "c": "XZNZKBB9eqK6rtgXUAvf1GykUC+KqVl2",
+     "t": "XZNZKBB9eqK6rtgXUAvf1GykUC+KqVl2y55FjVx35RI="
+    }
+   },
+   "now": 200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000004b",
+    "pid": "000000000000000000000000000000fc"
+   },
+   "now": 200.0,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": false
+   },
+   "n": [
+    1,
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "do": "op",
+   "fp": "SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY",
+   "op": "pair_commit",
+   "j": {
+    "rid": "0000000000000000000000000000004b",
+    "pid": "000000000000000000000000000000fc"
+   },
+   "now": 200.25,
+   "gkey": null,
+   "status": 200,
+   "reply": {
+    "v": 1,
+    "ok": true,
+    "done": true
+   },
+   "file": "{\"v\":1,\"edges\":{\"000000000000000000000000000000fb\":{\"b\":\"SHA256:aN1DebBiD3+Bx1YvMVh7zSCprXT0C4KqBhhXci/puVA\",\"a\":\"SHA256:+DirprC6CFmfnFgOZjGT48bf8Cg+O9oS03YcMNh1mFQ\",\"at\":-5},\"000000000000000000000000000000fc\":{\"a\":\"SHA256:wHY27uXldv4zvHirJCJyhu7rPCWA98NqfGVcIgInwrw\",\"b\":\"SHA256:B9yfWzkPXw8In39DQEuPYxfk1saAaK/HwJLIXC+4yQY\",\"at\":200.25,\"used\":200.25}},\"guests\":{},\"edges2\":1,\"x\":[NaN,Infinity,-Infinity,-0.0,1.0,100.0,0,1e+22,1e+16,123456789.12345679,1e-06,1e-07],\"é\\n\":{\"k\":\"/\"}}",
+   "n": [
+    1,
+    0,
+    0,
+    2,
+    0
+   ]
+  }
+ ]
+}
