@@ -189,6 +189,12 @@
   - OSC 52 写剪贴板：Claude Code 的「复制」靠它，但只在用户正看着这块终端时照办（主窗口在最前面、键盘焦点在终端上）——终端换到别的页
     以后还接着、还在收输出，不设这一条的话那边的任何输出都能在背后把剪贴板换成一条等着被粘贴的命令。几处接着时宿主只给主的那一处；
     读剪贴板不给
+  - 用户自己的复制、粘贴照终端的习惯来（`SizedTerminalView`，不改 SwiftTerm 的源码）：用鼠标选中的字（拖、双击选词、三击选行、Shift 点击扩展）
+    松开时马上放进剪贴板（选中即复制，经 App 的 `Platform.copy`，不弹提示：提示里会显示别人那边的内容）；右键直接粘贴（PuTTY、Xshell 的习惯，
+    和 ⌘V 一样经 SwiftTerm 的 `paste`，程序开着括号粘贴模式时带上标记），只看的、没在运行的终端不粘（`RemoteTerminal.canPaste`）、
+    也不弹菜单。SwiftTerm 的 `allowMouseReporting` 开着时每来一次输出都清掉选区（Claude Code 一直在重画，字选不住、⌘C 也灰着），所以只在
+    会话里的程序开着鼠标模式时开它（每次喂完输出看一眼 `mouseMode`，`followMouseMode`）；程序要鼠标时按住 Option（iTerm2 的习惯）或 Shift
+    拖才是在这台 Mac 上选字，选的那一下不报给它，松开后还给它。SwiftTerm 不把右键报给程序，右键粘贴和它不冲突
   - 标题（OSC 0 / 2）显示之前过 `Texts.plainLine`（控制字符、改文字方向的、零宽的去掉）；不响铃；窗口操作、通知不理；
     “报告标题”这类会把对方给的字当成按键送回去的查询 SwiftTerm 本来就不答
   - 终端里的内容只在 SwiftTerm 的缓冲区里，不写文件、不进日志
@@ -417,7 +423,8 @@
   标题的过滤；`PtyProcess` 在真的伪终端上（标准输入输出错误都是终端、给的窗口大小、改大小、退出码、断开是 SIGTERM 再 SIGKILL、
   三兆输出一个字节不丢）
 - `bash macos/build.sh`：重编 SwiftTerm 时跑 `macos/tools/swiftterm-check`（图形协议的各种入口都没有回话、临时文件没被删、之后终端照常）。
-  界面上只在用户看着终端时才写剪贴板、链接只开 http / https 这两条没有自动的测试（要窗口和焦点），改 `TerminalSurface` 时自己试
+  界面上只在用户看着终端时才写剪贴板、链接只开 http / https、选中即复制、右键粘贴、程序要鼠标时 Option 拖着选这几条没有自动的测试（要窗口、焦点和
+  鼠标；契约测试只查 `RemoteTerminal.canPaste`），改 `TerminalSurface` 时自己试
 - `tests/kit/term.rs` 的 `Term::start_app`（`tests/remote_host.rs` 用它）：照 App 的办法起接入端（`posix_spawn`、自己一个会话、标准输入是伪终端从的那头、没有控制终端），
   改窗口大小以后会话那头跟着变——`adopt_tty` 没了这一条就挂
 - 看界面：`bash macos/build.sh --debug` 以后用截图模式的 `remote`、`remote-terminal`、`remote-terminal-view`、`remote-tabs-list` 场景和 `flow`（配对的三页）。

@@ -61,6 +61,8 @@ final class RemoteTerminal: Identifiable {
     var arguments: [String] { ["remote", "attach"] + (readOnly ? ["-r"] : []) + [session.id] }
 
     var isRunning: Bool { status == .running }
+    /// 界面里的终端能不能右键粘贴（PROTOCOL 9.3）：在运行、不是只看的（只看的 cca 也会丢掉输入，这里干脆不发）
+    var canPaste: Bool { isRunning && !readOnly }
     var hasEnded: Bool {
         switch status {
         case .ended, .failed: return true

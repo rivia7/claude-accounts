@@ -483,6 +483,10 @@ private struct RemoteTerminalPane: View {
                 Text(place).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 12)
+            Text(terminal.readOnly ? "选中即复制" : "选中即复制 · 右键粘贴")
+                .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                .help("用鼠标选中的字马上放进剪贴板" + (terminal.readOnly ? "" : "；在终端里点右键粘贴剪贴板里的字")
+                      + "。会话里的程序要鼠标时，按住 Option 拖着选")
             if terminal.hasEnded {
                 // 还在最近一次查到的列表里、接得上，才给「重新接入」
                 if let s = model.remote.doc?.session(terminal.session.id), s.attachable {

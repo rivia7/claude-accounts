@@ -484,11 +484,15 @@ func remoteProtocolTests() {
 
     // 还没接上视图时输出太多：只留最近的
     let big = RemoteTerminal(session: far, readOnly: false) { args, cols, rows, onEvent in FakeTerminal(arguments: args, cols: cols, rows: rows, onEvent: onEvent) }
+    check("右键粘贴：还没起来时不粘", !big.canPaste)
     big.begin(cols: 80, rows: 24)
     check("起不了两次", { big.begin(cols: 10, rows: 10); return big.status == .running }())
+    let watcher = RemoteTerminal(session: far, readOnly: true) { args, cols, rows, onEvent in FakeTerminal(arguments: args, cols: cols, rows: rows, onEvent: onEvent) }
+    watcher.begin(cols: 80, rows: 24)
+    check("右键粘贴：在运行的才粘，只看的不粘", big.canPaste && watcher.isRunning && !watcher.canPaste)
     let failing = RemoteTerminal(session: far, readOnly: false) { _, _, _, _ in throw TerminalUnsupported() }
     failing.begin(cols: 80, rows: 24)
-    check("起不来：说原因", { if case .failed(let why) = failing.status { return !why.isEmpty }; return false }() && failing.hasEnded)
+    check("起不来：说原因", { if case .failed(let why) = failing.status { return !why.isEmpty }; return false }() && failing.hasEnded && !failing.canPaste)
 
     // 换成了没有远程会话的旧版 cca：页面没了，开着的终端也断开
     let t2 = ScriptedTransport { request, _ in

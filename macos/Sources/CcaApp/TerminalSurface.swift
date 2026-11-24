@@ -10,6 +10,7 @@ import SwiftTerm
 ///
 /// 内容来自别的机器，不让它动这台 Mac：图形协议（Kitty、sixel）在编 SwiftTerm 的时候就去掉了（macos/build.sh），这里再关掉 iTerm2 的
 /// 内联图片和文件（OSC 1337）、不说自己支持 sixel；链接只开 http / https；剪贴板只在用户正看着这块终端时才写、不给读；不响铃。
+/// 用户自己的操作照终端的习惯来（PROTOCOL 9.3）：用鼠标选中的字马上放进剪贴板（选中即复制），右键粘贴（只看的、没在运行的不粘）。
 @MainActor
 final class TerminalSurface {
     let view: SizedTerminalView
@@ -48,8 +49,12 @@ final class TerminalSurface {
         view.nativeBackgroundColor = TerminalSurface.background
         view.nativeForegroundColor = TerminalSurface.foreground
         view.installColors(Color.terminalAppColors)   // 16 色用它默认的那一套，和系统终端一样
+        view.onSelect = { [weak self] text in self?.selected(text) }
+        view.canPaste = { [weak terminal] in terminal?.canPaste ?? false }
+        view.followMouseMode()
         terminal.sink = { [weak view] data in
             view?.feed(byteArray: [UInt8](data)[...])
+            view?.followMouseMode()
         }
     }
 
@@ -109,11 +114,53 @@ final class TerminalSurface {
         guard !content.isEmpty, content.count <= 1 << 20, let s = String(data: content, encoding: .utf8) else { return }
         copy(s)
     }
+
+    /// 用户用鼠标选中了字：马上放进剪贴板（选中即复制）。是这边的人自己选的，不像 OSC 52 那样要看焦点
+    fileprivate func selected(_ text: String) {
+        copy(text)
+    }
 }
 
-/// SwiftTerm 的终端视图，多报一件事：大小变了。
+/// SwiftTerm 的终端视图，多做几件事：大小变了报一声；选中即复制、右键粘贴；会话里的程序不要鼠标时，选区不被它的输出冲掉。
 final class SizedTerminalView: TerminalView {
     var onLayout: (() -> Void)?
+    /// 用鼠标选好了字（拖、双击选词、三击选行、Shift 点击扩展）：松开时交出去放进剪贴板
+    var onSelect: ((String) -> Void)?
+    /// 右键粘贴现在行不行（只看的、没在运行的不行）
+    var canPaste: () -> Bool = { false }
+    /// 会话里的程序开着鼠标模式（要点击、拖动、滚轮）
+    private var programWantsMouse = false
+    /// 正在这台 Mac 上选字（按下到松开）
+    private var selecting = false
+
+    /// 会话里的程序开关了鼠标模式（每次喂完输出看一眼）：要鼠标时照常把点击、拖动、滚轮报给它；不要时不让 SwiftTerm 报——它报鼠标时
+    /// 每来一次输出都清掉选区（Claude Code 一直在重画），字选不住、⌘C 也一直灰着
+    func followMouseMode() {
+        programWantsMouse = getTerminal().mouseMode != .off
+        if !selecting { allowMouseReporting = programWantsMouse }
+    }
+
+    /// 程序不要鼠标时拖着就是选字；要鼠标时按住 Option（iTerm2 的习惯）或 Shift 拖才是在这台 Mac 上选字，选的这一下不报给它
+    override func mouseDown(with event: NSEvent) {
+        selecting = !programWantsMouse || !event.modifierFlags.isDisjoint(with: [.option, .shift])
+        allowMouseReporting = !selecting
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        if selecting, let text = getSelection(), !text.isEmpty { onSelect?(text) }
+        selecting = false
+        allowMouseReporting = programWantsMouse
+    }
+
+    /// 右键直接粘贴（PuTTY、Xshell 的习惯）：和 ⌘V 一样经 SwiftTerm 的 paste，程序开着括号粘贴模式时带上标记（Claude Code 不会把
+    /// 多行当成几次回车）。只看的、没在运行的终端什么都不做，也不弹菜单
+    override func rightMouseDown(with event: NSEvent) {
+        guard canPaste() else { return }
+        window?.makeFirstResponder(self)
+        paste(self)
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
