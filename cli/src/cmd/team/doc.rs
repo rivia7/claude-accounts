@@ -1,6 +1,6 @@
 //! Team 的线上格式（server/README.md「Team 的同步服务器」的「邀请链接」「设备的配置」）：Team 的编号、邀请链接、从邀请里那串随机数
-//! 派生的令牌 / 设备编号 / 密钥、每台设备的配置（密文 + 根密钥的签名）和配置明文的样子。tests/spec_wire.py 里有照文档独立写的一份，
-//! 这里单元测试的对照数据是它算的（改了格式先改它，再重新算）。
+//! 派生的令牌 / 设备编号 / 密钥、每台设备的配置（密文 + 根密钥的签名）和配置明文的样子。tests/kit/spec.rs 里有照文档独立写的一份。
+//! 这里单元测试的对照数据是固定的，没有重新生成它的命令：改了格式，两边的代码和这些数据一起换。
 
 use crate::cmd::hub::{hex32, link_sum};
 use crate::cmd::keyshare::{blob_ad, blob_open, blob_seal, Keys};
@@ -342,13 +342,13 @@ pub fn doc_digest(doc: &Dict) -> String {
 mod tests {
     use super::*;
 
-    // 对照数据是 tests/spec_wire.py 算的（team_id、invite_parts、invite_encode、team_doc_seal 固定 nonce 0..15、team_doc_signed）
+    // 对照数据是照文档独立实现的那一份算的，固定的（team_id、invite_parts、invite_encode、team_doc_seal 固定 nonce 0..15、team_doc_signed）
     const ROOT: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPUL7hSEVHXfYDWvDx/ozOeLVzcLMWYwN8Ru2CqCdG8d";
     const TID: &str = "45391bb0e9129a8a817e3e03219a08a8";
     const SECRET: &str = "abababababababababababababababab";
     const PROOF: &str = "B1rh0sV/O5Lm9pwKjFLyudL8kwNASfoJY+rd9ZBjYvY=";
     const LINK: &str = "cca-team1.eyJ1IjoiaHR0cHM6Ly8xOTIuMC4yLjEwOjE4NDQ1IiwicCI6WyJzaGEyNTYvL0FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9Il0sInIiOiJBQUFBQzNOemFDMWxaREkxTlRFNUFBQUFJUFVMN2hTRVZIWGZZRFd2RHgvb3pPZUxWemNMTVdZd044UnUyQ3FDZEc4ZCIsImsiOiJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsIm4iOiLmtYvor5Xnu4QiLCJlIjoxODAwMDAwMDAwfQ.169a";
-    // 同上，加上 d（spec_wire.invite_encode(…, device="小王的 MacBook")）
+    // 同上，加上 d（invite_encode 的 device="小王的 MacBook"）
     const LINK_D: &str = "cca-team1.eyJ1IjoiaHR0cHM6Ly8xOTIuMC4yLjEwOjE4NDQ1IiwicCI6WyJzaGEyNTYvL0FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9Il0sInIiOiJBQUFBQzNOemFDMWxaREkxTlRFNUFBQUFJUFVMN2hTRVZIWGZZRFd2RHgvb3pPZUxWemNMTVdZd044UnUyQ3FDZEc4ZCIsImsiOiJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsIm4iOiLmtYvor5Xnu4QiLCJlIjoxODAwMDAwMDAwLCJkIjoi5bCP546L55qEIE1hY0Jvb2sifQ.9710";
     const CT: &str = include_str!("../../../tests/vectors/team_doc_ct.json");
 
@@ -408,7 +408,7 @@ mod tests {
         assert_eq!(to_hex(&p.keys.1), "ffa8807e6363e23747849e1972c94307fc2786a04860d0b3f3a87a9ceec7ca59");
         assert!(invite_parts(&"AB".repeat(16)).is_none(), "只认小写");
         assert!(invite_parts("abab").is_none());
-        // tests/spec_wire.py 的 team_pub_proof 算的
+        // 独立实现的那一份的 team_pub_proof 算的
         assert_eq!(pub_proof(SECRET, &format!("{ROOT} 备注")).as_deref(), Some(PROOF));
         assert!(pub_proof(SECRET, "ssh-rsa AAAA").is_none());
     }

@@ -8,7 +8,7 @@
 //! 期望值不是照着代码推的：移植时拿原来的 Python（cca 里的 PY_SRC）把同一批输入、同一批场景跑了一遍，
 //! 结果记在 tests/vectors/src_clients.json 里（生成它的脚本已经删了，有意改了行为就直接改这份数据）——
 //! - 一个个函数：地址规则、版本号比大小、版本列表、解压、进程列表……（`check_functions`、`check_extract`）；
-//! - 整条路的场景（`check_scenarios`）：每一步的输出、退出码、起了哪些命令、跑完以后的文件。原来 tests/client_updates.py
+//! - 整条路的场景（`check_scenarios`）：每一步的输出、退出码、起了哪些命令、跑完以后的文件。那份单元测试
 //!   的每一项检查在生成时对 Python 的结果先核对过一遍，这里逐个场景重放，要求每一步都和记下来的一样。
 //!
 //! 这几组都在 `like_python` 一个测试里按顺序做，不是各占一个测试：`cargo test` 同时跑的测试数是有上限的（CPU 的核数），几个
@@ -508,7 +508,7 @@ fn check_urljoin(wrong: &mut Vec<String>) {
 
 #[test]
 fn time_budget_stops_new_downloads() {
-    // 原来 tests/client_updates.py 的 test_time_budget_stops_new_downloads
+    // 这次检查的时限：剩下的不够 20 秒就说时间用完了、不再开新的，够的话一次最多等剩下的那么久；没设时限照要的给
     let _reset = Reset;
     set_cu(&CU_CLAUDE);
     CU_BUDGET.with(|b| b.set(Some(time() + 5.0)));

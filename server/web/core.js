@@ -1,5 +1,5 @@
 // cca 远程会话的网页端：协议和加密这一层（没有界面）。格式照 server/README.md「远程会话的中转」「网页端」，
-// 和 cca 的辅助程序（cli/src/cmd/remote/）、tests/spec_wire.py 是同一套——三份实现要能互相配对、握手、收发。
+// 和 cca 的辅助程序（cli/src/cmd/remote/）、tests/kit/spec.rs 是同一套——三份实现要能互相配对、握手、收发。
 // 只用浏览器自带的：WebCrypto（PBKDF2、Ed25519、SHA-512）、fetch、WebSocket；HMAC-SHA256 自己算（加密记录要一块块地出密钥流，
 // WebCrypto 的每次调用都是异步的，太慢）。Node 里也能原样跑（tests/web_client.mjs 拿它和真的服务器、真的 cca 对着测）。
 

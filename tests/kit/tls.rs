@@ -360,7 +360,7 @@ pub(crate) mod testkit {
         openssl(bin, dir, &["req", "-new", "-x509", "-key", "key.pem", "-subj", "/CN=cca-team", "-days", "2", "-out", "cert.pem"]);
     }
 
-    /// CA 签的证书，名字是 127.0.0.1（presence.py 的 make_ca_cert，多写了 -sha256）：dir/ca.pem、dir/cert.pem、dir/key.pem
+    /// CA 签的证书，名字是 127.0.0.1（签的时候带 -sha256）：dir/ca.pem、dir/cert.pem、dir/key.pem
     pub fn ca_signed(bin: &Path, dir: &Path) {
         openssl(bin, dir, &["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", "ca.key"]);
         openssl(bin, dir, &["req", "-new", "-x509", "-key", "ca.key", "-subj", "/CN=cca-test-ca", "-days", "2", "-out", "ca.pem"]);

@@ -485,8 +485,8 @@ mod tests {
         }
     }
 
-    /// 原来 tests/mail_view.py 的 Judge、Links、Clean 里的每一条检查，结论照那边写的（邮件是对照数据 judge 一节里同名的那一封：
-    /// 生成对照数据时就是照那些测试里的写法做的）。上面是和真的 Python 逐项比，这里是把「该是什么」再钉一遍
+    /// 每一条检查该是什么结论，照字面写（邮件是对照数据 judge 一节里同名的那一封）。
+    /// 上面是和原来 Python 的结果逐项比，这里是把「该是什么」再钉一遍
     #[test]
     fn every_check_in_mail_view() {
         let mails = vectors("judge");
@@ -499,7 +499,7 @@ mod tests {
         let judge = |name: &str, acct: &str, got: f64, fwd: Option<&str>| {
             mail_judge(rule(), &msg(name), got, acct, now - 60.0, fwd).unwrap()
         };
-        // Judge.test_good_and_each_failure
+        // 好的那一封，和每一种过不了的
         assert_eq!(judge("good", alice, now, None), None);
         assert_eq!(judge("good", alice, now - 200.0, None), Some("old"));
         assert_eq!(judge("good", alice, now - 100.0, None), None, "登录开始前一分钟内收到的也算");
@@ -519,17 +519,17 @@ mod tests {
             assert_eq!(judge(name, alice, now, None), Some(why), "{name}");
         }
         assert_eq!(judge("good", "", now, None), Some("to"));
-        // Judge.test_only_trusts_the_topmost_gmail_result：最上面那条说没过、不是 mx.google.com 写的、pass 只在注释里
+        // 只信最上面那条 Gmail 写的结果：最上面那条说没过、不是 mx.google.com 写的、pass 只在注释里
         for name in ["forged below", "other server on top", "comment pass"] {
             assert_eq!(judge(name, alice, now, None), Some("dkim"), "{name}");
         }
-        // Judge.test_only_what_gmail_itself_wrote_counts
+        // 只有 Gmail 自己写的才算
         assert_eq!(judge("ar control", alice, now, None), None, "对照");
         assert_eq!(judge("ar nested comment", alice, now, None), None, "注释可以嵌套、带转义");
         for i in 0..8 {
             assert_eq!(judge(&format!("ar not gmail-written {i}"), alice, now, None), Some("dkim"), "第 {i} 种");
         }
-        // Judge.test_trusted_forwarder
+        // 登记了的中转（转发来的邮件）
         let relay = Some("relay.example.com");
         assert_eq!(judge("fwd good", alice, now, relay), None, "正常转发 + 登记了中转 → 放行");
         // 那边这一条写的是 forwarder='sub.relay.example.com'.split('.', 1)[1]，也就是 relay.example.com：照字面
@@ -557,10 +557,10 @@ mod tests {
         }
         assert_eq!(judge("good", alice, now, relay), None, "严格直签 + 开了中转 → 仍放行");
         assert_eq!(judge("fwd good", "bob@example.com", now, relay), Some("to"), "发给 alice 的转发邮件对 bob 不算");
-        // Judge.test_signature_matched_by_header_b
+        // 签名照头里的 b 来认
         assert_eq!(judge("twin signature", alice, now, None), Some("dkim"), "两个签名的 b 开头一样：分不清，不认");
         assert_eq!(judge("other signature", alice, now, None), None, "b 开头不一样的另一个签名不影响");
-        // Judge.test_judge_any_reports_the_furthest_reason
+        // mail_judge_any 报的是走得最远的那个原因
         let (r, why) = mail_judge_any(&[rule()], &msg("to bob"), now, alice, 0.0, None).unwrap();
         assert!(r.is_some_and(|r| std::ptr::eq(r, rule())) && why == Some("to"));
         // Links

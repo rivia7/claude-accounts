@@ -2138,7 +2138,7 @@ mod tests {
 
     #[test]
     fn reset_short_like_python_test() {
-        // 原来 tests/usage_view.py 的 test_reset_short
+        // 表格里的重置时间怎么写
         let now = time::time();
         assert_eq!(reset_short(now + 2.0 * 3600.0 + 13.0 * 60.0 + 5.0, now, false).unwrap(), "2小时13分后");
         assert_eq!(reset_short(now + 30.0, now, false).unwrap(), "不到1分钟后");
@@ -2257,7 +2257,7 @@ mod tests {
 
     #[test]
     fn fit_note_like_python_test() {
-        // 原来 tests/usage_view.py 的 test_fit_note
+        // 备注放不下时的取舍
         let parts: Vec<String> = ["剩余重置 2 次（最早 12 月 5 日过期）", "GPT-5-Pro 本周 30%", "credits 余额 12.5"]
             .iter()
             .map(|s| s.to_string())
@@ -2291,7 +2291,7 @@ mod tests {
 
     #[test]
     fn weeks_add_like_python_test() {
-        // 原来 tests/usage_view.py 的 test_weeks_add：按重置时间认是哪一周，记最高的百分比；掉下去一大截是中间重置过，之前的累计下来
+        // 按重置时间认是哪一周，记最高的百分比；掉下去一大截是中间重置过，之前的累计下来
         let w = WEEK as f64;
         let t = 1_800_000_000.0;
         let end = t + 3.0 * 86400.0;

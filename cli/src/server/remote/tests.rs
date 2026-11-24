@@ -1,6 +1,6 @@
 //! remote 的单元测试：直接调 handle_op（不经网络、不签名，时间由用例给）。
 //!
-//! 开头两条是 tests/remote_relay.py 的 LimitsTest 照搬过来的（那一份直接调 Python 的 Remote，对 Rust 的服务端不跑）；后面各条把每个
+//! 开头两条是限额和记账、没用过的配对到期删掉（时间得由用例给，从外面测不了：黑盒的那一份 tests/remote_relay.rs 里没有）；后面各条把每个
 //! op 成功和每一种不成功的回法、状态文件、访客、名单变了以后的清理、pair_get 的等待各走一遍。和 Python 逐项对照的在 replay.rs。
 
 use super::*;
@@ -146,7 +146,7 @@ fn field(body: &str, k: &str) -> String {
     json::loads(body).unwrap().as_dict().unwrap().str(k).unwrap().to_string()
 }
 
-// ---------------------------------------------------------------- LimitsTest（tests/remote_relay.py:540-616）
+// ---------------------------------------------------------------- 限额和记账
 
 #[test]
 fn limits() {

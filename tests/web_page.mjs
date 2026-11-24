@@ -1,5 +1,5 @@
 // 远程会话的网页端在真的浏览器里走一遍（无界面的 Chrome，照 iPhone 的屏幕大小、触摸）：打开页面、输入配对码、列出会话、接入、
-// 敲字、按键条、输入框、菜单、断开再接入、会话结束、设置。tests/web_relay.py 的 PageTest 起好服务器和会话以后跑它；
+// 敲字、按键条、输入框、菜单、断开再接入、会话结束、设置。tests/web_relay.rs 的 the_page_in_a_browser 起好服务器和会话以后跑它；
 // 也可以自己跑：node tests/web_page.mjs 网页端的地址 配对码 截图放哪个目录（DARK=1 是深色）。
 // 结果是一段 JSON：ok、走到了哪几步、页面控制台里的报错（内容安全策略拦下的也在里面：应该一条都没有）。
 // 这是 Chrome 的引擎，不是 iPhone 上的 Safari：键盘弹出、添加到主屏幕、手指滚动这些要在真的手机上看。
@@ -13,7 +13,7 @@ const profile = mkdtempSync(join(tmpdir(), 'cca-cdp-'));
 const chrome = spawn(process.env.CCA_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', '--remote-debugging-port=0',
   `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--hide-scrollbars', '--no-proxy-server', 'about:blank'],
   { stdio: ['ignore', 'ignore', 'pipe'] });
-// 出什么事都把 Chrome 停掉、它的临时资料目录删掉（这个脚本被叫停时也是：tests/web_relay.py 等不到会给整个进程组发信号）
+// 出什么事都把 Chrome 停掉、它的临时资料目录删掉（这个脚本被叫停时也是：tests/web_relay.rs 等不到会给整个进程组发信号）
 let cleaned = false;
 function cleanup() {
   if (cleaned) return;

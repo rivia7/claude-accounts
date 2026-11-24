@@ -49,21 +49,21 @@ pub const CMDS: &[(&str, crate::Run)] = &[
     ("claude-logout", role!(claude::logout)),     // .claude.json：去掉 oauthAccount
     ("claude-status", role!(claude::status)),     // .claude.json：auth status 的 JSON
     ("claude-session", role!(claude::session)),   // 配置目录 账号：一次会话写进配置目录的东西
-    ("fake-usage", role!(usage::run)),            // stream-json 的 get_usage（原来的 fake_usage.py）
-    ("fake-oauth", role!(oauth::run)),            // .claude.json 邮箱：本机回调的登录（原来的 fake_oauth.py）
-    ("browser", role!(browser::run)),             // state code：扮演账号的 Chrome 跳回回调（原来的 fake_browser.py）
+    ("fake-usage", role!(usage::run)),            // stream-json 的 get_usage
+    ("fake-oauth", role!(oauth::run)),            // .claude.json 邮箱：本机回调的登录
+    ("browser", role!(browser::run)),             // state code：扮演账号的 Chrome 跳回回调
     // 假 codex（$T/bin/codex）
     ("codex-features", role!(codex::features)),      // config.toml 开关：features disable
     ("codex-provider", role!(codex::provider)),      // -c 里的 model_providers.cca  CCA_T：执行 auth 的命令取 key
     ("codex-session", role!(codex::session)),        // CODEX_HOME  会话库目录  账号：一次会话写进 CODEX_HOME 的东西
-    ("fake-codex-server", role!(codex_server::run)), // [--write-auth]：app-server（原来的 fake_codex_server.py）
+    ("fake-codex-server", role!(codex_server::run)), // [--write-auth]：app-server
     // 假 agy（$T/bin/agy）
-    ("fake-agy", role!(agy::run)), // agy 的参数…（原来的 fake_agy.py）
+    ("fake-agy", role!(agy::run)), // agy 的参数…
     // 别的
-    ("stun", role!(stun::run)),           // 沙箱目录：假的 STUN 服务器（原来的 fake_stun.py）
+    ("stun", role!(stun::run)),           // 沙箱目录：假的 STUN 服务器
     ("core-load", role!(core_load::run)), // 配置文件：假内核读配置（原来的 $T/core_load）
     ("gh-releases", role!(gh::run)),      // $CCA_T/gh：假 GitHub 的发布列表
-    ("dockpl", role!(dock::run)),         // dock.plist set|get|add …：程序坞的设置（原来的 dockpl.py）
+    ("dockpl", role!(dock::run)),         // dock.plist set|get|add …：程序坞的设置
     ("plist", role!(launchd::run)),       // get 文件 路径…：属性列表里的几个值，制表符隔开（假 launchctl 用）
     // tests/linux.sh 的沙箱（原来是它现写的三段 Python）
     ("linux-claude", role!(linux_claude::run)), // 沙箱目录 脚本的路径 参数…：假 claude（登录的回调、会话）

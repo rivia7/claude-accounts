@@ -1,5 +1,5 @@
-//! 远程会话里的密码学（格式在 server/README.md「远程会话的中转」；tests/spec_wire.py 照那一份独立实现了一遍，
-//! 下面的测试向量是它算的）。只用 HMAC-SHA256（辅助程序已有的 sha2）：
+//! 远程会话里的密码学（格式在 server/README.md「远程会话的中转」；tests/kit/spec.rs 照那一份独立实现了一遍；
+//! 下面的测试向量是固定的数据）。只用 HMAC-SHA256（辅助程序已有的 sha2）：
 //!
 //! - 配对码：10 个随机字节，写成 16 个字符。从它派生配对时交换的那两份密文的密钥，和服务器上认这次配对的编号（rid）；
 //!   服务器只见得到 rid 和密文，不知道配对码
@@ -335,7 +335,7 @@ mod tests {
         pair_secret(&keys().kc, &[0x11; 32], &[0x22; 32], FPA, FPB)
     }
 
-    /// tests/spec_wire.py（照文档独立实现的）算出来的：两边要逐字节一样
+    /// 照文档独立实现的那一份算出来的（固定的数据）：两边要逐字节一样
     #[test]
     fn matches_the_reference_vectors() {
         assert_eq!(code_text(&code()), "0410-6105-0R3G-G28A");

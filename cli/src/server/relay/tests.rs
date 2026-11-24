@@ -262,7 +262,7 @@ impl Net {
 
 // ---------------------------------------------------------------- 认证码、帧
 
-/// 开场白和回的那一行：和客户端那边（cli/src/cmd/remote/crypto.rs，照 tests/spec_wire.py 算的对照数据）逐字节一样
+/// 开场白和回的那一行：和客户端那边（cli/src/cmd/remote/crypto.rs，照独立实现的那一份算的对照数据）逐字节一样
 #[test]
 fn preamble_macs_match_the_client_vectors() {
     let key = [7u8; 32];

@@ -1273,7 +1273,7 @@ mod tests {
 
     #[test]
     fn fake_commands_are_byte_for_byte_the_python_ones() {
-        // 原来 tests/presence.py 里那几段脚本的 SHA-256（改了脚本要一起改：别的测试照着它们的文件格式读）
+        // 这几段假命令的脚本的 SHA-256（改了脚本要一起改：别的测试照着它们的文件格式读）
         for (name, script, want) in [
             ("CURL", CURL, "e9cafc9e69398d12b02ca2f17d68c45f82c16de485d890ca417bf6e01cda3155"),
             ("PS", PS, "6db6c6e835fda13c79d145213a296d3ae24a34f953b2afae10696c0b7950b743"),

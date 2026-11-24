@@ -2,17 +2,18 @@
 //! 不在 Team 的名单里的访客拿配对码配对、它能发和不能发的请求、WebSocket 进中转、页面的文件、另开的那个带证书机构签的证书的端口。
 //!
 //! 真的服务器进程（Team「测试组」的同步服务器；用哪一份照 kit::server）；扮演手机的是这里照文档写的一份（Guest、WsSock：
-//! ssh-keygen 签名、自己说 WebSocket），另一头是 Team 里的设备（照文档自己说话，或者真的 cca：见 ClientTest 那几条）。
+//! ssh-keygen 签名、自己说 WebSocket），另一头是 Team 里的设备（照文档自己说话，或者真的 cca：见 pair_list_attach_type 那几条）。
 //! 浏览器里跑的那一份（server/web/core.js）经 tests/web_client.mjs 在 Node 里测（要 Node 22 以上），真的那一页经
 //! tests/web_page.mjs 在无界面的 Chrome 里走一遍（还要 Chrome：`CCA_CHROME` 换路径，`CCA_WEB_SHOTS=目录` 留下截图）；
 //! 没有 Node、Chrome 时那几条自己跳过。不联网。夹具（Base、转发器、服务器）在 kit::relay 里。
 //!
 //! 和原来的 tests/web_relay.py 不一样的地方：
-//! - UrlTest（--web-url 的各种写法怎么规整）直接调 Python 服务器里的函数，没有移过来；FilesTest 里从服务器的类里看的那几样
-//!   （发哪些文件、压缩以后多大、--web-name-file）改成问一台跑着的服务器，两份服务器都能对着测；名字不对时照旧叫 cca 的
-//!   那几种（空的、太长、带控制字符）从外面一种要起一台服务器，留给服务器自己的单元测试
-//! - CoreJsTest 的 signature 里“服务器自己的验签认页面签的名”那三句也是直接调 Python 的函数：这里换成 ssh-keygen 来验
-//!   （改过的内容、别的命名空间它不认）；服务器自己的验签认不认，ClientTest 那几条里真的服务器每个请求都在验
+//! - --web-url 的各种写法怎么规整不在这里：在服务器自己的单元测试里（cli/src/server/web.rs 的
+//!   the_web_url_is_written_the_way_browsers_say_it）；发哪些文件、压缩以后多大、--web-name-file 是问一台跑着的服务器
+//!   （the_real_page、the_team_name），两份服务器都能对着测；名字不对时照旧叫 cca 的那几种（空的、太长、带控制字符）
+//!   从外面一种要起一台服务器，也在服务器自己的单元测试里（cli/src/server/web.rs 的 the_team_name）
+//! - signature 里页面签的名交给 ssh-keygen 来验（改过的内容、别的命名空间它不认）；服务器自己的验签认不认，
+//!   pair_list_attach_type 那几条里真的服务器每个请求都在验
 //! - WsSock 等到时限（20 秒）还读不到东西算出错（原来是当成对面关了）：该断开的地方服务器得真的断开
 
 use kit::fleet::{self, Device, WAIT};
@@ -610,8 +611,8 @@ fn wport_in(d: &Path) -> u16 {
     written.trim().parse().unwrap_or_else(|_| panic!("端口文件里写的不是端口：{written:?}"))
 }
 
-/// 原来 WebBase 的 setUp：开着网页端的服务器，box、laptop 两台设备登记在上面。返回 (夹具, 网页端, box, laptop)。
-/// origin：开 WebSocket 时带的 Origin（ClientTest 那几条不带）
+/// 开着网页端的服务器，box、laptop 两台设备登记在上面。返回 (夹具, 网页端, box, laptop)。
+/// origin：开 WebSocket 时带的 Origin（pair_list_attach_type 那几条不带）
 fn web_fx_with(t: &mut Ctx, origin: Option<&str>) -> (Base, Web, Device, Device) {
     let fx = Base::with(t, true, web_extra);
     let ca = fx.d.join("web-tls").join("ca.pem");
@@ -1140,7 +1141,7 @@ fn need_node(t: &Ctx) -> PathBuf {
 }
 
 // 浏览器里跑的那一份（server/web/core.js）和照文档独立实现的 kit::spec 对：同样的输入算出同样的东西，互相握得上手、
-// 解得开对方的记录。不起服务器（原来的 CoreJsTest）
+// 解得开对方的记录。不起服务器
 
 fn the_same_numbers(t: &mut Ctx) {
     let mut node = Node::start(&need_node(t), None);
@@ -1269,11 +1270,11 @@ fn signature(t: &mut Ctx) {
     assert_eq!(r.status.py(), 0, "{}", r.err());
 }
 
-// ---- 整条路：真的 cca 在一头，浏览器里跑的那一份（在 Node 里）在另一头（原来的 ClientTest） ----
+// ---- 整条路：真的 cca 在一头，浏览器里跑的那一份（在 Node 里）在另一头 ----
 // box 上是真的 cca（辅助程序：在宿主里运行的会话、cca remote pair --web），手机那一头是浏览器里跑的那一份
 // （在 Node 里：自己生成密钥、输入配对码、列会话、经 WebSocket 接入、敲键、断了自己接上）
 
-/// 原来 ClientTest 的 setUp：开着网页端的服务器、两台设备、一个 Node 进程（照测试的证书机构认服务器）。
+/// 这一组用例的准备：开着网页端的服务器、两台设备、一个 Node 进程（照测试的证书机构认服务器）。
 /// 返回 (夹具, 网页端, box, laptop, Node, 页面连的地址：照实际的端口)。Node 里的 WebSocket 不带 Origin（浏览器才带）；
 /// 真的浏览器里对不对由界面那一轮看
 fn client_fx(t: &mut Ctx) -> (Base, Web, Device, Device, Node, String) {
@@ -1692,8 +1693,8 @@ fn the_real_page(t: &mut Ctx) {
 }
 
 /// --web-name-file（安装脚本写的 app/name）：标题、手机主屏幕上的名字带上 Team 的名字（转义过）；别的文件不动；
-/// 没给时照旧叫 cca。（文件不在、名字不对——空的、太长、带控制字符——时也照旧叫 cca：原来直接调 Python 服务器里读名字的
-/// 那个函数来查，没有移过来）
+/// 没给时照旧叫 cca。（文件不在、名字不对——空的、太长、带控制字符——时也照旧叫 cca：在服务器自己的单元测试里，
+/// cli/src/server/web.rs 的 the_team_name）
 fn the_team_name(t: &mut Ctx) {
     let (_plain_fx, plain) = real_page_fx(t, None);
     let (_team_fx, team) = real_page_fx(t, Some("甲组 <b>&\"x\"\n第二行不算\n"));

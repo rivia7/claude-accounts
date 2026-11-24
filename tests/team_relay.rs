@@ -114,7 +114,7 @@ fn server_args(d: &Path, root: &str) -> Vec<String> {
     args
 }
 
-// ---- 两个 Team、两台服务器（原来的 TeamServer、TeamRelayTest） ----
+// ---- 两个 Team、两台服务器 ----
 
 /// 「研发组」的同步服务器（自己的目录、证书），开着中转。离开作用域时杀掉
 struct TeamServer {
@@ -150,7 +150,7 @@ impl Drop for TeamServer {
     }
 }
 
-/// 原来 TeamRelayTest 的 setUp 备下的：研发组（管理员 admin 建的，编号 tid，服务器 rsrv）、测试组（fx）、两台设备 box 和 laptop。
+/// 每个用例备下的：研发组（管理员 admin 建的，编号 tid，服务器 rsrv）、测试组（fx）、两台设备 box 和 laptop。
 /// 字段照收场的先后排：设备先、研发组的服务器其次、测试组的服务器最后
 struct TeamFx {
     tid: String,
@@ -304,7 +304,7 @@ fn each_teams_sessions_go_through_its_own_server(t: &mut Ctx) {
     assert_eq!(rows_of(&doc["peers"], &["id", "team"]), [list![other_pid, other]]);
 }
 
-// ---- bash 这一层（真的 cca 脚本）：cca remote pair --team 名字，cca remote join 自己找到是哪台服务器（原来的 ShellTest） ----
+// ---- bash 这一层（真的 cca 脚本）：cca remote pair --team 名字，cca remote join 自己找到是哪台服务器 ----
 
 /// dev 上 cca remote pair 参数…（同意）：返回 (进程, 配对码, 到配对码为止 stderr 上说的)
 fn shown(fx: &Base, dev: &Device, argv: &[&str]) -> (Popen, String, String) {
@@ -365,7 +365,7 @@ fn terminal(t: &mut Ctx) {
     assert_eq!(sorted(via), ["经「测试组」的服务器", "经「研发组」的服务器"]);
 }
 
-// ---- 一个 Team 的服务器没开中转（原来的 NoRelayTest；测试组的那一台开着） ----
+// ---- 一个 Team 的服务器没开中转（测试组的那一台开着） ----
 
 fn pairing_on_a_team_server_without_relay(t: &mut Ctx) {
     let fx = Base::new(t);

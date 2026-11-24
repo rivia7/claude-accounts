@@ -16,7 +16,7 @@
 //!   proxy（refuse：代理不肯连；auth：SOCKS5 要认证）
 //! 日志在 目录/imap.log，一行一条：IMAP 命令 参数（LOGIN 的密码换成 ***）、DROP、VIOLATION、PROXY socks5|http 目标——测试按字 grep 它们。
 //!
-//! 在测试里用（和原来 mail_view.py 的用法一一对应）：
+//! 在测试里用：
 //!
 //! ```ignore
 //! let ca = make_pki(&dir.join("pki"))?;                 // mf.make_pki(…)

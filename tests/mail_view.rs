@@ -72,7 +72,7 @@ const WAIT: Duration = Duration::from_secs(30);
 // Used：cli/src/cmd/mail/hunt.rs 的 claim_once_across_processes、old_records_are_dropped
 // Hunt：cli/src/cmd/mail/hunt.rs 里同名的 14 个（opens_only_the_newest_and_keeps_watching …… refused_counts_as_rejected）
 // Source：cli/src/cmd/mail/imap/tests.rs 的 first_round_searches_and_takes_the_latest_burst、later_rounds_fetch_new_uids_without_searching、uidvalidity_change_searches_again、a_round_cut_short_loses_nothing
-// Lint：test_every_rule_is_known 在 cli/src/cmd/mail.rs 的 every_rule_is_known；test_python38_syntax_and_lazy_imports 查的是内嵌 Python 的写法，没有了
+// Lint：各工具写的规则名都认得，在 cli/src/cmd/mail.rs 的 every_rule_is_known；另一条查的是内嵌 Python 的写法，没有了
 // Keystore：下面的 Keystore 那一个用例（经假的 security 走真的进程）；原来进程里的那一条在 cli/src/cmd/secrets.rs 的 write_replaces_the_same_account_only_and_delete_can_pick_one
 
 /// 假的钥匙串（和 tests/setup.sh 的一样）：条目存在 ~/keychain/<服务名>/<账户名>，每次的命令行记在
@@ -141,7 +141,7 @@ exit "$(cat {rc} 2>/dev/null || echo 0)"
 
 // —— 夹具 ——
 
-/// 原来的三个子类：各有各的假 Gmail 和假代理（setUpClass）
+/// 原来的三个子类：各有各的假 Gmail 和假代理
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Class {
     Wire,
@@ -158,7 +158,7 @@ enum Store {
     Keychain,
 }
 
-/// 一个子类共用的假 Gmail 和假代理。字段的先后就是收掉的先后：先不再接新的连接，再删目录（原来的 tearDownClass）
+/// 一个子类共用的假 Gmail 和假代理。字段的先后就是收掉的先后：先不再接新的连接，再删目录
 struct Fake {
     /// 留着才接新的连接（丢掉就关上：原来的 srv.ls.close()）
     _srv: Server,
@@ -169,7 +169,7 @@ struct Fake {
     dir: TempDir,
 }
 
-/// 原来 setUpModule 生成的证书（模块完了删掉）
+/// 整个模块共用的证书（模块完了删掉）
 static PKI: Mutex<Option<TempDir>> = Mutex::new(None);
 /// 已经起了的各个子类的假 Gmail（模块完了收掉）
 static FAKES: Mutex<Vec<(Class, Arc<Fake>)>> = Mutex::new(Vec::new());
@@ -178,7 +178,7 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 原来的 setUpModule：一次性的 CA 和它签的 imap.gmail.com 的证书（openssl 生成），整个模块只生成一次。给出放证书的目录
+/// 一次性的 CA 和它签的 imap.gmail.com 的证书（openssl 生成），整个模块只生成一次。给出放证书的目录
 fn pki(t: &mut Ctx) -> PathBuf {
     let mut slot = locked(&PKI);
     if slot.is_none() {
@@ -190,7 +190,7 @@ fn pki(t: &mut Ctx) -> PathBuf {
     slot.as_ref().expect("刚放进去的").join("pki")
 }
 
-/// 原来每个子类的 setUpClass：拷一份证书、建好邮件夹，起假 Gmail 和假代理。同一个子类的用例共用，模块完了收掉
+/// 每个子类的准备：拷一份证书、建好邮件夹，起假 Gmail 和假代理。同一个子类的用例共用，模块完了收掉
 fn fake(t: &mut Ctx, class: Class) -> Arc<Fake> {
     if let Some((_, fake)) = locked(&FAKES).iter().find(|(c, _)| *c == class) {
         return fake.clone();
@@ -222,7 +222,7 @@ fn copy_dir(from: &Path, to: &Path) {
 /// 一条命令的结果：(退出码, stdout, stderr)
 type Ran = (i32, String, String);
 
-/// 一个用例的环境（原来的 Box：setUp 和它的那些方法）。每个用例一个临时 HOME；每个子类一个假 Gmail 和假代理（真的 TLS：
+/// 一个用例的环境。每个用例一个临时 HOME；每个子类一个假 Gmail 和假代理（真的 TLS：
 /// 证书是模块里一次性的 CA 签的，辅助程序经 CCA_MAIL_CAFILE 信任它——这个变量只在 HOME 换过、连的是本机时才算数）
 struct Mail {
     fake: Arc<Fake>,
@@ -247,7 +247,7 @@ struct Mail {
 }
 
 impl Mail {
-    /// 原来的 setUp
+    /// 备好一个用例的环境
     fn new(t: &mut Ctx, class: Class) -> Mail {
         if !cfg!(target_os = "macos") {
             t.skip(ONLY_MAC);

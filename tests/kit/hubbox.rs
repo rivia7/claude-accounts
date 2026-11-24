@@ -34,7 +34,7 @@
 //! HUB_BOX_PYTHON、HUB_BOX_SERVER 在建假服务器的环境里设了的，放进假服务器的环境（enter、install 都带着，假命令就看得到）；
 //! 没设时假服务器的环境和原来一字不差。在自己的进程里建假服务器的测试不改环境，直接给（[`Box::new_with`]）。
 //!
-//! 在测试里用（和原来 hub_deploy.py 的用法一一对应）：
+//! 在测试里用：
 //!
 //! ```ignore
 //! let b = Box::new(dir.join("box-1"), &Opts { docker: true, ..Opts::default() });   // Box(d, docker=True)

@@ -1345,7 +1345,7 @@ mod tests {
         assert_eq!(KEYSHARE_EVERY, 600.0, "上报进程里记下的 API key 两次同步至少隔 10 分钟");
     }
 
-    /// 原来 tests/presence.py 的 test_scan_app_cpu：桌面 App 看进程树的 CPU——开了很久的第一次见到先当作刚好闲置满 10 分钟，隔 30 秒以上的两次
+    /// 桌面 App 看进程树的 CPU——开了很久的第一次见到先当作刚好闲置满 10 分钟，隔 30 秒以上的两次
     /// 采样之间用掉不少 CPU（含子进程）才算有动静；别的资料目录不算
     #[test]
     fn scan_app_cpu_like_python_test() {
@@ -1375,7 +1375,7 @@ mod tests {
         assert!(presence_scan(&salt, &targets, &other, &mut AppSamples::new(), now, 1.0).unwrap().0.is_empty(), "别的资料目录不算");
     }
 
-    /// 原来 tests/presence.py 的 test_past_time：过去的某个时刻怎么写（今天的写几点，昨天、一周内、再早的各有写法；本地时间）
+    /// 过去的某个时刻怎么写（今天的写几点，昨天、一周内、再早的各有写法；本地时间）
     #[test]
     fn past_time_like_python_test() {
         use crate::py::time::mktime;

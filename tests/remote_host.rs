@@ -40,7 +40,7 @@ pub const MODULE: Module = Module {
     ],
 };
 
-/// 一个用例的临时 HOME 和里面的东西（原来的 setUp）
+/// 一个用例的临时 HOME 和里面的东西
 struct Fx {
     /// ~/.cca；DeepHome 里是 HOME 下面很深的一个目录，经 CCA_HOME 告诉辅助程序
     cca: PathBuf,
@@ -124,7 +124,7 @@ impl Fx {
     }
 }
 
-/// 一个用例在两种 ~/.cca 上各跑一遍（原来的两个类）
+/// 一个用例在两种 ~/.cca 上各跑一遍
 fn both(t: &mut Ctx, body: impl Fn(&Fx)) {
     for (class, deep) in [("RemoteHost", false), ("DeepHome", true)] {
         t.sub(class, |t| body(&Fx::new(t, deep)));

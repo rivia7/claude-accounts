@@ -331,7 +331,7 @@ ok "login-page：不是这个工具的登录页不打开（Codex 的提示用 cc
 # 占住回调的端口，一直占到下面 kill 它为止：后面这几次 login-page 都靠它（端口被占时打开登录页就返回）。以前只占 20 秒，机器慢时
 # （xprotectd 忙着扫新文件，每次运行慢好几倍）没跑到后面就放了，login-page 真的去等回调，干等 15 分钟才失败。都带 CCA_LOGIN_WAIT=20：端口万一空了最多等 20 秒
 "$TESTBIN" hold-port "$lp" "$T/lp.busy" & busy=$!
-for i in $(seq 1 100); do [ -e "$T/lp.busy" ] && break; sleep 0.1; done   # 等它真的占上了（机器慢时 python 起来也要一会儿）
+for i in $(seq 1 100); do [ -e "$T/lp.busy" ] && break; sleep 0.1; done   # 等它真的占上了（机器慢时它起来也要一会儿）
 out=$(run CCA_LOGIN_WAIT=20 cca login-page alice@example.com --node US-A "$LPU" 2>&1); rc=$?
 ok "login-page：回调的端口被别的程序占着：照样打开登录页，说清楚登录后从地址栏复制整个网址贴回服务器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "被别的程序占着" && grep -q "state=st-page1" open.log'
 # 节点按地址摘要认（两边叫法可以不同）；Mac 上还没有这个账号时问要不要用同一个节点加上它。回调的端口还占着：打开登录页就返回
@@ -4266,10 +4266,10 @@ ok "uninstall --no-backup：不留备份，照样删掉 ~/.cca；~/.local/bin �
 fi
 if sect unit; then
 # 和上面各节互不相干的那些测试。Rust 的（辅助程序和 tests/ 自己的单元测试、suite 的各个模块）开头就放到后台跑了（见前面的 unit_start），
-# 这里等它跑完、一样一行结果；还没移成 Rust 的那几份 Python 测试在这里一个个跑
+# 这里等它跑完、一样一行结果；bash 写的那一份（tests/path_unhint.sh）在这里现跑
 unit_wait
-# 辅助程序内部的检查（原来这一节里各份 Python 测试直接调内嵌 Python 的函数查的那些：解析、规则、价格表、时段、客户端更新的每一步……）
-# 都在 cargo test 里；下面各份 Python 测试把辅助程序当黑盒跑（tests/helper_bin.py），或者切出 cca 里的 bash 函数来测
+# 辅助程序内部的检查（从外面运行它查不到的那些：解析、规则、价格表、时段、客户端更新的每一步……）
+# 都在 cargo test 里；下面 suite 的各个模块把辅助程序当黑盒跑（kit::harness 的 helper：CCA_HELPER），或者切出 cca 里的 bash 函数来测
 ok "辅助程序（cli/）自己的单元测试：cargo test" 'cargo_ok cargo-test'
 # 代码照仓库根的 rustfmt.toml 排过（cli/ 和 tests/ 两个包都是；工具链是固定的，排出来哪台机器都一样）：没排过的改动一合进来，以后谁顺手 cargo fmt 就是一大片不相干的改动。
 # 生成的数据表标着 #[rustfmt::skip]，不参与

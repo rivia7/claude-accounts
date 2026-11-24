@@ -27,8 +27,8 @@
 - `@xterm/xterm@5.5.0`：`sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A==`
 - `@xterm/addon-fit@0.10.0`：`sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ==`
 
-换版本：`npm pack @xterm/xterm@版本 @xterm/addon-fit@版本`，核对 `dist.integrity`，换掉这四个文件，改上面的表（`tests/web_relay.py`
-照这张表核对文件），在真的浏览器里走一遍（`tests/web_relay.py PageTest`）。没用 6.x：它把滚动换成了自己画的滚动条，
+换版本：`npm pack @xterm/xterm@版本 @xterm/addon-fit@版本`，核对 `dist.integrity`，换掉这四个文件，改上面的表（`tests/web_relay.rs`
+的 `the_real_page` 照这张表核对文件），在真的浏览器里走一遍（同一份里的 `the_page_in_a_browser`）。没用 6.x：它把滚动换成了自己画的滚动条，
 手机上手指滚动靠不靠得住没有把握；5.5.0 是浏览器自己的滚动。只载入了这两个文件：没有图片、剪贴板（OSC 52）、网页链接这些插件，
 会话的输出让终端做不了这些事。页面的内容安全策略不许 `eval`，这两个文件里也没有。
 

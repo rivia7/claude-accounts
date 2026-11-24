@@ -760,7 +760,7 @@ impl Base {
     // --- bash 这一层：真的 cca 脚本（仓库里的那一份），辅助程序是设备 ~/bin 里的那个链接 ---
 
     /// 在 dev 上跑 cca 脚本时的环境：设备的环境，加上 CCA_HELPER（[`helper`]）、LANG=en_US.UTF-8、TERM=dumb，再加 more
-    /// （同名的以 more 为准；原来的 ShellTest.env）
+    /// （同名的以 more 为准）
     pub fn shell_env(&self, dev: &Device, more: &[(&str, &str)]) -> BTreeMap<String, String> {
         let mut env = dev.env.clone();
         env.insert("CCA_HELPER".to_string(), text(&helper(dev)));

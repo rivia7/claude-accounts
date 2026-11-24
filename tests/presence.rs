@@ -5,9 +5,9 @@
 //! 原来是 tests/presence.py。服务器用哪一份跑照 CCA_TEST_SERVER（kit::server）：这里只经网络和它打交道。夹具（服务器、Team、
 //! 设备、假命令）在 kit::fleet、kit::pki，别的几份测试也用。
 //!
-//! 原来直接调 Python 那一份服务器里的函数的几处不在这里——那是服务器进程里面的事，归服务器自己的单元测试：
-//! test_cost_leftovers、test_store、VerifyTest.test_against_ssh_keygen 三个用例整个是，test_keys、test_cost 的最后一段
-//! （Store 的各个上限）、test_flow 里的 parse_enroll、parse_team_docs、test_keyshare_crypto 里的 parse_blob 也是；各处留了一行说明。
+//! 服务器进程里面的事不在这里，归服务器自己的单元测试：Store 的各个上限、邀请和成员的规矩、以前的版本留下的折合金额启动时
+//! 清掉（cli/src/server/store/tests.rs），验签和 ssh-keygen 对（cli/src/server/sshsig.rs），请求里各项的形状（parse_enroll、
+//! parse_team_docs、parse_blob：cli/src/server/wire.rs）；各处留了一行说明。
 //! 服务器里的几个上限在这里写成了数（旁边注明是它的哪个常量）：改了服务器的要一起改。
 
 use kit::fleet::{self, CliSession, Device, Server, ServerOpts, ServerProc, SignedCalls, Team, DROPPED, SESSION_PID, WAIT};
@@ -77,7 +77,7 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 几个用例共用的东西（原来 setUpClass 建的）：头一个用到的用例建，模块完了收掉。用例拿着它的时候别的用例拿不到
+/// 几个用例共用的东西：头一个用到的用例建，模块完了收掉。用例拿着它的时候别的用例拿不到
 /// （模块里的用例本来就是一个接一个跑的）
 struct Held<T: 'static>(MutexGuard<'static, Option<T>>);
 
@@ -178,14 +178,14 @@ fn only(rows: &Value) -> &Value {
     &rows[0]
 }
 
-// ==== ServerTest：设备的请求（上报、查看、记下的 API key、折合金额）。名单由管理员拿根密钥登记、移除（team_enroll、
-// team_revoke），Team 的那几个 op 本身在下面 TeamServerTest 的那几个用例里 ====
+// ==== 服务器：设备的请求（上报、查看、记下的 API key、折合金额）。名单由管理员拿根密钥登记、移除（team_enroll、
+// team_revoke），Team 的那几个 op 本身在下面「Team 的同步服务器」的那几个用例里（flow、records_lost、cli、behind_proxy） ====
 
 /// 两台设备在 Team 里的编号
 const DEV: &str = "0a0a0a0a0a0a0a0a";
 const DEV2: &str = "0b0b0b0b0b0b0b0b";
 
-/// 原来 ServerTest 的 setUpClass：一个目录（证书、根密钥、三把设备的密钥 dev、dev2、evil）和照它起的服务器
+/// 这一组用例共用的：一个目录（证书、根密钥、三把设备的密钥 dev、dev2、evil）和照它起的服务器
 struct ServerFx {
     srv: Server,
     rootpub: String,
@@ -452,7 +452,7 @@ fn persist(t: &mut Ctx) {
 }
 
 /// API key 的密文：设备传上来的整份换掉旧的，问的时候回现在的（谁传的、多久以前）；服务器不懂里面是什么，只查形状和长度。
-/// （原来最后还直接调 Python 那一份的 Store 看“存满了”：那一段不在这里，见模块开头）
+/// （“存满了”要把上限换小才测得了：cli/src/server/store/tests.rs 的 key_cap）
 fn keys(t: &mut Ctx) {
     let mut fx = server_fx(t);
     fx.restart(); // 限流的配额从头算（前面的用例用掉了不少）
@@ -520,7 +520,7 @@ fn keys(t: &mut Ctx) {
 
 /// 折合金额的密文：每个账号、每台设备一份，设备只写自己的那一份；问的时候回各台设备的（认证码没变的、自己的不带密文），
 /// 顺带说哪些设备用过这个账号却没传过；移除设备时它传的删掉（以前的版本留下的，启动时删掉）；服务器只查形状和长度。
-/// （原来最后还直接调 Python 那一份的 Store 看各个上限——上限换小了、时间自己给：那一段不在这里，见模块开头）
+/// （各个上限要把上限换小、时间自己给才测得了：cli/src/server/store/tests.rs 的 cost_caps）
 fn cost(t: &mut Ctx) {
     let mut fx = server_fx(t);
     fx.restart(); // 限流的配额从头算
@@ -618,17 +618,17 @@ fn cost(t: &mut Ctx) {
     assert_eq!(fx.call("ledger", BY_DEV2, &obj! { "get" => list![a1] }).0, 403, "移除的设备不能再问");
 }
 
-// test_cost_leftovers（以前的版本留在服务器上的折合金额，启动时删掉）：直接调 Python 那一份的 Store，不在这里（见模块开头）
+// 以前的版本留在服务器上的折合金额启动时删掉：cli/src/server/store/tests.rs 的 leftovers_of_removed_devices_are_cleaned_at_start
 
-// ==== TeamServerTest：Team 的同步服务器——管理员拿根密钥登记、邀请、移除设备，存各台设备的配置；设备拿邀请加入、取自己的那一份。
+// ==== Team 的同步服务器——管理员拿根密钥登记、邀请、移除设备，存各台设备的配置；设备拿邀请加入、取自己的那一份。
 // 邀请链接、配置的密文和签名照 server/README.md「Team 的同步服务器」在 kit::spec 里独立实现 ====
 
 /// 配置里的盐
 const SALT: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 
-/// 原来 TeamServerTest 的 setUpClass：一个目录（证书，六把密钥 root、root2、a、b、c、evil）和照它起的服务器
+/// 这一组用例共用的：一个目录（证书，六把密钥 root、root2、a、b、c、evil）和照它起的服务器
 struct TeamFx {
-    /// 平常是照 root 的根公钥起的；flow 最后把它换成了照 root2 起的（原来换的是 TeamServerTest.srv）
+    /// 平常是照 root 的根公钥起的；flow 最后把它换成了照 root2 起的
     srv: Server,
     keys: SignedCalls,
     /// Team 的编号（照 root 的根公钥算的）
@@ -807,7 +807,7 @@ fn flow(t: &mut Ctx) {
         Some(rec),
         "根密钥不是设备：别的 op 不认它"
     );
-    // 登记（管理员自己的那台）。（原来这里还直接调 Python 那一份的 parse_enroll 看七种不对的写法：不在这里，见模块开头）
+    // 登记（管理员自己的那台）。（parse_enroll 不认的各种写法：cli/src/server/wire.rs 的 checks_match_python）
     assert_eq!(fx.admin("team_enroll", &obj! { "devices" => obj! {} }).0, 400);
     let root_as_device = obj! { "devices" => obj! { da => obj! { "pub" => pubs["root"].as_str(), "name" => "root" } } };
     assert_eq!(fx.admin("team_enroll", &root_as_device).0, 400, "根密钥不是设备：登记不了");
@@ -901,7 +901,7 @@ fn flow(t: &mut Ctx) {
         "设备手里的比存着的新（服务器的那一份被换成旧的了）：照样给，设备自己看序号"
     );
     assert_eq!(fx.call("team_get", AS_B, &obj! { "have" => 1i64 << 53 }).0, 400);
-    // （原来这里还直接调 Python 那一份的 parse_team_docs 看十一种不对的写法：不在这里，见模块开头）
+    // （parse_team_docs 不认的各种写法：cli/src/server/wire.rs 的 checks_match_python）
     assert_eq!(fx.admin("team_put", &obj! { "docs" => obj! { db => with(&d1, "seq", 0) } }).0, 400);
     assert_eq!(fx.call("team_put", AS_B, &obj! { "docs" => obj! { db => &d1 } }), refused(403, "denied"), "设备存不了配置");
     // 还没加入的设备的配置可以先存着：加入以后马上同步得到
@@ -1053,8 +1053,8 @@ fn records_lost(t: &mut Ctx) {
     assert_eq!(fx.call_on(&srv, "team_get", AS_B, &Value::Null).1["doc"], doc);
 }
 
-// test_store（Store 的 team_* 那几个方法：邀请的期限和上限、成员的上限、配置的总量……）：直接调 Python 那一份的 Store，
-// 不在这里（见模块开头）
+// Store 的 team_* 那几个方法（邀请的期限和上限、成员的上限、配置的总量……）：cli/src/server/store/tests.rs 的
+// invites_members_and_a_broken_state_file、invite_and_doc_caps、starts_over_for_another_server
 
 /// 问一个只说 HTTP 的服务器（--behind-proxy、托管平台上的）的 /v1/health
 fn plain_health(port: &str) -> Value {
@@ -1148,11 +1148,11 @@ fn behind_proxy(t: &mut Ctx) {
     assert_in("不用 --cert", &said);
 }
 
-// ==== ClientTest：客户端（cca 的辅助程序）——账号摘要、上报、cca devices、共享记下的 API key、折合金额的同步，经 curl + 公钥钉住连
+// ==== 客户端（cca 的辅助程序）——账号摘要、上报、cca devices、共享记下的 API key、折合金额的同步，经 curl + 公钥钉住连
 // 真的 Team 的同步服务器。设备都在 Team「测试组」里（它给 alice 的 Claude 账号；bob 是 alice-mbp 自己的账号）。只能在进程内测的
 // 几处在辅助程序自己的单元测试里（cargo test），下面各留了一行说它在哪 ====
 
-/// 原来 ClientTest 的 setUpClass：一个目录（证书、Team 的根密钥、服务器的状态文件；各台设备的 HOME 也建在里面）、Team、服务器
+/// 这一组用例共用的：一个目录（证书、Team 的根密钥、服务器的状态文件；各台设备的 HOME 也建在里面）、Team、服务器
 struct ClientFx {
     /// 每个用例换一个新的进程
     srv: Option<Server>,
@@ -1165,7 +1165,7 @@ struct ClientFx {
 
 static CLIENT_FX: Mutex<Option<ClientFx>> = Mutex::new(None);
 
-/// 一个用例的环境（原来 ClientTest 的 self：setUp 和它的那些方法）
+/// 一个用例的环境
 struct Client {
     fx: Held<ClientFx>,
     /// alice 的 Claude 账号的摘要
@@ -1176,7 +1176,7 @@ struct Client {
     dev: Device,
 }
 
-/// 原来的 setUp：每个用例一个新的服务器进程（名单、存的密文都在文件里，接着用）——限流的配额从头算；一台设备 alice-mbp；
+/// 每个用例一个新的服务器进程（名单、存的密文都在文件里，接着用）——限流的配额从头算；一台设备 alice-mbp；
 /// 收尾时核对没有哪台设备调到了 security（钥匙串）
 fn client(t: &mut Ctx) -> Client {
     let mut fx = held(t, &CLIENT_FX, || {
@@ -1400,7 +1400,7 @@ fn scan_cli_idle_from_tty(t: &mut Ctx) {
     drop(pty);
 }
 
-// test_scan_app_cpu（桌面 App 看进程树的 CPU：隔 30 秒采样、过了阈值才算有动静，别的资料目录不算）：
+// 桌面 App 看进程树的 CPU（隔 30 秒采样、过了阈值才算有动静，别的资料目录不算）：
 //   cli/src/cmd/presence.rs 的单元测试 scan_app_cpu_like_python_test（还有 scan_app_sampling_like_python、
 //   app_proc_re_matches_both_spellings_and_escapes）
 
@@ -1463,7 +1463,7 @@ fn post_and_devices(t: &mut Ctx) {
     assert_in("连不上 Team 的同步服务器（127.0.0.1:9）", &view(dev, &[], 1, &[]).0);
 }
 
-// test_past_time（cca devices 里过去的时刻怎么写：今天、昨天、星期几、日期）：cli/src/cmd/presence.rs 的单元测试 past_time_like_python_test
+// cca devices 里过去的时刻怎么写（今天、昨天、星期几、日期）：cli/src/cmd/presence.rs 的单元测试 past_time_like_python_test
 
 /// 报不出去（服务器连不上、不认这台设备）：按退避再试，心跳到期、会话变了都不会马上重发。
 /// 隔多久再试的那几个数（心跳 60 秒上下，退避 10、20 秒……，不认这台设备时 10 分钟）：cli/src/cmd/presence.rs 的单元测试 retry_backs_off
@@ -1548,7 +1548,7 @@ fn holds(v: Option<&Value>, item: &str) -> bool {
 /// 密文的格式：两把密钥由盐、工具、邮箱、登录身份派生；加密后认证（带着账号摘要）；明文补齐到 256 字节的整数倍。
 /// 每次的 nonce 不同、形状不对的密文不认、认证过内容不对的不认（逐个）：cli/src/cmd/keyshare.rs 的单元测试
 /// seal_then_open_round_trips_with_a_random_nonce、open_refuses_junk_like_python_test。
-/// （原来还两次直接调 Python 那一份的 parse_blob 看“服务器收这个形状”：不在这里，见模块开头——服务器收下了才取得回来）
+/// （“服务器收这个形状”这里不单独查：服务器收下了才取得回来；parse_blob 认什么见 cli/src/server/wire.rs 的 checks_match_python）
 fn keyshare_crypto(t: &mut Ctx) {
     const ALICE: &str = "alice(Alice@Example.com)";
     let c = client(t);
@@ -2022,4 +2022,4 @@ fn cost_sync(t: &mut Ctx) {
     }
 }
 
-// VerifyTest.test_against_ssh_keygen（服务器自己的验签和 ssh-keygen 对）：直接调 Python 那一份里的函数，不在这里（见模块开头）
+// 服务器自己的验签和 ssh-keygen 对：cli/src/server/sshsig.rs 的 real_ssh_keygen_signatures、s_plus_the_group_order_is_refused

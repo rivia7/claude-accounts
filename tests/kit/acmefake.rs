@@ -12,8 +12,8 @@
 //! - [`Knobs`]：去哪个端口取 http-01 的文件（真的证书机构是 80）、每 N 个请求说一次 nonce 不对（客户端应该自己再发）、
 //!   目录里列不列 shortlived 这一种
 //!
-//! 命令行（tests/tool/acme_fake.rs）：`cca-test acme-fake 目录 应答端口 [--bad-nonce N] [--no-shortlived]`，和原来的
-//! `python3 tests/acme_fake.py …` 一样，一直跑到被 kill。
+//! 命令行（tests/tool/acme_fake.rs）：`cca-test acme-fake 目录 应答端口 [--bad-nonce N] [--no-shortlived]`，
+//! 一直跑到被 kill。
 //!
 //! 和原来不一样的几处：
 //! - 签证书的几条 openssl 命令多写了 `-sha256`：macOS 自带的 LibreSSL（/usr/bin/openssl）默认用 SHA-1 签，rustls 不认这种签名
@@ -105,7 +105,7 @@ fn openssl_ok(args: &[&OsStr]) -> io::Result<()> {
     Err(io::Error::other(format!("openssl {} 失败：{}", shown.join(" "), String::from_utf8_lossy(&ran.stderr).trim())))
 }
 
-/// 测试的证书机构和假证书机构自己的 HTTPS 证书（原来 tests/acme.py 的 setUp 做的），都放在 d 里（没有就建）：
+/// 测试的证书机构和假证书机构自己的 HTTPS 证书，都放在 d 里（没有就建）：
 /// ca.pem、ca.key（签证书的；带着“能签证书”的用途，新的 Python 默认连这个也查）、cert.pem、key.pem（给 127.0.0.1 的，
 /// 测试的机构签的），还有中间的 csr.pem、ext.cnf、ca.srl。命令和原来一样，签名的两条多写了 -sha256（见开头）
 pub fn make_pki(d: &Path) -> io::Result<()> {
@@ -920,7 +920,7 @@ mod tests {
         port
     }
 
-    /// 期望值是原来的 Python（acme_fake.py 拼 DER 的那几行）算的：前面的 0 去掉、全是 0 时留一个、最高位是 1 的前面补一个 0
+    /// 期望值是固定的数据（原来那份 Python 拼 DER 的那几行算的）：前面的 0 去掉、全是 0 时留一个、最高位是 1 的前面补一个 0
     #[test]
     fn signatures_become_der_like_python() {
         let mut sig = vec![0u8; 32];

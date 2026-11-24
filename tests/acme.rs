@@ -5,7 +5,7 @@
 //! 运行着时登记了新的马上去要。不联网（都在 127.0.0.1 上）。
 //!
 //! 原来是 tests/acme.py。证书助手用哪一份跑照 CCA_TEST_SERVER（kit::server::acme_argv：平常是 server/cca-acme.py，rust 是辅助程序的
-//! team-acme）；假的证书机构、“别的网站”（原来是 `python3 -m http.server`）在这个进程里跑（kit::acmefake、kit::httpd::files）。
+//! team-acme）；假的证书机构、“别的网站”在这个进程里跑（kit::acmefake、kit::httpd::files）。
 
 use kit::acmefake::{self, FakeCa, Knobs};
 use kit::case;
@@ -44,7 +44,7 @@ const RUN_LIMIT: Duration = Duration::from_secs(180);
 /// 平常要签的地址（原来 acme() 的 ids 默认值）
 const IP: &[&str] = &["127.0.0.1"];
 
-/// 每个用例的准备（原来的 setUp）：临时目录，里面 ca/ 是测试的证书机构和假证书机构自己的 HTTPS 证书；证书助手应答的端口
+/// 每个用例的准备：临时目录，里面 ca/ 是测试的证书机构和假证书机构自己的 HTTPS 证书；证书助手应答的端口
 struct Fx {
     d: PathBuf,
     cad: PathBuf,
@@ -417,7 +417,7 @@ fn webroot(t: &mut Ctx) {
     let fx = setup(t);
     let root = fx.d.join("site");
     fsx::write(root.join("index.html"), "别的网站");
-    // 别的网站（原来是 python3 -m http.server 端口 --bind 127.0.0.1 --directory 目录）：这个进程里照目录给文件的服务
+    // 别的网站：这个进程里照目录给文件的服务，只听 127.0.0.1
     let site = httpd::Server::bind(("127.0.0.1", fx.http_port))
         .unwrap_or_else(|e| panic!("别的网站起不来（端口 {}）：{e}", fx.http_port))
         .http10()

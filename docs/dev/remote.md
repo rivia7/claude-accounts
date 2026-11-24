@@ -63,7 +63,7 @@
 
 两台机器之间不直连：都连同一台服务器（一个 Team 的同步服务器，设备统计的那一台，`server/cca-presence.py`；走哪台见下面「每个 Team 各用各的中转服务器」），
 它把两头的连接对接起来。线上的格式、
-服务器的接口和限额写在 `server/README.md`「远程会话的中转」（那一节是规范，`tests/spec_wire.py` 照它独立实现了一遍）；这里写 cca 这一头怎么做、为什么。
+服务器的接口和限额写在 `server/README.md`「远程会话的中转」（那一节是规范，`tests/kit/spec.rs` 照它独立实现了一遍）；这里写 cca 这一头怎么做、为什么。
 
 - 要防的是服务器自己和路上的人：它们看不到终端的内容、敲不进按键、冒充不了配对过的机器。靠两台机器配对时各存的一把密钥 P，
   服务器见不到它。只用 HMAC-SHA256（辅助程序已有的 `sha2`；Linux 那一份没有 TLS，也不加新的依赖）：通道的加密、认证、握手都是它，
@@ -273,7 +273,7 @@
     网页端关掉以后它的请求一律不认（记录留着）。拿着配对码来的签名不对、没有这次配对，回的和不认识的设备一样，分不出是哪种。
     不用 Team、不用管理员点头：手机和自己的电脑配对，和两台机器配对是一回事
 - 配对出来的密钥、握手、加密的记录、帧都和两台机器之间**完全一样**（`server/web/core.js` 是第三份实现，和辅助程序、
-  `tests/spec_wire.py` 互相握得上手）：宿主那头的转接进程不知道对面是浏览器，对方能做什么照旧由宿主把关
+  `tests/kit/spec.rs` 互相握得上手）：宿主那头的转接进程不知道对面是浏览器，对方能做什么照旧由宿主把关
 - 页面（`server/web/`，没有构建这一步）：
   - `core.js`：协议和加密。HMAC-SHA256 自己算（记录的密钥流要一块块地出，WebCrypto 每次调用都是异步的，太慢）；PBKDF2、
     Ed25519（请求照 SSHSIG 签名，和 `ssh-keygen -Y sign` 出的一样）、SHA-512 用 WebCrypto。设备的私钥、配对的密钥存成**不可导出**的
@@ -362,19 +362,26 @@
   每个请求（拿 openssl 验 JWS 的签名、nonce 只能用一次、开账户用 jwk 之后用 kid、单子上的地址和证书种类、http-01 真的来取文件、
   证书请求里的地址和单子上的一样而且没有 Common Name）。看：给 IP 要的是 shortlived、nonce 不对自己再发、文件和权限、没到时候不重复要、
   续的时候账户和证书私钥不换、验证没过 / 连不上 / 没有那一种证书时说清楚而且不留下半截的证书；`--webroot`（80 端口上另有一个
-  网站服务——测试里是 `python3 -m http.server`——验证的文件由它给出去，验完目录是空的，那个网站原来的文件不动）
-- `tests/web_relay.py`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：网页端。`ServerTest`：服务器这一头（扮演手机的是
-  测试里照文档写的 `Guest`、`WsSock`）——访客拿配对码配对、带错公钥 / 错签名 / 不知道配对码的进不来、访客能发和不能发的请求、
-  重启以后还在、取消最后一个配对就删掉、领它进来的设备撤销了跟着没有；WebSocket 进中转（大块的、切成碎帧的、几帧并发的一个字节不丢，
-  没加掩码的、文本的帧断开，不是自己那一页发起的不让进，同一个地址有上限）；页面的文件（内容安全策略、压缩、304、目录里别的东西
-  不给）。`LateCertTest`：网页端的证书启动时还没有，服务照样起来、给设备的那个端口照常，网页端那个端口握不了手；证书文件出现以后
-  不重启就用上。`ShellTest`：`cca remote pair --web` 在终端里、在 App 的提问会话里。`FilesTest`：真的那一页服务器读得进去、
-  xterm.js 和说明里记的校验和一样、页面不引别处的东西、没有内联脚本。**有 Node 22 以上才跑的**（没有就跳过，回归不要求装）：
-  `CoreJsTest`（`core.js` 和 `spec_wire.py` 算出同样的数、互相握得上手、签的请求服务器和 `ssh-keygen` 都认）、`ClientTest`
-  （`tests/web_client.mjs`：`core.js` 在 Node 里对着真的服务器和真的 cca 会话配对、列会话、接入、敲键、两万行输出一行不丢、
-  连接掐断以后自己接上、只让看、取消配对）。**还要有 Chrome 才跑的**：`PageTest`（`tests/web_page.mjs`：真的页面在无界面的 Chrome 里，
-  iPhone 的屏幕大小和触摸，从输入配对码走到会话结束，控制台里不许有报错——内容安全策略拦下的也算）
-- `python3 tests/web_demo.py [-- 会话里跑的命令…]`：在本机把网页端跑起来自己看（真的服务器开在 `http://localhost`、一台临时的
+  网站服务——测试里是 `kit::httpd` 照目录给文件的那一个——验证的文件由它给出去，验完目录是空的，那个网站原来的文件不动）
+- `tests/web_relay.rs`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：网页端。服务器这一头（扮演手机的是
+  测试里照文档写的 `Guest`、`WsSock`）：`guest_pairing_and_what_a_guest_may_do`（访客拿配对码配对、带错公钥 / 错签名 / 不知道配对码的
+  进不来、访客能发和不能发的请求、重启以后还在、取消最后一个配对就删掉）、`the_sponsor_is_revoked`（领它进来的设备撤销了跟着没有）；
+  `attach_over_websocket`、`many_websockets`（WebSocket 进中转：大块的、切成碎帧的、几帧并发的一个字节不丢，没加掩码的、文本的帧断开，
+  不是自己那一页发起的不让进，同一个地址有上限）；`page_files`（页面的文件：内容安全策略、压缩、304、目录里别的东西不给）；
+  `the_web_side_is_switched_off`（关掉网页端以后记下的访客一律不认、记录留着）、`off`（没开网页端的服务器和以前一样）。
+  `the_certificate_arrives_later`：网页端的证书启动时还没有，服务照样起来、给设备的那个端口照常，网页端那个端口握不了手；证书文件出现以后
+  不重启就用上。`terminal`、`in_the_app`：`cca remote pair --web` 在终端里、在 App 的提问会话里；`no_web`：服务器没开网页端时说清楚、
+  不留下配对码。`the_real_page`、`the_team_name`：真的那一页服务器发得出来（正好那 12 个文件）、xterm.js 和说明里记的校验和一样、
+  页面不引别处的东西、没有内联脚本，`--web-name-file` 的名字进标题和 manifest；`--web-url` 的各种写法怎么规整、名字不合格时照旧叫 cca
+  在服务端自己的单元测试里（`cli/src/server/web.rs` 的 `the_web_url_is_written_the_way_browsers_say_it`、`the_team_name`）。
+  **有 Node 22 以上才跑的**（没有就跳过，回归不要求装）：`the_same_numbers`、`handshake_and_records`、`signature`（`core.js` 和 `kit::spec`
+  算出同样的数、互相握得上手、签的请求 `ssh-keygen` 认）、`pair_list_attach_type`、`a_pairing_that_fails_is_closed_on_the_server`、
+  `view_only_unpair_and_no_session`（`tests/web_client.mjs`：`core.js` 在 Node 里对着真的服务器和真的 cca 会话配对、列会话、接入、敲键、
+  两万行输出一行不丢、连接掐断以后自己接上、只让看、取消配对；它签的每个请求真的服务器都在验）。**还要有 Chrome 才跑的**：
+  `the_page_in_a_browser`（`tests/web_page.mjs`：真的页面在无界面的 Chrome 里，iPhone 的屏幕大小和触摸，从输入配对码走到会话结束，
+  控制台里不许有报错——内容安全策略拦下的也算）
+- `cd cli && cargo run --profile kit -p cca-tests --bin cca-test -- web-demo [--port 端口] [-- 会话里跑的命令…]`（`tests/tool/web_demo.rs`；
+  先 `cargo build --release`）：在本机把网页端跑起来自己看（真的服务器开在 `http://localhost`、一台临时的
   “电脑”、一个会话、一个配对码），在这台 Mac 的浏览器里打开。手机上试不了这个（手机要 HTTPS 和信得过的证书）
 - `tests/remote_relay.rs`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：真的 Team 的服务器进程（开着中转）、每台设备一个临时 HOME 和
   登记在这个 Team 里的密钥（`team_enroll`）、会话在真的伪终端上。前五条（`pairing` 到 `pairings_survive_a_restart`）两头都照文档自己说话（配对的各种先后和拒绝、票据只能用一次、认证码不对的不算用掉、
@@ -392,7 +399,7 @@
   （0x07）宿主那头不转。等某个状态时一圈圈问服务器的地方两次之间隔一秒（`far()`）：
   服务器给每台设备的请求限了流，问光了之后那台设备的请求会被拒（取消配对那一句就说不到）
   转发器（`kit::relay` 的 `Sniffer`）是测试进程里的线程；夹具都在 `tests/kit/relay.rs`，网页端的测试也用它
-- `cargo test`：`remote::crypto`（和 `spec_wire` 算出来的向量逐字节一样——改了格式先改 `spec_wire` 再重新生成；记录的往返、改一个字节 / 重放 /
+- `cargo test`：`remote::crypto`（和照文档独立实现的那一份算出来的向量逐字节一样——向量是固定的数据，没有重新生成的命令，改了格式连同 `tests/kit/spec.rs` 和它的对照数据一起换；记录的往返、改一个字节 / 重放 /
   跳号都断开；握手要同一把密钥、同一个会话、同一对机器）、`remote::relay`（真的 TCP 上握手和通道）、`remote::peers`、`remote::far`、`py::hash` 的 PBKDF2
 - 界面 App 用的那一半：`tests/remote_relay.rs` 的 `pairing_errors`、`terminal`、`in_the_app`（真的 `cca`：终端里配对；`in_the_app` 用 `kit::gui_session` 扮演 App——
   同意当场问、答否不出配对码、配对码那一页上取消以后辅助程序停下而且那个配对码马上作废、两头各在自己的提问会话里配好、
@@ -415,7 +422,7 @@
   真的终端交互（打字、鼠标、滚动）截图模式测不了，要人在调试版里点
 
 - `cargo test`：`remote::vt`（查询和不是查询的各种序列；交出来的字节一个不多一个不少（各种分块）；去掉查询以后前后不会拼出新的序列、太长的绕不过去——这两组是审查时给出的攻击输入，别删；半路接进来的不收长序列的后半截；模式只记认识的、补和还原、kitty 的层数；什么进回放、回放整块丢）、`remote::keys`（断开的按键：一个字节的、kitty 的按下 / 松开 / 锁定键、modifyOtherKeys、分两次到的、粘贴的内容不算）、`remote::pty`（真的 pty：客户端有控制终端和给的大小、原始模式还原、另开的终端不改共用的那一份）、`remote::local`（帧、说明、socket 的权限和状态；没回应的宿主照列、文件不删，没人听的才清）
-- `tests/remote_host.rs`（回归的 unit 一节；单独跑：先 `cargo build --release`，再 `cd cli && cargo test --profile kit -p cca-tests --test suite -- remote_host`）：在真的伪终端上（`tests/kit/term.rs`）把辅助程序当黑盒跑。客户端是 `cca-test fake-client`（`tests/tool/fake_client.rs`，一行一条命令）。测：客户端的参数、环境（一个不多一个不少）、退出码原样，窗口大小跟着变；被信号杀掉、发给宿主的信号转过去；不在终端里时直接运行；终端很慢、客户端写了两兆多就退出时一行不丢；客户端关了终端还在跑时等它真的退出、不空转；关掉终端后会话还在、列表里看得到、接回去先看到回放、断开、按编号前缀再接入、会话结束时接入端的退出码；两个终端共用（大小取都画得下的、查询只给最近有输入的、只看的不能操作）；那组攻击输入端到端走一遍（主的逐字节一样，另一个终端和回放里没有拼出来的写剪贴板）、写剪贴板只给主的；后接入的补上模式、断开时还原；各种接不上的退出码、被强行结束的宿主留下的文件被清掉、被挂起（SIGSTOP）的宿主不被清掉；`remote-end`（没有会话 65、两个会话要说哪个 64、`--show` 只找不动、结束以后接着的各处拿到 129、不理 SIGHUP 的五秒后被强行结束 137、命令等到真的结束才回来）；`DeepHome` 把整套再在很深的 `CCA_HOME` 里跑一遍（socket 用相对路径）。客户端的 pty 是行模式：它写的 `\r\n` 出来是 `\r\r\n`
+- `tests/remote_host.rs`（回归的 unit 一节；单独跑：先 `cargo build --release`，再 `cd cli && cargo test --profile kit -p cca-tests --test suite -- remote_host`）：在真的伪终端上（`tests/kit/term.rs`）把辅助程序当黑盒跑。客户端是 `cca-test fake-client`（`tests/tool/fake_client.rs`，一行一条命令）。测：客户端的参数、环境（一个不多一个不少）、退出码原样，窗口大小跟着变；被信号杀掉、发给宿主的信号转过去；不在终端里时直接运行；终端很慢、客户端写了两兆多就退出时一行不丢；客户端关了终端还在跑时等它真的退出、不空转；关掉终端后会话还在、列表里看得到、接回去先看到回放、断开、按编号前缀再接入、会话结束时接入端的退出码；两个终端共用（大小取都画得下的、查询只给最近有输入的、只看的不能操作）；那组攻击输入端到端走一遍（主的逐字节一样，另一个终端和回放里没有拼出来的写剪贴板）、写剪贴板只给主的；后接入的补上模式、断开时还原；各种接不上的退出码、被强行结束的宿主留下的文件被清掉、被挂起（SIGSTOP）的宿主不被清掉；`remote-end`（没有会话 65、两个会话要说哪个 64、`--show` 只找不动、结束以后接着的各处拿到 129、不理 SIGHUP 的五秒后被强行结束 137、命令等到真的结束才回来）；每个用例跑两遍（子用例 `RemoteHost`、`DeepHome`）：平常的 `~/.cca`，和很深的 `CCA_HOME`（socket 用相对路径）。客户端的 pty 是行模式：它写的 `\r\n` 出来是 `\r\r\n`
 - regress.sh 3e：`rs_pty` 在真的终端里（`script`）运行 `cca @alice --version`。开关没开、不在终端里、`CCA_REMOTE=0` 时没有会话目录（直接运行）；在宿主里时假 claude 记下的 `ARGS`、`ENV` 两行和直接运行时逐字一样；`$T/hold` 让会话开着时 `cca remote list` / `cca remote` 列得出来；`cca remote on|off`、不认识的子命令、`cca help`；`cca remote end`（终端里先说是哪个会话再问、答否不结束；界面 App 那样运行时发同意事件、别的会话的同意不算、带着同意重跑才结束，假 claude 是被 SIGHUP 结束的）和 `hello.remote_end`。第 12 节：直接起一个辅助程序的 `remote-host`（客户端是 `sleep`）开着时 `cca restore` 先停下（别在更早的节里跑 `cca restore`：它会挨个工具查账号）
 - Linux：`tests/linux.sh`（宿主机模式）跑测试程序 `suite` 的 `remote_host`、`remote_relay` 两个模块（辅助程序、`cca-test`、`suite` 都是 musl 的那一份）；
   移成 Rust 以后这两个模块还没在 Linux 上实跑过。原来 Python 的那两份发 3.5.2-beta.2 时在 x86_64 的 Ubuntu 上实跑过：两份都过（照 App 的办法起接入端那一条在 Linux 上本来就有控制终端，`adopt_tty` 什么都不做）。

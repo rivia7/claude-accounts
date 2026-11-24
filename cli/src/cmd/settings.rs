@@ -1230,7 +1230,7 @@ pub const CMDS: &[Cmd] = &[
 
 #[cfg(test)]
 mod tests {
-    // 只测不看 HOME 的那些：按路径查的函数放在临时目录里测；经子命令走的路在 tests/*.py 和回归里
+    // 只测不看 HOME 的那些：按路径查的函数放在临时目录里测；经子命令走的路在 tests/*.rs（suite 的各个模块）和回归里
     use super::*;
     use std::os::unix::ffi::OsStringExt;
 

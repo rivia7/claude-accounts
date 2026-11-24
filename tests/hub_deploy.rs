@@ -39,7 +39,7 @@ pub const MODULE: Module = Module {
     src: include_str!("hub_deploy.rs"),
     default: true,
     tests: &[
-        // InstallerTest：在服务器上直接运行安装脚本（sudo sh cca-hub-install.sh --team-root …）
+        // 在服务器上直接运行安装脚本（sudo sh cca-hub-install.sh --team-root …）
         case!(script_itself),
         case!(systemd),
         case!(installer_test_web),
@@ -53,7 +53,7 @@ pub const MODULE: Module = Module {
         case!(needs),
         case!(old_own_server),
         case!(teams),
-        // DeployTest：cca team deploy（team-deploy）：经假的 ssh 把同一个脚本交给假服务器，装好了接上
+        // cca team deploy（team-deploy）：经假的 ssh 把同一个脚本交给假服务器，装好了接上
         case!(deploy),
         case!(undeploy),
         case!(recorded_host),
@@ -452,7 +452,7 @@ struct Fx {
     script: PathBuf,
 }
 
-/// 建临时目录，让辅助程序生成安装脚本（hub-installer）放进去。原来一个类生成一次（setUpClass），这里每个用例生成一次：
+/// 建临时目录，让辅助程序生成安装脚本（hub-installer）放进去。每个用例生成一次：
 /// 只是把编在辅助程序里的那份打出来，十来毫秒，用例之间就没有共用的东西了
 fn setup(t: &mut Ctx) -> Fx {
     // 最先登记，最后才跑：假服务器都停了，再放开这个用例占着的端口
@@ -548,7 +548,7 @@ fn deploy_ok(dev: &Device, tid: &str, b: &FakeBox, args: &[&str], env: &[(&str, 
     r
 }
 
-// ---- InstallerTest：在服务器上直接运行安装脚本（sudo sh cca-hub-install.sh --team-root …）----
+// ---- 在服务器上直接运行安装脚本（sudo sh cca-hub-install.sh --team-root …）----
 
 /// 生成的脚本：sh -n 过得去、带着版本、服务端程序和证书助手；模板本身不能运行；参数、root 的检查（什么都不动）
 fn script_itself(t: &mut Ctx) {
@@ -1434,7 +1434,7 @@ fn teams(t: &mut Ctx) {
     assert_eq!(sync_state(&c), "ok");
 }
 
-// ---- DeployTest：cca team deploy（team-deploy）：经假的 ssh 把同一个脚本交给假服务器，装好了接上 ----
+// ---- cca team deploy（team-deploy）：经假的 ssh 把同一个脚本交给假服务器，装好了接上 ----
 
 /// 整个输出当成一串 sh 的 键=值 拆开（值里有换行——steps 是几行——所以整个一起拆，不能一行一行来）
 fn kvs(text: &str) -> BTreeMap<String, String> {

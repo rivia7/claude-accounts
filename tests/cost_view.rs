@@ -503,9 +503,9 @@ impl Base {
 }
 
 // 价格表（Prices）只能在进程内测，在 cli/src/cmd/cost.rs 的单元测试里：
-// test_model_names（会话记录里的模型名 → 价格表里的写法）：model_names_like_python_test
-// test_claude（Anthropic 的标价：缓存、快速模式、只在美国推理、长上下文、网页搜索、没有公开价格的）：claude_prices_like_python_test
-// test_codex（OpenAI 的标价：档位、长上下文、缓存写）：codex_prices_like_python_test
+// 会话记录里的模型名 → 价格表里的写法：model_names_like_python_test
+// Anthropic 的标价（缓存、快速模式、只在美国推理、长上下文、网页搜索、没有公开价格的）：claude_prices_like_python_test
+// OpenAI 的标价（档位、长上下文、缓存写）：codex_prices_like_python_test
 
 // ---------------------------------------------------------------- Scan
 
@@ -1424,7 +1424,7 @@ fn quota_weeks(t: &mut Ctx) {
     assert!(w2.len() <= 13 && weeks.len() <= 13);
 }
 
-// test_bin_by_midpoint（小时数据按时段加起来：跨过边界的小时按中点算）：cli/src/cmd/cost.rs 的单元测试 bin_by_midpoint_like_python_test
+// 小时数据按时段加起来（跨过边界的小时按中点算）：cli/src/cmd/cost.rs 的单元测试 bin_by_midpoint_like_python_test
 
 // ---------------------------------------------------------------- View
 

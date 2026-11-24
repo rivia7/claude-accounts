@@ -783,7 +783,7 @@ mod tests {
         assert!(text.contains("  --mode {team}\n") && text.contains("  --behind-proxy\n"));
     }
 
-    /// 参数合不合在一起：说的话、两处都不对时先说哪一处，都和 Python 的 main 一样（oracle_cli.py 拿真的服务器试的那些）
+    /// 参数合不合在一起：说的话、两处都不对时先说哪一处，都和 Python 的 main 一样（拿真的服务器试出来的那些）
     #[test]
     fn plan_errors_in_python_order() {
         let base = ["--behind-proxy", "--state", "s", "--team-root", ROOT];

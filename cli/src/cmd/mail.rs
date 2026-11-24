@@ -601,7 +601,7 @@ mod tests {
         }
     }
 
-    /// 原来 tests/mail_view.py 的 Rules
+    /// 登录链接只认正好是 Claude 登录链接的那一种：协议、主机、端口、路径差一点的，带引号、尖括号、空格、非 ASCII 字符的，太长的都不认
     #[test]
     fn link_must_be_exactly_a_claude_login_link() {
         let ok = |u: &str| MAIL_RULES[0].link_ok(u);
@@ -686,8 +686,8 @@ mod tests {
         }
     }
 
-    /// 原来 tests/mail_view.py 的 Lint.test_every_rule_is_known：各工具的 mail_rules 里写的名字 MAIL_RULES 里都有
-    /// （原来写错了是 KeyError；`mail_rules()` 这里是跳过，所以更要守着），Codex 没有规则
+    /// 各工具的 mail_rules 里写的名字 MAIL_RULES 里都有
+    /// （写错了的名字 `mail_rules()` 是跳过、不出错，所以更要守着），Codex 没有规则
     #[test]
     fn every_rule_is_known() {
         for tool in crate::core::tool::tools() {

@@ -341,8 +341,8 @@ fn narrow_terminal_folds_columns_in_order(t: &mut Ctx) {
     assert!(lines.iter().any(|l| l.contains("终端太窄，备注没显示")), "{lines:#?}");
 }
 
-// test_fit_note（备注放不下时的取舍）：cli/src/cmd/usage.rs 的单元测试 fit_note_like_python_test
-// test_reset_short（表格里的重置时间）：cli/src/cmd/usage.rs 的单元测试 reset_short_like_python_test
+// 备注放不下时的取舍：cli/src/cmd/usage.rs 的单元测试 fit_note_like_python_test
+// 表格里的重置时间：cli/src/cmd/usage.rs 的单元测试 reset_short_like_python_test
 
 // --- 周结算提醒 ---
 
@@ -392,7 +392,7 @@ fn key_hint(t: &mut Ctx) {
 }
 
 // --- 每周用量 ---
-// test_weeks_add（按重置时间认是哪一周，记最高的百分比；掉下去一大截是中间重置过）：cli/src/cmd/usage.rs 的单元测试 weeks_add_like_python_test
+// 按重置时间认是哪一周，记最高的百分比（掉下去一大截是中间重置过）：cli/src/cmd/usage.rs 的单元测试 weeks_add_like_python_test
 
 /// 查到用量时记进账号目录的 usage-weeks.json（600）；坏的项读的时候不要。
 /// 同一次查询不重写：cli/src/cmd/usage.rs 的单元测试 weeks_record_file_like_python_test

@@ -1,5 +1,5 @@
-// 网页端的协议层（server/web/core.js）在 Node 里跑：tests/web_relay.py 起它，一行一条 JSON 命令从 stdin 进来、一行一条结果从 stdout 出去。
-// 对面是真的服务器、真的 cca（或者 tests/spec_wire.py）；这里不判断对错，只照命令做、把看到的报回去。要 Node 22 以上（自带 WebSocket）。
+// 网页端的协议层（server/web/core.js）在 Node 里跑：tests/web_relay.rs 起它，一行一条 JSON 命令从 stdin 进来、一行一条结果从 stdout 出去。
+// 对面是真的服务器、真的 cca（或者 tests/kit/spec.rs）；这里不判断对错，只照命令做、把看到的报回去。要 Node 22 以上（自带 WebSocket）。
 import { createInterface } from 'node:readline';
 import * as core from '../server/web/core.js';
 
@@ -25,7 +25,7 @@ async function until(test, secs) {
 }
 
 const cmds = {
-  // 照给的输入算一遍，结果交回去和 spec_wire.py 算的比
+  // 照给的输入算一遍，结果交回去和 kit::spec 算的比
   async vectors(a) {
     const code = core.codeBytes(a.code);
     const k = await core.pairKeys(code);
@@ -44,7 +44,7 @@ const cmds = {
       bad_codes: a.bad_codes.map((c) => core.codeBytes(c) === null),
     };
   },
-  // 通道：这一头是接入方，对面的三步握手和记录由 spec_wire.py 出
+  // 通道：这一头是接入方，对面的三步握手和记录由 kit::spec 出
   async channel(a) {
     const ka = core.hmac(b(a.p), core.utf8('cca-remote/v1/auth'));
     const ch = (cmds.ch = new core.Channel(ka, a.pid, a.sid, a.fph, a.fpv));

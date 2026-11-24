@@ -567,7 +567,7 @@ mod tests {
         unsafe { libc::geteuid() == 0 }
     }
 
-    /// tests/web_relay.py 的 UrlTest：--web-url 要和浏览器发的 Origin 逐字相等才让开 WebSocket：主机小写、默认的端口不写
+    /// --web-url 要和浏览器发的 Origin 逐字相等才让开 WebSocket：主机小写、默认的端口不写
     #[test]
     fn the_web_url_is_written_the_way_browsers_say_it() {
         for (given, want) in [
@@ -597,7 +597,7 @@ mod tests {
         }
     }
 
-    /// FilesTest.test_the_real_page：服务器读得进去、只发该发的；别人的代码（xterm.js）和说明里记的校验和一样；
+    /// 服务器读得进去、只发该发的；别人的代码（xterm.js）和说明里记的校验和一样；
     /// 页面自己不引别处的东西、没有内联的脚本（内容安全策略不许，写了也不会跑）
     #[test]
     fn the_real_page() {
@@ -660,7 +660,7 @@ mod tests {
         }
     }
 
-    /// FilesTest.test_the_team_name：--web-name-file（安装脚本写的 app/name）：标题、手机主屏幕上的名字带上 Team 的名字（转义过）；
+    /// --web-name-file（安装脚本写的 app/name）：标题、手机主屏幕上的名字带上 Team 的名字（转义过）；
     /// 别的文件不动；没给、文件不在、名字不对（空的、太长、带控制字符）时照旧叫 cca
     #[test]
     fn the_team_name() {

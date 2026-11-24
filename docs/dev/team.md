@@ -726,7 +726,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 ## 测试
 
 - `tests/presence.rs` 里 Team 的服务器那几条（`flow`、`records_lost`、`cli`、`behind_proxy`；回归的 unit 一节收整个模块的结果）：真的服务器进程、真的 `ssh-keygen` 签名，客户端是照文档独立实现的
-  `tests/spec_wire.py`；签请求的辅助函数在 `SignedCalls` 里。
+  `tests/kit/spec.rs`；签请求的辅助函数是 `tests/kit/fleet.rs` 的 `SignedCalls`。
   - `flow`：`/v1/health`；管理员的 op 只认根密钥（设备的密钥、冒用根公钥指纹的别的密钥、改过的请求）；根密钥登记、加入不了；登记、
     邀请（令牌和那串随机数不落在服务器上）、加入（没有这个邀请 / 签名不对一样的 403，用过了、同一个编号再发前一个作废、直接登记了邀请作废）；
     配置（只取得到自己的、签名照根公钥验、认证带着设备和序号、补齐到 1024、序号往回走的不存、设备手里的比存着的新也照给、还没加入的先存着）；
@@ -737,9 +737,9 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     手改坏了的状态文件、别的模式留下的状态文件。
   - `cli`：启动参数（根公钥从 `--team-root` 或者 `CCA_TEAM_ROOT` 来、只写后面那一段也认；托管的预设 `CCA_HUB_HOSTED=1` 下给了根公钥就是 Team 的服务器，
     没有 `/data` 不启动）。`behind_proxy`：只说 HTTP、不用证书，按 `X-Forwarded-For` 的最后一项限流，同一个 IP 的连接数不限。
-  - 形状不对的请求直接调解析函数（`parse_enroll`、`parse_team_docs`）；`admin()` 遇到 429 等一会儿再试。
-- `cargo test team`（`cmd/team/doc.rs`、`core/team.rs`）：编号、邀请链接、从 `k` 派生的令牌 / 设备编号 / 密钥、签的那一段字节、解 `tests/spec_wire.py`
-  封的密文（`cli/tests/vectors/team_doc_ct.json`：它固定 nonce 封的），都和独立实现的那一份逐字节对得上；配置明文的检查。
+  - 形状不对的请求（`parse_enroll`、`parse_team_docs`）在服务端自己的单元测试里（`cli/src/server/wire.rs` 的 `checks_match_python`、`limits_at_the_boundaries`）；`admin()` 遇到 429 等一会儿再试。
+- `cargo test team`（`cmd/team/doc.rs`、`core/team.rs`）：编号、邀请链接、从 `k` 派生的令牌 / 设备编号 / 密钥、签的那一段字节、解独立实现的那一份
+  封的密文（`cli/tests/vectors/team_doc_ct.json`：固定 nonce 封的，固定的数据；`tests/kit/spec/vectors.rs` 的 `the_helpers_team_doc_vector` 拿 `kit::spec` 再封一遍核对），都和独立实现的那一份逐字节对得上；配置明文的检查。
 - `tests/team.rs`（回归的 unit 一节）：辅助程序对着真的 `--mode team` 服务器，各台设备各一个临时 HOME（`tests/kit/fleet.rs` 的 `Device`）。
   - `admin_local`：建 Team 只在本机、文件的权限、`k` 不落盘（照主密钥算得出来）、没接上服务器时导入和 `map` 只改本机、接不上的各种原因。
   - `lifecycle`：接上、导入、邀请（那串随机数和令牌不在管理员这台的任何文件、请求、curl 的命令行里，也不在服务器上）、加入（没成什么都不留、
@@ -784,7 +784,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   （连同撞了以后换成的）跟着改、自己改过的不跟；管理员这台设备上只有邮箱的不补、以前加进来的不跟；以前的 Team 发布时补上编号。
   `core/policy.rs` 的单元测试 `alias_fallback_names`：「Team 的名字-N」怎么拼、截短、拼不出来的时候。
 - 同步经 Team 的服务器（`tests/team.rs` 的 `pipelines`）：Team 给的账号记下 API key、同步折合金额、看设备，请求都是这台设备在 Team 里的
-  密钥签的、账号摘要是照 Team 的盐算的；服务器上存的密文照文档（`spec_wire`）拿 Team 的盐解得开；别的服务器的状态文件没有；被移除以后
+  密钥签的、账号摘要是照 Team 的盐算的；服务器上存的密文照文档（`kit::spec`）拿 Team 的盐解得开；别的服务器的状态文件没有；被移除以后
   不再发请求，留下的状态文件删掉了。
 - 上报进程（`agent`，起真的 `presence-agent`）：没有会话开着时一次都不报、自己退出；开着时拿 Team 的密钥报；进程开着时加入第二个 Team
   （另一台服务器）接着就有一路，各报各的账号；被第一个 Team 的管理员移除以后那一路停了（再开会话也不报），另一路照旧。假 ps 的进程表里
@@ -801,37 +801,38 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `copySecret`、改授权和节点发的命令。通用检查（`Generic.swift`）：`config.teams` 和账号的 `team` 对得上、Team 的服务器照编号算、
   `team_devices` / `team_list` 两种文档。回归 11b3d 把真实的 hello、带 Team 的 state、`team ls --json`、`team devices --json` 存进
   `$T/guifx4` 交给 `macos/test.sh` 解码。
-- 部署（`tests/hub_deploy.rs`：生成一次安装脚本，在 `tests/kit/hubbox.rs` 的假服务器上运行；回归的 unit 一节跑它，`tests/linux.sh` 在各个发行版的
+- 部署（`tests/hub_deploy.rs`：每个用例生成一份安装脚本，在 `tests/kit/hubbox.rs` 的假服务器上运行；回归的 unit 一节收它的结果，`tests/linux.sh` 在各个发行版的
   容器里也跑——那个发行版的 sh、openssl、python3）。假服务器 `Box`：临时目录当根（安装脚本的 `CCA_HUB_ROOT`，只给测试用），`bin/` 里 `id`、
-  `useradd`、`userdel`、`chown`、`ip`、`journalctl`、`sudo` 是假的（`ufw`、`ss` 要的用例另放：`Box.fake`），`systemctl`、`docker` 是 Python
-  写的（照 unit 的 `ExecStart`、compose.yaml 里各个服务的 `command`、端口和挂载起真的服务端，监听 127.0.0.1；证书助手换成 `acme_stub.py`：共用的
+  `useradd`、`userdel`、`chown`、`ip`、`journalctl`、`sudo` 是假的（`ufw`、`ss` 要的用例另放：`Box::fake`），`systemctl`、`docker` 是 `cca-test` 的角色
+  `box-systemctl`、`box-docker`（照 unit 的 `ExecStart`、compose.yaml 里各个服务的 `command`、端口和挂载起真的服务端，监听 127.0.0.1；证书助手换成 `cca-test acme-stub`：共用的
   那种照 `--teams` 里登记的地址一个地址一张自签的证书，存在 `--store`、放进各个 Team 的那一份，`store` 里没有、Team 的那一份里有就接着用；以前
   每个 Team 自己的那种照 `--id` 往 `--out` 里写一张；写过的记在 `acme.issued`；假的 `id -g` 说 `useradd` 时记下的组），`sh` 是 `/bin/dash`（没有时 `/bin/sh`）；每个服务各有各的进程号文件（`server.<服务名>.pid`，以前的 `cca-hub`
   是 `server.pid`）；目录下的几个文件让它出各种状况（`uid`、`sudo_ok`、`ip`、`listening`、`no_pull`、`docker_down`、`no_compose`、`compose_fail`、
   `start_fail`、`start_hang`、`acme_fail`、`ssh_denied`……，见它开头），等证书最多 4 秒（`CCA_HUB_CERT_WAIT`），`any_ip` 时内网地址也开网页端
   （`CCA_HUB_ANY_IP`）；`enter` 是假 ssh 的服务器那一头。
-  - `InstallerTest`（在服务器上直接运行）：`test_script_itself`（`sh -n`、带着版本、服务端程序和证书助手；模板不能运行；参数、root 的检查）、
-    `test_systemd`（装好、打出接上它的那一行，内网地址不开网页端、说一声；目录、权限、unit；再运行是更新；换端口再打一次那一行；`--uninstall`）、
-    `test_web`（共用的证书助手 `cca-team-acme`：自己的系统用户、只给绑 80 的权限、目录和权限，照登记的地址要来证书、放进这个 Team 的那一份，
+  - 在服务器上直接运行安装脚本的十三条：`script_itself`（`sh -n`、带着版本、服务端程序和证书助手；模板不能运行；参数、root 的检查）、
+    `systemd`（装好、打出接上它的那一行，内网地址不开网页端、说一声；目录、权限、unit；再运行是更新；换端口再打一次那一行；`--uninstall`）、
+    `installer_test_web`（共用的证书助手 `cca-team-acme`：自己的系统用户、只给绑 80 的权限、目录和权限，照登记的地址要来证书、放进这个 Team 的那一份，
     服务端用它、标题带上 `--name`；再运行照旧；`--no-web` 去掉登记、没别的 Team 用了停掉它（证书留着）；80 被占着不开，写了 `--web-port`
-    就停下；没要到证书时说放行 80；卸载最后一个 Team 连同证书助手删掉）、`test_web_two_teams`（两个 Team 共用一个证书助手、同一个地址只要一张、
-    各是各的组和标题；卸载一个另一个照旧）、`test_web_old_helper`（另一个 Team 以前它自己的证书助手占着 80：`acme_old`、写了 `--web-port` 停下；
-    更新那个 Team：停掉它自己的，证书、账户搬给共用的、接着用那张，之后另一个也开得了）、`test_web_skipped`（几种开不了网页端的情况照样装好；不开中转就没有网页端）、`test_docker`（第一个拉得到的镜像、
+    就停下；没要到证书时说放行 80；卸载最后一个 Team 连同证书助手删掉）、`web_two_teams`（两个 Team 共用一个证书助手、同一个地址只要一张、
+    各是各的组和标题；卸载一个另一个照旧）、`web_old_helper`（另一个 Team 以前它自己的证书助手占着 80：`acme_old`、写了 `--web-port` 停下；
+    更新那个 Team：停掉它自己的，证书、账户搬给共用的、接着用那张，之后另一个也开得了）、`web_skipped`（几种开不了网页端的情况照样装好；不开中转就没有网页端）、`docker`（第一个拉得到的镜像、
     用户 10001、项目名是服务名、共用的证书助手是另一个 compose 项目，这个 Team 只读挂它的那一份；改用 systemd 时这个 Team 的容器停掉、证书助手照旧是
     Docker 的；拉不到镜像改用 systemd，`--docker` 时停下）、
-    `test_compose`（只有老的 docker-compose、`compose up` 起不来时改用 systemd，`--docker` 时停下、第一次装的 `.env` 不留；Docker 的卸载）、
-    `test_dir`（别人的目录装、卸载都不碰，末尾的 `/` 去掉，同一个 Team 一台只装一个）、`test_failed_update_rolls_back`（起不来、被打断时 `.env`
-    换回原来的）、`test_needs`（缺东西时停下什么都不动；看得到的公网 IP 照用）、`test_old_own_server`（`/opt/cca-hub` 只能卸载、不往里装）、
-    `test_teams`（两个 Team 各一个服务、从 18445 起找端口、只写目录再运行是更新、中转的端口能换能关、另一个 Team 的目录不碰、卸载一个另一个照旧）。
-  - `DeployTest`（`team-deploy`：管理员是 `presence.Device`，假 ssh 把命令交给假服务器上的 sh，`-G` 说在 127.0.0.1）：`test_deploy`（经 SSH 装好
-    （Docker）、接上，发邀请、别的设备加入、同步到配置；再部署是更新；内网地址不开网页端；托管平台的部署文件）、`test_web`（`web_cert ok`、标题和
-    manifest 带上 Team 的名字、`--no-web`、`wait`）、`test_args`（参数不对是 `usage`、不连服务器）、`test_unreachable_then_again`（接不上时说放行哪个端口，放行后再部署是更新；服务器自己的
-    防火墙也说）、`test_not_root`（免密码的 sudo 能装，要密码时什么都不运行）、`test_dropped_after_start`（服务起来以后 SSH 断了：服务器上不换回，
-    管理员照旧接着原来的，再部署是更新）、`test_login_check_and_password`（假 ssh `SSH_PW` 只认密码、经 `SSH_ASKPASS` 取，`SSH_SAYS` 照
+    `compose`（只有老的 docker-compose、`compose up` 起不来时改用 systemd，`--docker` 时停下、第一次装的 `.env` 不留；Docker 的卸载）、
+    `dir`（别人的目录装、卸载都不碰，末尾的 `/` 去掉，同一个 Team 一台只装一个）、`failed_update_rolls_back`（起不来、被打断时 `.env`
+    换回原来的）、`needs`（缺东西时停下什么都不动；看得到的公网 IP 照用）、`old_own_server`（`/opt/cca-hub` 只能卸载、不往里装）、
+    `teams`（两个 Team 各一个服务、从 18445 起找端口、只写目录再运行是更新、中转的端口能换能关、另一个 Team 的目录不碰、卸载一个另一个照旧）。
+  - `cca team deploy` 那一半的十条（`team-deploy`：管理员是 `kit::fleet` 的 `Device`，假 ssh 把命令交给假服务器上的 sh，`-G` 说在 127.0.0.1）：`deploy`（经 SSH 装好
+    （Docker）、接上，发邀请、别的设备加入、同步到配置；再部署是更新；内网地址不开网页端；托管平台的部署文件）、`deploy_test_web`（`web_cert ok`、标题和
+    manifest 带上 Team 的名字、`--no-web`、`wait`）、`args`（参数不对是 `usage`、不连服务器）、`unreachable_then_again`（接不上时说放行哪个端口，放行后再部署是更新；服务器自己的
+    防火墙也说）、`not_root`（免密码的 sudo 能装，要密码时什么都不运行）、`dropped_after_start`（服务起来以后 SSH 断了：服务器上不换回，
+    管理员照旧接着原来的，再部署是更新）、`login_check_and_password`（假 ssh `SSH_PW` 只认密码、经 `SSH_ASKPASS` 取，`SSH_SAYS` 照
     `$HUB_SSH_SAYS` 说一句就退出：`ssh_auth`、`ssh_denied`（不带 `BatchMode`）、`--check` 什么都不装、`ssh_keyonly`、密钥太多是 `ssh_auth`，`--batch`
     不带 `accept-new`，`--askpass` 只问一次密码、密码不在命令行和服务器上；只认公钥、主机密钥变了、解析不了、什么都没说各是哪个原因码）、
-    `test_ssh_and_cert`（ssh 连不上、登录不了；服务器上的证书没了重新生成时照新的重新接上）、`test_undeploy`（删除 Team 时卸载：记下了装到哪、`-i` 记成绝对路径（相对的、`~/` 的）；
-    目录里装的是别的 Team 的 `taken`、没装的 `install`，都不动；`--check` 什么都不动；卸好了 stdout 是目录、同一台上别的 Team 照旧）。
+    `ssh_and_cert`（ssh 连不上、登录不了；服务器上的证书没了重新生成时照新的重新接上）、`undeploy`（删除 Team 时卸载：记下了装到哪、`-i` 记成绝对路径（相对的、`~/` 的）；
+    目录里装的是别的 Team 的 `taken`、没装的 `install`，都不动；`--check` 什么都不动；卸好了 stdout 是目录、同一台上别的 Team 照旧）、`recorded_host`（服务器上直接装好、记着地址的 Team，这台设备经内网地址的 ssh 再部署：
+    各台设备连的还是服务器上记着的那个地址）。
 - 服务端的托管预设、`--behind-proxy` 在 `tests/presence.rs` 的 `cli`、`behind_proxy`；不写指纹的服务器（托管平台上的）
   照证书机构验在 `tests/team.rs` 的 `ca_mode`。
 - 回归 11b3d 的部署（`hubbox`：`cca-test hub-box` 建的假服务器（`tests/kit/hubbox.rs`），假 ssh 认得 `hubbox`、`*@hubbox`，交给它的 `enter`；`$T/hubbox/ssh_denied` 时

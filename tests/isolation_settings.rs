@@ -642,10 +642,8 @@ fn large_inherited_environment(t: &mut Ctx) {
     assert_eq!(result.out(), "");
 }
 
-// 原来还有的几个，现在在别处：
-// - EmbeddedParserTests（上面每个场景换成内嵌的 tomli 再跑一遍）：解析器只有一个了；同样的输入由 cli/src/py/toml.rs 的
-//   matches_cpython_vectors 拿 cli/tests/vectors/toml.json 逐份对照
-// - EmbeddedParserTests.test_embedded_source_integrity_and_version：内嵌的 tomli 没有了，不用再核对它的摘要和版本
-// - BootstrapTests.test_snapshot_stdin_arguments_and_cache_digest：PY_BOOT 的字节码缓存没有了；辅助程序按摘要解出来、
-//   不重复解、清旧的在 tests/regress.sh 的「辅助程序：…」那几个用例里
-// - BootstrapTests.test_full_source_with_large_inherited_environment：就是上面的 large_inherited_environment
+// 不在这里、在别处的：
+// - TOML 解析器自己对不对：同样的输入由 cli/src/py/toml.rs 的 matches_cpython_vectors 拿 cli/tests/vectors/toml.json
+//   逐份对照（解析器只有一个了，不用每个场景换一个解析器再跑一遍）
+// - 辅助程序按摘要解出来、不重复解、清旧的：tests/regress.sh 的「辅助程序：…」那几个用例
+// - 继承来的环境很大时照样跑得了：就是上面的 large_inherited_environment

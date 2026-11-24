@@ -17,7 +17,7 @@ fn rule() -> &'static MailRule {
     &MAIL_RULES[0]
 }
 
-/// 原来 tests/mail_view.py 的 Parse.test_internaldate
+/// INTERNALDATE 换成时间戳（各种时区；月份、写法不对的不认），加上对照数据
 #[test]
 fn internaldate() {
     let e = |s: &str| mail_epoch(s).unwrap();
@@ -39,7 +39,7 @@ fn internaldate() {
     }
 }
 
-/// 原来 tests/mail_view.py 的 Parse.test_search_criteria
+/// 搜索的条件（SINCE 的日期、几条规则怎么用 OR 连起来），加上对照数据
 #[test]
 fn search_criteria() {
     let t = mail_epoch("15-Nov-2026 00:30:00 +0000").unwrap().unwrap() as f64;
@@ -73,7 +73,7 @@ fn fetched(got: BTreeMap<u64, (i64, Vec<u8>)>) -> V {
     V::from(got.into_iter().map(|(u, (t, lit))| V::from(list![u as i64, t, latin1(&lit)])).collect::<Vec<_>>())
 }
 
-/// 原来 tests/mail_view.py 的 Parse.test_fetch_parse_any_order，加上对照数据
+/// FETCH 的回应里各项先后不定也取得出来（没有 INTERNALDATE 的不算），加上对照数据
 #[test]
 fn fetch_parse_any_order() {
     let d = "\"15-Nov-2026 02:00:00 +0000\"";
@@ -345,7 +345,7 @@ fn sessions_like_imaplib() {
     }
 }
 
-// --- MailSource：原来 tests/mail_view.py 的 Source（假的 MailBox） --------------------------------------------------------------
+// --- MailSource：配假的 MailBox --------------------------------------------------------------
 
 #[derive(Default)]
 struct FakeBox {

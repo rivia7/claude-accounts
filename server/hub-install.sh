@@ -31,7 +31,7 @@
 set -u
 umask 022
 
-ROOT=${CCA_HUB_ROOT:-}     # 只给测试用（tests/hub_box.py）：所有文件都放在这个目录下面
+ROOT=${CCA_HUB_ROOT:-}     # 只给测试用（tests/kit/hubbox.rs）：所有文件都放在这个目录下面
 ANYIP=${CCA_HUB_ANY_IP:-}  # 只给测试用：地址是内网的也开网页端（测试里的证书助手是假的）
 CERT_WAIT=${CCA_HUB_CERT_WAIT:-120}   # 等网页端的证书最多几秒（测试里调短）
 D=""                       # 装在哪：--dir，没写时 /opt/<服务名>（team_setup）

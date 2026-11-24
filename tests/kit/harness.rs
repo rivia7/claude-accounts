@@ -174,7 +174,7 @@ impl Ctx {
         child::push_defer(Box::new(f), false);
     }
 
-    /// 同 [`Ctx::defer`]，但等这个模块的用例都跑完才跑（`setUpClass` 建的、几个用例共用的东西）
+    /// 同 [`Ctx::defer`]，但等这个模块的用例都跑完才跑（几个用例共用的东西）
     pub fn defer_module(&mut self, f: impl FnOnce() + Send + 'static) {
         child::push_defer(Box::new(f), true);
     }

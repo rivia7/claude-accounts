@@ -318,7 +318,7 @@ fn not_found(cfg: &Arc<ServerConfig>, mut sock: TcpStream) -> io::Result<()> {
     tls.flush()
 }
 
-// ---- 每个用例的夹具（原来的 setUp 和 TeamTest 的那几个方法） ----
+// ---- 每个用例的夹具 ----
 
 /// 一个用例的临时目录：各台设备的 HOME、各台服务器的目录、现生成的密钥都建在里面
 struct Fx {

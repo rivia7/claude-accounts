@@ -385,7 +385,7 @@ mod tests {
         }
     }
 
-    /// 对照值是照 tests/spec_wire.py 的 code_text（去掉横线）算的
+    /// 对照值是固定的数据：原来那份独立实现的 code_text（去掉横线）算出来的
     #[test]
     fn crockford() {
         let cases = [

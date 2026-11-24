@@ -231,7 +231,7 @@ mod tests {
     }
 
     /// 同一个签名的 s 加上群的阶 L：照验签的式子算也成立，但 s 必须小于 L（RFC 8032 5.1.7；不然同一份内容就多出一个验得过的签名）。
-    /// Python 那一份自己查这一条（原来 tests/presence.py 的 VerifyTest），这里看的是 ring 也不收
+    /// Python 那一份自己查这一条，这里看的是 ring 也不收
     #[test]
     fn s_plus_the_group_order_is_refused() {
         let public = hash::from_hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a").unwrap();

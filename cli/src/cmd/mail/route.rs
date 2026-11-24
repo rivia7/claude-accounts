@@ -647,7 +647,7 @@ mod tests {
     use crate::py::obj::V;
     use std::net::TcpListener;
 
-    /// 原来 tests/mail_view.py 的 Route
+    /// `scutil --proxy` 的一份输出：下面几条拿它当系统的代理设置
     const SCUTIL: &str = concat!(
         "<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n    1 : 169.254/16\n  }\n  FTPPassive : 1\n",
         "  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 7891\n",
@@ -784,8 +784,8 @@ mod tests {
         assert!(route(Some("socks5://127.0.0.1:7901"), None, Some(bad)).unwrap_err().is("AttributeError"));
     }
 
-    /// 原来 tests/mail_view.py 的 Wire.test_tls_is_always_verified（现在 tests/mail_view.rs 的 tls_is_always_verified）的后一半（「HOME 是用户真正的主目录：只给测试的 CA 不认」）：
-    /// 那一条在外面测不了——辅助程序要在真的主目录下跑才走得到。这里钉住认不认的规则；不认的时候握手确实过不了，
+    /// tests/mail_view.rs 的 tls_is_always_verified 从外面测不了的那一半（「HOME 是用户真正的主目录：只给测试的 CA 不认」）：
+    /// 辅助程序要在真的主目录下跑才走得到。这里钉住认不认的规则；不认的时候握手确实过不了，
     /// tests/mail_view.rs 的那一条用空的 CCA_MAIL_CAFILE 测
     #[test]
     fn test_ca_only_in_a_swapped_home_and_to_this_machine() {

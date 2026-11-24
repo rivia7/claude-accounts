@@ -62,10 +62,10 @@ cargo build --release --locked --target x86_64-unknown-linux-musl   # 交叉编�
 
 ## 测试
 
-- `cargo test`：兼容层对着 CPython 的对照数据（`tests/vectors/`）、各模块的内部函数。原来 Python 单元测试里只能调内部函数的检查搬到了这里
-- `tests/*.py`（回归的 unit 一节）：把辅助程序当黑盒跑（`tests/helper_bin.py` 给出它在哪：`CCA_HELPER`，没有就是 `cli/target/release/cca-core`）。临时 HOME、PATH 上放假命令；单独跑之前先 `cargo build --release`
+- `cargo test`：兼容层对着 CPython 的对照数据（`tests/vectors/`）、各模块的内部函数（从外面运行辅助程序查不到的都在这里）
+- `tests/*.rs`（测试程序 `suite` 的各个模块，回归的 unit 一节收它们的结果）：把辅助程序当黑盒跑（`kit::harness` 的 `helper` 给出它在哪：`CCA_HELPER`，没有就是 `cli/target/release/cca-core`）。临时 HOME、PATH 上放假命令；单独跑之前先 `cargo build --release`，再 `cargo test --profile kit -p cca-tests --test suite -- 模块名`（见 tests/CLAUDE.md）
 - `tests/regress.sh`：整条 `cca` 命令的行为。开头先编辅助程序；10g 里测“怎么找到辅助程序”（没编出来、`CCA_HELPER`、第一次解出来、不再解、清旧的、文件不完整、校验值不对、缓存目录是链接、没有这种机器的、缺 `base64`、两个同时第一次运行）；`mkver` 做的假发布版像真的一样接着辅助程序
-- 移植时用过的对拍（原来的 Python 和 cca-core 在同一份沙箱上各跑一遍、逐字节比）和从原来的 Python 生成对照数据的脚本已经删了：以后的开发直接照 Rust 来，行为用 `cargo test`、`tests/*.py`、回归测。`cli/tests/vectors/` 里从原来的 Python 取的那几份（`src_*.json`、`usage.json`、`corenet.json`、`clients.json`、`mail.json`）成了固定的数据，有意改了行为就直接改它们或者改测试；只照 CPython 标准库生成的表（`cli/src/py/uni_tables.rs`、`xml_tables.rs`、`zip_cp437.rs`、`cmd/mail/html5.rs`、`cmd/clients/casefold_table.rs`）和对照数据（`cli/tests/vectors/` 里其余的几份）也固定了：生成它们的脚本（`cli/tools/gen_*.py`）跟着仓库里别的 Python 一起删了，要看去 git 历史里翻。兼容层的行为以这些数据为准，不再跟着 CPython 的新版本走
+- 移植时用过的对拍（原来的 Python 和 cca-core 在同一份沙箱上各跑一遍、逐字节比）和从原来的 Python 生成对照数据的脚本已经删了：以后的开发直接照 Rust 来，行为用 `cargo test`、`tests/*.rs`、回归测。`cli/tests/vectors/` 里从原来的 Python 取的那几份（`src_*.json`、`usage.json`、`corenet.json`、`clients.json`、`mail.json`）成了固定的数据，有意改了行为就直接改它们或者改测试；只照 CPython 标准库生成的表（`cli/src/py/uni_tables.rs`、`xml_tables.rs`、`zip_cp437.rs`、`cmd/mail/html5.rs`、`cmd/clients/casefold_table.rs`）和对照数据（`cli/tests/vectors/` 里其余的几份）也固定了：生成它们的脚本（`cli/tools/gen_*.py`）跟着仓库里别的 Python 一起删了，要看去 git 历史里翻。兼容层的行为以这些数据为准，不再跟着 CPython 的新版本走
 - Linux：`tests/linux.sh` 用 musl 的那一份（`--docker` 时在宿主机上先交叉编译；见 `docs/dev/linux.md`）
 
 ## 量过的

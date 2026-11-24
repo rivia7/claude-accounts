@@ -140,7 +140,7 @@ cca 只经 stdin、提问会话传它，不进命令行和环境变量。它在�
   服务器扣着新的不给，设备也看不出来，只知道很久没变过。服务器不验 `sig`、不懂 `ct`：它没有那两把密钥，也没有根密钥。
 
 明文里有什么服务器不管（盐也在里面：账号摘要、API key 和折合金额的密钥照「隐私」一节的算，盐是配置里的这一份）：cca 用的字段见
-docs/dev/team.md。`tests/spec_wire.py` 的 `team_id`、`invite_parts`、`invite_encode`、`invite_decode`、`team_doc_seal`、`team_doc_open`、
+docs/dev/team.md。`tests/kit/spec.rs` 的 `team_id`、`invite_parts`、`invite_encode`、`invite_decode`、`team_doc_seal`、`team_doc_open`、
 `team_doc_signed`、`team_doc_sign`、`team_doc_verify` 照这一节独立实现。
 
 ### 部署
@@ -215,7 +215,7 @@ Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、�
 
 `--relay-listen 地址:端口` 才开（不给时那几个接口回 404，和旧版服务器一样）；`--relay-port` 是告诉客户端连哪个端口（容器里外不一样时给）。
 Team 的安装脚本默认开着（见「Team 的同步服务器 → 部署」）；托管平台上的开不了：只有一个 HTTP 端口。
-格式照下面写的，`tests/spec_wire.py` 是照这一节独立实现的一份（测试里拿它和 cca 互相配对、握手、收发）。
+格式照下面写的，`tests/kit/spec.rs` 是照这一节独立实现的一份（测试里拿它和 cca 互相配对、握手、收发）。
 
 要防的是这台服务器自己（被攻破、被换掉）和路上的人：它们看不到终端的内容、敲不进按键、冒充不了配对过的机器。靠的是两台机器配对时
 各自存下的一把密钥 P——服务器从头到尾见不到它。密码学只用 HMAC-SHA256（cca 的辅助程序里已有的）：没有前向保密，P 日后泄露的话，
@@ -317,7 +317,7 @@ CCA-RELAY/1 <角色> <编号> <cn> <mac>\n
 
 手机上装不了 cca：服务器把一页网页（仓库的 `server/web/`）发给手机的浏览器，页面自己配对、自己接入。`--web-url https://域名[:端口]/`
 才开（要和 `--relay-listen` 一起；`/v1/health` 里多一项 `web`）；没开时下面这些都没有，和以前一样（以前记下的访客的请求也一律不认，
-记录留着，再打开时还在）。地址照浏览器自己说的那个样子记：主机小写，默认的端口（443）不写——WebSocket 的 `Origin` 要和它逐字相等。`tests/web_relay.py` 里的
+记录留着，再打开时还在）。地址照浏览器自己说的那个样子记：主机小写，默认的端口（443）不写——WebSocket 的 `Origin` 要和它逐字相等。`tests/web_relay.rs` 里的
 `Guest`、`WsSock` 是照这一节独立写的一份，页面用的是 `server/web/core.js`。
 
 **访客。** 手机不是 Team 里的设备、不在名单里，是和它配对的那台设备领进来的：

@@ -483,7 +483,7 @@ mod tests {
         fs::load_quiet(&path::join(dir, "used.json")).and_then(|v| v.as_dict()).unwrap_or_default()
     }
 
-    /// 原来 tests/mail_view.py 的 Used.test_claim_once_across_processes
+    /// 一个链接只认领一次：别的进程认领着的不抢，认领的人不在了可以接手，--again 照样打开；只记摘要，链接不进文件
     #[test]
     fn claim_once_across_processes() {
         use std::os::unix::fs::PermissionsExt;
@@ -513,7 +513,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 原来 tests/mail_view.py 的 Used.test_old_records_are_dropped
+    /// 过了期的、样子不对的记录认领时清掉；没改动就不写文件
     #[test]
     fn old_records_are_dropped() {
         let dir = tmpdir("old");
@@ -694,7 +694,7 @@ mod tests {
         }
     }
 
-    // --- 原来 tests/mail_view.py 的 Hunt：假的邮件来源、假的时钟 ------------------------------------------------------------------
+    // --- 盯邮箱：假的邮件来源、假的时钟 ------------------------------------------------------------------
 
     enum Round {
         Mails(Vec<Cand>),
@@ -728,7 +728,7 @@ mod tests {
         }
     }
 
-    /// 对照数据里原来的 tests/mail_fake.py（现在是 kit::mailfake）做的登录邮件（judge 一节里的 good、to bob……）
+    /// 对照数据里的登录邮件（judge 一节里的 good、to bob……；当初是假 Gmail 那一份做的，现在是 kit::mailfake）
     fn eml(name: &str) -> Vec<u8> {
         let c =
             vectors("judge").into_iter().find(|c| c.at("name").py_str() == name).unwrap_or_else(|| panic!("对照数据里没有 {name}"));

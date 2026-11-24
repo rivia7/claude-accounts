@@ -3828,7 +3828,7 @@ mod tests {
 
     #[test]
     fn model_names_like_python_test() {
-        // 原来 tests/cost_view.py 的 Prices.test_model_names：会话记录里的模型名 → 价格表里的写法
+        // 会话记录里的模型名 → 价格表里的写法
         let long = "m".repeat(100);
         for (raw, want) in [
             (V::from("claude-opus-5-5[1m]"), "claude-opus-5-5"),
@@ -3848,7 +3848,7 @@ mod tests {
 
     #[test]
     fn claude_prices_like_python_test() {
-        // 原来 tests/cost_view.py 的 Prices.test_claude
+        // Anthropic 的标价：缓存、快速模式、只在美国推理、长上下文、网页搜索、没有公开价格的
         let f = |model: &str, u: &str| cost_claude(model, &d(u));
         let with = |more: &str| {
             format!(
@@ -3911,7 +3911,7 @@ mod tests {
 
     #[test]
     fn codex_prices_like_python_test() {
-        // 原来 tests/cost_view.py 的 Prices.test_codex
+        // OpenAI 的标价：档位、长上下文、缓存写
         let now = 1795500000.0; // 2026-11-24：GPT-6.2 的 Ultrafast 还在促销
         let f = |model: &str, tier: Option<&str>, u: &str| cost_codex(model, tier, now, &d(u));
         let u = r#"{"input_tokens": 10000, "cached_input_tokens": 8000, "cache_write_input_tokens": 0, "output_tokens": 500, "reasoning_output_tokens": 300}"#;
@@ -3957,7 +3957,7 @@ mod tests {
 
     #[test]
     fn bin_by_midpoint_like_python_test() {
-        // 原来 tests/cost_view.py 的 Periods.test_bin_by_midpoint：跨过边界的小时按中点算；时段以外的不算
+        // 小时数据按时段加起来：跨过边界的小时按中点算；时段以外的不算
         let period = |s: i64, e: i64, tag: &str| Period { start: V::Int(s), end: V::Int(e), tag: tag.to_string() };
         let periods = [period(1000 * 3600, 1000 * 3600 + 5400, "x"), period(1000 * 3600 + 5400, 1003 * 3600, "y")];
         let h: Hours = [(1000, 1), (1001, 2), (1002, 4), (999, 8), (1003, 16)]

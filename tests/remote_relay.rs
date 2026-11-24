@@ -7,9 +7,9 @@
 //!
 //! 夹具（Base、转发器、服务器、照文档说话的另一头）在 kit::relay 里，别的几份测试也用。
 //!
-//! 原来的 LimitsTest（服务器的限额和记账：一台设备同时开着 4 个配对、最多和 16 台配对、手里 16 张没用掉的票据、8 个会话，
-//! 一个会话 4 处接入，没用过的配对 180 天删掉）直接调 Python 服务器里的类、时间由用例给，从外面测不了，没有移过来：
-//! Rust 的服务器要在它自己的单元测试里测这些。
+//! 服务器的限额和记账（一台设备同时开着 4 个配对、最多和 16 台配对、手里 16 张没用掉的票据、8 个会话，
+//! 一个会话 4 处接入，没用过的配对 180 天删掉）时间得由用例给，从外面测不了，不在这里：在服务器自己的单元测试里
+//! （cli/src/server/remote/tests.rs 的 limits、idle_pairings_are_dropped_but_used_ones_stay）。
 
 use kit::fleet::{self, Device, WAIT};
 use kit::fsx::{self, wait_for};
@@ -218,9 +218,9 @@ fn field_of(es: &[Value], kind: &str, key: &str) -> Vec<String> {
     es.iter().filter(|e| e["ev"].str() == kind).map(|e| e[key].str().to_string()).collect()
 }
 
-// ---- 服务器这一头：两边都照文档自己说话（不经 cca）（原来的 ServerTest） ----
+// ---- 服务器这一头：两边都照文档自己说话（不经 cca） ----
 
-/// 原来 ServerTest 的 setUp：三台设备 box、laptop、other，都登记在服务器上。返回 (夹具, box, laptop, other)
+/// 这一组用例的准备：三台设备 box、laptop、other，都登记在服务器上。返回 (夹具, box, laptop, other)
 fn server_fx(t: &mut Ctx) -> (Base, Device, Device, Device) {
     let fx = Base::new(t);
     let (a, b, c) = (fx.device("box"), fx.device("laptop"), fx.device("other"));
@@ -535,7 +535,7 @@ fn pairings_survive_a_restart(t: &mut Ctx) {
     assert_eq!(fsx::mode(fx.d.join("remote.json")) & 0o777, 0o600);
 }
 
-// ---- 没开中转的服务器（和旧版一样）：那几个接口不认（原来的 OldServerTest） ----
+// ---- 没开中转的服务器（和旧版一样）：那几个接口不认 ----
 
 fn relay_is_off_unless_asked(t: &mut Ctx) {
     let fx = Base::with(t, false, |_| Vec::new());
@@ -558,7 +558,7 @@ fn relay_is_off_unless_asked(t: &mut Ctx) {
     assert_eq!(lone.sent(None), no_values());
 }
 
-// ---- 两台设备上都是真的 cca（辅助程序）：box 上跑会话，laptop 接入（原来的 ClientTest） ----
+// ---- 两台设备上都是真的 cca（辅助程序）：box 上跑会话，laptop 接入 ----
 
 /// 每台设备上一次问服务器“别的机器上有哪些会话”是什么时候（原来记在用例的 asked 里）
 #[derive(Default)]
@@ -584,7 +584,7 @@ impl Asked {
     }
 }
 
-/// 原来 ClientTest 的 setUp：box、laptop 两台，都登记在服务器上。返回 (夹具, box, laptop, 问服务器的节奏)
+/// 这一组用例的准备：box、laptop 两台，都登记在服务器上。返回 (夹具, box, laptop, 问服务器的节奏)
 fn client_fx(t: &mut Ctx) -> (Base, Device, Device, Asked) {
     let fx = Base::new(t);
     let (a, b) = (fx.device("box"), fx.device("laptop"));
@@ -1064,10 +1064,10 @@ fn pairing_errors(t: &mut Ctx) {
     assert_eq!((incoming(&a), incoming(&b)), (vec!["control".to_string()], vec!["control".to_string()]));
 }
 
-// ---- bash 这一层（原来的 ShellTest）：真的 cca 脚本（仓库里的那一份），两台设备。终端里的提问用答案文件（CCA_TTY），
+// ---- bash 这一层：真的 cca 脚本（仓库里的那一份），两台设备。终端里的提问用答案文件（CCA_TTY），
 // 界面 App 的提问会话由 cca-test gui-session 扮演（事件文件、答案管道） ----
 
-/// 原来 ShellTest 的 setUp：box、laptop 两台，都登记在服务器上
+/// 这一组用例的准备：box、laptop 两台，都登记在服务器上
 fn shell_fx(t: &mut Ctx) -> (Base, Device, Device) {
     let fx = Base::new(t);
     let (a, b) = (fx.device("box"), fx.device("laptop"));
