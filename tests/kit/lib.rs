@@ -19,6 +19,7 @@ pub mod pty;
 pub mod sandbox;
 pub mod server;
 pub mod spec;
+pub mod term;
 pub mod tls;
 pub mod tlsd;
 pub mod width;

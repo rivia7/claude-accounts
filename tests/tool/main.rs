@@ -5,6 +5,7 @@ mod double;
 mod ev;
 mod exec;
 mod fake;
+mod fake_client;
 mod fx;
 mod gui_session;
 mod hubbox;
@@ -23,6 +24,7 @@ const TABLES: &[&[(&str, Run)]] = &[
     ev::CMDS,
     exec::CMDS,
     fake::CMDS,
+    fake_client::CMDS,
     fx::CMDS,
     gui_session::CMDS,
     hubbox::CMDS,

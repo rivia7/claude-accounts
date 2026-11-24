@@ -15,6 +15,7 @@ mod isolation_settings;
 mod kit_selftest;
 mod local_udp;
 mod mail_view;
+mod remote_host;
 mod router_merge;
 mod shared_state;
 mod usage_view;
@@ -38,6 +39,7 @@ fn main() {
             client_updates::MODULE,
             usage_view::MODULE,
             mail_view::MODULE,
+            remote_host::MODULE,
             acme::MODULE,
             isolation_chrome_native::MODULE,
         ],
