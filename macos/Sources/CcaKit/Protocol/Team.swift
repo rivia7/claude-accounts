@@ -174,6 +174,8 @@ struct TeamDeviceState: KnownValues {
 
     /// 还在 Team 里、或者还能加入的（列在前面；别的是留着备查的）
     var active: Bool { self == .local || self == .invited || self == .joined }
+    /// 不再列出来的：自己退出了的、被移除了的（3.6.6 起 cca 不再记、不再给它们，以前的 cca 还给：界面上不列，解码照样留着）
+    var removed: Bool { self == .left || self == .revoked }
 }
 
 struct TeamDevice: Decodable, Sendable, Equatable, Identifiable {

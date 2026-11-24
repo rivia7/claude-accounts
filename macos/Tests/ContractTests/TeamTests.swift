@@ -68,12 +68,13 @@ func teamFixtureTests() {
               && d[1].label == "小王的 MacBook" && d[1].name == "wang-mbp" && d[2].name == nil && doc.aliasLock == true)
         check("team devices：授权：全部 / 只给几个 / 一个都不给", d[0].grantsAll && d[0].has(doc.accountList[2]) && !d[1].grantsAll && d[1].has(doc.accountList[1])
               && !d[1].has(doc.accountList[0]) && d[1].grantCount(of: 3) == 1 && d[0].grantCount(of: 3) == 3 && !d[4].grantsAll && d[4].grantCount(of: 3) == 0)
-        check("team devices：状态；不认识的状态不算还在的", d[2].state == .invited && d[2].state.active && d[4].state == .revoked && !d[4].state.active
-              && !d[5].state.isKnown && !d[5].state.active && d[2].expiresEpoch == 1794600000 && d[3].problem?.contains("公钥") == true)
+        check("team devices：状态；不认识的状态不算还在的；移除了的（以前的 cca 还给）不列", d[2].state == .invited && d[2].state.active
+              && d[4].state == .revoked && !d[4].state.active && d[4].state.removed && !d[2].state.removed
+              && !d[5].state.isKnown && !d[5].state.active && !d[5].state.removed && d[2].expiresEpoch == 1794600000 && d[3].problem?.contains("公钥") == true)
         check("team devices：给人看的那一句", Texts.teamDeviceDetail(d[0], accounts: 3, now: now) == "刚刚来过 · 全部账号 · 配置是最新的"
               && Texts.teamDeviceDetail(d[1], accounts: 3, now: now).hasSuffix("1 个账号 · 还没同步到最新的配置")
               && Texts.teamDeviceDetail(d[2], accounts: 3, now: now) == "邀请还没用（6 天后过期） · 全部账号"
-              && Texts.teamDeviceDetail(d[4], accounts: 3, now: now) == "移除了", Texts.teamDeviceDetail(d[0], accounts: 3, now: now))
+              && Texts.teamDeviceDetail(d[5], accounts: 3, now: now) == "later-state", Texts.teamDeviceDetail(d[0], accounts: 3, now: now))
     }
     check("命令：看设备（展开时自己查的降优先级）、同步配置、退出、邀请、移除、改授权、改名字、改节点、改别名",
           CcaCommand.teamDevices(team: teamA, auto: true).arguments == ["team", "devices", teamA, "--json"] && CcaCommand.teamDevices(team: teamA, auto: true).isBackground

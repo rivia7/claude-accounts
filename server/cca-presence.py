@@ -17,10 +17,12 @@
   没开会话 → none；有会话 idle 秒内有动静 → in_use，否则 idle。只有相对秒数上线，两边的时钟对不对不影响状态。
 - API key（keys）：Team 给的官方账号记下备查的 API key，经这里同步给登录了这个账号的其他设备。服务器只存设备传上来的密文
   （每个账号一份，新的整个换掉旧的），看不到 key，也分不出是 key 还是“删掉了”：密钥由盐、邮箱和账号的登录身份派生，只有
-  登录过这个账号的设备算得出来；谁新谁旧、真的假的都由设备自己按密文里认证过的时间判断。存在状态文件旁边的 keys.json。
+  登录过这个账号的设备算得出来；谁新谁旧、真的假的都由设备自己按密文里认证过的时间判断。存在状态文件旁边的 keys.json。设备被移除时
+  它传的 key 的密文留着（是账号的，别的设备还要用），只是不再记着是它传的。
 - 折合金额（op ledger）：Team 给的官方账号的用量按官方 API 标价折成的金额，各台设备算自己的，经这里交换。服务器只存设备传上来的密文
-  （每个账号、每台设备一份，设备只能写自己的那一份；移除设备后不删，是账号的用量，cost_keep 天没再传就删掉），密钥和 API key
-  一样只有登录过这个账号的设备算得出来。回的时候顺带说哪些设备 30 天内用过这个账号、却没传过（多半是 cca 太旧）。存在 cost-slots.json。
+  （每个账号、每台设备一份，设备只能写自己的那一份；设备被移除时它传的跟着删掉，cost_keep 天没再传的也删掉），密钥只由 Team 的盐
+  派生（3.6.5 及以前的 cca 还带着登录身份），Team 里的设备都算得出来，服务器算不出来。回的时候顺带说哪些设备 30 天内用过这个账号、
+  却没传过（多半是 cca 太旧）。存在 cost-slots.json。
   早先试过的 /v1/cost 是另一种格式，这一版不认（回 404：那时的客户端照旧版服务器处理，过几个小时再试）。
 - 连接：同一个 IP 最多同时 8 个，每个连接从接进来起最多 15 秒（TLS 握手 5 秒），慢吞吞、不说话的连接占不满服务器；
   POST 按 IP 限流，验签通过之后再按设备限流（别的设备拿你的指纹乱发请求，扣不到你的配额）。
@@ -425,8 +427,8 @@ class Store:
     | null, "used": 上次使用}}}, "team": {"root": 配置的根公钥, "gen": 这一份记录的编号, "invites": {令牌的 SHA-256: {"dev",
     "exp": 什么时候过期, "at"}}, "spent": {用掉的令牌的 SHA-256: 什么时候}}}，时间都是服务器的。
     keys.json（另一个文件：心跳不用跟着重写它）：{"acc": {账号摘要: {"blob": 密文, "fp": 传的设备, "name": 它那时的名字,
-    "at": 什么时候传的}}}（移除设备不删：是账号的）。cost-slots.json：{"acc": {账号摘要: {设备指纹: {"blob", "name", "at"}}}}
-    （移除设备不删，cost_keep 秒没再传的才删）。team-docs.json：{"docs": {设备编号: {"seq", "ct": 密文, "sig": 签名, "at"}}}
+    "at": 什么时候传的}}}（移除设备时密文留着：是账号的；fp、name 去掉）。cost-slots.json：{"acc": {账号摘要: {设备指纹: {"blob",
+    "name", "at"}}}}（移除设备时它的跟着删掉，cost_keep 秒没再传的也删）。team-docs.json：{"docs": {设备编号: {"seq", "ct": 密文, "sig": 签名, "at"}}}
     （管理员给各台设备的配置）"""
     def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400, team_root=None):
         self.path, self.ttl, self.idle, self.retain, self.cost_keep = path, ttl, idle, retain, cost_keep
@@ -466,7 +468,8 @@ class Store:
     def team_setup(self, root):
         """配置的根公钥和上次的不一样（第一次启动、换了一个 Team、以前是维护者的服务器或者自己的同步服务器）就从头开始：以前的设备、
         邀请、记录、密文都不要了（另一个 Team 的盐算出来的账号摘要和密钥都不一样，旧的谁也用不上；以前的维护者的服务器、自己的同步
-        服务器的也是）。接着用时，状态文件里样子不对的邀请、设备不要（手改坏了的：留着的话以后每个请求都出错）"""
+        服务器的也是）。接着用时，状态文件里样子不对的邀请、设备不要（手改坏了的：留着的话以后每个请求都出错），不在名单里的设备的
+        记录不留（forget_gone：以前的版本移除设备时留下的）"""
         team = self.data.get('team')
         if isinstance(team, dict) and team.get('root') == root and GEN_RE.match(str(team.get('gen') or '')):
             entries = lambda k: team[k].items() if isinstance(team.get(k), dict) else ()
@@ -478,6 +481,7 @@ class Store:
             if json.dumps([team['invites'], team['spent'], self.data['machines']], sort_keys=True) != before:
                 self.save()
             self.docs_prune()
+            self.forget_gone()
             return
         if self.data['machines'] or self.keys['acc'] or self.cost['acc'] or self.docs['docs']:
             if 'own' in self.data:
@@ -582,7 +586,8 @@ class Store:
 
     def cost_sync(self, fp, put, get, have, now):
         """折合金额的密文：先存这台设备传的（每个账号一份、只写自己的那一份），再回问的那些账号各台设备的（have 里认证码一样的、
-        这台设备自己的不带密文；移除了的设备照样回，标上 revoked），和 30 天内经 cca 用过这个账号、却没传过的设备（missing）"""
+        这台设备自己的不带密文；只回名单里的设备的，revoked 总是 false：移除设备时它的已经删了），和 30 天内经 cca 用过这个账号、
+        却没传过的设备（missing）"""
         with self.lock:
             m = self.data['machines'].get(fp)
             if not m:
@@ -604,9 +609,10 @@ class Store:
                 rows = []
                 for f, e in sorted((acc.get(aid) or {}).items(), key=lambda x: -(x[1].get('at') or 0)):   # 最近传过的先给密文
                     cur = self.data['machines'].get(f)
-                    name = cur['name'] if cur else e.get('name')
-                    r = {'fp': f, 'name': name if isinstance(name, str) else None, 'me': f == fp, 'revoked': cur is None,
-                         'tag': e['blob']['t'], 'age': ago(now, e.get('at') or 0)}
+                    if not cur:   # 不在名单里了（移除设备时就删了：这里只是保险）
+                        continue
+                    r = {'fp': f, 'name': cur['name'], 'me': f == fp, 'revoked': False, 'tag': e['blob']['t'],
+                         'age': ago(now, e.get('at') or 0)}
                     if f != fp and (have.get(aid) or {}).get(f) != r['tag'] and len(e['blob']['c']) <= budget:
                         r['blob'] = e['blob']
                         budget -= len(e['blob']['c'])
@@ -627,14 +633,20 @@ class Store:
                 out.append({'name': self.data['machines'][f]['name'], 'used_age': ago(now, used)})
         return out
 
-    def cost_prune(self, now):
-        """cost_keep 秒没再传过的不要了（那台设备早就不用 cca 了）"""
-        acc = self.cost['acc']
+    def cost_drop(self, gone):
+        """删掉 gone(设备指纹, 那一份) 为真的折合金额，账号一份都不剩了也删掉；返回删了几份。拿着锁调（启动时不用）"""
+        acc, n = self.cost['acc'], 0
         for aid in list(acc):
-            for f in [f for f, e in acc[aid].items() if now - (e.get('at') or 0) > self.cost_keep]:
+            for f in [f for f, e in acc[aid].items() if gone(f, e)]:
                 del acc[aid][f]
+                n += 1
             if not acc[aid]:
                 del acc[aid]
+        return n
+
+    def cost_prune(self, now):
+        """cost_keep 秒没再传过的不要了（那台设备早就不用 cca 了）"""
+        self.cost_drop(lambda f, e: now - (e.get('at') or 0) > self.cost_keep)
 
     def free_name(self, name, fp):
         """名字被别的设备用了就在后面加 -2、-3……（最长 64 个字符）。拿着锁调"""
@@ -653,12 +665,27 @@ class Store:
                 'seen_age': ago(now, seen) if seen else None}
 
     def drop_machine(self, fp):
-        """一台设备的密钥就此不认，它上报的记录跟着删掉（传过的 API key、折合金额的密文是账号的，不删）。拿着锁调"""
+        """一台设备的密钥就此不认，它在这里的记录跟着删掉：上报的、传过的折合金额（forget_gone；记下的 API key 的密文是账号的，
+        留着）。拿着锁调"""
         self.data['machines'].pop(fp, None)
         self.data['beats'].pop(fp, None)
         self.data['units'].pop(fp, None)
         self.seen.pop(fp, None)
         self.have.pop(fp, None)
+        self.forget_gone()
+
+    def forget_gone(self):
+        """不在名单里的设备的记录不留（移除设备、换了密钥时；启动时清掉以前的版本留下的）：传过的折合金额的密文删掉；记下的
+        API key 的密文是账号的（别的设备还要用），留着，只是不再记着是哪台传的。有改动才写文件。拿着锁调（启动时不用）"""
+        ms = self.data['machines']
+        if self.cost_drop(lambda f, e: f not in ms):
+            save_doc(self.cost_path, self.cost)
+        orphans = [e for e in self.keys['acc'].values() if isinstance(e, dict) and ('fp' in e or 'name' in e) and e.get('fp') not in ms]
+        for e in orphans:
+            e.pop('fp', None)
+            e.pop('name', None)
+        if orphans:
+            save_doc(self.keys_path, self.keys)
 
     # ---- Team 的服务器（mode team；格式见 README.md「Team 的同步服务器」）。管理员的请求（根密钥签的）、设备加入时的签名都在 Handler 里验过
 
@@ -699,7 +726,8 @@ class Store:
 
     def team_enroll(self, devs, now):
         """管理员直接登记设备的公钥（它自己的那台；服务器的记录没了以后把各台加回去；给设备改名字：同一把公钥、新的名字）：devs 是
-        parse_enroll 的结果。这个编号原来的那把密钥就此不认（换了密钥），还没用掉的邀请作废；公钥已经是别的编号的设备是 409。
+        parse_enroll 的结果。这个编号原来的那把密钥就此不认（换了密钥：drop_machine，它传的折合金额跟着删掉），还没用掉的邀请作废；
+        公钥已经是别的编号的设备是 409。
         同一把公钥再登记：加入的时间、加入时带的认证码（proof）照旧"""
         root = self.root_fp()
         if any(fp == root for fp, _, _ in devs.values()):   # 根密钥不是设备
@@ -816,7 +844,7 @@ class Store:
             return 200, {'v': API, 'ok': True, 'members': rows, 'invites': invites, 'gen': team['gen']}
 
     def team_revoke(self, dev):
-        """管理员移除一台设备：它的密钥就此不认，给它的配置、还没用掉的邀请一起删掉"""
+        """管理员移除一台设备：它的密钥就此不认，给它的配置、还没用掉的邀请、它传过的折合金额一起删掉"""
         with self.lock:
             team = self.data['team']
             fps = [f for f, m in self.data['machines'].items() if m.get('dev') == dev]

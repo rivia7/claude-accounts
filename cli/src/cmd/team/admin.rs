@@ -9,7 +9,7 @@
 //!             给旧版本用：每个邮箱用它最前面那个工具里的）, "alias_lock": true（锁定了别名；没锁定时没有）, "install_node": 节点,
 //!             "nodes": {"group", "proxies"} | null},
 //!  "devices": {设备编号: {"n": 序数, "label": 管理员起的名字（设备的名字以它为准：align_names）, "state": local | invited | joined |
-//!              expired | revoked, "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
+//!              expired（3.6.6 起移除了的、自己退出了的不记：以前记着的 revoked、left 下次和服务器对一遍时删掉）, "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
 //!              "sha": 那一版内容的摘要, "exp": 邀请什么时候过期}},
 //!  "deploy": {"target": [用户@]主机, "ssh_port": SSH 端口（没写是空的）, "dir": 目录, "identity": 私钥（-i 的绝对路径，没写是空的）}
 //!            （cca team deploy 装到了哪台、用哪把私钥登录的：删除 Team 时照它卸载；手动 cca team attach 换到别的地址时去掉）}
@@ -377,8 +377,8 @@ fn label_of(d: &Dict, dev: &str) -> String {
 }
 
 /// 把内容变了的配置封好、签好存到服务器上（only：只管这一台）。存上了的记下序号和摘要；服务器上的序号比记着的大（管理员的状态是从
-/// 备份里恢复的）就接着它的往上加再存一次——它说的数要像话（不比记着的小、没到上限），不然不信；服务器不认得的编号（邀请过期很久了、
-/// 被移除了）记成 expired。改了 admin.json
+/// 备份里恢复的）就接着它的往上加再存一次——它说的数要像话（不比记着的小、没到上限），不然不信；服务器不认得的编号：加入过的（和服务器
+/// 对过以后才退出的）不再记，别的（邀请过期很久了）记成 expired。改了 admin.json
 fn publish(t: &Team, a: &Dict, only: Option<&str>) -> R<Result<Published, String>> {
     let cfg = match root_cfg(t)? {
         Ok(c) => c,
@@ -446,8 +446,12 @@ fn publish(t: &Team, a: &Dict, only: Option<&str>) -> R<Result<Published, String
                     None => out.problems.push(format!("{label}：服务器说它存着的配置的序号是 {}，对不上，没存上", cur.py_str())),
                 }
             } else if put.unknown.contains(dev) {
-                d.set("state", "expired");
-                out.problems.push(format!("{label}：服务器不认得这台设备（邀请过期很久了，或者被移除了）"));
+                if d.str("state").as_deref() == Some("joined") {
+                    devs.pop(dev); // 加入过、服务器却不认得了：它刚退出了（和服务器对过以后），这边也不记了
+                } else {
+                    d.set("state", "expired");
+                    out.problems.push(format!("{label}：服务器不认得这台设备（邀请过期很久了，或者被移除了）"));
+                }
             } else if put.silent.contains(dev) {
                 out.problems.push(format!("{label}：服务器没说这一份存上了没有"));
             }
@@ -513,8 +517,9 @@ fn forward(old: &Team, t: &Team, a: &Dict, pending: &List) -> R<String> {
 /// - 设备的公钥：第一次见到时要过认证码（设备加入时拿邀请里的 k 算的 proof：服务器不知道 k，换不了公钥）才记下；记下以后服务器
 ///   再报别的公钥不照它的。管理员自己这台的是本机的。没过认证码的（旧版本、照文档自己实现又没带 proof 的）照样发布配置，只是不记公钥
 /// - 服务器的记录换了编号（记录没了、换了一台服务器）：照**记下的**公钥把加入过的设备登记回去，配置都重新发布一次
-/// - 加入了的设备 invited → joined；邀请不在了、设备也没加入的记成 expired；编号没变、服务器上却没有了的是它自己退出了（left：
-///   不登记回去；它又出现了就恢复成 joined）；服务器上存着的那一版比发布过的旧就重新发布
+/// - 加入了的设备 invited → joined；邀请不在了、设备也没加入的记成 expired；编号没变、服务器上却没有了的是它自己退出了：不登记回去，
+///   这边也不记了（3.6.5 及以前记成 left、移除了的记成 revoked：这样的也删掉，只有 left 的又出现在服务器上时恢复成 joined）；
+///   服务器上存着的那一版比发布过的旧就重新发布
 ///
 /// 返回 {"gen", "by_dev": {设备编号: 服务器的那一行}, "pending": {设备编号: 邀请的那一行}, "problems": {设备编号: 要告诉管理员的}}；
 /// 没成是给人看的原因。改了 admin.json
@@ -574,9 +579,14 @@ fn reconcile(t: &Team, a: &Dict) -> R<Result<Dict, String>> {
     let older = |r: &Dict, d: &Dict| {
         r.get("seq").and_then(|s| s.as_int()).unwrap_or(0) < d.get("seq").and_then(|s| s.as_int()).unwrap_or(0)
     };
+    let mut gone: Vec<String> = Vec::new(); // 不再记着的：退出了的、移除了的
     for (dev, d) in devs.items() {
         let Some(d) = d.as_dict() else { continue };
         let state = d.str("state").map(|s| s.to_string()).unwrap_or_default();
+        if state == "revoked" {
+            gone.push(dev.to_string());
+            continue;
+        }
         if let Some(r) = by_dev.dict(&dev) {
             let reported = r.str("pub").and_then(|p| root_line(&p));
             match d.str("pub") {
@@ -631,10 +641,13 @@ fn reconcile(t: &Team, a: &Dict) -> R<Result<Dict, String>> {
             }
         } else if state == "invited" {
             d.set("state", "expired");
-        } else if state == "joined" {
-            d.set("state", "left"); // 服务器上没有它了：它自己退出了（记录没了的那种，上面已经登记回去）
-            d.pop("sha");
+        } else if matches!(state.as_str(), "joined" | "left") && *dev != *t.dev {
+            // 服务器上没有它了：它自己退出了（记录没了的那种，上面已经登记回去）。管理员自己这台不会退出，照旧记着
+            gone.push(dev.to_string());
         }
+    }
+    for dev in &gone {
+        devs.pop(dev);
     }
     align_names(t, &cfg, &devs, &by_dev, &problems)?;
     admin_save(&t.id, a)?;
@@ -1444,8 +1457,8 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
 }
 
 /// py team-revoke plan | apply Team 设备：移除一台设备（或者撤回还没用掉的邀请）。plan（只读）：stdout 是「Team 的编号\t设备编号\t给它
-/// 起的名字\t状态」（bash 据此问同意）。apply：服务器就此不认它的密钥，给它的配置删掉（它已经拿到的节点凭证收不回来）；stdout：给它
-/// 起的名字。原因码：no_team、not_admin、no_device、self（管理员移除不了自己这台）、not_attached、以及请求没成的那些
+/// 起的名字\t状态」（bash 据此问同意）。apply：服务器就此不认它的密钥，给它的配置、它传过的折合金额删掉（它已经拿到的节点凭证收
+/// 不回来），这边也不再记着它；stdout：给它起的名字。原因码：no_team、not_admin、no_device、self（管理员移除不了自己这台）、not_attached、以及请求没成的那些
 pub fn cmd_team_revoke(args: &[String]) -> R<()> {
     let [mode, sel, device] = args else {
         return Err(Fail::Die("用法: py team-revoke plan | apply Team 设备".into()));
@@ -1475,8 +1488,9 @@ pub fn cmd_team_revoke(args: &[String]) -> R<()> {
         let (c, why) = admin_fault(&t, code, &j);
         return fail(c, &why);
     }
-    d.set("state", "revoked");
-    d.pop("sha");
+    if let Some(ds) = a.dict("devices") {
+        ds.pop(&dev);
+    }
     admin_save(&t.id, &a)?;
     out!("{}", d.at("label").py_str());
     Ok(())
@@ -1536,7 +1550,8 @@ pub fn cmd_team_grant(args: &[String]) -> R<()> {
 /// py team-rename Team 设备 新名字：给一台设备改名字。管理员这边记着的名字（label）改成它；加入了的设备在服务器上的名字也跟着改
 /// （同一把公钥照它的编号再登记一次：team_enroll，加入的时间、远程会话的配对都不变；名字被别的设备用了时服务器在后面加 -2，这边也记成
 /// 服务器的：一台设备只有一个名字），它自己下次同步配置时跟着改（team.json 的 device：follow）。还没加入的设备加入以后照这个名字改
-/// （align_names）。登记之前先和服务器对一遍：自己退出了的不登记回去；服务器报的公钥和记下的对不上时不登记（只改这边记着的）。
+/// （align_names）。登记之前先和服务器对一遍：自己退出了的不登记回去（对的时候这边就不记它了：no_device）；服务器报的公钥和记下的
+/// 对不上时不登记（只改这边记着的）。
 /// 管理员自己这台还没接上服务器时改的是接上时用的名字。还在这个 Team 里的别的设备已经叫这个名字的不行（name_taken）。
 /// stdout：原来的名字、改好的名字、服务器上的名字没跟着改的原因（改了是空行）。原因码：no_team、not_admin、no_device、name、server、
 /// 以及请求没成的那些
@@ -1579,6 +1594,9 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
             Ok(r) => r,
             Err(why) => return fail("server", &why),
         };
+        if !a.dict("devices").is_some_and(|ds| ds.has(&dev)) {
+            return fail("no_device", &format!("「{old}」已经退出了这个 Team"));
+        }
         let reported = rows.dict("by_dev").and_then(|b| b.dict(&dev)).and_then(|r| r.str("pub")).and_then(|p| root_line(&p));
         // 记下的公钥（管理员自己这台是本机的）；没记下（加入时没带对认证码）时用服务器报的：它本来就存着这一把，再登记一次不多给谁什么
         let known = if me { Some(pub_line(&t.path("id_ed25519"))?) } else { d.str("pub").map(|p| p.to_string()) };
@@ -1587,8 +1605,7 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
             (None, Some(r)) => Some(r),
             _ => None,
         };
-        match key.filter(|_| d.str("state").as_deref() == Some("joined")) {
-            None if d.str("state").as_deref() != Some("joined") => "它已经退出了这个 Team：只改了这边记着的名字".to_string(),
+        match key {
             None => "服务器报的公钥和这台设备加入时的不一样：服务器上的名字没改（cca team devices 看看）".to_string(),
             Some(key) => {
                 let cfg = match root_cfg(&t)? {

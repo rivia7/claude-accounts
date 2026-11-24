@@ -34,6 +34,7 @@ import spec_wire as sw   # noqa: E402  照 server/README.md 的格式独立实�
 U1 = 'aaaaaaaa-0000-4000-8000-000000000001'
 U2 = 'aaaaaaaa-0000-4000-8000-000000000002'
 U3 = 'user-' + 'c' * 24
+BOB = 'b0b0b0b0b0b0b0b0'   # bob-mini 那台机器的 device_id（它传的 dv）
 U4 = 'user-' + 'd' * 24
 M = 1000000   # 一美元 = 这么多个百万分之一美元
 WEEK = 7 * 86400
@@ -598,9 +599,9 @@ class CostView:
             raise AssertionError('_cost-view 没成：退出码 %d，%s' % (r.returncode, r.stderr))
         return json.loads(r.stdout)
 
-    def account(self, tool, key, quota, given, logged_in):
+    def account(self, tool, key, quota, given):
         """given：谁给的账号——True 是这一份的那个 Team，也可以直接写 Team 的编号；False 是这台设备自己的"""
-        self.spec['accounts'].append([tool, key, quota, self.spec['team'] if given is True else given, logged_in])
+        self.spec['accounts'].append([tool, key, quota, self.spec['team'] if given is True else given])
         return self.ask()['accounts'][-1]
 
     def total(self, tools):
@@ -632,12 +633,16 @@ class View(Base):
                       'um': {'claude:' + U1: ['claude-unknown-1']},
                       'orphan': {self.at(2026, 11, 12, 1): self.row(0.5), self.at(2026, 9, 1, 1): self.row(100)}}
         now = self.NOW
+        # bob-mini 换过密钥：同一台机器（dv 一样）的两份；gone-mini 从 Team 里移除了（3.6.5 及以前的服务器还回来、标着 revoked）：哪儿都不算
         slot = {'SHA256:bob': {'h': {self.at(2026, 11, 12, 10): self.row(2)}, 'um': ['claude-other'], 'at': now - 600, 'name': 'bob-mini',
-                               'revoked': False, 'tag': 't1'},
+                               'tag': 't1', 'dv': BOB},
                 'SHA256:bob-old': {'h': {self.at(2026, 10, 20, 10): self.row(1), self.at(2026, 11, 12, 11): self.row(9)}, 'um': [],
-                                   'at': now - 30 * 86400, 'name': 'bob-mini', 'revoked': True, 'tag': 't2'},
+                                   'at': now - 30 * 86400, 'name': 'bob-mini', 'tag': 't2', 'dv': BOB},
                 'SHA256:carol': {'h': {self.at(2026, 11, 11, 10): self.row(1)}, 'um': [], 'at': now - 2 * 86400, 'name': 'carol-air',
-                                 'revoked': False, 'tag': 't3'},
+                                 'tag': 't3'},
+                'SHA256:gone': {'h': {self.at(2026, 10, 25, 10): self.row(6), self.at(2026, 11, 13, 8): self.row(8)}, 'um': ['claude-gone'],
+                                'at': now - 3600, 'name': 'gone-mini', 'revoked': True, 'tag': 't5', 'dv': 'd0d0d0d0d0d0d0d0',
+                                'dg': {'why': [{'code': 'claude_app', 'last_epoch': now - 86400}]}},
                 'SHA256:junk': {'h': {'x': [1]}, 'at': now, 'name': 'junk', 'tag': 't4'}}
         self.remote = {'v': 1, 'acc': {'claude:alice@example.com': slot}}
         self.sync = {'v': 1, 'state': 'ok', 'at': now - 100, 'ok_at': now - 100, 'me': 'alice-mbp',
@@ -655,11 +660,11 @@ class View(Base):
 
     def test_account(self):
         cv = self.view()
-        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        a = cv.account('claude', 'alice(alice@example.com)', None, True)
         self.assertEqual((a['currency'], a['prices_date'], len(a['weeks']), len(a['days'])), ('USD', COST_PRICES_DATE, 13, 30))
         s = a['summary']
         self.assertEqual((s['weeks_usd'], s['current_usd'], s['days_usd'], s['today_usd']), (20.0, 11.0, 19.0, 5.0),
-                         '三台设备加起来；撤销的那份只算 bob-mini 现在的 key 有数据以前的小时；坏的不算')
+                         '三台设备加起来；bob-mini 以前那把 key 的只算现在的 key 有数据以前的小时；移除了的、坏的不算')
         self.assertEqual((s['average_usd'], s['average_weeks']), (1.6, 5), '平均：从有数据的那一周以后、过完的整周')
         self.assertEqual((s['average_day_usd'], s['average_days']), (0.4828, 29),
                          '按天的平均：从有数据的那天以后、过完的整天（10 月 15 日到 11 月 12 日，今天不算）：14 美元 / 29 天')
@@ -669,7 +674,7 @@ class View(Base):
         self.assertTrue(a['weeks'][-1]['current'] and not any(w['current'] for w in a['weeks'][:-1]))
         self.assertEqual(a['days'][-1]['date'], '2026-11-13')
         self.assertEqual(a['days'][-1]['tokens'], {'input': 2000, 'output': 200, 'cache_read': 0, 'cache_write': 0})
-        self.assertEqual(a['unpriced_models'], ['claude-other', 'claude-unknown-1'])
+        self.assertEqual(a['unpriced_models'], ['claude-other', 'claude-unknown-1'], '移除了的设备的不算')
         devs = a['devices']
         self.assertEqual([(d['name'], d['me'], d['revoked'], d['stale']) for d in devs],
                          [('alice-mbp', True, False, False), ('bob-mini', False, False, False), ('carol-air', False, False, True)],
@@ -678,14 +683,14 @@ class View(Base):
         self.assertEqual({k: devs[0]['summary'][k] for k in ('average_usd', 'average_weeks', 'average_day_usd', 'average_days')},
                          {'average_usd': 1.4, 'average_weeks': 5, 'average_day_usd': 0.3448, 'average_days': 29},
                          '一台设备的平均按整个账号的那几周、那几天算（各台设备的平均加起来是整个账号的）')
-        self.assertEqual(devs[1]['summary']['weeks_usd'], 3.0, 'bob-mini：现在的 2 + 撤销以前的 1（撤销以后的 9 不重复计）')
+        self.assertEqual(devs[1]['summary']['weeks_usd'], 3.0, 'bob-mini：现在的 2 + 以前那把 key 的 1（之后的 9 不重复计）')
         self.assertEqual(sum(devs[0]['days_usd']), 15.0)
         self.assertEqual(len(devs[0]['weeks_usd']), 13)
         self.assertEqual(a['sync'], {'state': 'ok', 'message': None, 'checked_epoch': self.NOW - 100, 'hub': 'team',
                                      'missing': [{'name': 'dan-air', 'used_epoch': self.NOW - 3600}]}, '30 天以前用过的不提；经 Team 的服务器')
-        x = cv.account('codex', 'alice@example.com', None, True, True)
+        x = cv.account('codex', 'alice@example.com', None, True)
         self.assertEqual((x['summary']['weeks_usd'], [d['name'] for d in x['devices']]), (4.0, ['alice-mbp']), '工具分开')
-        self.assertIsNone(cv.account('claude', 'bob@example.com', None, True, True), '没有记录：None')
+        self.assertIsNone(cv.account('claude', 'bob@example.com', None, True), '没有记录：None')
         t = cv.total(['claude', 'codex'])
         self.assertEqual((t['current_usd'], t['weeks_usd'], t['average_usd'], t['days_usd'], t['today_usd']), (15.0, 24.0, 1.6, 23.0, 5.0))
         self.assertEqual(t['average_day_usd'], 0.4828, '按天的平均：有平均的账号加起来（Codex 只有一天、还没过完的整天）')
@@ -708,7 +713,7 @@ class View(Base):
                          '这台设备总有诊断（没有 local.json 的 diag 时是空的）；旧版 cca 的设备没有')
         self.assertEqual(t['scan']['state'], 'ready')
         quota = {'weeks': [{'start_epoch': self.NOW - 2 * 86400, 'end_epoch': self.NOW + 5 * 86400}]}
-        q = self.view().account('claude', 'alice@example.com', quota, True, True)
+        q = self.view().account('claude', 'alice@example.com', quota, True)
         self.assertEqual((q['weeks'][-1]['basis'], q['weeks'][-1]['start_epoch'], q['summary']['current_usd']),
                          ('quota', self.NOW - 2 * 86400, 7.0), '有额度窗口时，这一周按额度窗口算（周三 12:00 起：carol-air 周三 10 点的不算）')
 
@@ -716,14 +721,14 @@ class View(Base):
         """cost_total.devices：按设备分开加起来（App 的设备菜单）。这台设备在最前，别的设备按 id 归到一起、在哪个账号里用过才算，
         按最近 30 天的多少排；每台的几项和 me 一样（30 天每天、按工具分开），各台加起来是顶层的"""
         cv = self.view()
-        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        a = cv.account('claude', 'alice(alice@example.com)', None, True)
         self.assertEqual([(d['name'], d['used']) for d in a['devices']], [('alice-mbp', True), ('bob-mini', True), ('carol-air', True)],
                          '账号里的设备：用过这个账号')
-        cv.account('codex', 'alice@example.com', None, True, True)
+        cv.account('codex', 'alice@example.com', None, True)
         t = cv.total(['claude', 'codex'])
         devs = t['devices']
         self.assertEqual([(d['id'], d['name'], d['me'], d['revoked'], d['stale']) for d in devs],
-                         [(self.DV, 'alice-mbp', True, False, False), ('SHA256:bob', 'bob-mini', False, False, False),
+                         [(self.DV, 'alice-mbp', True, False, False), (BOB, 'bob-mini', False, False, False),
                           ('SHA256:carol', 'carol-air', False, False, True)],
                          '这台设备在最前，别的按 30 天的多少排；两天没同步的标出来')
         self.assertEqual(set(devs[0]) - {'id', 'name', 'me', 'revoked', 'stale'}, set(t['me']), '每台多的就是这几项，别的和 me 一样')
@@ -731,7 +736,7 @@ class View(Base):
         self.assertEqual({k: devs[0][k] for k in keys}, {k: t['me'][k] for k in keys}, '这台设备的就是 me')
         b = devs[1]
         self.assertEqual((b['weeks_usd'], b['days_usd'], b['current_usd'], b['average_usd'], b['by_tool']['claude']['days_usd']),
-                         (3.0, 3.0, 2.0, 0.2, 3.0), 'bob-mini：现在的 key 的 2 + 撤销以前的 1（撤销以后的 9 不重复计）；平均按账号的那 5 周')
+                         (3.0, 3.0, 2.0, 0.2, 3.0), 'bob-mini：现在的 key 的 2 + 以前那把 key 的 1（之后的 9 不重复计）；平均按账号的那 5 周')
         self.assertEqual(b['by_tool']['codex'], {'current_usd': 0.0, 'weeks_usd': 0.0, 'average_usd': None, 'average_day_usd': None,
                                                  'days_usd': 0.0, 'today_usd': 0.0}, '没用过 Codex：都是 0、没有平均')
         self.assertEqual((len(b['days']), b['days'][-2]['usd'], [d['start_epoch'] for d in b['days']]), (30, 2.0, [d['start_epoch'] for d in t['days']]))
@@ -739,65 +744,67 @@ class View(Base):
             self.assertAlmostEqual(sum(d[k] or 0 for d in devs), t[k], places=4, msg='各台设备的 %s 加起来是顶层的' % k)
         for n in range(30):
             self.assertAlmostEqual(sum(d['days'][n]['usd'] for d in devs), t['days'][n]['usd'], places=4)
-        # 撤销了、又没有同名的设备接着用（只剩撤销前同步来的）：单独一台，标着撤销了
+        # 移除了的、又没有别的设备是同一台机器、同一个名字（只剩移除前同步来的）：3.6.5 及以前单独列一台、标着撤销了，现在不列、不算
         slot = self.remote['acc']['claude:alice@example.com']
         slot['SHA256:dave-old'] = {'h': {self.at(2026, 11, 2, 10): self.row(6)}, 'um': [], 'at': self.NOW - 20 * 86400, 'name': 'dave-mini',
                                    'revoked': True, 'tag': 't9'}
         self.write()
         cv = self.view()
-        cv.account('claude', 'alice(alice@example.com)', None, True, True)
-        devs = cv.total(['claude'])['devices']
-        self.assertEqual([(d['name'], d['revoked'], d['stale'], d['days_usd']) for d in devs],
-                         [('alice-mbp', False, False, 15.0), ('dave-mini', True, True, 6.0), ('bob-mini', False, False, 3.0), ('carol-air', False, True, 1.0)])
+        cv.account('claude', 'alice(alice@example.com)', None, True)
+        t = cv.total(['claude'])
+        self.assertEqual([(d['name'], d['revoked'], d['stale'], d['days_usd']) for d in t['devices']],
+                         [('alice-mbp', False, False, 15.0), ('bob-mini', False, False, 3.0), ('carol-air', False, True, 1.0)])
+        self.assertEqual(t['days_usd'], 19.0, '合计里也没有移除了的')
         # 不在 Team 里：只有这台设备；没有 device_id（还没同步过路由器、也没别处生成过）时 id 是 local
         lo = self.view(c={'cost': True}, team=None)
-        lo.account('claude', 'alice(alice@example.com)', None, True, True)
+        lo.account('claude', 'alice(alice@example.com)', None, True)
         self.assertEqual([(d['id'], d['me'], d['days_usd']) for d in lo.total(['claude'])['devices']], [('local', True, 15.0)])
 
     def test_machine_id(self):
         """别的设备传来的 dv（那台机器的 device_id）：id 用它，同一台机器的几份（换过 key、改过名字）按它并成一台；这台机器自己以前传的
-        （退出又加入过）并进这台，只用这台有数据以前的小时；dv 不对的不认（id 照旧是指纹）"""
+        （换过 key：服务器还留着以前那份的）并进这台，只用这台有数据以前的小时；dv 不对的不认（id 照旧是指纹）"""
         slot = self.remote['acc']['claude:alice@example.com']
-        for fp in ('SHA256:bob', 'SHA256:bob-old'):
-            slot[fp]['dv'] = 'b0b0b0b0b0b0b0b0'
         slot['SHA256:bob-old']['name'] = 'bob-renamed'   # 名字改过：按机器认，不靠名字
         slot['SHA256:me-old'] = {'h': {self.at(2026, 9, 20, 10): self.row(4), self.at(2026, 11, 13, 9): self.row(5, 2)}, 'um': [],
-                                 'at': self.NOW - 50 * 86400, 'name': 'old-name', 'revoked': True, 'tag': 't5', 'dv': self.DV}
+                                 'at': self.NOW - 50 * 86400, 'name': 'old-name', 'tag': 't6', 'dv': self.DV}
         slot['SHA256:carol']['dv'] = 'NOT-HEX'
         self.write()
-        a = self.view().account('claude', 'alice(alice@example.com)', None, True, True)
+        a = self.view().account('claude', 'alice(alice@example.com)', None, True)
         devs = a['devices']
         self.assertEqual([(d['id'], d['name'], d['revoked']) for d in devs],
-                         [(self.DV, 'alice-mbp', False), ('b0b0b0b0b0b0b0b0', 'bob-mini', False), ('SHA256:carol', 'carol-air', False)])
+                         [(self.DV, 'alice-mbp', False), (BOB, 'bob-mini', False), ('SHA256:carol', 'carol-air', False)])
         self.assertEqual((devs[0]['summary']['weeks_usd'], devs[1]['summary']['weeks_usd'], a['summary']['weeks_usd']), (20.0, 3.0, 24.0),
-                         '这台机器以前传的：只用这台有数据（10 月 1 日）以前的 4（11 月 13 日的 5 不重复计）；bob-mini 照旧是 2 + 撤销以前的 1')
+                         '这台机器以前传的：只用这台有数据（10 月 1 日）以前的 4（11 月 13 日的 5 不重复计）；bob-mini 照旧是 2 + 以前那把 key 的 1')
+        slot['SHA256:me-old']['revoked'] = True
+        self.write()
+        a = self.view().account('claude', 'alice(alice@example.com)', None, True)
+        self.assertEqual((a['devices'][0]['summary']['weeks_usd'], a['summary']['weeks_usd']), (16.0, 20.0), '移除了的那份（标着 revoked）不并进来')
 
     def test_machine_across_accounts(self):
         """同一台机器在两个账号里的指纹不一样（换过密钥；在两个 Team 里也是各用各的密钥）、dv 一样：设备菜单里是一台，两个账号的加在一起。
         （_cost-view 一次只看一个 Team：两个 Team 的各算各的、按 dv 并成一台，走的是同一段）"""
-        self.remote['acc']['claude:alice@example.com']['SHA256:bob']['dv'] = 'b0b0b0b0b0b0b0b0'
         self.remote['acc']['claude:bob@example.com'] = {'SHA256:bob-new': {
-            'h': {self.at(2026, 11, 12, 12): self.row(6)}, 'um': [], 'at': self.NOW - 600, 'name': 'bob-mini', 'revoked': False, 'tag': 't9',
-            'dv': 'b0b0b0b0b0b0b0b0'}}
+            'h': {self.at(2026, 11, 12, 12): self.row(6)}, 'um': [], 'at': self.NOW - 600, 'name': 'bob-mini', 'tag': 't9',
+            'dv': BOB}}
         self.write()
         cv = self.view()
-        mine = cv.account('claude', 'alice(alice@example.com)', None, True, True)
-        theirs = cv.account('claude', 'bob(bob@example.com)', None, TID, True)
+        mine = cv.account('claude', 'alice(alice@example.com)', None, True)
+        theirs = cv.account('claude', 'bob(bob@example.com)', None, TID)
         usd = lambda a, dv: [d['summary']['days_usd'] for d in a['devices'] if d['id'] == dv]
-        self.assertEqual((usd(mine, 'b0b0b0b0b0b0b0b0'), usd(theirs, 'b0b0b0b0b0b0b0b0')), ([3.0], [6.0]), '各账号里是那台机器各自传的（alice 的还带着移除了的旧 key 以前的 1）')
+        self.assertEqual((usd(mine, BOB), usd(theirs, BOB)), ([3.0], [6.0]), '各账号里是那台机器各自传的（alice 的还带着它以前那把 key 的 1）')
         t = cv.total(['claude'])
         self.assertEqual([(d['id'], d['name']) for d in t['devices']],
-                         [(self.DV, 'alice-mbp'), ('b0b0b0b0b0b0b0b0', 'bob-mini'), ('SHA256:carol', 'carol-air')], '按机器归成一台')
+                         [(self.DV, 'alice-mbp'), (BOB, 'bob-mini'), ('SHA256:carol', 'carol-air')], '按机器归成一台')
         self.assertEqual(t['devices'][1]['days_usd'], 9.0, '两个账号加起来')
 
     def test_me_without_records(self):
         self.local['acc']['claude:' + U1] = {}
         self.write()
         cv = self.view()
-        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        a = cv.account('claude', 'alice(alice@example.com)', None, True)
         self.assertEqual([(d['name'], d['me']) for d in a['devices']], [('bob-mini', False), ('carol-air', False)],
                          '这台设备没有这个账号的记录：不列这台设备，别的设备的照样有')
-        cv.account('codex', 'alice@example.com', None, True, True)
+        cv.account('codex', 'alice@example.com', None, True)
         t = cv.total(['claude', 'codex'])
         self.assertEqual((t['days_usd'], t['me']['days_usd'], t['me']['by_tool']['claude']['days_usd'], t['me']['by_tool']['claude']['average_usd']),
                          (8.0, 4.0, 0.0, None), 'me 里没有这个账号（金额是 0、没有平均），只有 Codex 的 4')
@@ -806,8 +813,8 @@ class View(Base):
         self.local['acc']['codex:' + U3] = {}
         self.write()
         cv = self.view()
-        cv.account('claude', 'alice(alice@example.com)', None, True, True)
-        cv.account('codex', 'alice@example.com', None, True, True)
+        cv.account('claude', 'alice(alice@example.com)', None, True)
+        cv.account('codex', 'alice@example.com', None, True)
         me = cv.total(['claude', 'codex'])['devices'][0]
         self.assertEqual((me['name'], me['me'], me['days_usd'], me['average_usd'], len(me['days'])), ('alice-mbp', True, 0.0, None, 30),
                          '这台设备哪个账号都没用过：照样列在最前（数字是 0）')
@@ -821,17 +828,17 @@ class View(Base):
         slot = self.remote['acc']['claude:alice@example.com']
         why = lambda age, code='old_claude_code': {'code': code, 'last_epoch': day(self.NOW - age), 'claude_code': '2.1.316'}
         slot['SHA256:bob']['dg'] = {'cca': '3.6.0', 'claude_code': '2.1.316', 'why': [why(2 * 86400)]}
-        slot['SHA256:erin'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'erin-mini', 'revoked': False, 'tag': 't5',
+        slot['SHA256:erin'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'erin-mini', 'tag': 't5',
                                'dg': {'cca': '3.6.0', 'why': [why(86400, 'claude_app')]}}
-        slot['SHA256:fred'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'fred-mini', 'revoked': False, 'tag': 't6',
+        slot['SHA256:fred'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'fred-mini', 'tag': 't6',
                                'dg': {'why': [why(40 * 86400)]}}   # 30 天以前的：不提
-        slot['SHA256:gus'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'gus-mini', 'revoked': False, 'tag': 't7'}
-        slot['SHA256:hal'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'hal-mini', 'revoked': False, 'tag': 't8',
+        slot['SHA256:gus'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'gus-mini', 'tag': 't7'}
+        slot['SHA256:hal'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'hal-mini', 'tag': 't8',
                               'dg': {'cca': 'bad version!', 'why': [{'code': 'Bad Code', 'last_epoch': self.NOW}, {'code': 'x', 'last_epoch': 'y'}]}}
         self.write()
         self.dev.env['CCA_VERSION'] = '3.6.0'
         cv = self.view()
-        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        a = cv.account('claude', 'alice(alice@example.com)', None, True)
         devs = {d['name']: d for d in a['devices']}
         self.assertEqual(list(devs), ['alice-mbp', 'bob-mini', 'carol-air', 'erin-mini'], '没有数据的只列最近有回复认不出账号的')
         self.assertEqual(devs['alice-mbp']['diag'], {'cca': '3.6.0', 'claude_code': '2.1.330', 'claude_code_old': False, 'why': [
@@ -846,28 +853,27 @@ class View(Base):
         self.assertEqual([d['name'] for d in t['devices']], ['alice-mbp', 'bob-mini', 'carol-air'], '只为诊断列出来的设备没用过这个账号：设备菜单里没有它')
         self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1, 'claude_code': '2.1.330', 'claude_code_old': False, 'why': [
             {'code': 'old_claude_code', 'last_epoch': self.NOW - 86400, 'claude_code': '2.1.316'}]})
-        self.assertIsNone(cv.account('claude', 'bob@example.com', None, True, True), '整个账号都没有数据：照旧是 None')
+        self.assertIsNone(cv.account('claude', 'bob@example.com', None, True), '整个账号都没有数据：照旧是 None')
         self.local['acc']['claude:' + U1] = {}
         self.write()
-        a = self.view().account('claude', 'alice(alice@example.com)', None, True, True)
+        a = self.view().account('claude', 'alice(alice@example.com)', None, True)
         self.assertNotIn('alice-mbp', [d['name'] for d in a['devices']], '这台设备没有这个账号的数据：有诊断也不列')
         self.local['diag'] = {'why': 'x'}
         self.write()
         cv = self.view()
-        cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        cv.account('claude', 'alice(alice@example.com)', None, True)
         self.assertEqual(cv.total(['claude'])['unattributed']['why'], [], 'diag 不对：当没有')
 
     def test_sync_states(self):
         C, k = 'claude', 'alice(alice@example.com)'
-        st = lambda cv, given=True, logged=True: cv.account(C, k, None, given, logged)['sync']
+        st = lambda cv, given=True: cv.account(C, k, None, given)['sync']
         self.assertEqual(st(self.view({'presence': False}))['state'], 'off')
         lo = self.view(team=None)
-        a = lo.account(C, k, None, True, True)
+        a = lo.account(C, k, None, True)
         self.assertEqual((a['sync']['state'], a['sync']['hub'], [d['name'] for d in a['devices']], a['devices'][0]['id']),
                          ('local_only', None, [os.uname().nodename.split('.')[0]], self.DV), '不在 Team 里：只有这台设备的（不经哪台服务器）')
         self.assertEqual(st(self.view(), given=False)['state'], 'local_only', '这台设备自己的账号（Team 没给的）')
         self.assertEqual(st(self.view(), given='cd' * 16)['state'], 'local_only', '别的 Team 给的（这台设备用不了它的服务器）')
-        self.assertEqual(st(self.view(), logged=False)['state'], 'not_logged_in')
         self.sync.update(state='error', error='连不上', at=self.NOW - 50)
         self.write()
         self.assertEqual((st(self.view())['state'], st(self.view())['message']), ('error', '连不上'), '这个账号上次同步好了以后又出错了')
@@ -942,10 +948,69 @@ class Crypto(Base):
         d.write(d.cca / 'cost' / 'local.json', {'v': 1, 'build': 'x', 'who': {'claude:' + U1: 'alice@example.com'}, 'acc': {'claude:' + U1: rows},
                                                 'um': {}, 'orphan': {}})
 
+    def v1(self, ident):
+        """3.6.5 及以前的密钥：还带着登录身份"""
+        return sw.derive(sw.COST_V1, self.SALT, 'claude', 'alice@example.com', ident)
+
+    def test_old_key_later(self):
+        """没登录这个账号的设备：还没升级的设备用以前的密钥封的解不开，记下认证码和 no_v1（问的时候带着认证码：没变就不再取），
+        自己没用过这个账号也不传自己的那一份。登录以后不带那个认证码（服务器重发），用以前的密钥解开，登录着就传自己的那一份。
+        解开过的、后来这一轮又没有以前的密钥了（登出了，或者 .claude.json 正写到一半）：先留着，有了以前的密钥再取新的。
+        没登录、用过（有记录）的照样传自己的那一份"""
+        self.aid = aid = sw.aid_of(self.SALT, 'claude', 'alice@example.com')
+        old = 'SHA256:' + 'O' * 43
+        hour = str(int(time.time() // 3600 * 3600) - 3600)
+
+        def row(tag, usd=None):
+            """还没升级的那台设备（old-air）的那一行：usd 是 None 时不带密文（服务器看认证码没变）"""
+            r = {'fp': old, 'tag': tag, 'name': 'old-air'}
+            if usd is not None:
+                r['blob'] = sw.cost_seal(self.v1(U1), aid, old, {'v': 1, 'at': time.time(), 'h': {hour: [usd, 1, 0, 0, 0, 0, 0]}, 'um': []},
+                                         label=sw.COST_V1)
+            return r
+
+        bob = self.device('bob-mini', 32)
+        login = lambda on: bob.write(bob.cdir(self.KEY) / '.claude.json',
+                                     {'oauthAccount': {'accountUuid': U1, 'emailAddress': 'Alice@Example.com'}} if on else {})
+
+        def sync(rows):
+            """服务器回 rows，同步一次：(这一轮问的时候带着的认证码, 传没传自己的那一份, remote.json 里 old-air 的那一项)"""
+            self.serve(bob, rows)
+            before = len(self.sent(bob))
+            self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
+            sent = self.sent(bob)[before:]
+            return (sent[0]['have'].get(aid, {}), any('put' in r for r in sent),
+                    bob.cost(LANE + 'remote.json')['acc']['claude:alice@example.com'].get(old))
+
+        login(False)
+        have, put, e = sync([row('t1', 1000000)])
+        self.assertEqual((put, e), (False, {'tag': 't1', 'name': 'old-air', 'no_v1': True}), '没登录、没用过：只取不传；解不开的记下 no_v1')
+        have, put, e = sync([row('t1')])
+        self.assertEqual((have.get(old), e), ('t1', {'tag': 't1', 'name': 'old-air', 'no_v1': True}), '还是没有以前的密钥：带着认证码，不再取')
+        login(True)
+        have, put, e = sync([row('t1', 1000000)])
+        self.assertEqual((old in have, put, e['h'], 'no_v1' in e), (False, True, {hour: [1000000, 1, 0, 0, 0, 0, 0]}, False),
+                         '登录以后：不带那个认证码，服务器重发，用以前的密钥解开；登录着就传自己的那一份')
+        login(False)
+        have, put, e = sync([row('t2', 2000000)])
+        self.assertEqual((have.get(old), e['h'], e['tag'], e['no_v1']), ('t1', {hour: [1000000, 1, 0, 0, 0, 0, 0]}, 't2', True),
+                         '这一轮又没有以前的密钥：解开过的先留着')
+        have, put, e = sync([row('t2')])
+        self.assertEqual((have.get(old), e['h'], e['no_v1']), ('t2', {hour: [1000000, 1, 0, 0, 0, 0, 0]}, True), '没变就不再取')
+        login(True)
+        have, put, e = sync([row('t2', 2000000)])
+        self.assertEqual((old in have, e['h'], 'no_v1' in e), (False, {hour: [2000000, 1, 0, 0, 0, 0, 0]}, False), '有了以前的密钥再取新的')
+        carol = self.device('carol-air', 64)
+        carol.write(carol.cdir(self.KEY) / '.claude.json', {})
+        self.local_rows(carol, {hour: [3000000, 1, 0, 0, 0, 0, 0]})
+        before = len(self.sent(carol))
+        self.assertEqual(carol.sync('--now')['sync']['state'], 'ok')
+        self.assertEqual([sorted(r.get('put', {})) for r in self.sent(carol)[before:]], [[], [aid]], '没登录、用过（有记录）：照样传自己的那一份')
+
     def test_seal_open(self):
         salt = self.SALT
         self.aid = aid = sw.aid_of(salt, 'claude', 'alice@example.com')
-        k = sw.derive(sw.COST, salt, 'claude', 'alice@example.com', U1)
+        k = sw.team_keys(salt)   # 3.6.6 起整个 Team 一把：只由盐派生
         a = self.device('alice-mbp', 0)
         hour = int(time.time() // 3600 * 3600) - 3600
         a.write(a.home / '.claude' / 'projects' / '-work' / 's1.jsonl',
@@ -957,6 +1022,7 @@ class Crypto(Base):
         self.assertTrue(now - 600 < doc['at'] <= now)   # 传的时候的时间
         self.assertEqual((doc['h'], doc['um']), content(a.cost('local.json'), 'claude', 'alice@example.com'), '传的是这台设备统计好的那一份')
         self.assertIsNone(sw.unseal(sw.COST, sw.derive(sw.KEYSHARE, salt, 'claude', 'alice@example.com', U1), [aid, a.fp], b), '和共享 API key 的密钥不通')
+        self.assertIsNone(sw.cost_open(self.v1(U1), aid, a.fp, b, label=sw.COST_V1), '传的是新的：以前的密钥解不开')
         self.assertEqual(srvmod.parse_blob(b, srvmod.MAX_COST_BLOB), b, '服务器收这个形状')
         self.assertEqual(len(base64.b64decode(b['c'])) % 1024, 0)
         again = self.upload(a)
@@ -971,14 +1037,18 @@ class Crypto(Base):
             f = fp_ or fp(label)
             rows.append({'fp': f, 'tag': 't-' + label, 'name': label, 'blob': blob})
             if accept is not None:
-                want[f] = dict(accept, tag='t-' + label, name=label, revoked=False)
+                want[f] = dict(accept, tag='t-' + label, name=label)
 
         row('alice-mbp', b, a.fp, {'at': doc['at'], 'h': doc['h'], 'um': ['claude-x'], 'dg': {'why': []}})
-        seal = lambda label, d, keys=k, aid_=aid, fp_=None, **kw: sw.cost_seal(keys, aid_, fp_ or fp(label), d, **kw)
+        seal = lambda name, d, keys=k, aid_=aid, fp_=None, **kw: sw.cost_seal(keys, aid_, fp_ or fp(name), d, **kw)
         spec = {'v': 1, 'at': now, 'h': {'1794567600': [1, 2, 3, 4, 5, 6, 0]}, 'um': ['claude-x']}
         row('spec', seal('spec', spec), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})   # 照文档封的 cca 也认
-        row('other-ident', seal('other-ident', spec, sw.derive(sw.COST, salt, 'claude', 'alice@example.com', U2)))   # 身份不对
-        row('other-tool', seal('other-tool', spec, sw.derive(sw.COST, salt, 'codex', 'alice@example.com', U1)))   # 同一个邮箱的 Codex 账号
+        row('old', seal('old', spec, self.v1(U1), label=sw.COST_V1), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})   # 还没升级的设备封的：登录着这个账号就认
+        row('old-other-ident', seal('old-other-ident', spec, self.v1(U2), label=sw.COST_V1))   # 以前的密钥、登录身份不对
+        row('old-key-new-label', seal('old-key-new-label', spec, self.v1(U1)))
+        row('new-key-old-label', seal('new-key-old-label', spec, label=sw.COST_V1))
+        row('other-salt', seal('other-salt', spec, sw.team_keys('cd' * 16)))   # 别的 Team 的
+        row('other-tool', seal('other-tool', spec, aid_=sw.aid_of(salt, 'codex', 'alice@example.com')))   # 同一个邮箱的 Codex 账号的
         row('other-account', seal('other-account', spec, aid_='b' * 32))   # 挪到别的账号上
         row('other-device', seal('other-device', spec, fp_='SHA256:' + 'G' * 43))   # 挪到别的设备上
         ok = seal('tampered', spec)
@@ -1011,12 +1081,23 @@ class Crypto(Base):
         self.serve(bob, rows)
         self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
         got = bob.cost(LANE + 'remote.json')['acc']['claude:alice@example.com']
-        self.assertEqual(sorted(e['name'] for e in got.values()), ['alice-mbp', 'bad-diag', 'diag', 'models', 'spec'], '别的都不认')
-        self.assertEqual(got, want)
+        read = {f: e for f, e in got.items() if 'h' in e}
+        self.assertEqual(sorted(e['name'] for e in read.values()), ['alice-mbp', 'bad-diag', 'diag', 'models', 'old', 'spec'], '别的都不认')
+        self.assertEqual(read, want)
+        unread = {f: e for f, e in got.items() if 'h' not in e}
+        self.assertEqual(unread[fp('other-salt')], {'tag': 't-other-salt', 'name': 'other-salt'}, '解不开的只记下认证码和名字（视图里没有它）')
+        self.assertTrue(all(set(e) == {'tag', 'name'} for e in unread.values()))
+        before = len(self.sent(bob))
+        self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
+        have = self.sent(bob)[before]['have'][self.aid]
+        self.assertEqual({f: have.get(f) for f in unread}, {f: e['tag'] for f, e in unread.items()}, '解不开的没变就不再取：问的时候带着它的认证码')
+        self.assertEqual({f: have.get(f) for f in read}, {f: e['tag'] for f, e in read.items()})
 
         # 小时很多的：14 周每个小时都有记录也放得下；压缩不了的放不下，去掉最早的直到放得下
         limit = int(re.search(r'pub const COST_BLOB_MAX: usize = (\d+);', (ROOT / 'cli' / 'src' / 'cmd' / 'cost.rs').read_text()).group(1))
         self.assertEqual(limit, srvmod.MAX_COST_BLOB, '客户端和服务器的上限一样')
+        batch = int(re.search(r'pub const COST_BATCH: usize = (\d+);', (ROOT / 'cli' / 'src' / 'cmd' / 'cost.rs').read_text()).group(1))
+        self.assertEqual(batch, srvmod.MAX_ACCOUNTS, '一个请求最多几个账号：客户端分批和服务器的上限一样')
         hour0 = int(time.time() // 3600 * 3600)
         hours = [str(hour0 - 3600 * i) for i in range(14 * 7 * 24)]
         published = lambda rows, at: {k: v for k, v in rows.items() if int(k) >= at - COST_PUBLISH}   # 只传最近 14 周的（正好落在界线上的那个小时可能不在）

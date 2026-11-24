@@ -176,7 +176,7 @@ pub fn keyshare_kick(force: bool) {
 // HMAC-SHA256(加密密钥, nonce + 块号) 按块（32 字节）当密钥流异或加密，再用另一把密钥认证 ad + nonce + 密文（先加密后认证；
 // ad 是标签、账号摘要这些，挪不到别的用途、别的账号上）。明文由调用的一方补齐。
 
-/// 密钥、认证的标签（折合金额的是 COST_LABEL）
+/// 密钥、认证的标签（折合金额的是 COST_LABEL；它的密钥 3.6.6 起是 Team 共用的，见 team_keys）
 pub const KEYSHARE_LABEL: &str = "cca-keyshare-v1";
 /// 明文补齐到这么长的整数倍：从密文的长短看不出是 key 还是删除、key 有多长
 pub const KEYSHARE_PAD: usize = 256;
@@ -191,10 +191,20 @@ fn bytes_fromhex(s: &str) -> R<Vec<u8>> {
         .ok_or_else(|| crate::py::Fail::Value("non-hexadecimal number found in fromhex() arg".into()))
 }
 
-/// 这个账号的两把密钥（加密、认证）：盐、工具、邮箱、登录身份一起派生；label 分开用途（折合金额的是 COST_LABEL）
-pub fn keyshare_keys(salt: &str, tool: &str, email: &str, ident: &str, label: &str) -> R<Keys> {
-    let root = hmac_sha256(&bytes_fromhex(salt)?, format!("{}\0{}\0{}\0{}", label, tool, email.to_lowercase(), ident).as_bytes());
+/// 两把密钥（加密、认证）：root = HMAC(盐, info)，再各 HMAC 一次 "enc"、"mac"
+fn derive_keys(salt: &str, info: &[u8]) -> R<Keys> {
+    let root = hmac_sha256(&bytes_fromhex(salt)?, info);
     Ok((hmac_sha256(&root, b"enc"), hmac_sha256(&root, b"mac")))
+}
+
+/// 整个 Team 共用的两把密钥：只由盐派生（Team 里的设备都有盐，服务器没有）；label 分开用途（3.6.6 起折合金额的 COST_LABEL）
+pub fn team_keys(salt: &str, label: &str) -> R<Keys> {
+    derive_keys(salt, label.as_bytes())
+}
+
+/// 这个账号的两把密钥：盐、工具、邮箱、登录身份一起派生；label 分开用途（3.6.5 及以前折合金额的是 COST_LABEL_V1）
+pub fn keyshare_keys(salt: &str, tool: &str, email: &str, ident: &str, label: &str) -> R<Keys> {
+    derive_keys(salt, format!("{}\0{}\0{}\0{}", label, tool, email.to_lowercase(), ident).as_bytes())
 }
 
 /// 认证里带着的：每一项后面一个 \0（都得是 ASCII，不是的话原来是没人接的 UnicodeEncodeError）
@@ -614,6 +624,11 @@ mod tests {
         assert_eq!(to_hex(&keys.1), "ff5c832f0147ecbf10eb5cdb9bd9c72a844ca4776bf60fd44ebc03dcbdaefed6");
         let cost = keyshare_keys(&format!("{salt}\n"), "codex", "erin@example.com", "acct", "cca-cost-v1").unwrap();
         assert_eq!(to_hex(&cost.0), "c2ae742d849d173c0e5c9d82ef6c457fe409ea7d764aa705fc66c283497a6a34");
+        // Team 共用的（3.6.6 起折合金额的）：照 server/README.md 用 Python 的 hmac 算的
+        let team = team_keys(&format!("{salt}\n"), "cca-cost-v2").unwrap();
+        assert_eq!(to_hex(&team.0), "b4265e7bae52a98a798f07ef4327e80f2471609f63944fd92f8ea9125112a935");
+        assert_eq!(to_hex(&team.1), "1ac087b5369e2a74aaf2a6a90165ad88ded5081c3caa36e198cc8f83d5cdeceb");
+        assert!(team_keys("zz", "cca-cost-v2").is_err());
         assert!(keyshare_keys("zz", "claude", "a@example.com", "x", KEYSHARE_LABEL).is_err());
         assert_eq!(blob_ad(&[KEYSHARE_LABEL, "abc123"]).unwrap(), b"cca-keyshare-v1\0abc123\0");
         assert!(blob_ad(&["中"]).is_err());

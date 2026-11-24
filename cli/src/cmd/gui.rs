@@ -503,7 +503,7 @@ fn gui_account(
     let share = hub.is_some() && matches!(tool.kind, Kind::Claude | Kind::Codex);
     let share_err =
         env.key_errors.iter().find(|(kind, _)| Some(*kind) == hub).and_then(|(_, e)| e.as_deref()).map_or(V::None, V::from);
-    let cost = if can_cost { env.cost.account(tool, k, weeks.as_ref(), hub, login == "logged_in") } else { V::None };
+    let cost = if can_cost { env.cost.account(tool, k, weeks.as_ref(), hub) } else { V::None };
     let node = node_of(v);
     let d = dict! {
         "key" => k, "id" => acct_id(k, tool), "alias" => a, "email" => e.as_str(), "name" => name_of(k), "label" => label_of(k),

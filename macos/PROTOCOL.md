@@ -323,8 +323,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     同一台机器经各台服务器传的都带着它）是这个标识，别的（旧版 cca、没有标识的）是它在那台服务器上的设备指纹
     （`SHA256:…`）；这台设备是自己的 `device_id`，没有时是 `"local"`。App 只拿它在各账号、设备菜单之间认同一台设备，不解释。
     `name`：那台服务器上的名字（Team 的管理员给这台设备起的名字），这台设备没开设备统计时是主机名。
-    `me`：这台设备。`revoked`：这台设备的 key 作废了（被 Team 的管理员移除了；数字是那以前同步来的，照样算进合计；
-    和现在某台设备是同一台机器、或者同名的，当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
+    `me`：这台设备。`revoked`：3.6.6 起总是 false——被 Team 的管理员移除了的、自己退出了的设备不列（服务器删掉它同步过的，
+    合计里也不再有它）；3.6.5 及以前是这台设备的 key 作废了（数字是那以前同步来的，照样算进合计；和现在某台设备是同一台机器、
+    或者同名的，当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
     这台设备是最后一次统计的时间），`stale`：超过 36 小时没同步上来（那台设备没开、断网、cca 太旧），之后用的可能还没算进来。
     `used`：那台设备用过这个账号（列出的周期里有请求）；只为诊断列出来的那种是 false（App 的设备菜单看那台设备时不列这个账号）。
     旧版 cca 没有这一项，当作 true。
@@ -343,7 +344,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     App 不认识的值当 null：3.6.0 以前的 cca 还会给 `maintainer`；旧版 cca 没有这个字段，也当 null）。`state`：`ok`（同步过，
     `checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|
     `local_only`（只有这台设备：账号不经哪台服务器同步——不是 Team 给的，或者该走的那一台这台设备用不了）| `off`（config.json 里写了 `"presence": false`）|
-    `not_logged_in`（这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的）|
+    `not_logged_in`（3.6.5 及以前：这台设备上没登录这个账号，解不开别的设备的数据，显示上次同步来的；3.6.6 起 Team 给的账号
+    不用登录也同步，不再有它）|
     `error`（最近一次没同步成，`message` 是给人看的原因，显示上次同步来的）。不认识的值当 `error` 显示（3.6.0 以前的 cca 还会给 `old_server`：
     维护者的服务器还不支持，`message` 照样说原因）。
     `missing`：30 天内用过这个账号、却没同步过金额的设备（多半是 cca 太旧），`used_epoch` 是它最近一次用这个账号的时间；没有为 `[]`。
@@ -439,9 +441,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `me`：只算这台设备的同样几项（`days`、`by_tool` 也有，工具和顶层的一样）：各账号里 `me` 为真的那台设备的 `summary`、`days_usd` 加起来，
   这台设备没有记录的账号不算（App 的「本机」）。顶层的几项是所有设备的。旧版 cca 没有这一项，App 的本机合计写「—」。
 - `devices[]`：按设备分开加起来的同样几项（App 的设备菜单），每台多几项：`id`、`name`、`me`（和账号里 `devices[]` 的一样）、
-  `revoked`（哪个账号里同步来的说撤销了就是）、`stale`（每个账号里都很久没同步上来；App 在菜单里标出来）。这台设备总在第一项（和 `me`
+  `revoked`（3.6.6 起总是 false：移除了的设备不列；以前是哪个账号里同步来的说撤销了就是）、`stale`（每个账号里都很久没同步上来；App 在菜单里标出来）。这台设备总在第一项（和 `me`
   一样的数字，哪个账号都没用过时都是 0）；别的设备按 `id` 归到一起，只算 `used` 的（只为诊断列出来的不算，一个账号都没用过的不列），
-  按 30 天的金额从多到少排（一样多按名字、再按 id）。撤销了的 key 只在一个账号里并进同名的那一台：别的账号里只有撤销了的那份时，它在这里单独一项。
+  按 30 天的金额从多到少排（一样多按名字、再按 id）。（3.6.5 及以前：撤销了的 key 只在一个账号里并进同名的那一台，别的账号里只有撤销了的那份时，它在这里单独一项。）
   各台设备加起来就是顶层的。旧版 cca 没有这一项（App 的菜单里只有所有设备、本机）。
 - `scan.state`：`ready`（统计过，`updated_epoch` 是最后一次）| `scanning`（正在统计：第一次要把会话记录全读一遍，可能要一会儿）|
   `never`（还没统计过：App 显示“正在统计”并运行一次 `cost sync`）。
@@ -748,7 +750,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `remote_end` | 会话的 id（`remote list --json` 的 `sessions[].id`，32 个十六进制字符） | `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到通知（SIGHUP）后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。`detail` 开头是列表里这个会话的那一行（编号、工具、账号、文件夹）。同意只对这一个会话有效 | no |
 | `team_leave` | Team 的编号（32 个十六进制字符） | `cca team leave`（这台设备是成员）：服务器上移除这台设备，这台设备上这个 Team 的配置都删掉；以后要再加入要管理员重新发邀请 | no |
 | `team_delete` | Team 的编号 | `cca team leave`（这台设备是管理员）：删除这个 Team——部署过同步服务器的先经 SSH 卸掉它（`detail` 说登录哪台（端口、部署时写的私钥：App 里删除照它登录）、删掉哪个目录；没记下部署到哪的照部署的默认猜，也说怎么写清楚），这台设备上就没有这个 Team 的根密钥了，这个 Team 再没有谁能邀请、移除设备、改配置（别的设备照旧用着手里的配置）。App 里是提问会话（「删掉这个 Team…」，4.14），当场问 | no |
-| `team_revoke` | 设备在 Team 里的编号（16 个十六进制字符） | `cca team revoke`：管理员移除一台设备（或者撤回还没用掉的邀请）：服务器就此不认它的密钥，给它的配置删掉；它已经拿到的节点凭证收不回来 | no |
+| `team_revoke` | 设备在 Team 里的编号（16 个十六进制字符） | `cca team revoke`：管理员移除一台设备（或者撤回还没用掉的邀请）：服务器就此不认它的密钥，给它的配置、它同步过的折合金额删掉（3.6.6 起），管理员这边也不再列它；它已经拿到的节点凭证收不回来 | no |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
@@ -1021,7 +1023,8 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
   "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "alias_lock": 别名锁定着没有,
   "nodes": [配置里带着定义的节点的名字…],
-  "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked", me, grants: "all" | {工具: [邮箱…]},
+  "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked"（`left`、`revoked` 3.6.6 起不再有：
+  退出了的、移除了的不再记，3.6.5 及以前的 cca 还给，App 不列它们）, me, grants: "all" | {工具: [邮箱…]},
   seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
   没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
   别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
@@ -1047,6 +1050,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   哪个目录。命令行里没人能答时卸不掉就不删（`fail` 的 `team_ssh`、`team_install`、`team_taken`……，原因里说加 `--keep-server`）。成员退出照旧是无交互命令
   （先同意再重跑）。
 - **移除设备**（`cca team revoke <Team> <设备>`）：要同意（`team_revoke`，范围是设备的编号，默认否），成了 `result` 的 `team_revoked`。
+  3.6.6 起移除了的设备从 `team devices --json` 里去掉（自己退出了的，下次和服务器对一遍时也去掉），它同步过的折合金额服务器删掉。
 - **邀请**（`cca team invite <Team> <名字> [--accounts all|none|工具:邮箱,…]`；还在这个 Team 里的别的设备已经叫这个名字时是 `team_name`，
   3.5.3-beta.7 起）：邀请链接只打到 stdout 一行（说明在 stderr），在 Claude Code 的
   会话里（有 `CLAUDECODE`、没有 `CCA_EVENTS`）不给。它是那台设备的密钥：App **只经内存里的管道**读这一行，放进剪贴板（标成机密、60 秒后清掉），

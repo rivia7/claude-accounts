@@ -157,9 +157,10 @@ private struct TeamAdminSection: View {
                     ForEach(doc.devices.filter(\.state.active)) { d in
                         TeamDeviceLine(team: team, device: d, accounts: accounts, now: now)
                     }
-                    let gone = doc.devices.filter { !$0.state.active }
-                    if !gone.isEmpty {
-                        Text("已经不在的：" + gone.map { "\($0.label)（\(Texts.teamDeviceDetail($0, accounts: accounts.count, now: now))）" }.joined(separator: "、"))
+                    // 只说没用上就过期了的邀请（和不认得的状态）：退出了的、移除了的不列（3.6.6 起 cca 也不再给）
+                    let unused = doc.devices.filter { !$0.state.active && !$0.state.removed }
+                    if !unused.isEmpty {
+                        Text("已经不在的：" + unused.map { "\($0.label)（\(Texts.teamDeviceDetail($0, accounts: accounts.count, now: now))）" }.joined(separator: "、"))
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -237,7 +238,7 @@ private struct TeamDeviceLine: View {
                     if !device.me {
                         RowAction(device.state == .invited ? "撤回…" : "移除…", systemImage: "xmark.circle") { model.revokeTeamDevice(team, device) }
                             .help(device.state == .invited ? "撤回这个还没用的邀请（先问一句）"
-                                  : "从这个 Team 里移除这台设备：它的密钥作废、给它的配置删掉；它已经拿到的节点凭证收不回来（先问一句）")
+                                  : "从这个 Team 里移除这台设备：它的密钥作废、给它的配置和它同步过的折合金额删掉，不再列出来；它已经拿到的节点凭证收不回来（先问一句）")
                     }
                 }
                 .disabled(model.teamBusy || model.flow != nil)

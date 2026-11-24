@@ -306,6 +306,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.code(admin, 'team-revoke', 'plan', tid, 'studio'), 'self')
         self.assertEqual(self.lines(admin, 'team-revoke', 'plan', tid, 'bob-mini'), ['%s\t%s\tbob-mini\tjoined' % (tid, dev_b)])
         self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'bob-mini'), ['bob-mini'])
+        self.assertNotIn(dev_b, json.loads((t / 'admin.json').read_text())['devices'], '移除了的这边也不再记着')
         line = self.lines(bob, 'team-sync')[0].split('\t')
         self.assertEqual(line[:4], [tid, '测试组', 'removed', '5'])
         self.assertIn('移除', line[4])
@@ -314,8 +315,9 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link3)[5:], ['ok', '2'], '被移除了的拿新的邀请直接加入（以前记着的不要了）')
         self.assertEqual(self.doc(bob, tid)[0], 1)
         rows = {r['label']: r['state'] for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
-        self.assertEqual((rows['bob-again'], rows['bob-mini'], rows['no-proof']), ('joined', 'revoked', 'revoked'), '管理员和服务器对过一遍：知道它加入了')
-        # 退出：服务器上没有它了；管理员那边记成自己退出的，不登记回去
+        self.assertEqual((rows['bob-again'], 'bob-mini' in rows, 'no-proof' in rows), ('joined', False, False),
+                         '管理员和服务器对过一遍：知道它加入了；移除了的不列')
+        # 退出：服务器上没有它了；管理员那边不再记它，不登记回去
         self.assertEqual(self.lines(bob, 'team-leave', 'plan'), ['%s\t测试组\tmember\t127.0.0.1:%d' % (tid, srv.port)])
         self.assertEqual(self.code(bob, 'team-leave', 'apply', tid[:8]), 'no_team', '真退出要写完整的编号')
         self.assertEqual(self.lines(bob, 'team-leave', 'apply', tid), ['测试组', '127.0.0.1:%d' % srv.port, ''])
@@ -323,7 +325,23 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(json.loads((bob.cca / 'teams' / 'index.json').read_text())['order'], [])
         self.assertEqual(self.code(bob, 'team-sync', tid), 'no_team')
         rows = {r['label']: r['state'] for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
-        self.assertEqual(rows, {'studio': 'joined', 'bob-mini': 'revoked', 'spec': 'joined', 'no-proof': 'revoked', 'bob-again': 'left'})
+        self.assertEqual(rows, {'studio': 'joined', 'spec': 'joined'}, '自己退出了的、移除了的都不列')
+        self.assertEqual(len(json.loads((t / 'admin.json').read_text())['devices']), 2, 'admin.json 里也只剩这两台')
+        # 3.6.5 及以前留下的记录（移除了的 revoked、自己退出了的 left）：对一遍时删掉
+        a = json.loads((t / 'admin.json').read_text())
+        old = {'%016x' % (0xdead0000 + i): {'n': 90 + i, 'label': 'gone-%d' % i, 'state': s, 'grants': 'all', 'seq': 1} for i, s in enumerate(('revoked', 'left'))}
+        a['devices'].update(old)
+        (t / 'admin.json').write_text(json.dumps(a))
+        rows = {r['label']: r['state'] for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
+        self.assertEqual(rows, {'studio': 'joined', 'spec': 'joined'})
+        self.assertFalse(set(old) & set(json.loads((t / 'admin.json').read_text())['devices']))
+        # 以前记成 left、又出现在服务器上的（3.6.5 及以前：对过以后它又登记回来了）：恢复成 joined
+        a = json.loads((t / 'admin.json').read_text())
+        spec_dev = next(dev for dev, d in a['devices'].items() if d['label'] == 'spec')
+        a['devices'][spec_dev]['state'] = 'left'
+        (t / 'admin.json').write_text(json.dumps(a))
+        rows = {r['label']: r['state'] for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
+        self.assertEqual(rows, {'studio': 'joined', 'spec': 'joined'}, '服务器上还有它：恢复成 joined')
         self.assertEqual(self.lines(admin, 'team-leave', 'plan', '测试组'),
                          ['%s\t测试组\tadmin\t127.0.0.1:%d\troot@127.0.0.1\t22\t/opt/cca-team-%s\t0' % (tid, srv.port, tid[:8])],
                          '管理员：后面是删除时去哪卸载它的同步服务器（手动接上的、没记下部署到哪：照部署的默认猜，最后一项是 0）')
@@ -333,7 +351,8 @@ class TeamTest(Sessions, unittest.TestCase):
 
     def test_rename(self):
         """管理员给设备改名字：这边记着的、服务器上的一起改（同一把公钥再登记：加入的时间、认证码、配对认的指纹都不变），设备下次同步配置时
-        跟着改；服务器上别的设备叫这个名字时服务器加 -2；还没加入的、已经不在的只改这边记着的；还在的别的设备叫这个名字不行"""
+        跟着改；服务器上别的设备叫这个名字时服务器加 -2；还没加入的只改这边记着的；自己退出了的（对一遍时就不记了）改不了；
+        还在的别的设备叫这个名字不行"""
         admin, tid, root, srv, url, pin = self.new_team()
         t = self.tdir(admin, tid)
         state = lambda: json.loads((self.d / 'srv' / 'state.json').read_text())['machines']
@@ -403,15 +422,13 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual((rows[dev_c]['label'], rows[dev_c]['name']), ('carol-mac', 'carol-mac'))
         carol.ok('team-sync')
         self.assertEqual(json.loads(carol.ok('team-list', '--json'))['teams'][0]['device'], 'carol-mac')
-        # 自己退出了的：不登记回去
+        # 自己退出了的：不登记回去，这边也不再记着它
         self.lines(bob, 'team-leave', 'apply', tid)
-        got = self.lines(admin, 'team-rename', tid, dev_b, 'bob-old')
-        self.assertEqual(got[:2], ['mini-2', 'bob-old'])
-        self.assertIn('退出', got[2])
+        self.assertEqual(self.code(admin, 'team-rename', tid, dev_b, 'bob-old'), 'no_device')
         self.assertFalse([m for m in state().values() if m['dev'] == dev_b], '退出了的没被改名字登记回去')
-        self.assertEqual(json.loads((t / 'admin.json').read_text())['devices'][dev_b]['state'], 'left')
-        # 已经不在的设备叫这个名字不算重
-        self.assertEqual(self.lines(admin, 'team-rename', tid, 'carol-mac', 'bob-old')[:2], ['carol-mac', 'bob-old'])
+        self.assertNotIn(dev_b, json.loads((t / 'admin.json').read_text())['devices'])
+        # 已经不在的设备以前的名字可以再用
+        self.assertEqual(self.lines(admin, 'team-rename', tid, 'carol-mac', 'mini-2')[:2], ['carol-mac', 'mini-2'])
 
     def test_aliases(self):
         """Team 里账号的别名：没写的编成 team-1、team-2……（加账号、发布时；同一个 Team 里不重复，用过的号不再用，--mine 带进这台设备上
@@ -988,7 +1005,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual((r['state'], [(h['kind'], h.get('team'), h['state']) for h in r['hubs']]), ('ok', [('team', tid, 'ok')]), r)
         self.assertEqual(set(asked('ledger')), {(fp, (aid,))})
         slot = json.loads((self.d / 'srv' / 'cost-slots.json').read_text())['acc'][aid][fp]['blob']
-        doc = sw.cost_open(sw.derive(sw.COST, salt, 'claude', 'alice@example.com', 'u-alice-0001'), aid, fp, slot)
+        doc = sw.cost_open(sw.team_keys(salt), aid, fp, slot)
         self.assertEqual(list(doc['h'].values()), [[1000000, 1, 1, 1, 0, 0, 0]])
         self.assertTrue((bob.cca / 'cost' / ('team.%s.sync.json' % tid)).exists())
         # 设备统计
@@ -1280,6 +1297,27 @@ class TeamTest(Sessions, unittest.TestCase):
         (admin.home / 'reply' / 'team_put').unlink()
         self.assertEqual(self.lines(admin, 'team-publish', tid), ['1', ''])
         self.assertEqual(aj()['devices'][dev_b]['seq'], seq + 6)
+        # 发布时服务器说不认得（对过名单以后它才走的）：加入过的不再记，邀请了还没加入的记成 expired
+        link_c, dev_c = self.invite(admin, tid, 'carol')
+        a = aj()
+        for dev in (dev_b, dev_c):
+            a['devices'][dev].pop('sha', None)   # 都重新发布一次
+        (self.tdir(admin, tid) / 'admin.json').write_text(json.dumps(a))
+        (admin.home / 'reply' / 'team_put').write_text('200\n' + json.dumps({'v': 1, 'ok': True, 'stored': [], 'stale': {}, 'unknown': [dev_b, dev_c]}))
+        r = admin.run('team-publish', tid)
+        self.assertEqual((r.returncode, dev_b in aj()['devices'], aj()['devices'][dev_c]['state']), (1, False, 'expired'), r.stdout)
+        self.assertIn('服务器不认得', r.stdout)
+        (admin.home / 'reply' / 'team_put').unlink()
+        # 服务器的名单里没有管理员自己这台（gen 没变；正常不会这样）：不当它退出了，这边照旧记着
+        me = json.loads((self.tdir(admin, tid) / 'team.json').read_text())['dev']
+        port = srv.port
+        srv.stop()
+        state = json.loads((self.d / 'srv' / 'state.json').read_text())
+        state['machines'] = {f: m for f, m in state['machines'].items() if m['dev'] != me}
+        (self.d / 'srv' / 'state.json').write_text(json.dumps(state))
+        srv, _, _ = self.server(root, port=port)
+        rows = {r['dev']: r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
+        self.assertTrue(me in aj()['devices'] and rows[me]['me'], rows)
 
 
 if __name__ == '__main__':

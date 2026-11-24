@@ -30,7 +30,7 @@ struct CostSyncState: KnownValues {
     static let localOnly = CostSyncState(rawValue: "local_only")
     /// config.json 里写了 `"presence": false`
     static let off = CostSyncState(rawValue: "off")
-    /// 这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的
+    /// 这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的（3.6.5 及以前的 cca；3.6.6 起 Team 给的账号不用登录也同步）
     static let notLoggedIn = CostSyncState(rawValue: "not_logged_in")
     /// 最近一次没同步成（`message` 是原因），显示上次同步来的
     static let error = CostSyncState(rawValue: "error")

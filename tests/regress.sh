@@ -3273,7 +3273,7 @@ ok "cca key alice --forget：说登录了这个账号的其他设备上的也会
 dkey put "$KS2" "$(python3 -c 'import time; print(time.time())')"
 v=$(run cca key alice --show 2>/dev/null); rc=$?
 ok "这台 Mac 上没有、dan-air 又记下了：cca key alice --show 先同步一次再给（App 的「显示」「复制」同样）" '[ $rc -eq 0 ] && [ "$v" = "$KS2" ]'
-# 折合金额经服务器交换：各台设备只写自己的那一份，密文（密钥和 API key 一样由盐、邮箱、登录身份派生，标签是 cca-cost-v1；认证里带着设备指纹）。
+# 折合金额经服务器交换：各台设备只写自己的那一份，密文（3.6.6 起密钥整个 Team 共用，只由盐派生，标签是 cca-cost-v2；认证里带着账号摘要和设备指纹）。
 # 10g 里 alice 在这台 Mac 上 4 次请求、折合 0.026 美元。dan-air 照 server/README.md 写的格式封好、解开
 dcost() {   # dcost get | put 时间 美元：dan-air 解开这台 Mac 传的 alice 的那一份（打印 JSON；none：没有；bad：认证不过；明文没补齐到 1024 字节的整数倍时出错）/ 传自己的那一份
 	python3 -B - "$D" "$T/dan" "$GLPORT" "$H/.cca/teams/$GLTID/id_ed25519.pub" "$@" <<'PY'
@@ -3282,7 +3282,7 @@ sys.path.insert(0, sys.argv[1])
 import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
 key, port, me, op = sys.argv[2], int(sys.argv[3]), sw.fp_of(sys.argv[4]), sys.argv[5]
 aid = sw.aid_of('cd' * 16, 'claude', 'alice@example.com')
-keys = sw.derive(sw.COST, 'cd' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
+keys = sw.team_keys('cd' * 16)
 if op == 'get':
     extra = {'get': [aid]}
 else:
@@ -3300,9 +3300,9 @@ if op == 'get':
 PY
 }
 out=$(run cca cost sync --now --json 2>/dev/null </dev/null); rc=$?
-ok "cost sync --now --json：开了设备统计、alice 是 Team 给的、登录着：加密传给服务器（服务器上没有邮箱、登录身份、金额，600）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"sync\"][\"state\"] == \"ok\" and isinstance(d[\"sync\"][\"checked_epoch\"], float)" && [ "$(stat -f %Lp "$GLD/cost-slots.json")" = 600 ] && ! grep -q "example.com\|u-alice\|26000" "$GLD/cost-slots.json"'
+ok "cost sync --now --json：开了设备统计、alice 是 Team 给的：加密传给服务器（服务器上没有邮箱、登录身份、金额，600）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"sync\"][\"state\"] == \"ok\" and isinstance(d[\"sync\"][\"checked_epoch\"], float)" && [ "$(stat -f %Lp "$GLD/cost-slots.json")" = 600 ] && ! grep -q "example.com\|u-alice\|26000" "$GLD/cost-slots.json"'
 v=$(dcost get)
-ok "dan-air（也登录着 alice）照文档的格式解得开这台 Mac 传的：4 次请求、折合 0.026 美元，明文补齐到 1024 字节的整数倍" 'printf "%s" "$v" | jok "d == {\"usd\": 0.026, \"requests\": 4, \"name\": \"$ME\"}"'
+ok "dan-air 照文档的格式解得开这台 Mac 传的（密钥只由 Team 的盐派生，不用登录 alice）：4 次请求、折合 0.026 美元，明文补齐到 1024 字节的整数倍" 'printf "%s" "$v" | jok "d == {\"usd\": 0.026, \"requests\": 4, \"name\": \"$ME\"}"'
 dcost put "$(python3 -c 'import time; print(time.time() - 86400)')" 2.5; rc=$?
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_cost_sync.json"
 ok "dan-air 传了自己的那一份（2.5 美元）：同步后 alice 有两台设备（这台在前），合计 2.526 美元（全部账号 2.579：还有 dave 的 Codex），同步好了" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"me\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", True, False), (\"dan-air\", False, False)] and a[\"summary\"][\"days_usd\"] == 2.526 and a[\"sync\"][\"state\"] == \"ok\" and isinstance(a[\"sync\"][\"checked_epoch\"], float))(acct(0, \"alice@example.com\")[\"cost\"]) and d[\"cost_total\"][\"by_tool\"][\"claude\"][\"days_usd\"] == 2.526 and d[\"cost_total\"][\"days_usd\"] == 2.579"'
@@ -3423,7 +3423,7 @@ ok "界面 App 里输入配对码：一个输入框；配对码不对是 fail �
 rm -f "$H/.cca/remote/peers.json"; rmdir "$H/.cca/remote" 2>/dev/null
 tm_spec revoke "$GLROOT" "$GLPORT" "$DANS" >/dev/null   # 管理员把 dan-air 移出阁楼组
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state)
-ok "管理员把 dan-air 移出了阁楼组：它传过的照样算（是 alice 的用量），标上已撤销" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False), (\"dan-air\", True)] and a[\"summary\"][\"days_usd\"] == 2.526)(acct(0, \"alice@example.com\")[\"cost\"])"'
+ok "管理员把 dan-air 移出了阁楼组：服务器删掉它传的；同步以后 alice 只剩这台设备（0.026 美元），设备菜单里也没有它" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False)] and a[\"summary\"][\"days_usd\"] == 0.026)(acct(0, \"alice@example.com\")[\"cost\"]) and [x[\"name\"] for x in d[\"cost_total\"][\"devices\"]] == [\"$ME\"]" && ! grep -q "dan-air" "$GLD/cost-slots.json"'
 # Team 的服务器按设备限流（每秒 0.5 个、最多攒 30 个）：上面配对的那些把这台 Mac 的配额用得差不多了，后面还要经它退出：
 # 先重启它（状态文件留着），配额从头算
 gl_down; gl_upr
@@ -3542,7 +3542,8 @@ out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
 TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
 out=$(runev CCA_GRANT="team_revoke:$TMDEV" cca team revoke 书房组 dan-air 2>&1); rc=$?
-ok "同意以后移除了（result 的 team_revoked）：服务器不认它了" '[ $rc -eq 0 ] && [ "$(lastres)" = team_revoked ] && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1,2)" = "403 unknown_device" ] && run cca team devices 书房组 2>&1 | grep -q "dan-air（.*）：revoked"'
+out2=$(run cca team devices 书房组 2>&1); rc2=$?
+ok "同意以后移除了（result 的 team_revoked）：服务器不认它了，cca team devices 不再列它" '[ $rc -eq 0 ] && [ "$(lastres)" = team_revoked ] && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1,2)" = "403 unknown_device" ] && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "书房的Mac（" && ! printf "%s" "$out2" | grep -q "dan-air"'
 out=$(runev cca team leave 书房组 2>&1); rc=$?
 ok "cca team leave（管理员）：先发同意事件（team_delete，范围是 Team 的编号，说根密钥就没了；没记下部署到哪：照部署的默认猜 root@服务器的地址，说不对怎么写清楚），什么都不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_delete\" and e[\"scope\"] == \"$TMID\" and \"根密钥\" in e[\"detail\"] and \"经 SSH 登录 root@127.0.0.1（端口 22）\" in e[\"detail\"] and \"照部署的默认猜的\" in e[\"detail\"] and \"cca team leave ${TMID:0:8} 用户@服务器\" in e[\"detail\"]" && [ -f "$H/.cca/teams/$TMID/root_ed25519" ]'
 out=$(run CCA_TTY="$(ans n)" cca team leave 2>&1); rc=$?

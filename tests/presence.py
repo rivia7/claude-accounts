@@ -343,8 +343,10 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(j['keys'][a1]['blob'], b2, '重启后还在')
         self.revoke(self.DEV2)
         st, j = self.call('keys', get=[a1])
-        self.assertEqual((st, j['keys'][a1]['blob'], j['keys'][a1]['name']), (200, b2, 'bob-mini'),
-                         '移除了传它的设备：密文留着（是账号的，登录了这个账号的设备还要用）')
+        self.assertEqual((st, j['keys'][a1]['blob'], j['keys'][a1]['name'], j['keys'][a1]['me']), (200, b2, None, False),
+                         '移除了传它的设备：密文留着（是账号的，登录了这个账号的设备还要用），不再记着是它传的')
+        raw = (self.d / 'keys.json').read_text()
+        self.assertFalse(self.fp(self.dev2pub) in raw or 'bob-mini' in raw, '文件里没有它的指纹、名字')
         self.assertEqual(self.call('keys', key='dev2', get=[a1])[0], 403, '移除的设备不能再问')
         # 存满了（MAX_KEYS 个账号）：新的账号不收，已有的照常换
         store = self.store()
@@ -359,7 +361,7 @@ class ServerTest(unittest.TestCase):
 
     def test_cost(self):
         """折合金额的密文：每个账号、每台设备一份，设备只写自己的那一份；问的时候回各台设备的（认证码没变的、自己的不带密文），
-        移除的设备照样回（标上 revoked），顺带说哪些设备用过这个账号却没传过；服务器只查形状和长度"""
+        顺带说哪些设备用过这个账号却没传过；移除设备时它传的删掉（以前的版本留下的，启动时删掉）；服务器只查形状和长度"""
         self.restart()   # 限流的配额从头算
         self.both()
         a1, a2 = secrets.token_hex(16), secrets.token_hex(16)
@@ -419,10 +421,11 @@ class ServerTest(unittest.TestCase):
         st, j = self.call('ledger', key='dev2', get=[a1])
         self.assertEqual({x['name']: x.get('blob') for x in j['cost'][a1]}, {'alice-mbp': b3, 'bob-mini': None}, '重启后还在')
         self.revoke(self.DEV2)
-        st, j = self.call('ledger', get=[a1])
-        rows = {x['name']: x for x in j['cost'][a1]}
-        self.assertEqual((rows['bob-mini']['revoked'], rows['bob-mini']['blob'], rows['alice-mbp']['revoked']), (True, b2, False),
-                         '移除了的设备：它传的留着（是账号的用量），标上 revoked')
+        st, j = self.call('ledger', get=[a1, a2])
+        self.assertEqual(([(x['name'], x['revoked']) for x in j['cost'][a1]], j['cost'][a2]), ([('alice-mbp', False)], []),
+                         '移除了的设备：它传的删掉（服务器上不留它的用量）')
+        raw = (self.d / 'cost-slots.json').read_text()
+        self.assertFalse(fb in raw or b2['c'] in raw, '文件里也没有了')
         self.assertEqual(self.call('ledger', key='dev2', get=[a1])[0], 403, '移除的设备不能再问')
         store = self.store()
         store.data['machines'] = {fa: {'name': 'alice-mbp', 'key': self.devpub, 'dev': self.DEV},
@@ -450,6 +453,35 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(store.cost_sync(fb, {y: ok}, [], {}, now + 2000)[0], 200,
                              '存满了：先清掉 cost_keep 秒没再传的，再看放不放得下（不然一直清不掉）')
         self.assertEqual(sorted(store.cost['acc']), [y], 'cost_keep 秒没再传的删掉')
+        # 换了密钥（同一个编号登记另一把公钥）：旧的那把传的跟着删掉
+        store.cost_sync(fa, {x: ok}, [], {}, now + 2000)
+        fd = 'SHA256:' + 'D' * 43
+        self.assertEqual(store.team_enroll({self.DEV2: (fd, ' '.join(self.evilpub.split()[:2]), 'bob-mini')}, now + 2000)[0], 200)
+        self.assertEqual({aid: sorted(s) for aid, s in store.cost['acc'].items()}, {x: [fa]})
+
+    def test_cost_leftovers(self):
+        """以前的版本移除设备时留下的：照旧的根公钥接着用（重启、更新）时清掉——不在名单里的设备传的折合金额删掉，
+        记下的 API key 的密文留着、不再记着是它传的；名单里的照旧"""
+        st0 = self.store()
+        fa, fb, now = self.fp(self.devpub), self.fp(self.dev2pub), time.time()
+        st0.data['machines'] = {fa: {'name': 'alice-mbp', 'key': ' '.join(self.devpub.split()[:2]), 'dev': self.DEV, 'joined': now}}
+        st0.save()
+        x, y = secrets.token_hex(16), secrets.token_hex(16)
+        b = {'n': base64.b64encode(bytes(16)).decode(), 'c': base64.b64encode(bytes(64)).decode(), 't': base64.b64encode(bytes(32)).decode()}
+        cost = {'v': 1, 'acc': {x: {fa: {'blob': b, 'name': 'alice-mbp', 'at': now}, fb: {'blob': b, 'name': 'bob-mini', 'at': now}},
+                                y: {fb: {'blob': b, 'name': 'bob-mini', 'at': now}}}}
+        keys = {'v': 1, 'acc': {x: {'blob': b, 'fp': fb, 'name': 'bob-mini', 'at': now}, y: {'blob': b, 'fp': fa, 'name': 'alice-mbp', 'at': now}}}
+        srvmod.save_doc(st0.cost_path, cost)
+        srvmod.save_doc(st0.keys_path, keys)
+        st1 = srvmod.Store(st0.path, 150, 600, 86400, cost_keep=1000, team_root=self.rootpub)
+        self.assertEqual(list(st1.data['machines']), [fa], '照旧的根公钥：名单接着用')
+        self.assertEqual({aid: sorted(s) for aid, s in st1.cost['acc'].items()}, {x: [fa]})
+        self.assertEqual((st1.keys['acc'][x], st1.keys['acc'][y]['fp']), ({'blob': b, 'at': now}, fa))
+        on_disk = lambda p: json.loads(Path(p).read_text())['acc']
+        self.assertEqual((on_disk(st0.cost_path), on_disk(st0.keys_path)), (st1.cost['acc'], st1.keys['acc']), '写回了文件')
+        before = (os.stat(st0.cost_path).st_mtime_ns, os.stat(st0.keys_path).st_mtime_ns)
+        srvmod.Store(st0.path, 150, 600, 86400, cost_keep=1000, team_root=self.rootpub)
+        self.assertEqual((os.stat(st0.cost_path).st_mtime_ns, os.stat(st0.keys_path).st_mtime_ns), before, '没什么要清的：不重写')
 
 
 class SignedCalls:
@@ -1197,7 +1229,7 @@ class Device:
 
     def cost_view(self, team, accounts=(), sync=()):
         """App 看到的（_gui state 的 cost）：经辅助程序只给测试用的 _cost-view 看。team 是同步走的那个 Team 的编号；accounts 的行是
-        [工具, 键, usage_weeks, 谁给的（Team 的编号，这台设备自己的是 False）, 登录着没有]，sync 的行是 [slot, 谁给的, 登录着没有]"""
+        [工具, 键, usage_weeks, 谁给的（Team 的编号，这台设备自己的是 False）]，sync 的行是 [slot, 谁给的]"""
         spec = {'config': {}, 'team': team, 'accounts': [list(a) for a in accounts], 'sync': [list(s) for s in sync], 'tools': ['claude']}
         return json.loads(self.ok('_cost-view', repr(time.time()), json.dumps(spec)))
 
@@ -1706,9 +1738,32 @@ class ClientTest(Sessions, unittest.TestCase):
     def slots(self, aid):
         return json.loads((self.d / 'cost-slots.json').read_text())['acc'].get(aid, {})
 
+    def test_cost_many_accounts(self):
+        """Team 给的账号比一个请求放得下的多（服务器一次最多 64 个账号：COST_BATCH）：分几次问、几次传，都同步得上"""
+        emails = ['u%02d@example.com' % i for i in range(70)]
+        table = {'u%02d(%s)' % (i, e): 'US-A' for i, e in enumerate(emails)}
+        a, b = self.device('many-mbp', table=table), self.device('many-mini', table=table)
+        for d in (a, b):
+            d.set_doc(self.team, self.doc(accounts={'claude': {e: 'US-A' for e in emails}}))
+        self.machines(a, b)
+        hour = str(int(time.time() // 3600 * 3600) - 3600)
+        rows = {e: {hour: [1000000 * (i + 1), 1, 1, 1, 0, 0, 0]} for i, e in enumerate(emails)}
+        (a.cca / 'cost').mkdir(exist_ok=True)
+        (a.cca / 'cost' / 'local.json').write_text(json.dumps({'v': 1, 'build': 'x', 'who': {'claude:u-%s' % e: e for e in emails},
+                                                               'acc': {'claude:u-%s' % e: rows[e] for e in emails}, 'um': {}, 'orphan': {}}))
+        for d in (a, b):
+            self.assertEqual(d.cost_sync()['state'], 'ok')
+            sizes = [max(len(r.get(k) or ()) for k in ('get', 'have', 'put')) for r in d.sent('ledger')]
+            self.assertTrue(len(sizes) >= 2 and max(sizes) <= 64, sizes)
+        slots = json.loads((self.d / 'cost-slots.json').read_text())['acc']
+        self.assertEqual([sorted(slots.get(sw.aid_of(self.salt, 'claude', e), {})) for e in emails], [[a.fp]] * 70, 'b 没用过、没登录：不传')
+        got = b.cost(self.lane + 'remote.json')['acc']
+        self.assertEqual({e: [x['h'] for x in got['claude:' + e].values()] for e in emails}, {e: [rows[e]] for e in emails}, 'b 取到了 70 个账号的')
+
     def test_cost_sync(self):
-        """alice-mbp、bob-mini 登录着 alice，carol-air 没有：两台互相取到对方的，服务器上只有密文；伪造的、重放的不认；
-        没变的不重传、不重取；移除的设备留着、标上；用过却没传过的设备说一声"""
+        """alice-mbp、bob-mini 登录着 alice，carol-air 没有：三台都取得到别的设备的（3.6.6 起密钥整个 Team 共用，不用登录），
+        只有用过、登录着的传自己的那一份；服务器上只有密文；伪造的、重放的不认；没变的不重传、不重取；移除了的设备传的服务器删掉、
+        哪儿都不列；用过却没传过的设备说一声"""
         a = self.dev
         b = self.device('bob-mini', 'u-alice-0005')
         c = self.device('carol-air', None)
@@ -1728,11 +1783,17 @@ class ClientTest(Sessions, unittest.TestCase):
         self.assertEqual(list(self.slots(aid)), [fa])
         self.assertEqual(b.cost_sync()['state'], 'ok')
         rb = b.cost(lane + 'remote.json')['acc'][slot]
-        self.assertEqual([(e['name'], e['h'], e['revoked']) for e in rb.values()], [('alice-mbp', {str(hour): [5000000, 2, 100, 10, 0, 0, 0]}, False)],
+        self.assertEqual([(e['name'], e['h']) for e in rb.values()], [('alice-mbp', {str(hour): [5000000, 2, 100, 10, 0, 0, 0]})],
                          'bob-mini 取到了 alice-mbp 的')
-        self.assertEqual(c.cost_sync()['state'], 'skipped', 'carol-air 没登录 alice（解不开）：不问也不传')
-        self.assertEqual(c.sent(), [])
-        self.assertEqual(sorted(self.slots(aid)), sorted([fa, b.fp]))
+        self.assertEqual(c.cost_sync()['state'], 'ok', 'carol-air 没登录 alice 也取得到')
+        rc = c.cost(lane + 'remote.json')['acc'][slot]
+        self.assertEqual(sorted((e['name'], e['h']) for e in rc.values()),
+                         [('alice-mbp', {str(hour): [5000000, 2, 100, 10, 0, 0, 0]}), ('bob-mini', {str(hour - 86400): [3000000, 1, 50, 5, 0, 0, 0]})],
+                         'carol-air 也看得到另外两台的')
+        [v] = c.cost_view(self.tid, [('claude', self.key, None, self.tid)])['accounts']
+        self.assertEqual((v['summary']['days_usd'], [d['name'] for d in v['devices']], v['sync']['state']), (8.0, ['alice-mbp', 'bob-mini'], 'ok'),
+                         'carol-air 的 App 里：这个账号两台设备的用量（它自己没用过）')
+        self.assertEqual(sorted(self.slots(aid)), sorted([fa, b.fp]), 'carol-air 没用过、没登录 alice：不传自己的那一份')
         at_a = self.slots(aid)[fa]['at']
         n = len(a.sent())
         self.assertEqual(a.cost_sync()['state'], 'ok')
@@ -1746,29 +1807,29 @@ class ClientTest(Sessions, unittest.TestCase):
         posts = a.sent()[n:]
         self.assertEqual(list(posts[0]['have'][aid].values()).count(None), 0)
         self.assertEqual(len(posts[0]['have'][aid]), 2, '带着已经有的认证码（自己的、bob-mini 的）：没变的服务器不回密文')
-        [v] = a.cost_view(self.tid, [('claude', self.key, None, self.tid, True)])['accounts']
+        [v] = a.cost_view(self.tid, [('claude', self.key, None, self.tid)])['accounts']
         self.assertEqual((v['summary']['days_usd'], [d['name'] for d in v['devices']], v['sync']['state']), (8.0, ['alice-mbp', 'bob-mini'], 'ok'),
                          'App 看到的：两台设备加起来')
-        # carol-air 在名单里，在自己的那一份里放伪造的、重放 alice-mbp 的：认证里带着设备指纹，都不认
-        fake = sw.cost_seal(sw.derive(sw.COST, self.salt, 'claude', 'alice@example.com', 'u-wrong'), aid, c.fp,
-                            {'v': 1, 'at': time.time(), 'h': {str(hour): [10 ** 9, 1, 0, 0, 0, 0, 0]}, 'um': []})
+        # carol-air 在名单里，在自己的那一份里放伪造的（不是这个 Team 的密钥）、重放 alice-mbp 的：认证里带着设备指纹，都不认
+        fake = sw.cost_seal(sw.team_keys('11' * 16), aid, c.fp, {'v': 1, 'at': time.time(), 'h': {str(hour): [10 ** 9, 1, 0, 0, 0, 0, 0]}, 'um': []})
         for bad in (fake, self.slots(aid)[fa]['blob']):
             self.assertEqual(c.post(self.srv.port, 'ledger', {'put': {aid: bad}})[0], 200)
             self.assertEqual(a.cost_sync()['state'], 'ok')
             ra = a.cost(lane + 'remote.json')['acc'][slot]
-            self.assertEqual([e['name'] for e in ra.values()], ['bob-mini'], '伪造的、重放的都不认')
-        # 移除 bob-mini：它传的留着、标上；dan（用过 alice、没传过）
+            self.assertEqual([e['name'] for e in ra.values() if 'h' in e], ['bob-mini'], '伪造的、重放的都不认')
+        # 移除 bob-mini：服务器删掉它传的，这台设备上也不再有它；dan（用过 alice、没传过）
         d = self.device('dan-air', 'u-alice-0005')
         self.machines(a, c, d)
+        self.assertNotIn(b.fp, self.slots(aid), '服务器上删掉了')
         self.assertEqual(d.post(self.srv.port, 'report', {'units': {aid: {'cli': [[60, 0]], 'app': None}}, 'end': None})[0], 200)
         self.assertEqual(a.cost_sync()['state'], 'ok')
         ra = a.cost(lane + 'remote.json')['acc'][slot]
-        self.assertEqual([(e['name'], e['revoked']) for e in ra.values()], [('bob-mini', True)])
+        self.assertEqual(([e['name'] for e in ra.values() if 'h' in e], b.fp in ra), ([], False), '没有 bob-mini 了（carol-air 那一份是上面重放的，解不开）')
         sync = a.cost(lane + 'sync.json')
         self.assertEqual([m['name'] for m in sync['acc'][slot]['missing']], ['dan-air'])
-        [v] = a.cost_view(self.tid, [('claude', self.key, None, self.tid, True)])['accounts']
-        self.assertEqual(([(x['name'], x['revoked']) for x in v['devices']], [m['name'] for m in v['sync']['missing']]),
-                         ([('alice-mbp', False), ('bob-mini', True)], ['dan-air']))
+        [v] = a.cost_view(self.tid, [('claude', self.key, None, self.tid)])['accounts']
+        self.assertEqual(([(x['name'], x['revoked']) for x in v['devices']], v['summary']['days_usd'], [m['name'] for m in v['sync']['missing']]),
+                         ([('alice-mbp', False)], 5.0, ['dan-air']), '合计里也没有它了')
         for f in ('remote.json', 'sync.json'):
             self.assertEqual(oct(os.stat(a.cca / 'cost' / (lane + f)).st_mode & 0o777), '0o600', f)
         for f in ('remote.json', 'sync.json'):

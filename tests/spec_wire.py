@@ -12,13 +12,23 @@ import tempfile
 import time
 import zlib
 
-KEYSHARE, COST = 'cca-keyshare-v1', 'cca-cost-v1'
+KEYSHARE, COST, COST_V1 = 'cca-keyshare-v1', 'cca-cost-v2', 'cca-cost-v1'
+
+
+def keys_of(salt, info):
+    """两把 HMAC 密钥（加密、认证）：root = HMAC(盐（十六进制解出来的字节）, info)，再各 HMAC 一次 enc、mac"""
+    root = hmac.new(bytes.fromhex(salt), info, hashlib.sha256).digest()
+    return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
 
 
 def derive(label, salt, tool, email, ident):
-    """两把 HMAC 密钥（加密、认证）：由 Team 的配置里的盐（十六进制）、工具、邮箱（小写）和登录身份派生"""
-    root = hmac.new(bytes.fromhex(salt), ('%s\0%s\0%s\0%s' % (label, tool, email.lower(), ident)).encode(), hashlib.sha256).digest()
-    return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
+    """由 Team 的配置里的盐、工具、邮箱（小写）和登录身份派生（记下的 API key；3.6.5 及以前的折合金额，标签是 COST_V1）"""
+    return keys_of(salt, ('%s\0%s\0%s\0%s' % (label, tool, email.lower(), ident)).encode())
+
+
+def team_keys(salt, label=COST):
+    """整个 Team 共用的两把密钥：只由盐派生（3.6.6 起的折合金额）"""
+    return keys_of(salt, label.encode())
 
 
 def stream(enc, n, size):
@@ -62,13 +72,13 @@ def cost_plain(z):
     return pt + b'\0' * (-len(pt) % 1024)
 
 
-def cost_seal(keys, aid, fp, doc, raw=None):
-    """认证带着账号摘要和设备指纹；raw：直接给压缩好的（测解压炸弹之类）"""
-    return seal(COST, keys, [aid, fp], cost_plain(raw if raw is not None else zlib.compress(json.dumps(doc).encode())))
+def cost_seal(keys, aid, fp, doc, raw=None, label=COST):
+    """认证带着标签、账号摘要和设备指纹（3.6.5 及以前的标签是 COST_V1，密钥照 derive）；raw：直接给压缩好的（测解压炸弹之类）"""
+    return seal(label, keys, [aid, fp], cost_plain(raw if raw is not None else zlib.compress(json.dumps(doc).encode())))
 
 
-def cost_open(keys, aid, fp, blob):
-    pt = unseal(COST, keys, [aid, fp], blob)
+def cost_open(keys, aid, fp, blob, label=COST):
+    pt = unseal(label, keys, [aid, fp], blob)
     if pt is None:
         return None
     size = int.from_bytes(pt[:4], 'big')

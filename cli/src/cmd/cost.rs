@@ -10,13 +10,15 @@
 //! 增量地读：每个文件记着读到哪（只读完整的行；文件被截短、换了、读过的末尾对不上就从头读），回复按消息 id 去重，Codex 的
 //! 按时间和累计的用量去重。
 //! Team 给的官方账号、开着设备统计时，各台设备算的经那个 Team 的同步服务器交换（op ledger，见 server/README.md）：一台设备
-//! 一份、只写自己的那一份，服务器只存密文（密钥和共享 API key 一样由盐、邮箱、登录身份派生，标签不同）。
+//! 一份、只写自己的那一份，服务器只存密文。密钥整个 Team 共用（3.6.6 起只由 Team 的盐派生，不用登录：Team 给了这个账号的设备
+//! 都看得到各台设备的；服务器没有盐，解不开）；3.6.5 及以前的还带着登录身份（和共享 API key 一样），这台设备登录着时照样解得开。
+//! 从 Team 里移除了的设备传的，服务器删掉（以前的服务器还回来、标着 revoked 的不要）。
 //! 统计在后台进程里做（cca _cost-sync：会话结束、cca usage、cca devices、上报进程里，最多 COST_EVERY 一次；App 定时跑
 //! cca cost sync --json），_gui state 只读统计好的（cost/local.json、remote.json、sync.json）。config.json 的 "cost": false 关掉
 
 use super::codex::codex_claims;
 use super::hub::{host_name, hubs, Hub, HubKind, TeamTag};
-use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, share_ident, Keys};
+use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, share_ident, team_keys, Keys};
 use super::presence::{presence_aid, presence_post, presence_targets, presence_why, spawn_background};
 use super::session::{cli_alive, proc_starts};
 use super::usage::{parse_ts, WEEK, WEEKS_KEEP, WEEKS_SHOW};
@@ -69,14 +71,19 @@ pub const COST_STALE: f64 = 36.0 * 3600.0;
 pub const COST_BEAT: f64 = 12.0 * 3600.0;
 /// 按天看最近这么多天
 pub const COST_DAYS: i64 = 30;
-/// 密钥、认证的标签（和共享 API key 的分开）
-pub const COST_LABEL: &str = "cca-cost-v1";
+/// 密钥、认证的标签（和共享 API key 的分开）。3.6.6 起密钥整个 Team 共用：只由 Team 的盐和它派生（team_keys）
+pub const COST_LABEL: &str = "cca-cost-v2";
+/// 3.6.5 及以前的标签：密钥还由登录身份派生（keyshare_keys），登录着那个账号的设备才解得开。只用来读还没升级的设备传的
+/// （Item::keys_v1）；各台设备都升级到 3.6.6 以后连同它们一起去掉
+pub const COST_LABEL_V1: &str = "cca-cost-v1";
 /// 明文补齐到这么长的整数倍
 pub const COST_PAD: usize = 1024;
 /// 服务器收的一份密文最长多少个字符（base64）
 pub const COST_BLOB_MAX: usize = 98304;
 /// 一次请求最多传这么多密文（多了分几次）
 pub const COST_PUT_MAX: usize = 256 * 1024;
+/// 一次请求最多问、传这么多个账号（服务器的 MAX_ACCOUNTS）：多了分几次
+pub const COST_BATCH: usize = 64;
 /// cca cost sync 最多等正在跑的统计这么久
 pub const COST_WAIT: i64 = 240;
 /// 账号目录里记会话开始的文件（cmd_session_start 写，Marks 读）
@@ -1830,9 +1837,9 @@ pub fn my_dv() -> Option<String> {
     c.str("device_id").filter(|d| DV_RE.fullmatch(d).is_some()).map(|d| d.to_string())
 }
 
-/// 服务器上别的设备的那一份解开；认证不过、格式不对（伪造的、别的账号的、坏了）是 None
-fn cost_open(keys: &Keys, aid: &str, fp: &str, blob: &V, now: f64) -> R<Option<Dict>> {
-    let Some(pt) = blob_open(keys, &blob_ad(&[COST_LABEL, aid, fp])?, blob) else { return Ok(None) };
+/// 服务器上别的设备的那一份解开（label 是封它用的标签）；认证不过、格式不对（伪造的、别的账号的、坏了）是 None
+fn cost_open(keys: &Keys, label: &str, aid: &str, fp: &str, blob: &V, now: f64) -> R<Option<Dict>> {
+    let Some(pt) = blob_open(keys, &blob_ad(&[label, aid, fp])?, blob) else { return Ok(None) };
     let n = pt.get(..4).map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
     let body = pt.get(4..).unwrap_or(&[]);
     let Some((raw, tail)) = zlib::decompress_limited(&body[..n.min(body.len())], 4 << 20) else { return Ok(None) };
@@ -1885,38 +1892,53 @@ pub fn cost_content(local: &Dict, tool: &Tool, email: &str) -> (Dict, Vec<String
     (h, um)
 }
 
-/// 要同步的账号：(工具, 邮箱小写, slot（工具名:邮箱，sync.json、remote.json 里的键）, 账号摘要, 密钥)
+/// 要同步的账号：(工具, 邮箱小写, slot（工具名:邮箱，sync.json、remote.json 里的键）, 账号摘要, 密钥（Team 共用的），
+/// 3.6.5 及以前的密钥（这台设备登录着这个账号时才有：还没升级的设备传的靠它解；有它也说明登录着）)
 struct Item {
     tool: &'static Tool,
     email: String,
     slot: String,
     aid: String,
     keys: Keys,
+    keys_v1: Option<Keys>,
 }
 
-/// 和这台服务器同步的账号：走它的 Claude、Codex 官方账号，这台设备登录着（没登录的解不开，也不传）。账号表读不了是 None
+impl Item {
+    /// 解开 fp 那台设备传的：先用 Team 共用的密钥，再用以前的；解不开、内容不对是 None
+    fn open(&self, fp: &str, blob: &V, now: f64) -> R<Option<Dict>> {
+        if let Some(doc) = cost_open(&self.keys, COST_LABEL, &self.aid, fp, blob, now)? {
+            return Ok(Some(doc));
+        }
+        match &self.keys_v1 {
+            Some(keys) => cost_open(keys, COST_LABEL_V1, &self.aid, fp, blob, now),
+            None => Ok(None),
+        }
+    }
+}
+
+/// 和这台服务器同步的账号：走它的 Claude、Codex 官方账号（Team 给了这台设备的；3.6.6 起登录没登录都取，自己的那一份只传用过的、
+/// 登录着的：cost_round）。账号表读不了是 None
 fn cost_items(hub: &Hub) -> R<Option<Vec<Item>>> {
     let Some(targets) = presence_targets(hub.kind) else { return Ok(None) };
     let salt = hub.salt();
     let mut out = Vec::new();
     for (tool, key, _) in targets {
-        if !matches!(tool.kind, Kind::Claude | Kind::Codex) {
+        let email = parse_key(&key).1.to_lowercase();
+        if !matches!(tool.kind, Kind::Claude | Kind::Codex) || email.is_empty() {
             continue;
         }
         let ident = {
             let _using = Using::tool(tool);
             share_ident(tool, &key)
         };
-        let email = parse_key(&key).1.to_lowercase();
-        if let Some(ident) = ident.filter(|_| !email.is_empty()) {
-            out.push(Item {
-                tool,
-                slot: format!("{}:{}", tool.name, email),
-                aid: presence_aid(&salt, tool.name, &email)?,
-                keys: keyshare_keys(&salt, tool.name, &email, &ident, COST_LABEL)?,
-                email,
-            });
-        }
+        out.push(Item {
+            tool,
+            slot: format!("{}:{}", tool.name, email),
+            aid: presence_aid(&salt, tool.name, &email)?,
+            keys: team_keys(&salt, COST_LABEL)?,
+            keys_v1: ident.map(|i| keyshare_keys(&salt, tool.name, &email, &i, COST_LABEL_V1)).transpose()?,
+            email,
+        });
     }
     Ok(Some(out))
 }
@@ -1970,7 +1992,7 @@ fn cost_hub(hub: &Hub, force: bool) -> R<Dict> {
     }
     let Some(items) = cost_items(hub)? else { return Ok(res("error", Some(V::from("读不了账号表")))) };
     if items.is_empty() {
-        // 没有要同步的账号了（都退出了登录、移走了）：上次没同步成的原因不再算数（不然 config.hubs 一直说没同步成）
+        // 没有要同步的账号了（Team 不再给、移走了）：上次没同步成的原因不再算数（不然 config.hubs 一直说没同步成）
         if st.str("state").as_deref() == Some("error") {
             st.set("state", "skipped");
             st.set("error", V::None);
@@ -2005,35 +2027,40 @@ fn sub_dict(d: &Dict, k: &str) -> Dict {
     }
 }
 
-/// 一轮：问服务器这些账号各台设备的（带着这台设备已经有的认证码：没变的不回），解开、存进 rem（remote.json 的内容）；这台设备的
-/// 变了、服务器上没有或者不是上次传的、隔了 COST_BEAT 就传上去。st（sync.json 的内容）原地改。返回没成的原因（成了是空的）
+/// 一轮：问服务器这些账号各台设备的（带着这台设备已经有的认证码：没变的不回；一次最多 COST_BATCH 个账号），解开、存进 rem
+/// （remote.json 的内容）；这台设备的变了、服务器上没有或者不是上次传的、隔了 COST_BEAT 就传上去。st（sync.json 的内容）原地改。
+/// 返回没成的原因（成了是空的）
 fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, now: f64) -> R<String> {
     let (accs, racc) = (sub_dict(st, "acc"), rem.dict("acc").expect("cost_sync 保证了是字典"));
-    let get: Vec<V> = items.iter().map(|x| V::from(x.aid.as_str())).collect();
-    let (code, r) = presence_post(cfg, "ledger", &dict! { "get" => get, "have" => cost_have(cfg, items, &accs, &racc) }, 20)?;
-    let Some(cost) = r.dict("cost").filter(|_| code == 200) else {
-        return Ok(if code != 200 {
-            presence_why(cfg, code, &r)?
-        } else {
-            "设备统计的服务器回的内容看不懂".to_string()
-        });
-    };
-    if let Some(me) = r.str("me_name").filter(|n| text::isprintable(n)) {
-        st.set("me", text::head(&me, 64));
+    let (cost, missing) = (Dict::new(), Dict::new());
+    for batch in items.chunks(COST_BATCH) {
+        let get: Vec<V> = batch.iter().map(|x| V::from(x.aid.as_str())).collect();
+        let (code, r) = presence_post(cfg, "ledger", &dict! { "get" => get, "have" => cost_have(cfg, batch, &accs, &racc) }, 20)?;
+        let Some(got) = r.dict("cost").filter(|_| code == 200) else {
+            return Ok(if code != 200 {
+                presence_why(cfg, code, &r)?
+            } else {
+                "设备统计的服务器回的内容看不懂".to_string()
+            });
+        };
+        cost.update(&got);
+        missing.update(&r.dict("missing").unwrap_or_default());
+        if let Some(me) = r.str("me_name").filter(|n| text::isprintable(n)) {
+            st.set("me", text::head(&me, 64));
+        }
     }
-    let missing = r.dict("missing").unwrap_or_default();
     let fp = cfg.at("fp").py_str();
     let dv = my_dv();
     let puts = Dict::new();
     let mut sent: Vec<(String, V, String)> = Vec::new();
     for x in items {
         let a = sub_dict(&accs, &x.slot);
-        let old = match racc.get(&x.slot).filter(|o| o.truthy()) {
+        let last = match racc.get(&x.slot).filter(|o| o.truthy()) {
             None => Dict::new(),
             Some(V::Dict(o)) => o,
             Some(other) => panic!("AttributeError: remote.json 里 {} 那一项是 {}", x.slot, other.py_repr()),
         };
-        let (new, mine) = cost_take(cfg, cost.get(&x.aid), &x.keys, &x.aid, &old, now)?;
+        let (new, mine) = cost_take(cfg, cost.get(&x.aid), x, &last, now)?;
         if new.is_empty() {
             racc.pop(&x.slot);
         } else {
@@ -2041,6 +2068,11 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
         }
         a.set("missing", cost_missing_view(missing.get(&x.aid), now));
         let (h, um) = cost_content(local, x.tool, &x.email);
+        if h.is_empty() && x.keys_v1.is_none() {
+            // 自己的那一份只传用过（有记录）或者登录着的账号：没用过的传上去是空的，别的设备的账号页里会多出一台金额是 0 的
+            // （带着这台设备的诊断）；服务器给每台设备存的账号也有上限（COST_SLOTS）
+            continue;
+        }
         let recent = Dict::new();
         for (k, v) in h.items() {
             if hour_of(&k) >= now - COST_PUBLISH {
@@ -2053,7 +2085,9 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
         if let Some(dv) = &dv {
             doc.set("dv", dv.as_str()); // 这台机器（别的设备据此把它在两台服务器上的认成一台）
         }
-        let s = sha256_hex(json::dumps(&V::Dict(doc.clone()), json::Fmt::new().compact().sort_keys()))[..16].to_string();
+        // 内容的摘要（没变就不重传）带着标签：换了密钥以后（3.6.6 起是 Team 共用的）重传一次，没登录的设备也解得开了
+        let body = json::dumps(&V::Dict(doc.clone()), json::Fmt::new().compact().sort_keys());
+        let s = sha256_hex(format!("{COST_LABEL}\0{body}"))[..16].to_string();
         let up = a.get("up_at").filter(is_num).and_then(|u| u.as_num()).unwrap_or(0.0);
         let same_tag = |mine: &Dict| match (mine.get("tag"), a.get("tag")) {
             (None, None) => true,
@@ -2096,7 +2130,11 @@ fn cost_have(cfg: &Dict, items: &[Item], accs: &Dict, racc: &Dict) -> Dict {
             Some(other) => panic!("AttributeError: remote.json 里 {} 那一项是 {}", x.slot, other.py_repr()),
         };
         for (fp, e) in known {
-            if let Some(tag) = e.as_dict().and_then(|e| e.get("tag")).filter(|t| t.is_str()) {
+            let Some(e) = e.as_dict() else { continue };
+            if x.keys_v1.is_some() && e.truthy("no_v1") {
+                continue; // 上次没有以前的密钥、这一轮有了：不带认证码，让服务器重发，再解一次（cost_take）
+            }
+            if let Some(tag) = e.get("tag").filter(|t| t.is_str()) {
                 tags.set(fp, tag);
             }
         }
@@ -2108,9 +2146,12 @@ fn cost_have(cfg: &Dict, items: &[Item], accs: &Dict, racc: &Dict) -> Dict {
     have
 }
 
-/// 服务器回的这个账号各台设备的 → ({设备指纹: remote.json 里的一项}, 这台设备自己的那一行 | None)。带着密文的解开
-/// （认证不过的不要），没带的（没变，或者这次回得太多没给）用上次的（old）
-fn cost_take(cfg: &Dict, rows: Option<V>, keys: &Keys, aid: &str, old: &Dict, now: f64) -> R<(Dict, Option<Dict>)> {
+/// 服务器回的这个账号各台设备的 → ({设备指纹: remote.json 里的一项}, 这台设备自己的那一行 | None)。带着密文的解开（Item::open）；
+/// 解不开的只记下认证码和名字，没变就不再取（cost_have），视图里没有它：两把密钥都试过了的（伪造的、别的 Team 的、坏了）就这样；
+/// 这一轮没有以前的密钥的（没登录这个账号，或者 .claude.json 正写到一半：可能是还没升级的设备封的）另记一笔 no_v1，以前解开过的
+/// 先留着，有了以前的密钥时 cost_have 不带它的认证码、让服务器重发。没带密文的（没变，或者这次回得太多没给）用上次的（last）。
+/// 从 Team 里移除了的设备（以前的服务器还回来，标着 revoked）不要
+fn cost_take(cfg: &Dict, rows: Option<V>, x: &Item, last: &Dict, now: f64) -> R<(Dict, Option<Dict>)> {
     let (new, mut mine) = (Dict::new(), None);
     let my_fp = cfg.at("fp").py_str();
     for row in rows.and_then(|r| r.as_list()).map(|r| r.items()).unwrap_or_default() {
@@ -2120,23 +2161,28 @@ fn cost_take(cfg: &Dict, rows: Option<V>, keys: &Keys, aid: &str, old: &Dict, no
             mine = Some(row);
             continue;
         }
-        let prev = old.dict(&fp);
+        if matches!(row.get("revoked"), Some(V::Bool(true))) {
+            continue;
+        }
         let e = if let Some(blob) = row.get("blob").filter(|b| b.is_dict()) {
-            match cost_open(keys, aid, &fp, &blob, now)? {
-                None => continue, // 认证不过（伪造的、坏了）：不要
-                Some(doc) => {
-                    doc.set("tag", &*tag);
-                    doc
+            let e = match x.open(&fp, &blob, now)? {
+                Some(doc) => doc,
+                None if x.keys_v1.is_none() => {
+                    let e = last.dict(&fp).filter(|p| p.has("h")).map(|p| p.copy()).unwrap_or_default();
+                    e.set("no_v1", true);
+                    e
                 }
-            }
-        } else if let Some(prev) = prev.filter(|p| !p.is_empty()) {
+                None => Dict::new(),
+            };
+            e.set("tag", &*tag);
+            e
+        } else if let Some(prev) = last.dict(&fp).filter(|p| !p.is_empty()) {
             prev.copy() // 认证码照旧：没给的下次再取
         } else {
             continue;
         };
         let name = row.str("name").filter(|n| !n.is_empty() && text::isprintable(n));
         e.set("name", name.map_or("?".to_string(), |n| text::head(&n, 64).to_string()));
-        e.set("revoked", matches!(row.get("revoked"), Some(V::Bool(true))));
         new.set(fp, e);
     }
     Ok((new, mine))
@@ -2187,13 +2233,14 @@ fn cost_seal_fit(keys: &Keys, aid: &str, fp: &str, doc: &Dict, now: f64) -> R<Di
     }
 }
 
-/// 把这几份（{账号摘要: 密文}）传上去：一次最多 COST_PUT_MAX，多了分几次。返回没成的原因（成了是空的）
+/// 把这几份（{账号摘要: 密文}）传上去：一次最多 COST_PUT_MAX、COST_BATCH 份，多了分几次。返回没成的原因（成了是空的）
 fn cost_put(cfg: &Dict, puts: &Dict) -> R<String> {
     let mut batches = vec![Dict::new()];
     let mut size = 0;
     for (aid, blob) in puts.items() {
         let len = text::len(&blob.as_dict().expect("cost_seal_fit 给的").at("c").py_str());
-        if !batches.last().expect("至少有一份").is_empty() && size + len > COST_PUT_MAX {
+        let last = batches.last().expect("至少有一份");
+        if !last.is_empty() && (size + len > COST_PUT_MAX || last.len() >= COST_BATCH) {
             batches.push(Dict::new());
             size = 0;
         }
@@ -2535,7 +2582,6 @@ struct Device {
     id: V,
     name: String,
     me: bool,
-    revoked: bool,
     synced_epoch: V,
     stale: bool,
     h: Hours,
@@ -2548,7 +2594,6 @@ struct DevMoney {
     id: String,
     name: String,
     me: bool,
-    revoked: bool,
     stale: bool,
     money: Money,
 }
@@ -2651,7 +2696,7 @@ impl CostView {
     }
 
     /// 账号的 sync（PROTOCOL 2.2）；kind 是这个账号经哪台服务器同步（hub.rs 的 hub_of：这台设备用得了的），不经服务器是 None
-    fn sync_view(&self, slot: &str, kind: Option<HubKind>, logged_in: bool) -> Dict {
+    fn sync_view(&self, slot: &str, kind: Option<HubKind>) -> Dict {
         let hub = self.hub(kind);
         let empty = Dict::new();
         let sync = hub.map_or(&empty, |h| &h.sync);
@@ -2670,8 +2715,6 @@ impl CostView {
             "off"
         } else if hub.is_none() {
             "local_only"
-        } else if !logged_in {
-            "not_logged_in"
         } else if gst == Some("error")
             && (!checked.as_ref().is_some_and(|c| c.truthy())
                 || sync.get("at").filter(is_num).is_some_and(|at| at.as_num() > checked.as_ref().and_then(|c| c.as_num())))
@@ -2709,8 +2752,8 @@ impl CostView {
     }
 
     /// 有数据的设备，这台设备在最前；别的设备的 id 是它传的 dv（机器的标识），以前的版本没有 dv 时是它在服务器上的指纹。
-    /// 合并（它有数据以前的小时才用另一份，不重复计）：这台机器自己以前传的（dv 就是这台的 device_id：换过 key、退出又加入过）并进这台；
-    /// 撤销了的（从 Team 里移除了、换了密钥）并进同一台机器（dv 一样）没撤销的那一份，没有就并进同名的。
+    /// 同一台机器（id 一样）的几份并成一份（它有数据以前的小时才用另一份，不重复计）：这台机器自己以前传的（dv 就是这台的
+    /// device_id）并进这台。从 Team 里移除了的设备（以前同步来的，标着 revoked）不算：服务器已经删了它传的。
     /// 第二个返回值：没有标价的模型（排好序）
     fn devices(&self, tool: &Tool, email: &str, slot: &str, hub: Option<&HubCost>) -> (Vec<Device>, Vec<String>) {
         let (h, mut ums) = cost_content(&self.local, tool, email);
@@ -2723,7 +2766,6 @@ impl CostView {
             id: me_id,
             name: self.me_name.clone(),
             me: true,
-            revoked: false,
             synced_epoch: V::from(self.updated),
             stale: false,
             h: hours_of(&h),
@@ -2742,7 +2784,7 @@ impl CostView {
                 Some(other) => panic!("AttributeError: remote.json 里 {slot} 那一项是 {}", other.py_repr()),
             };
             for (fp, e) in entries {
-                let Some(e) = e.as_dict() else { continue };
+                let Some(e) = e.as_dict().filter(|e| !matches!(e.get("revoked"), Some(V::Bool(true)))) else { continue };
                 let (Some(rows), Some(at), Some(name)) =
                     (e.get("h").filter(|h| cost_rows_ok(Some(h))), e.get("at").filter(is_num), e.str("name"))
                 else {
@@ -2752,7 +2794,6 @@ impl CostView {
                     id: V::from(e.str("dv").filter(|d| DV_RE.fullmatch(d).is_some()).unwrap_or(fp)),
                     name: name.to_string(),
                     me: false,
-                    revoked: matches!(e.get("revoked"), Some(V::Bool(true))),
                     stale: self.now - at.as_num().unwrap_or(0.0) > COST_STALE,
                     synced_epoch: at,
                     h: hours_of(&rows.as_dict().expect("cost_rows_ok 核对过")),
@@ -2773,21 +2814,15 @@ impl CostView {
                 }
             }
         }
-        // 并进哪一台（into）：同一台机器（id 一样）的只留一份：这台设备，不然是没撤销的、最近同步过的；撤销了、又没有同一台机器的
-        // 并进同名的（名字一样的有好几台时后来的算数）。都直接并进留下的那一份，不会一层套一层
+        // 并进哪一台（into）：同一台机器（id 一样）的只留一份：这台设备，不然是最近同步过的。都直接并进留下的那一份，不会一层套一层
         let n = devs.len();
-        let rank = |d: &Device| (d.me, !d.revoked, d.synced_epoch.as_num().unwrap_or(0.0));
+        let rank = |d: &Device| (d.me, d.synced_epoch.as_num().unwrap_or(0.0));
         let mut into: Vec<Option<usize>> = vec![None; n];
         for i in 1..n {
             let best = (0..n)
                 .filter(|&j| devs[j].id.py_eq(&devs[i].id))
                 .max_by(|&a, &b| rank(&devs[a]).partial_cmp(&rank(&devs[b])).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b)));
             into[i] = best.filter(|&b| b != i);
-        }
-        for i in 1..n {
-            if into[i].is_none() && devs[i].revoked {
-                into[i] = (0..n).rev().find(|&a| a != i && into[a].is_none() && !devs[a].revoked && devs[a].name == devs[i].name);
-            }
         }
         // 只用它有数据以前的小时（不重复计）；几份并进同一台时新的先并，依次往前接
         let mut order: Vec<usize> = (1..n).filter(|&i| into[i].is_some()).collect();
@@ -2816,20 +2851,13 @@ impl CostView {
 
     /// 账号的 cost（PROTOCOL 2.2）；没有任何记录是 None。kind：这个账号经哪台服务器同步（不经服务器是 None）。
     /// 各项的百万分之一美元另记进 self.accounts（cost_total 用）
-    pub fn account(
-        &mut self,
-        tool: &'static Tool,
-        k: &str,
-        weeks_view: Option<&Dict>,
-        kind: Option<HubKind>,
-        logged_in: bool,
-    ) -> V {
+    pub fn account(&mut self, tool: &'static Tool, k: &str, weeks_view: Option<&Dict>, kind: Option<HubKind>) -> V {
         let email = parse_key(k).1.to_lowercase();
         if email.is_empty() {
             return V::None;
         }
         let slot = format!("{}:{}", tool.name, email);
-        let sync = self.sync_view(&slot, kind, logged_in);
+        let sync = self.sync_view(&slot, kind);
         let share = !matches!(sync.at("state").as_str(), Some("off") | Some("local_only"));
         let (devs, ums) = self.devices(tool, &email, &slot, if share { self.hub(kind) } else { None });
         let quota = weeks_view.filter(|w| !w.is_empty()).map(|w| w.at("weeks"));
@@ -2886,14 +2914,7 @@ impl CostView {
             .filter(|(i, _, _)| data.contains(i))
             .map(|(i, pm, _)| {
                 let d = &devs[*i];
-                DevMoney {
-                    id: d.id.py_str(),
-                    name: d.name.clone(),
-                    me: d.me,
-                    revoked: d.revoked,
-                    stale: d.stale,
-                    money: pm.clone(),
-                }
+                DevMoney { id: d.id.py_str(), name: d.name.clone(), me: d.me, stale: d.stale, money: pm.clone() }
             })
             .collect();
         self.accounts.push((tool.name, Some(m), shares));
@@ -2902,7 +2923,8 @@ impl CostView {
             .map(|(i, _, ps)| {
                 let d = &devs[*i];
                 dict! {
-                    "id" => &d.id, "name" => d.name.as_str(), "me" => d.me, "revoked" => d.revoked, "synced_epoch" => &d.synced_epoch, "stale" => d.stale,
+                    // revoked：3.6.6 起总是 false（移除了的设备不列；接口只加不删）
+                    "id" => &d.id, "name" => d.name.as_str(), "me" => d.me, "revoked" => false, "synced_epoch" => &d.synced_epoch, "stale" => d.stale,
                     "used" => data.contains(i),
                     "weeks_usd" => wk[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
                     "days_usd" => dy[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
@@ -3023,10 +3045,10 @@ impl CostView {
         for g in &others {
             let first = g[0].1;
             let ms: Vec<(&'static str, &Money)> = g.iter().map(|(t_, d)| (*t_, &d.money)).collect();
-            // 撤销了：哪个账号里同步来的说撤销了就算；很久没同步：每个账号里都很久没同步上来
+            // 很久没同步：每个账号里都很久没同步上来（revoked 3.6.6 起总是 false：移除了的设备不列）
             let head = dict! {
-                "id" => first.id.as_str(), "name" => first.name.as_str(), "me" => false,
-                "revoked" => g.iter().any(|(_, d)| d.revoked), "stale" => g.iter().all(|(_, d)| d.stale),
+                "id" => first.id.as_str(), "name" => first.name.as_str(), "me" => false, "revoked" => false,
+                "stale" => g.iter().all(|(_, d)| d.stale),
             };
             devices.push(device(head, &ms));
         }
@@ -3076,7 +3098,7 @@ pub fn cmd_cost_periods(args: &[String]) -> R<()> {
 /// CostView 靠“现在”和本地时区切时段，_gui state 里的“现在”定不住：测试拿固定的时刻、固定的时区（TZ）核对。要看什么：
 /// {"config": config.json 里它看的那几项（cost、presence、device_id）, "team": 用得了的同步服务器——一个 Team 的编号，或者几个编号的
 ///  列表（照列表的先后），写 "load" 是这台设备现在用得了的那几台（hubs()），没有是一台都用不了,
-///  "accounts": [[工具, 账号表的键, usage_weeks 或 null, 谁给的, 登录着没有]…], "sync": [[slot, 谁给的, 登录着没有]…],
+///  "accounts": [[工具, 账号表的键, usage_weeks 或 null, 谁给的]…], "sync": [[slot, 谁给的]…],
 ///  "tools": [启用了的工具名…]}。谁给的：Team 的编号是那个 Team 给的（经它的服务器同步；那一台用不了时只算这台设备的），
 ///  false 或 null 是这台设备自己的（只算这台设备的）。3.6.0 起没有维护者的服务器：以前的 "presence" 一项不看了，谁给的写 true 是错的
 /// 打印一行 {"accounts": [各账号的 cost…], "sync": [各 slot 的 sync…], "total": cost_total, "scan": 统计到哪一步了}
@@ -3103,17 +3125,16 @@ pub fn cmd_cost_view(args: &[String]) -> R<()> {
     let rows = |k: &str| spec.list(k).map(|l| l.items()).unwrap_or_default();
     let mut accounts = Vec::new();
     for a in rows("accounts") {
-        let a =
-            a.as_list().filter(|a| a.len() == 5).ok_or_else(|| bad("账号要写成 [工具, 键, usage_weeks, 谁给的, 登录着没有]"))?;
+        let a = a.as_list().filter(|a| a.len() == 4).ok_or_else(|| bad("账号要写成 [工具, 键, usage_weeks, 谁给的]"))?;
         let name = a.at(0).py_str();
         let tool = crate::core::tool::tools().iter().find(|t| t.name == name).ok_or_else(|| bad("没有这个工具"))?;
         let _using = Using::tool(tool);
-        accounts.push(cv.account(tool, &a.at(1).py_str(), a.at(2).as_dict().as_ref(), via(&a.at(3))?, a.at(4).truthy()));
+        accounts.push(cv.account(tool, &a.at(1).py_str(), a.at(2).as_dict().as_ref(), via(&a.at(3))?));
     }
     let mut sync = Vec::new();
     for x in rows("sync") {
-        let x = x.as_list().filter(|x| x.len() == 3).ok_or_else(|| bad("sync 要写成 [slot, 谁给的, 登录着没有]"))?;
-        sync.push(V::Dict(cv.sync_view(&x.at(0).py_str(), via(&x.at(1))?, x.at(2).truthy())));
+        let x = x.as_list().filter(|x| x.len() == 2).ok_or_else(|| bad("sync 要写成 [slot, 谁给的]"))?;
+        sync.push(V::Dict(cv.sync_view(&x.at(0).py_str(), via(&x.at(1))?)));
     }
     let names: Vec<String> = rows("tools").iter().map(|n| n.py_str()).collect();
     let tools: Vec<&str> = names.iter().map(|n| n.as_str()).collect();

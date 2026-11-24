@@ -7118,7 +7118,7 @@ team_revoke() {   # cca team revoke Team 设备：移除一台设备（或者撤
 	local out tid dev label state why
 	out=$(py team-revoke plan "$1" "$2") || team_fail "$out" "没有这台设备"
 	IFS=$'\t' read -r tid dev label state <<< "$out"
-	why="服务器就此不认「${label}」的密钥，给它的配置删掉。它已经拿到的节点凭证收不回来：要紧的话换掉那些节点的凭证"
+	why="服务器就此不认「${label}」的密钥，给它的配置、它同步过的折合金额都删掉，这里也不再列出它。它已经拿到的节点凭证收不回来：要紧的话换掉那些节点的凭证"
 	[ -n "$PROMPT_GUI" ] || say "  ${why}"
 	consent team_revoke "$dev" "移除设备" "从 Team 里移除「${label}」吗？" "$why" n
 	case $? in

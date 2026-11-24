@@ -283,9 +283,7 @@ enum Texts {
         case .invited:
             parts.append(d.expiresEpoch.map { $0 > now ? "邀请还没用（" + untilPhrase($0 - now) + "后过期）" : "邀请过期了" } ?? "邀请还没用")
         case .expired: parts.append("邀请过期了，没用上")
-        case .left: parts.append("它自己退出了")
-        case .revoked: parts.append("移除了")
-        default: parts.append(d.state.rawValue)
+        default: parts.append(d.state.rawValue) // 退出了的、移除了的界面上不列（TeamDeviceState.removed），不会到这里
         }
         if d.state.active {
             parts.append(d.grantsAll ? "全部账号" : "\(d.grantCount(of: total)) 个账号")
