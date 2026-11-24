@@ -9,7 +9,7 @@ STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）�
 TMPIDS=""   # Team 的测试服务器（tm_srv 起的，11b2 起的几节用；各节自己停）
 MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
 HC=""    # 辅助程序的缓存目录（10g 测“解出来”的那几个用例才建；在这个用户的临时目录里）
-trap '[ -z "$HC" ] || rm -rf "$HC"; type tm_stop_all >/dev/null 2>&1 && tm_stop_all; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
+trap '[ -z "$HC" ] || rm -rf "$HC"; type tm_stop_all >/dev/null 2>&1 && tm_stop_all; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T" "$T.trap"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
 [ -n "${FROM:-}${ONLY:-}" ] || bash "$D/setup.sh" "$T" >/dev/null || exit 1   # 分节续跑时跳过建沙箱：快照恢复会填好 $T
 cd "$T" || exit 1
 # 辅助程序（cli/ 的 Rust 程序）：仓库里的 cca 用 cli/target/release 里编出来的那一份，这里先编（没改过就是零点几秒；--locked --offline：
@@ -24,6 +24,19 @@ if [ -z "$HELPER_BIN" ]; then
 fi
 [ -x "$HELPER_BIN" ] || { echo "辅助程序不在：$HELPER_BIN" >&2; exit 1; }
 case "$(uname -m)" in arm64) HOST_TARGET=aarch64-apple-darwin ;; *) HOST_TARGET=x86_64-apple-darwin ;; esac
+# 测试用的小工具 cca-test（tests/ 的 Rust 包 cca-tests：断言的求值器、假命令扮演的角色、造测试数据……见 tests/CLAUDE.md），和辅助程序
+# 一样先编（--profile kit：见 cli/Cargo.toml）。CCA_TEST_BIN=路径：不编，用这一份。沙箱里的假命令经 $CCA_T/cca-test 找它
+TESTBIN="${CCA_TEST_BIN:-}"
+if [ -z "$TESTBIN" ]; then
+	TESTBIN="$(dirname "$CCA")/cli/target/kit/cca-test"
+	( cd "$(dirname "$CCA")/cli" && cargo build --profile kit -p cca-tests --locked --offline ) > "$T/cargo-kit.log" 2>&1 ||
+		{ tail -n 30 "$T/cargo-kit.log" >&2; echo "测试用的小工具编不出来（cd cli && cargo build --profile kit -p cca-tests）" >&2; exit 1; }
+fi
+[ -x "$TESTBIN" ] || { echo "测试用的小工具不在：$TESTBIN" >&2; exit 1; }
+ln -sf "$TESTBIN" "$T/cca-test"
+# 求值器不认识的写法（cca-test 的退出码 2）都记进这个文件，结尾有一条用例查它是空的：不然 ! cfgok '…' 这种取反的断言会悄悄通过。
+# 放在沙箱外面（分节续跑恢复快照时不会被换掉）
+export CCA_TEST_TRAP="$T.trap"; : > "$CCA_TEST_TRAP"
 # TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次辅助程序<TAB>sleep 了几秒<TAB>说明”；
 # 次数靠 CCA_HELPER 指向的一个记数的小脚本（只在 TIMING 时用；11b 以后装着的是假发布版，它不认 CCA_HELPER，那以后的次数不记），sleep 靠 $T/bin 里的 sleep
 #（cca、假命令、经假 ssh 跑的路由器端都从 PATH 找它；后台进程的也算在内）
@@ -38,7 +51,7 @@ if [ -n "${TIMING:-}" ]; then
 	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_HELPER="$HELPERWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_TEST_TRAP="$T.trap" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_HELPER="$HELPERWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -213,6 +226,7 @@ PY
 # 不带 CKPT/FROM/ONLY 时 sect 恒返回 0，一行不漏地跑全量（下面每节都包在 if sect 节名; then … fi 里）。
 sect() {
 	local name=$1 _v _fn
+	case " ${SKIP:-} " in *" $name "*) return 1 ;; esac   # SKIP="unit 10g"：开发时不跑这几节（它们得是别的节不靠的；发版不带这个变量）
 	if [ -n "${CKPT:-}" ] && [ -z "${FROM:-}${ONLY:-}" ]; then   # 建快照：这一节开始时的沙箱 + 这时各节新设的变量和函数（跨节用到的 ${VS}、node_rn… 要带上）
 		( cd "$T" && tar czf "$CKPT/$name.tgz" . ) 2>/dev/null
 		# 只存各节新设的变量：compgen -v 现在的减去前置基线 ${_BASE}。按名字 declare -p（带引号、多行值都对；bash 3.2 不带名字的 declare -p 没有 declare 前缀，不能用）
@@ -237,6 +251,7 @@ _ckpt_restore() {   # 恢复某节开始时的沙箱和变量；计数（pass/fa
 	[ -f "$CKPT/$name.tgz" ] || { echo "FAIL  缺 $name 的快照：先 CKPT=$CKPT bash tests/regress.sh 建一次"; fail=$((fail + 1)); return 1; }
 	find "$T" -mindepth 1 -delete 2>/dev/null
 	tar xzf "$CKPT/$name.tgz" -C "$T"
+	ln -sf "$TESTBIN" "$T/cca-test"   # 快照里的链接指着建快照时的那一份
 	[ -f "$CKPT/$name.vars" ] && . "$CKPT/$name.vars" 2>/dev/null
 	[ -f "$CKPT/$name.fns" ] && . "$CKPT/$name.fns" 2>/dev/null   # 各节新定义的函数（node_rn 这类跨节用的）
 	pass=$_p; fail=$_f
@@ -4590,4 +4605,6 @@ ok "uninstall --no-backup：不留备份，照样删掉 ~/.cca；~/.local/bin �
 # 单独的一个，这里照旧删掉这一份（只这个版本的，名字是它的 SHA-256）
 [ -z "$hs" ] || rm -f "$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
 fi
+ok "断言里没有求值器不认识的写法（cca-test 的退出码 2；不认识的都记在 ${CCA_TEST_TRAP}：取反的断言遇到它会悄悄通过）" '[ ! -s "$CCA_TEST_TRAP" ]'
+[ ! -s "$CCA_TEST_TRAP" ] || sed 's/^/      | /' "$CCA_TEST_TRAP"
 echo "---- $pass passed, $fail failed"

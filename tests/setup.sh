@@ -947,7 +947,6 @@ json.dump(j, open(p, 'w'), indent=2)
 s = os.path.join(cd, 'settings.json')
 cur = json.load(open(s)) if os.path.exists(s) else {}
 cur['lastWriter'] = tag
-time.sleep(1.1)
 json.dump(cur, open(s + '.tmp', 'w')); os.replace(s + '.tmp', s)
 os.makedirs(os.path.join(cd, 'output-styles'), exist_ok=True)
 open(os.path.join(cd, 'output-styles', tag + '.md'), 'w').write('style ' + tag)

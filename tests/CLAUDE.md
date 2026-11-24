@@ -10,6 +10,8 @@
 
 ## 写法
 - 分节续跑（省开发迭代时间；发版、平时照样跑全量、一行不差）：`CKPT=目录 bash tests/regress.sh` 先全量跑一次、在每节开头存快照（沙箱 tar + 跨节用到的变量和函数）；之后 `CKPT=目录 FROM=10h`（从某节恢复、跑到结尾）或 `CKPT=目录 ONLY="10h 11b4"`（只跑这几节、各从自己的快照起，约 1-2 分钟，不是 13 分钟）。每节都包在 `if sect 节名; then … fi` 里，不带 CKPT/FROM/ONLY 时 `sect` 恒真、逐字跑全量（发版门不受影响）。坑：① 沙箱固定在 `$TMPDIR/cca-ckpt.sandbox`（和快照里的路径要一致），快照目录约 600 MB（11b 以后沙箱里有十几个接着辅助程序的假发布版，每个快照 35～60 MB），`$T.lock` 防并发（一次只能一个，共用沙箱并发会互删、报 getcwd 错）。② bash 3.2 没有 `declare -g`：存变量去掉 `declare` 前缀存成普通赋值，恢复是在 `_ckpt_restore` 函数里 source 的，`declare --` 会建成函数局部、一出函数就没了（跨节的 `$VS`/`$GF` 全丢）；不带名字的 `declare -p` 在 bash 3.2 也没有 declare 前缀（得按名字一个个存）。③ 改了定义跨节函数（`node_rn` 这类）、设跨节变量的早节之后，要重建快照。④ 11b 的「发布版安装」之后 `$H/.local/bin/cca` 是 mkver 出来的拷贝（之前是链到仓库 cca 的链接），快照里存的是建快照时的那份：改了 cca 以后 `ONLY=`/`FROM=` 跑 11b 及以后的节测的还是旧代码（新行为的用例会挂），先从 11b 之前（如 `FROM=10h`）续跑一次重建快照，或者不带 CKPT 跑全量。不抓后台进程（各节多自起自停）。实测 10h/12/3d/10c/11b4 逐字一致
+- 开发时不跑某几节：`SKIP="unit 10g" bash tests/regress.sh`（`sect` 对它们返回假）。只能跳别的节不靠的那些（unit：Rust 的单元测试和 tests/ 下各份黑盒测试，约 8 分钟；10g 里的 App 契约测试）；发版、提交前的那一遍不带这个变量
+- 测试用的小工具 `cca-test`（tests/ 是 Rust 包 `cca-tests`：支持库 `kit/`、小工具 `tool/`、测试程序 `suite.rs`，和辅助程序同一个 workspace，`cd cli && cargo build --profile kit -p cca-tests`）：回归开头编出来（`CCA_TEST_BIN=路径` 时不编），regress.sh 里是 `"$TESTBIN"`，沙箱里的假命令经 `"$CCA_T/cca-test"` 找它。它遇到不认识的写法退出码是 2，并在 `$CCA_TEST_TRAP`（`$T.trap`）里记一行；回归最后一条用例查这个文件是空的
 - 交互流程：`CCA_TTY="$(ans 答案1 答案2 …)"`，一行一个答案
 - 真终端里的提问（不设 `CCA_TTY`）：`{ printf 答案; 等完成标记; } | script -q 日志 env -i … bash -c 'cca …; touch 完成标记'`，左边要一直开着到命令跑完（macOS 的 script 读到 EOF 会先送一个 ^D，打乱输入）。见 regress.sh 10a
 - 方向键菜单和 readline 输入要在真 pty 里测：`script -q 日志 bash 驱动脚本`，配合定时输入
