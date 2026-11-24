@@ -565,6 +565,15 @@ fn mail_connect(s: &mut TcpStream) -> Result<(), Tunnel> {
     Ok(())
 }
 
+/// 给套接字设读、写的时限。对方一接上就把连接重置了（RST）的话，macOS 上这一步的 setsockopt 回 EINVAL（套接字已经关了）：
+/// 不算这里出的错，照样往下走，断了由后面头一次读写去说（Python 的 settimeout 只是记个数，从不出错；Linux 上这一步也照样成）
+pub(super) fn set_timeouts(s: &TcpStream, t: Option<Duration>) -> io::Result<()> {
+    match s.set_read_timeout(t).and_then(|()| s.set_write_timeout(t)) {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        r => r,
+    }
+}
+
 /// 连上 imap.gmail.com:993（还没有 TLS）：直连，或者经代理
 pub fn mail_dial(r: &Route, timeout: f64) -> R<TcpStream> {
     let (place, host, port) = match r.via {
@@ -579,7 +588,7 @@ pub fn mail_dial(r: &Route, timeout: f64) -> R<TcpStream> {
         }
     };
     let t = Some(Duration::from_secs_f64(timeout));
-    let tunnel = s.set_read_timeout(t).and_then(|()| s.set_write_timeout(t)).map_err(Tunnel::Os).and_then(|()| match r.via {
+    let tunnel = set_timeouts(&s, t).map_err(Tunnel::Os).and_then(|()| match r.via {
         Via::Socks5 => mail_socks5(&mut s),
         Via::Http => mail_connect(&mut s),
         Via::Direct => Ok(()),
@@ -815,6 +824,42 @@ mod tests {
         assert_eq!(mail_route_note(&Route::direct()), "直连");
         assert_eq!(mail_route_note(&via(Via::Socks5, "127.0.0.1", 7897)), "经代理 127.0.0.1:7897，SOCKS5");
         assert_eq!(mail_route_note(&via(Via::Http, "proxy.example.com", 8080)), "经代理 proxy.example.com:8080，HTTP CONNECT");
+    }
+
+    /// 对方一接上就把连接重置了：设时限不算出错（macOS 上 setsockopt 这时回 EINVAL），断了是后面读的时候才说的
+    #[test]
+    fn timeouts_on_a_connection_the_peer_already_reset() {
+        use std::os::fd::AsRawFd;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut s = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (conn, _) = listener.accept().unwrap();
+        // SO_LINGER 设成 0 再关：发出去的是 RST
+        let l = libc::linger { l_onoff: 1, l_linger: 0 };
+        // SAFETY: conn 开着；l 是有效的内存，长度如实给出
+        let rc = unsafe {
+            libc::setsockopt(
+                conn.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                (&raw const l).cast(),
+                std::mem::size_of::<libc::linger>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0);
+        drop(conn);
+        // 等 RST 到了这一头（套接字变成“可读”：读得到断开）
+        let mut p = libc::pollfd { fd: s.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        // SAFETY: p 是有效的内存，只有它一个
+        assert_eq!(unsafe { libc::poll(&raw mut p, 1, 5000) }, 1);
+        set_timeouts(&s, Some(Duration::from_secs(5))).unwrap();
+        let mut buf = [0u8; 1];
+        match s.read(&mut buf) {
+            Ok(0) => {}
+            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {}
+            other => panic!("{other:?}"),
+        }
+        // 别的错照旧说：时限是 0 不行
+        assert!(set_timeouts(&s, Some(Duration::ZERO)).is_err());
     }
 
     /// 本机起一个假代理：照 script 回答，返回它收到的字节

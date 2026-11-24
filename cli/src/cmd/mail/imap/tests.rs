@@ -221,10 +221,40 @@ fn serve(scenes: Vec<Scene>) -> (u16, Arc<Mutex<Vec<String>>>, Arc<AtomicBool>, 
     (port, sent, stop, h)
 }
 
+/// 一条已经被对方重置了的连接：读写都说断了
+struct ResetWire;
+
+impl std::io::Read for ResetWire {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::ConnectionReset.into())
+    }
+}
+
+impl std::io::Write for ResetWire {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::BrokenPipe.into())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Wire for ResetWire {
+    fn close(self: Box<Self>) {}
+}
+
 fn connector(port: u16, timeout: f64) -> Connector {
     Box::new(move || {
-        let s = TcpStream::connect(("127.0.0.1", port))?;
-        s.set_read_timeout(Some(Duration::from_secs_f64(timeout)))?;
+        let s = match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => s,
+            // 假服务器一接上就重置连接的那个剧本：机器忙的时候 macOS 的 connect() 自己就回“连接被重置”（内核里连接已经建好、
+            // 又被对方重置了，connect 还没来得及返回）。这和连上以后头一次读到重置是同一件事，只是早一步知道：照后一种演
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return Ok(Box::new(ResetWire) as Box<dyn Wire>),
+            Err(e) => return Err(e.into()),
+        };
+        // 和真的那条路（mail_dial）一样设：假服务器一接上就重置连接的那几个剧本里，macOS 上直接设会回 EINVAL
+        crate::cmd::mail::route::set_timeouts(&s, Some(Duration::from_secs_f64(timeout)))?;
         Ok(Box::new(s) as Box<dyn Wire>)
     })
 }
