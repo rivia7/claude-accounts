@@ -260,11 +260,7 @@ ok "install：8 个槽位 7901-7908，CCA-1 默认 US-A，空槽位默认 REJECT
 ok "install：只重载了一次" '[ "$(reloads)" = 1 ]'
 ok "install：同时建好 cxa（等于 cca codex），是指向同目录 cca 的相对链接" '[ "$(readlink "$H/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 cxa 代替 cca codex：cxa @别名 直接启动"'
 ok "install：同时建好 aga（等于 cca agy），也是相对链接；说明里提 aga usage 查额度" '[ "$(readlink "$H/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 aga 代替 cca agy：aga @别名 直接启动，aga usage 查额度"'
-python3 - > "$T/accounts.golden" <<'PY'
-import hashlib, json
-n = 'alice-example-com-' + hashlib.sha1(b'alice@example.com').hexdigest()[:6]
-print(json.dumps({'base': 7900, 'slots': 8, 'nodes': ['US-A', 'US-B', 'US-C', 'US-D'], 'accounts': [{'slot': 1, 'name': n, 'node': 'US-A'}]}))
-PY
+"$TESTBIN" val --json -s sha="$("$TESTBIN" fx sha1 alice@example.com)" '{"base": 7900, "slots": 8, "nodes": ["US-A", "US-B", "US-C", "US-D"], "accounts": [{"slot": 1, "name": "alice-example-com-" + sha[:6], "node": "US-A"}]}' > "$T/accounts.golden"
 ok "install：路由器上的账号表和以前的版本逐字节一样（只有 Claude 账号时它变了，已安装的机器都会重新部署路由器端）" 'cmp -s "$T/accounts.golden" "$R/etc/cca/accounts.yaml"'
 ok "install：钩子 / cron / sysupgrade" 'grep -q ">>> cca >>>" "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && grep -q ensure "$R/etc/crontabs/root" && grep -qx /etc/cca/ "$R/etc/sysupgrade.conf"'
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); alice_device=$(claude_device "$AD")
@@ -916,22 +912,7 @@ kch() { local d; d=$(kcd "$1"); [ -n "$d" ] && ls "$d"; }   # 存它的服务商
 lastline() { grep "^$1: " "${2:-claude.log}" | tail -n 1; }   # [日志]
 lastenv() { grep "^ENV: " claude.log | tail -n 1; }   # 最后一次启动 claude 的环境变量那一行
 hookless() {   # hookless "ARGS 那一行" 账号目录：--settings 是记下会话的 hook（只有 SessionStart 回调 cca _session-start 这个账号目录名）时打印去掉它的那一行，别的打印 BAD
-	python3 - "$1" "$(basename "$2")" <<'PY'
-import json, re, shlex, sys
-line, name = sys.argv[1], sys.argv[2]
-m = re.match(r'^(.*?) --settings (\{"hooks": .*?\}\]\}\]\}\})( .*)?$', line)
-ok = False
-if m:
-    try:
-        h = json.loads(m.group(2))
-        c = h['hooks']['SessionStart'][0]['hooks'][0]
-        ok = (list(h) == ['hooks'] and list(h['hooks']) == ['SessionStart'] and len(h['hooks']['SessionStart']) == 1 and
-              sorted(c) == ['command', 'timeout', 'type'] and c['type'] == 'command' and c['timeout'] == 10 and
-              shlex.split(c['command'])[1:] == ['_session-start', name])   # 目录名没有要引的字符时不带引号（和 shlex.quote 一样）
-    except (ValueError, KeyError, IndexError, TypeError):
-        pass
-print(m.group(1) + (m.group(3) or '') if ok else 'BAD')
-PY
+	"$TESTBIN" fx hookless "$1" "$(basename "$2")"   # 三层都没有别的键、别的项；command 照 shlex 拆开，第一段（cca 的路径）不看：目录名没有要引的字符时不带引号（和 shlex.quote 一样）
 }
 S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
 : > ssh.log; : > "$T/env.log"; rm -f "$T/security.stdin"
@@ -1004,16 +985,7 @@ cp "$T/settings.bak" "$H/.claude/settings.json"
 # 账号目录的 settings.json 被客户端原子替换：预检主配置时仍正常，合并后也必须重新检查。
 shared_client="$(ls -d "$H"/.cca/accounts/alice-example-com-*)/claude"
 cp "$H/.claude/settings.json" "$T/settings.atomic.bak"
-python3 - "$shared_client/settings.json" <<'PY'
-import json, os, sys
-path = sys.argv[1]
-with open(path) as f:
-    data = json.load(f)
-data.setdefault('env', {})['ANTHROPIC_BASE_URL'] = 'https://evil.invalid'
-with open(path + '.test-new', 'w') as f:
-    json.dump(data, f)
-os.replace(path + '.test-new', path)
-PY
+"$TESTBIN" edit --atomic data="$shared_client/settings.json" 'data.setdefault("env", {})["ANTHROPIC_BASE_URL"] = "https://evil.invalid"'
 n_args=$(grep -c "^ARGS: " claude.log)
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "账号原子保存的 settings.json 合并后含 ANTHROPIC_BASE_URL：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（env.ANTHROPIC_BASE_URL）" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
@@ -1023,17 +995,11 @@ ok "恢复共享配置后账号正常启动，settings.json 重新保持共享�
 # 另一台电脑上直接在 ~/.claude/settings.json 的 env 里配了第三方 API：说清楚是哪份文件、哪几项、为什么不继续，给出 cca settings fix；
 # fix 问过后先把整份原文备份在旁边（600），再只去掉这几项（连同官方账号用不了的模型名），别的设置不动；从头到尾不说值
 cp "$H/.claude/settings.json" "$T/settings.fix.bak"
-python3 - "$H/.claude/settings.json" <<'PY'
-import json, sys
-p = sys.argv[1]
-j = json.load(open(p))
-j['env'] = dict(j.get('env', {}), ANTHROPIC_BASE_URL='https://api.example.com/anthropic', ANTHROPIC_AUTH_TOKEN='sk-fix-0000',
-                ANTHROPIC_MODEL='kimi-k2', ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-5', API_TIMEOUT_MS='600000')
-j['model'] = 'kimi-k2'
-j['apiKeyHelper'] = 'echo sk-fix-0000'
-j['permissions'] = {'allow': ['Bash(ls:*)']}
-json.dump(j, open(p, 'w'), indent=2)
-PY
+"$TESTBIN" edit --indent 2 j="$H/.claude/settings.json" 'j["env"] = dict(j.get("env", {}), ANTHROPIC_BASE_URL="https://api.example.com/anthropic", ANTHROPIC_AUTH_TOKEN="sk-fix-0000",
+                ANTHROPIC_MODEL="kimi-k2", ANTHROPIC_DEFAULT_OPUS_MODEL="claude-opus-4-5", API_TIMEOUT_MS="600000")
+j["model"] = "kimi-k2"
+j["apiKeyHelper"] = "echo sk-fix-0000"
+j["permissions"] = {"allow": ["Bash(ls:*)"]}'
 cp "$H/.claude/settings.json" "$T/settings.fix.orig"; n_args=$(grep -c "^ARGS: " claude.log)
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "共享 settings.json 里配了第三方 API：说清楚是哪份文件、哪几项、为什么不继续，给出 cca settings fix 和 cca add api（不说值、不启动）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（env.ANTHROPIC_BASE_URL、env.ANTHROPIC_AUTH_TOKEN、apiKeyHelper）。" && printf "%s" "$out" | grep -qF "这份设置所有账号共用" && printf "%s" "$out" | grep -qF "运行 cca settings fix 修复" && printf "%s" "$out" | grep -qF "用 cca add api 把它加成一个单独的账号" && ! printf "%s" "$out" | grep -q "sk-fix-0000\|api.example.com\|kimi-k2" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
@@ -1043,15 +1009,11 @@ out=$(run CCA_TTY="$(ans n)" cca settings fix 2>&1); rc=$?
 ok "cca settings fix 先列出要去掉的（连同官方账号用不了的模型名；Claude 的模型名和别的设置不在里面），答 n 什么都不动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "env.ANTHROPIC_MODEL、model（官方账号用不了的模型名）" && ! printf "%s" "$out" | grep -q "ANTHROPIC_DEFAULT_OPUS_MODEL\|API_TIMEOUT_MS\|permissions" && printf "%s" "$out" | grep -qF "没有改动" && cmp -s "$H/.claude/settings.json" "$T/settings.fix.orig" && ! ls "$H/.claude" | grep -q cca-backup'
 out=$(run CCA_TTY="$(ans y)" cca settings fix 2>&1); rc=$?
 BK=$(ls "$H/.claude" | grep '^settings\.json\.cca-backup-' | head -n 1)
-chk=$(python3 - "$H/.claude/settings.json" <<'PY'
-import json, sys
-j = json.load(open(sys.argv[1]))
-e = j.get('env', {})
-assert not any(k in e for k in ('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL'))
-assert e['ANTHROPIC_DEFAULT_OPUS_MODEL'] == 'claude-opus-4-5' and e['API_TIMEOUT_MS'] == '600000'
-assert 'apiKeyHelper' not in j and 'model' not in j and j['permissions'] == {'allow': ['Bash(ls:*)']}
-print('ok')
-PY
+chk=$("$TESTBIN" run -f j="$H/.claude/settings.json" 'e = j.get("env", {})
+assert not any(k in e for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"))
+assert e["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-4-5" and e["API_TIMEOUT_MS"] == "600000"
+assert "apiKeyHelper" not in j and "model" not in j and j["permissions"] == {"allow": ["Bash(ls:*)"]}
+print("ok")'
 )
 ok "答 y：原文整份备份在旁边（600），只去掉这几项，别的设置原样留着；说备份在哪、怎么恢复、cca add api（不说值）" '[ $rc -eq 0 ] && [ -n "$BK" ] && cmp -s "$H/.claude/$BK" "$T/settings.fix.orig" && [ "$(stat -f %Lp "$H/.claude/$BK")" = 600 ] && [ "$chk" = ok ] && printf "%s" "$out" | grep -qF "已修复 ~/.claude/settings.json：去掉了 5 项" && printf "%s" "$out" | grep -qF "cp ~/.claude/$BK ~/.claude/settings.json" && printf "%s" "$out" | grep -qF "cca add api" && ! printf "%s" "$out" | grep -q "sk-fix-0000"'
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
@@ -1207,25 +1169,12 @@ fi
 if sect 10d; then
 # 10d. 订阅用量：经每个官方账号自己的出口，让 Claude Code 自己查（get_usage），查不到时显示缓存；菜单里附上最近一次的
 setoa() {   # setoa .claude.json 字段=值…：改 oauthAccount（套餐、accountUuid）
-	python3 - "$@" <<'PY'
-import json, sys
-p = sys.argv[1]; j = json.load(open(p)); oa = j.setdefault('oauthAccount', {})
-for kv in sys.argv[2:]:
-    k, v = kv.split('=', 1); oa[k] = v
-json.dump(j, open(p, 'w'), indent=2)
-PY
+	"$TESTBIN" edit --indent 2 j="$1" 'oa = j.setdefault("oauthAccount", {}); [oa.update([kv.split("=", 1)]) for kv in argv]' "${@:2}"
 }
 canned() {   # canned 邮箱 5小时% 本周% [订阅] [额外的窗口 JSON]：假 claude 给这个账号的 get_usage 回应
 	mkdir -p "$T/usage"
-	python3 - "$T/usage/$1.json" "$2" "$3" "${4:-max}" "${5:-}" <<'PY'
-import json, sys, time
-p, five, week, sub, extra = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4], json.loads(sys.argv[5] or '{}')
-at = lambda s: time.strftime('%Y-%m-%dT%H:%M:%S.123456+00:00', time.gmtime(time.time() + s))
-rl = {'five_hour': {'utilization': five, 'resets_at': at(2 * 3600 + 13 * 60 + 30)},
-      'seven_day': {'utilization': week, 'resets_at': at(3 * 86400 + 5 * 3600)}, 'seven_day_opus': None, 'seven_day_sonnet': None}
-rl.update(extra)
-json.dump({'subscription_type': sub, 'rate_limits_available': True, 'rate_limits': rl}, open(p, 'w'))
-PY
+	# 5 小时的窗口 2 小时 13 分 30 秒以后重置，本周的 3 天 5 小时以后；seven_day_opus、seven_day_sonnet 是 null；额外的窗口并进 rate_limits
+	"$TESTBIN" fx claude-usage "$T/usage/$1.json" "$2" "$3" "${4:-max}" "${5:-}"
 }
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); AJ="$AD/claude/.claude.json"
 setoa "$AJ" organizationType=claude_max organizationRateLimitTier=default_claude_max_5x accountUuid=u-alice
@@ -1288,13 +1237,7 @@ canned alice@example.com 13 45; run cca usage alice >/dev/null 2>&1
 canned alice@example.com 13 44; run cca usage alice >/dev/null 2>&1; w2=$(gj state)
 ok "每周用量：查到用量时记进 usage-weeks.json（600）；_gui state 里是还没过完的这一周（7 天），用到这一周查到的最高的（略低一点不算重置），还没有过完的周、没有统计；第三方 API 账号是 null" '[ "$(stat -f %Lp "$AD/usage-weeks.json")" = 600 ] && printf "%s" "$w1" | jok "(lambda u: len(u[\"weeks\"]) == 1 and u[\"weeks\"][0][\"used_percent\"] == 30 and u[\"weeks\"][0][\"current\"] is True and u[\"weeks\"][0][\"partial\"] is False and u[\"weeks\"][0][\"resets\"] == 0 and u[\"summary\"] == {\"weeks\": 0, \"average_percent\": None, \"maxed\": 0, \"under_half\": 0} and isinstance(u[\"since_epoch\"], float))(acct(0, \"alice@example.com\")[\"usage_weeks\"]) and all(a[\"usage_weeks\"] is None for a in d[\"tools\"][0][\"accounts\"] if a[\"kind\"] == \"api\")" && printf "%s" "$w2" | jok "(lambda w: w[\"used_percent\"] == 45 and w[\"resets\"] == 0 and abs(w[\"end_epoch\"] - w[\"start_epoch\"] - 7 * 86400) < 1)(acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
 cp "$AD/usage-weeks.json" "$T/weeks.keep"
-python3 - "$AD/usage.json" <<'PY'
-import json, sys
-j = json.load(open(sys.argv[1]))
-j['fetchedAtMs'] += 60000
-j['utilization']['seven_day']['utilization'] = 50
-json.dump(j, open(sys.argv[1], 'w'))
-PY
+"$TESTBIN" edit j="$AD/usage.json" 'j["fetchedAtMs"] += 60000; j["utilization"]["seven_day"]["utilization"] = 50'
 w3=$(gj state)
 ok "_gui state 只读：比记下的新的用量（usage.json、Claude Code 的缓存）只在内存里并进来，不写 usage-weeks.json" 'printf "%s" "$w3" | jok "acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1][\"used_percent\"] == 50" && cmp -s "$AD/usage-weeks.json" "$T/weeks.keep"'
 canned alice@example.com 13 10; run cca usage alice >/dev/null 2>&1; w4=$(gj state)
@@ -1361,24 +1304,13 @@ python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.pop(\"oauthA
 n_usage=$(grep -c "^USAGE: " claude.log)
 out=$(run cca usage 2>&1)
 ok "没登录的账号：不启动查询，提示先登录" 'printf "%s" "$out" | grep -q "还没登录（cca @bob@example.com 登录）" && [ "$(grep -c "^USAGE: " claude.log)" = $((n_usage + 1)) ]'
-python3 - "$AD/usage.json" <<'PY'
-import json, sys, time
-p = sys.argv[1]; j = json.load(open(p))
-j['fetchedAtMs'] = int((time.time() - 3 * 3600 - 60) * 1000)
-j['utilization']['five_hour']['resets_at'] = '2000-01-01T00:00:00Z'
-json.dump(j, open(p, 'w'))
-PY
+"$TESTBIN" edit j="$AD/usage.json" 'j["fetchedAtMs"] = int((time.time() - 3 * 3600 - 60) * 1000); j["utilization"]["five_hour"]["resets_at"] = "2000-01-01T00:00:00Z"'
 m=$(run COLUMNS=160 CCA_TTY="$(ans q)" cca 2>&1)
 ok "菜单：缓存旧了注明多久前；重置时间过了的窗口写已重置" 'printf "%s" "$m" | grep -q "5h 已重置 · 周 41%（3 小时前）"'
 rm -f "$AD/usage.json"
-python3 - "$AJ" <<'PY'
-import json, sys, time
-p = sys.argv[1]; j = json.load(open(p))
-w = {'utilization': 7, 'resets_at': '2099-01-01T00:00:00Z'}
-j['cachedUsageUtilization'] = {'fetchedAtMs': int(time.time() * 1000), 'accountUuid': 'u-alice',
-                               'utilization': {'five_hour': w, 'seven_day': dict(w, utilization=9)}}
-json.dump(j, open(p, 'w'))
-PY
+"$TESTBIN" edit j="$AJ" 'w = {"utilization": 7, "resets_at": "2099-01-01T00:00:00Z"}
+j["cachedUsageUtilization"] = {"fetchedAtMs": int(time.time() * 1000), "accountUuid": "u-alice",
+                               "utilization": {"five_hour": w, "seven_day": dict(w, utilization=9)}}'
 m=$(run COLUMNS=160 CCA_TTY="$(ans q)" cca 2>&1)
 ok "菜单：也认 Claude Code 自己的缓存（cachedUsageUtilization）" 'printf "%s" "$m" | grep -q "5h 7% · 周 9%"'
 setoa "$AJ" accountUuid=u-other
@@ -1465,15 +1397,7 @@ respect_system_proxy = true   # 系统代理优先'; do
 done
 ok "共享的 config.toml 里有会把登录发到别处、换账号或改走系统代理的设置（含 profile 选中的那一节、行尾带注释的）：拒绝启动" '[ $rc -ne 0 ] && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
 cp "$X/config.toml" "$T/codex-config.atomic.bak"
-python3 - "$CH/config.toml" <<'PY'
-import os, sys
-path = sys.argv[1]
-with open(path) as f:
-    data = f.read()
-with open(path + '.test-new', 'w') as f:
-    f.write('openai_base_url = "https://evil.invalid"\n' + data)
-os.replace(path + '.test-new', path)
-PY
+"$TESTBIN" fx text-prepend "$CH/config.toml" 'openai_base_url = "https://evil.invalid"'   # 像客户端原子保存那样：写到旁边的 .test-new 再改名换上
 n_args=$(grep -c "^ARGS: " codex.log)
 out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
 ok "账号原子保存的 config.toml 合并后含 openai_base_url：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "config.toml:openai_base_url" && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
@@ -1539,22 +1463,17 @@ ok "Codex 第三方 API 账号没有 env 字段（说明能用的字段）" '[ $
 ccanned() {   # ccanned 邮箱 5小时% 本周% [套餐] [剩余重置次数]：假 app-server 给这个账号的 account/rateLimits/read 回应；
 	            # 不给剩余重置次数就是旧版本的 codex（回应里没有 rateLimitResetCredits）
 	mkdir -p "$T/codex_usage"
-	python3 - "$T/codex_usage/$1.json" "$2" "$3" "${4:-plus}" "${5:-}" <<'PY'
-import json, sys, time
-p, five, week, plan, resets = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5]
+	"$TESTBIN" edit --or-empty j="$T/codex_usage/$1.json" 'five, week, plan, resets = int(argv[0]), int(argv[1]), argv[2], argv[3]
 now = int(time.time())
-rl = {'limitId': 'codex', 'primary': {'usedPercent': five, 'windowDurationMins': 300, 'resetsAt': now + 2 * 3600 + 13 * 60 + 30},
-      'secondary': {'usedPercent': week, 'windowDurationMins': 10080, 'resetsAt': now + 3 * 86400 + 5 * 3600},
-      'credits': {'hasCredits': True, 'unlimited': False, 'balance': '12.5'}, 'planType': plan}
-other = {'limitId': 'codex_other', 'limitName': 'GPT-5-Pro', 'primary': None,
-         'secondary': {'usedPercent': 30, 'windowDurationMins': 10080, 'resetsAt': now + 86400 * 2}}
-j = {'rateLimits': rl, 'rateLimitsByLimitId': {'codex': rl, 'codex_other': other}}
-if resets:
-    j['rateLimitResetCredits'] = {'availableCount': int(resets), 'credits': [
-        {'id': 'rc-%d' % i, 'resetType': 'codexRateLimits', 'status': 'available', 'grantedAt': now - 86400,
-         'expiresAt': now + 30 * 86400, 'title': None, 'description': None} for i in range(int(resets))]}
-json.dump(j, open(p, 'w'))
-PY
+rl = {"limitId": "codex", "primary": {"usedPercent": five, "windowDurationMins": 300, "resetsAt": now + 2 * 3600 + 13 * 60 + 30},
+      "secondary": {"usedPercent": week, "windowDurationMins": 10080, "resetsAt": now + 3 * 86400 + 5 * 3600},
+      "credits": {"hasCredits": True, "unlimited": False, "balance": "12.5"}, "planType": plan}
+other = {"limitId": "codex_other", "limitName": "GPT-5-Pro", "primary": None,
+         "secondary": {"usedPercent": 30, "windowDurationMins": 10080, "resetsAt": now + 86400 * 2}}
+j = {"rateLimits": rl, "rateLimitsByLimitId": {"codex": rl, "codex_other": other}}
+j.update({"rateLimitResetCredits": {"availableCount": int(resets), "credits": [
+        {"id": "rc-%d" % i, "resetType": "codexRateLimits", "status": "available", "grantedAt": now - 86400,
+         "expiresAt": now + 30 * 86400, "title": None, "description": None} for i in range(int(resets))]}} if resets else {})' "$2" "$3" "${4:-plus}" "${5:-}"
 }
 ccanned alice@example.com 13 41 pro 2; n_usage=$(grep -c "^USAGE: " claude.log)
 out=$(run COLUMNS=160 cca codex usage 2>&1); rc=$?
@@ -2163,45 +2082,13 @@ ok "套餐档位（ChatGPT）：按原始套餐值查表（Pro 100 / 200 是 adv
 # _gui state 只读统计好的。alice 登录的身份换成 u-alice-0001，dave 的 id_token 里补上用户 id（假 codex 写的没有），这一段结束时还原
 cp -p "$AJ" "$T/cost.aj.json"; cp -p "$DD/codex/auth.json" "$T/cost.dave.json"
 setoa "$AJ" accountUuid=u-alice-0001
-costlog() {   # costlog 家目录 写法…：往会话记录里写（a 追加），见下面的 python
-	python3 - "$@" <<'PY'
-import base64, json, os, sys, time
-home, what = sys.argv[1], sys.argv[2:]
-now = time.time()
-iso = lambda t: time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(t))
-line = lambda d: json.dumps(d, separators=(',', ':')) + '\n'
-def reply(t, mid, model, inp, out, sid='s-cost-1'):
-    return line({'type': 'assistant', 'timestamp': iso(t), 'requestId': 'req_' + mid, 'sessionId': sid,
-                 'message': {'id': mid, 'model': model, 'role': 'assistant', 'usage': {'input_tokens': inp, 'output_tokens': out}}})
-d = os.path.join(home, '.claude', 'projects', '-cost')
-os.makedirs(d, exist_ok=True)
-if 'init' in what:
-    open(os.path.join(d, 's-cost-1.jsonl'), 'w').write(
-        line({'type': 'session-owner', 'accountUuid': 'u-alice-0001', 'organizationUuid': 'org-1', 'sessionId': 's-cost-1'})
-        + line({'type': 'user', 'timestamp': iso(now - 2 * 86400), 'message': {'role': 'user', 'content': 'SECRET-PROMPT-TEXT'}})
-        + reply(now - 2 * 86400, 'mc1', 'claude-opus-5-5', 1000, 100)
-        + reply(now - 86400, 'mc2', 'claude-sonnet-5-5[1m]', 2000, 1000) + reply(now - 86400, 'mc2', 'claude-sonnet-5-5[1m]', 2000, 1000)
-        + reply(now - 3600, 'mc3', 'claude-new-9', 10, 10))
-    open(os.path.join(d, 's-cost-0.jsonl'), 'w').write(reply(now - 3 * 3600, 'mc4', 'claude-opus-5-5', 1000, 100, 's-cost-0'))   # 没有 session-owner（旧版本）
-    x = os.path.join(home, '.codex', 'sessions', '2026', '11', '12')
-    os.makedirs(x, exist_ok=True)
-    ev = lambda t, kind, p: line({'timestamp': iso(t), 'type': kind, 'payload': p})
-    u = {'input_tokens': 10000, 'cached_input_tokens': 8000, 'output_tokens': 500, 'reasoning_output_tokens': 0, 'total_tokens': 10500}
-    tc = {'type': 'token_count', 'info': {'total_token_usage': u, 'last_token_usage': u}}
-    open(os.path.join(x, 'rollout-cost.jsonl'), 'w').write(
-        ev(now - 7200, 'session_meta', {'id': 'th-cost', 'creator_user_id': 'user-dave-0001', 'model_provider': 'openai'})
-        + ev(now - 7200, 'turn_context', {'model': 'gpt-6-astra'}) + ev(now - 7100, 'event_msg', tc) + ev(now - 7099, 'event_msg', tc))
-if 'more' in what:
-    open(os.path.join(d, 's-cost-1.jsonl'), 'a').write(reply(now - 600, 'mc5', 'claude-opus-5-5', 1000, 100))
-if 'dave' in what:   # dave 的 id_token 里补上用户 id（真的 id_token 有 chatgpt_user_id）
-    p = sys.argv[-1]
-    j = json.load(open(p))
-    h, c, sg = j['tokens']['id_token'].split('.')
-    claims = json.loads(base64.urlsafe_b64decode(c + '=' * (-len(c) % 4)))
-    claims['https://api.openai.com/auth']['chatgpt_user_id'] = 'user-dave-0001'
-    j['tokens']['id_token'] = '.'.join([h, base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('='), sg])
-    json.dump(j, open(p, 'w'))
-PY
+costlog() {   # costlog 家目录 写法…：往会话记录里写折合金额要读的那几份（tests/tool/fx.rs 的 costlog；时刻都是相对现在的）
+	# init：~/.claude/projects/-cost/s-cost-1.jsonl（session-owner 是 u-alice-0001 / org-1；一句 2 天前的提问 SECRET-PROMPT-TEXT；回复 mc1：2 天前 claude-opus-5-5 进 1000 出 100，
+	#       mc2：1 天前 claude-sonnet-5-5[1m] 进 2000 出 1000（同一条写了两行），mc3：1 小时前 claude-new-9 进 10 出 10）、s-cost-0.jsonl（没有 session-owner（旧版本）；mc4：3 小时前
+	#       claude-opus-5-5 进 1000 出 100）、~/.codex/sessions/2026/11/12/rollout-cost.jsonl（th-cost / user-dave-0001 / openai，gpt-6-astra，两条一样的 token_count：进 10000（缓存 8000）出 500）
+	# more：s-cost-1.jsonl 后面追加 mc5：10 分钟前 claude-opus-5-5 进 1000 出 100
+	# dave：最后一个参数（Codex 的 auth.json）：id_token 里补上用户 id（chatgpt_user_id 是 user-dave-0001；真的 id_token 有它）
+	"$TESTBIN" fx costlog "$@"
 }
 costreq() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if sum(r[1] for r in j["acc"]["claude:u-alice-0001"].values()) == int(sys.argv[2]) else 1)' "$H/.cca/cost/local.json" "$1" 2>/dev/null; }   # 统计好的 alice 有这么多次请求
 costlog "$H" init dave "$DD/codex/auth.json"
@@ -2457,33 +2344,12 @@ ok "提问会话：节点不见了：选了哪个就换成哪个" 'tblok "t.get(
 cp "$T/tbl.bak" "$H/.cca/accounts.json"; cp "$T/cfg.bak" "$H/.cca/config.json"
 node_rn US-Z9 192.0.2.44 US-D 192.0.2.4; oc_restart; run CCA_YES=1 cca router sync -y >/dev/null 2>&1 </dev/null
 lint_prompts() {   # 提问只能经基元：别的地方直接读 fd 3，图形界面就收不到这个问题；每个题号都要写进 PROTOCOL 的映射表
-	python3 -I - "$CCA" "$D/../macos/PROTOCOL.md" <<'PY'
-import re, sys
-src = open(sys.argv[1], encoding='utf-8').read()
-doc = open(sys.argv[2], encoding='utf-8').read()
-allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'gui_answer_wait', 'cmd_edit', 'node_read_block'}
-bad, fn = [], ''
-for line in src.split('\n'):
-    m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\(\) \{', line)
-    if m:
-        fn = m.group(1)
-    if '<&3' in line and ': <&3' not in line and not line.lstrip().startswith('#') and fn not in allowed:
-        bad.append(fn)
-qs = set(re.findall(r'\bq=([a-z_]+\.[a-z_.]+)', src)) | set(re.findall(r'ask_fields ([a-z]+\.[a-z_.]+) ', src))
-missing = sorted(q for q in qs if '`%s`' % q not in doc)
-print('ok' if not bad and not missing and qs else '：读 fd 3 的 %s；PROTOCOL 里没写的题号 %s' % (bad, missing))
-PY
+	"$TESTBIN" lint prompts "$CCA" "$D/../macos/PROTOCOL.md"   # 能读 fd 3 的函数、题号的两种写法见 tests/tool/lint.rs
 }
 lp=$(lint_prompts)
 ok "lint：提问只经基元（别处不读 fd 3），每个题号都在 PROTOCOL 的映射表里${lp#ok}" '[ "$lp" = ok ]'
 lint_ifaces() {   # 虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE（at_home）和辅助程序的（内置代理的出站绑定，cli/src/cmd/corenet/bind.rs）是同一份
-	python3 -I - "$CCA" "$D/../cli/src/cmd/corenet/bind.rs" <<'PY'
-import re, sys
-b = re.search(r"^VIRTUAL_IFACE_RE='([^']*)'$", open(sys.argv[1], encoding='utf-8').read(), re.M)
-# 等号后面可以折行（rustfmt 排的：这一行超过行宽）
-p = re.search(r'^pub const VIRTUAL_IFACE_RE: &str =\s*r"([^"]*)";$', open(sys.argv[2], encoding='utf-8').read(), re.M)
-print('ok' if b and p and b.group(1) == p.group(1) else '：bash 的 %s，辅助程序的 %s' % (b and b.group(1), p and p.group(1)))
-PY
+	"$TESTBIN" lint ifaces "$CCA" "$D/../cli/src/cmd/corenet/bind.rs"   # 辅助程序那边等号后面可以折行（rustfmt 排的：这一行超过行宽）
 }
 lv=$(lint_ifaces)
 ok "虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE 和辅助程序的一样${lv#ok}" '[ "$lv" = ok ]'
@@ -2529,23 +2395,7 @@ ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账�
 lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名，要写 ${变量}。
 	# 查发出去的 bash：cca、install.sh、release.sh、Team 的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 下的脚本，
 	# 还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
-	python3 -I - "$D/.." "$CCA" install.sh release.sh server/hub-install.sh 'macos/*.sh' macos/Sources macos/tools <<'PY'
-import glob, os, re, sys
-root, files = sys.argv[1], []
-for a in sys.argv[2:]:
-    ps = sorted(glob.glob(os.path.join(root, a)))
-    if not ps and '*' not in a:
-        print('：没有 %s' % a)
-        sys.exit()
-    for p in ps:
-        if os.path.isdir(p):
-            files += sorted(os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs if f.endswith(('.sh', '.swift')))
-        else:
-            files.append(p)
-bad = ['%s:%d' % (os.path.relpath(f, root), i) for f in files
-       for i, line in enumerate(open(f, encoding='utf-8'), 1) if re.search(r'\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f])', line)]
-print('ok' if not bad else '：' + '、'.join(bad))
-PY
+	"$TESTBIN" lint dollar "$D/.." "$CCA" install.sh release.sh server/hub-install.sh 'macos/*.sh' macos/Sources macos/tools   # 目录下面查 .sh、.swift
 }
 ld=$(lint_dollar)
 ok "lint：cca、install.sh、release.sh、server/hub-install.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
@@ -2568,14 +2418,10 @@ cp "$H/.cca/config.json" "$T/md_cfg.bak"; cp "$H/.cca/accounts.json" "$T/md_tbl.
 cp "$R/etc/dropbear/authorized_keys" "$T/md_keys.bak" 2>/dev/null
 deva=$(cfgv 'c.get("device_id")')
 # 直接写路由器的 accounts.yaml + owners，扮演"另一台设备"占了槽位 2（owner bbbb…，节点 US-B）
-python3 - "$R/etc/cca/accounts.yaml" "$R/etc/cca/owners" <<'PY'
-import json, sys
-acc = json.load(open(sys.argv[1])); acc['slots'] = max(acc.get('slots', 0), 8)
-acc['accounts'] = [a for a in acc['accounts'] if a['slot'] != 2] + [{'slot': 2, 'name': 'carol-dev2', 'node': 'US-B'}]
-acc['nodes'] = list(dict.fromkeys(acc['nodes'] + ['US-B']))
-json.dump(acc, open(sys.argv[1], 'w'), ensure_ascii=False)
-own = json.load(open(sys.argv[2])); own['2'] = 'bbbb1111bbbb1111'; json.dump(own, open(sys.argv[2], 'w'))
-PY
+"$TESTBIN" edit --unicode acc="$R/etc/cca/accounts.yaml" 'acc["slots"] = max(acc.get("slots", 0), 8)
+acc["accounts"] = [a for a in acc["accounts"] if a["slot"] != 2] + [{"slot": 2, "name": "carol-dev2", "node": "US-B"}]
+acc["nodes"] = list({n: None for n in acc["nodes"] + ["US-B"]})' &&
+"$TESTBIN" edit own="$R/etc/cca/owners" 'own["2"] = "bbbb1111bbbb1111"'
 edit_table 'j["bob@example.com"] = "US-C"'
 out=$(run CCA_YES=1 cca router sync -y 2>&1)
 ok "多设备共用：同步保留别的设备的账号（carol@2），自己的 bob 排到空槽位 3，不互相覆盖" '[ "$(sel CCA-2)" = US-B ] && [ "$(sel CCA-3)" = US-C ] && grep -q "carol-dev2" "$R/etc/cca/accounts.yaml" && python3 -c "import json,sys; o=json.load(open(sys.argv[1])); sys.exit(0 if o.get(\"2\")==\"bbbb1111bbbb1111\" and o.get(\"3\")==sys.argv[2] else 1)" "$R/etc/cca/owners" "$deva"'
@@ -3126,22 +2972,7 @@ ok "_gui state：can.custom_proxy——Team 的配置固定了节点的账号是
 rm -rf "$T/router.md"; cp -R "$R" "$T/router.md"; cp "$H/.cca/config.json" "$T/config.md"; cp "$H/.cca/accounts.json" "$T/acct.md"; cp -p "$CNF" "$T/cnf.md"
 mdslot() {   # mdslot 节点 ck [custom]：另一台设备的账号占第一个空槽位（输出槽位号）；ck 空着就不带。custom 是节点 JSON 时
 	          # 账号表的 custom 换成只有它（像那台最后同步过），是 - 时去掉（像旧版 cca 最后同步过）
-	python3 - "$R/etc/cca/accounts.yaml" "$R/etc/cca/owners" "$@" <<'PY'
-import json, sys
-acc = json.load(open(sys.argv[1])); own = json.load(open(sys.argv[2]))
-acc['accounts'] = [a for a in acc['accounts'] if a['name'] != 'dave-dev2']
-used = {a['slot'] for a in acc['accounts']}
-s = next(i for i in range(1, 99) if i not in used)
-a = {'slot': s, 'name': 'dave-dev2', 'node': sys.argv[3]}
-if sys.argv[4]: a['ck'] = sys.argv[4]
-acc['accounts'].append(a); acc['slots'] = max(acc.get('slots', 0), s)
-if len(sys.argv) > 5:
-    if sys.argv[5] == '-': acc.pop('custom', None)
-    else: acc['custom'] = {'id': 'other', 'proxies': [json.loads(sys.argv[5])]}
-own = {k: v for k, v in own.items() if v != 'bbbb1111bbbb1111'}; own[str(s)] = 'bbbb1111bbbb1111'
-json.dump(acc, open(sys.argv[1], 'w'), ensure_ascii=False); json.dump(own, open(sys.argv[2], 'w'))
-print(s)
-PY
+	"$TESTBIN" fx router-occupy "$R/etc/cca/accounts.yaml" "$R/etc/cca/owners" dave-dev2 bbbb1111bbbb1111 "$@"
 }
 s2=$(mdslot 'Home IP' 0123456789abcdef)
 out=$(run cca router sync -y 2>&1)
@@ -3582,16 +3413,13 @@ TMCOWN=$(printf '%s\n' "$TMCAND" | awk -F '\t' '$5 == "-" { printf "%s%d", (n++ 
 out=$(sess '{"team.new":[{"name":"机房组"}],"team.accounts":[{"v":""}]}' -- cca team new 2>&1); rc=$?
 TMDID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID")
 ok "提问会话：cca team new 不写名字：问 Team 的名字，建好了（result 的 team_created），还没接上服务器" '[ $rc -eq 0 ] && [ "$(asks)" = "team.new team.accounts" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_created\"" && [ ${#TMDID} -eq 32 ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，没有服务器"'
-tmask() { python3 -I - "$T/ev.jsonl" "$TMCN" "$TMCOWN" <<'PY'
-import json, sys
-ev, n, own = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-e = next(e for e in map(json.loads, open(ev)) if e.get('q') == 'team.accounts')
-f = e['fields'][0]
-ok = (f['kind'], f['optional'], f['min'], f['default'], f['value'], e['submit']) == ('multi', True, 0, '', own, '新建') and len(f['options']) == n
-ok = ok and [o['value'] for o in f['options']] == [str(i) for i in range(1, n + 1)] and all(o['note'].startswith('走 ') for o in f['options'])
-ok = ok and '「机房组」' in e['message']
-sys.exit(0 if ok else 1)
-PY
+tmask() { "$TESTBIN" run 'ev, n, own = argv[0], int(argv[1]), argv[2]
+e = next(e for e in map(json.loads, open(ev)) if e.get("q") == "team.accounts")
+f = e["fields"][0]
+ok = (f["kind"], f["optional"], f["min"], f["default"], f["value"], e["submit"]) == ("multi", True, 0, "", own, "新建") and len(f["options"]) == n
+ok = ok and [o["value"] for o in f["options"]] == [str(i) for i in range(1, n + 1)] and all(o["note"].startswith("走 ") for o in f["options"])
+ok = ok and "「机房组」" in e["message"]
+sys.exit(0 if ok else 1)' "$T/ev.jsonl" "$TMCN" "$TMCOWN"
 }
 ok "提问会话：名字之后一页多选（team.accounts，可以都不勾）：列出这台设备上能放的账号（工具、别名、邮箱，注着走哪个节点），自己加的预先勾上（写在 value 里）；都不勾就是一个都不放" '[ "$TMCN" -gt 0 ] && [ -n "$TMCOWN" ] && tmask && [ "$(tmacc "$TMDID")" = "{}" ] && ! printf "%s" "$out" | grep -q "放进了"'
 tmexp() { printf '%s\n' "$TMCAND" | python3 -c 'import json,sys
@@ -3964,15 +3792,12 @@ cp "$H/.cca/config.json" "$T/config.udp"; cp "$H/.cca/accounts.json" "$T/account
 edit_table 'j["alice@example.com"] = "US-A"'
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 mkdir -p "$CN"; chmod 700 "$CN"
-python3 - "$CN/nodes.json" "$H/.cca/config.json" <<'P'
-import json, sys, time
-nodes = json.load(open(sys.argv[2]))['nodes']
-px = {'US-A': {'type': 'vless', 'server': '192.0.2.21', 'port': 443, 'uuid': 'udp-secret-a', 'udp': True, 'tls': True},
-      'US-B': {'type': 'trojan', 'server': '192.0.2.22', 'port': 443, 'password': 'udp-secret-b'},
-      'US-C': {'type': 'ss', 'server': '192.0.2.23', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'udp-secret-c', 'udp': True}}
-out = [dict(px.get(n) or {'type': 'ss', 'server': '192.0.2.29', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'x', 'udp': True}, name=n) for n in nodes]
-json.dump({'version': 1, 'saved_at': time.time(), 'nodes': nodes, 'proxies': out}, open(sys.argv[1], 'w'))
-P
+"$TESTBIN" edit -f c="$H/.cca/config.json" --or-empty j="$CN/nodes.json" 'nodes = c["nodes"]
+px = {"US-A": {"type": "vless", "server": "192.0.2.21", "port": 443, "uuid": "udp-secret-a", "udp": True, "tls": True},
+      "US-B": {"type": "trojan", "server": "192.0.2.22", "port": 443, "password": "udp-secret-b"},
+      "US-C": {"type": "ss", "server": "192.0.2.23", "port": 8388, "cipher": "aes-128-gcm", "password": "udp-secret-c", "udp": True}}
+out = [dict(px.get(n) or {"type": "ss", "server": "192.0.2.29", "port": 8388, "cipher": "aes-128-gcm", "password": "x", "udp": True}, name=n) for n in nodes]
+j = {"version": 1, "saved_at": time.time(), "nodes": nodes, "proxies": out}'
 chmod 600 "$CN/nodes.json"
 : > "$T/osascript.log"; : > "$T/launchctl.log"; : > env.log
 out=$(ru cca local udp on US-A 2>&1 </dev/null); rc=$?
