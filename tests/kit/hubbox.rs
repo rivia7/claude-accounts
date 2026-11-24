@@ -32,7 +32,7 @@
 //!   `辅助程序 team-server 参数…`（参数原样）
 //!
 //! HUB_BOX_PYTHON、HUB_BOX_SERVER 在建假服务器的环境里设了的，放进假服务器的环境（enter、install 都带着，假命令就看得到）；
-//! 没设时假服务器的环境和原来一字不差。
+//! 没设时假服务器的环境和原来一字不差。在自己的进程里建假服务器的测试不改环境，直接给（[`Box::new_with`]）。
 //!
 //! 在测试里用（和原来 hub_deploy.py 的用法一一对应）：
 //!
@@ -168,9 +168,27 @@ impl Box {
         Box::create(d, opts).unwrap_or_else(|e| panic!("建不了假服务器 {}：{e}", d.display()))
     }
 
+    /// 同 [`Box::new`]，但起服务用这台机器上的哪个程序由调用的人给（host：`[("HUB_BOX_PYTHON", 路径)]`、`HUB_BOX_SERVER`，见模块开头
+    /// 「起的是哪个程序」），不看这个进程的环境——在自己的进程里建假服务器的测试用：测试的进程不该为了这个去改自己的环境
+    pub fn new_with(d: impl AsRef<Path>, opts: &Opts, host: &[(&str, &str)]) -> Box {
+        let d = d.as_ref();
+        Box::create_with(d, opts, host).unwrap_or_else(|e| panic!("建不了假服务器 {}：{e}", d.display()))
+    }
+
     /// 同上，建不成返回错误（`cca-test hub-box` 用）。假的 systemctl、docker 是 exec cca-test 的两行 sh：cca-test 在哪照
     /// [`crate::proc::tool`]
     pub fn create(d: &Path, opts: &Opts) -> io::Result<Box> {
+        // 起服务用这台机器上的哪个 python3、哪个辅助程序：建的时候（这个进程的环境里）设了才放进去，没设时假服务器的环境和原来一字不差
+        let set: Vec<(&str, String)> = ["HUB_BOX_PYTHON", "HUB_BOX_SERVER"]
+            .into_iter()
+            .filter_map(|key| Some((key, std::env::var(key).ok().filter(|v| !v.is_empty())?)))
+            .collect();
+        let host: Vec<(&str, &str)> = set.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        Box::create_with(d, opts, &host)
+    }
+
+    /// 同 [`Box::create`]，HUB_BOX_PYTHON、HUB_BOX_SERVER 由 host 给（照给的先后放进假服务器的环境），不看这个进程的环境
+    pub fn create_with(d: &Path, opts: &Opts, host: &[(&str, &str)]) -> io::Result<Box> {
         let d = tidy(d);
         let (root, bin) = (d.join("root"), d.join("bin"));
         for p in [&root, &bin, &d.join("users")] {
@@ -224,11 +242,8 @@ impl Box {
         if opts.any_ip {
             b.env.push(("CCA_HUB_ANY_IP".to_string(), "1".to_string()));
         }
-        // 起服务用这台机器上的哪个 python3、哪个辅助程序：建的时候设了才放进去（没设时环境和原来一字不差）
-        for key in ["HUB_BOX_PYTHON", "HUB_BOX_SERVER"] {
-            if let Some(value) = std::env::var(key).ok().filter(|v| !v.is_empty()) {
-                b.env.push((key.to_string(), value));
-            }
+        for (key, value) in host {
+            b.env.push((key.to_string(), value.to_string()));
         }
         let assigns: Vec<String> = b.env.iter().map(|(k, v)| format!("{k}={}", quote(v))).collect();
         let dd = text(&d);

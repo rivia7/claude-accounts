@@ -5,6 +5,7 @@ mod acme;
 mod client_updates;
 mod cost_view;
 mod device_identity;
+mod hub_deploy;
 mod isolation_apps;
 mod isolation_browser;
 mod isolation_chrome_native;
@@ -44,6 +45,7 @@ fn main() {
             client_updates::MODULE,
             presence::MODULE,
             team::MODULE,
+            hub_deploy::MODULE,
             usage_view::MODULE,
             cost_view::MODULE,
             mail_view::MODULE,

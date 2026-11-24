@@ -519,7 +519,7 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 
 还没做的：托管平台的那一页（App 里）；Railway 上没真的部署过 Team 的服务器（步骤照它现在的文档写，生成的 README 里说以平台现在
 的界面为准）；安装脚本在一台真的 Linux 云服务器上用 Docker 装过、更新过多次（2026-11-22 起，`cca team deploy` 经 SSH：同一台上两个 Team，
-网页端、共用的证书助手、从各自的证书助手搬到共用的都在它上面做过），systemd 那一种只在假服务器 `tests/hub_box.py` 上跑过（证书助手换成假的；
+网页端、共用的证书助手、从各自的证书助手搬到共用的都在它上面做过），systemd 那一种只在假服务器（`tests/kit/hubbox.rs`）上跑过（证书助手换成假的；
 `tests/linux.sh` 会在各个发行版的容器里跑同一份测试）。`cca team deploy` 传不了 `--relay-port`、`--no-relay`（要换中转的端口、不开中转的，在服务器上直接运行安装脚本）。
 
 ## 界面（M5）
@@ -801,7 +801,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `copySecret`、改授权和节点发的命令。通用检查（`Generic.swift`）：`config.teams` 和账号的 `team` 对得上、Team 的服务器照编号算、
   `team_devices` / `team_list` 两种文档。回归 11b3d 把真实的 hello、带 Team 的 state、`team ls --json`、`team devices --json` 存进
   `$T/guifx4` 交给 `macos/test.sh` 解码。
-- 部署（`tests/hub_deploy.py`：生成一次安装脚本，在 `tests/hub_box.py` 的假服务器上运行；回归的 unit 一节跑它，`tests/linux.sh` 在各个发行版的
+- 部署（`tests/hub_deploy.rs`：生成一次安装脚本，在 `tests/kit/hubbox.rs` 的假服务器上运行；回归的 unit 一节跑它，`tests/linux.sh` 在各个发行版的
   容器里也跑——那个发行版的 sh、openssl、python3）。假服务器 `Box`：临时目录当根（安装脚本的 `CCA_HUB_ROOT`，只给测试用），`bin/` 里 `id`、
   `useradd`、`userdel`、`chown`、`ip`、`journalctl`、`sudo` 是假的（`ufw`、`ss` 要的用例另放：`Box.fake`），`systemctl`、`docker` 是 Python
   写的（照 unit 的 `ExecStart`、compose.yaml 里各个服务的 `command`、端口和挂载起真的服务端，监听 127.0.0.1；证书助手换成 `acme_stub.py`：共用的

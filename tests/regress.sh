@@ -3363,7 +3363,7 @@ out=$(runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" 2>&1); r
 ok "同意以后退出了（result 的 team_left）：本机记着的删掉，另一个 Team 还在" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMBID" ] && [ -d "$H/.cca/teams/$TMID" ]'
 # --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（cca-test hub-box 建的假服务器，tests/kit/hubbox.rs：目录当根，假 systemctl 起真的
 #     server/cca-presence.py；一台服务器上每个 Team 一个服务），装好了自动接上。Docker、拉不到镜像、网页端和证书助手、连不上、几个 Team 这些
-#     细的在 tests/hub_deploy.py。App 里新建问名字（team.new），部署问服务器（hub.deploy）、密码（hub.password）、怎么加公钥（hub.pubkey）
+#     细的在 tests/hub_deploy.rs。App 里新建问名字（team.new），部署问服务器（hub.deploy）、密码（hub.password）、怎么加公钥（hub.pubkey）
 "$TESTBIN" hub-box "$T/hubbox"
 out=$(run cca team deploy --script 2>/dev/null); rc=$?
 HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$(printf '%s\n' "$out" | head -n 1)
@@ -3452,14 +3452,14 @@ out=$(runev cca team hosted 机房组 sealos --dir "$T/tm-sealos" 2>&1); rc=$?
 ok "cca team hosted 机房组 sealos：不再支持 Sealos（fail 事件 team_usage，说换 Railway 或者自己的服务器），什么都不生成" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再支持 Sealos：部署到 Railway，或者自己的服务器（cca team deploy）" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && [ ! -e "$T/tm-sealos" ]'
 # 删除 Team（管理员的 cca team leave）：先经 SSH 卸掉它的同步服务器（cca team deploy 记下了装到哪：root@hubbox、端口 22、/opt/<服务名>），
 # 卸好了才删这台设备上的。卸不成：命令行里不删，说加 --keep-server；App 里问要不要照样删（team.keep_server）。安装脚本的 --uninstall 细的在
-# tests/hub_deploy.py
+# tests/hub_deploy.rs
 out=$(runev CCA_GRANT="team_delete:$TMDID" cca team leave "${TMDID:0:8}" root@nohub 2>&1); rc=$?
 ok "cca team leave（管理员，写了服务器）：SSH 连不上就不删（fail 事件 team_ssh，说确定只删这台设备上的要加 --keep-server）；服务器上、这台设备上都没动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_ssh\" and \"root@nohub\" in e[\"message\"] and \"cca team leave ${TMDID:0:8} --keep-server\" in e[\"message\"]" && [ -d "$H/.cca/teams/$TMDID" ] && [ -e "$TMDD/.env" ]'
 out=$(run cca team leave "${TMDID:0:8}" root@hubbox --keep-server 2>&1); rc=$?
 ok "--keep-server 是不卸载：不能再写服务器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不用再写服务器" && [ -d "$H/.cca/teams/$TMDID" ]'
 out=$(sess '{"consent.team_delete":[{"v":"y"}],"team.keep_server":[{"v":"n"}]}' -- cca team leave "${TMDID:0:8}" root@hubbox --dir /opt/cca-team-elsewhere 2>&1); rc=$?
 ok "App 里删除：先问同意（consent.team_delete：说经 SSH 登录哪台、删掉哪个目录、根密钥）；那个目录里没装（卸不成）：问要不要仍然删掉（team.keep_server，默认否，说服务器上怎么自己卸载），答否就不删" '[ $rc -ne 0 ] && [ "$(asks)" = "consent.team_delete team.keep_server" ] && evq "e.get(\"q\") == \"consent.team_delete\" and e[\"title\"] == \"删除 Team\" and \"root@hubbox\" in e[\"fields\"][0][\"detail\"] and \"/opt/cca-team-elsewhere\" in e[\"fields\"][0][\"detail\"] and \"根密钥\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"team.keep_server\" and e[\"fields\"][0][\"default\"] == \"n\" and \"--uninstall --dir /opt/cca-team-elsewhere\" in e[\"fields\"][0][\"detail\"]" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && [ -d "$H/.cca/teams/$TMDID" ] && [ -e "$TMDD/.env" ]'
-# 部署时写了私钥（-i：记下的是绝对路径，tests/hub_deploy.py 测记下来）：App 里删除照它登录（App 里没法写 -i）。它登录不了、服务器只认密钥：
+# 部署时写了私钥（-i：记下的是绝对路径，tests/hub_deploy.rs 测记下来）：App 里删除照它登录（App 里没法写 -i）。它登录不了、服务器只认密钥：
 # 不问加公钥那一页（ssh 只试写的那把，这台 Mac 默认的那把加上去也没用），算没卸成，问要不要照样删（原因里说是哪把私钥）
 : > "$T/hub_id"
 "$TESTBIN" edit -s "a2=$T/hub_id" "a=$H/.cca/teams/$TMDID/admin.json" 'a["deploy"]["identity"] = a2'
@@ -4293,7 +4293,7 @@ ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的
 ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'suite_ok presence'
 ok "Team：辅助程序建 Team、接上服务器、邀请、加入、同步配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'suite_ok team'
-ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
+ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'suite_ok hub_deploy'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'suite_ok usage_view'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'suite_ok cost_view'
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'suite_ok mail_view'
