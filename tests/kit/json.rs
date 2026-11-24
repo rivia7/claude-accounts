@@ -316,6 +316,19 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
+// Python 的 json 读得了、这里读不了的那几种
+const TOO_BIG: &str = "整数太大";
+const TOO_DEEP: &str = "嵌套太深";
+const LONE_SURROGATE: &str = "单独的代理项（U+D800 到 U+DFFF）这里不支持";
+
+impl Error {
+    /// 输入本身是 Python 读得了的 JSON，只是这里读不了（整数超过 128 位、嵌套太深、单独的代理项）：
+    /// 照着 Python 的行为做事的调用方拿它分清“JSON 写错了”和“这里的限制”
+    pub fn unsupported(&self) -> bool {
+        matches!(self.msg.as_str(), TOO_BIG | TOO_DEEP | LONE_SURROGATE)
+    }
+}
+
 /// json.loads：NaN、Infinity、-Infinity 认；重复的键留第一次的位置、最后一次的值；值后面还有东西算错
 pub fn parse(text: &str) -> Result<Value, Error> {
     let mut p = Parser { s: text.as_bytes(), i: 0, depth: 0 };
@@ -379,7 +392,7 @@ impl Parser<'_> {
     }
     fn nested(&mut self, f: fn(&mut Self) -> Result<Value, Error>) -> Result<Value, Error> {
         if self.depth >= MAX_DEPTH {
-            return Err(self.err("嵌套太深"));
+            return Err(self.err(TOO_DEEP));
         }
         self.depth += 1;
         let v = f(self);
@@ -475,7 +488,7 @@ impl Parser<'_> {
         if float {
             text.parse::<f64>().map(Value::Float).map_err(|_| self.err("数字读不出来"))
         } else {
-            text.parse::<i128>().map(Value::Int).map_err(|_| self.err("整数太大"))
+            text.parse::<i128>().map(Value::Int).map_err(|_| self.err(TOO_BIG))
         }
     }
     fn digits(&mut self) {
@@ -530,7 +543,7 @@ impl Parser<'_> {
                                 }
                             }
                             // 单独的代理项 Python 留着（str 里放得下），这里放不下：算错，夹具里没有这种
-                            char::from_u32(n).ok_or_else(|| self.err("单独的代理项（U+D800 到 U+DFFF）这里不支持"))?
+                            char::from_u32(n).ok_or_else(|| self.err(LONE_SURROGATE))?
                         }
                         _ => {
                             self.i -= 1;
@@ -785,6 +798,20 @@ mod tests {
         }
         assert!(parse(&format!("{}1{}", "[".repeat(2000), "]".repeat(2000))).is_err());
         assert_eq!(parse("1.").unwrap_err().pos, 1);
+    }
+
+    #[test]
+    fn limits_are_told_apart_from_bad_json() {
+        // Python 读得了、这里读不了的
+        let deep = format!("{}1{}", "[".repeat(901), "]".repeat(901));
+        for text in ["170141183460469231731687303715884105728", deep.as_str(), "\"\\ud800\"", "[\"\\udc00x\"]"] {
+            assert!(parse(text).unwrap_err().unsupported(), "{:?}", &text[..text.len().min(30)]);
+        }
+        // 写错了的
+        for text in ["", "{", "[1,]", "tru", "\"\\x\"", "1 2", "{\"a\" 1}"] {
+            assert!(!parse(text).unwrap_err().unsupported(), "{text:?}");
+        }
+        assert_eq!(parse("170141183460469231731687303715884105727").unwrap(), Value::Int(i128::MAX));
     }
 
     /// 对照数据：每一项是 [原文, 默认写法, indent=2, 紧凑+不转义, sort_keys+indent=1+不转义]，都是 Python 的 json 模块算的
