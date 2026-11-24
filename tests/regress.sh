@@ -5,6 +5,7 @@
 D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
 if [ -n "${CKPT:-}" ]; then mkdir -p "$CKPT"; T="${TMPDIR:-/tmp}/cca-ckpt.sandbox"; mkdir "$T.lock" 2>/dev/null || { echo "另一个分节续跑（CKPT/FROM/ONLY）在用同一个沙箱 ${T}：一次只能跑一个，先等它跑完，或删掉 $T.lock" >&2; exit 1; }; [ -n "${FROM:-}${ONLY:-}" ] || rm -rf "$T"; mkdir -p "$T"; else T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX"); fi; T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）；CKPT 时用 $TMPDIR 下的固定沙箱 + $T.lock 防并发（分节续跑：路径要稳定、在 /var/folders 下、一次只能一个）
+[ -z "${CKPT:-}" ] || [ -n "${FROM:-}${ONLY:-}" ] || dirname "$CCA" > "$CKPT/repo"   # 建快照：记下是哪份检出（_ckpt_restore 在另一份检出里续跑时用）
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
 TMPIDS=""   # Team 的测试服务器（tm_srv 起的，11b2 起的几节用；各节自己停）
 MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
@@ -247,12 +248,23 @@ sect() {
 	return 0
 }
 _ckpt_restore() {   # 恢复某节开始时的沙箱和变量；计数（pass/fail）接着本次续跑的、不取快照里的
-	local name=$1 _p=$pass _f=$fail
+	local name=$1 _p=$pass _f=$fail _old _new _l _t
 	[ -f "$CKPT/$name.tgz" ] || { echo "FAIL  缺 $name 的快照：先 CKPT=$CKPT bash tests/regress.sh 建一次"; fail=$((fail + 1)); return 1; }
 	find "$T" -mindepth 1 -delete 2>/dev/null
 	tar xzf "$CKPT/$name.tgz" -C "$T"
 	ln -sf "$TESTBIN" "$T/cca-test"   # 快照里的链接指着建快照时的那一份
-	[ -f "$CKPT/$name.vars" ] && . "$CKPT/$name.vars" 2>/dev/null
+	# 快照可以是在另一份检出里建的（几个 worktree 共用一份快照，$CKPT/repo 记着是哪一份）：沙箱里指着那份检出的链接、写着它的路径的
+	# 文件和变量都换成这一份的。不然 11b 之前的节（~/.local/bin/cca 是指着仓库里的 cca 的链接）测的是那一份检出里的代码
+	_old=$(cat "$CKPT/repo" 2>/dev/null); _new=$(dirname "$CCA")
+	if [ -n "$_old" ] && [ "$_old" != "$_new" ]; then
+		find "$T" -type l 2>/dev/null | while IFS= read -r _l; do
+			_t=$(readlink "$_l"); case "$_t" in "$_old"/*) ln -sfn "$_new${_t#"$_old"}" "$_l" ;; esac
+		done
+		LC_ALL=C grep -rIlF -- "$_old" "$T" 2>/dev/null | while IFS= read -r _l; do [ -L "$_l" ] || LC_ALL=C sed -i '' "s|$_old|$_new|g" "$_l"; done
+		[ ! -f "$CKPT/$name.vars" ] || { LC_ALL=C sed "s|$_old|$_new|g" "$CKPT/$name.vars" > "$T.vars"; . "$T.vars" 2>/dev/null; rm -f "$T.vars"; }
+	else
+		[ -f "$CKPT/$name.vars" ] && . "$CKPT/$name.vars" 2>/dev/null
+	fi
 	[ -f "$CKPT/$name.fns" ] && . "$CKPT/$name.fns" 2>/dev/null   # 各节新定义的函数（node_rn 这类跨节用的）
 	pass=$_p; fail=$_f
 	return 0
