@@ -23,7 +23,6 @@ doctest = false
 [[bin]]
 name = "cca-test"
 path = "tool/main.rs"
-test = false
 
 # 各份测试合成一个程序（suite.rs 列着各个模块，一个模块就是 tests/ 下的一个 .rs）；运行器是自己的（kit::harness）
 [[test]]

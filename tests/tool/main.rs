@@ -3,12 +3,21 @@
 
 mod ev;
 mod exec;
+mod fake;
+mod fx;
+mod gui_session;
+mod hubbox;
+mod lint;
+mod mail;
+mod spec;
+mod util;
 
 /// 一个子命令：收下子命令后面的参数，返回退出码
 pub type Run = fn(&[String]) -> i32;
 
 /// 各个模块的子命令表
-const TABLES: &[&[(&str, Run)]] = &[ev::CMDS, exec::CMDS];
+const TABLES: &[&[(&str, Run)]] =
+    &[ev::CMDS, exec::CMDS, fake::CMDS, fx::CMDS, gui_session::CMDS, hubbox::CMDS, lint::CMDS, mail::CMDS, spec::CMDS, util::CMDS];
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
