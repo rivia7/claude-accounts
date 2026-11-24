@@ -417,6 +417,10 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 - 成了：stdout 是 `sh` 的 键=值（`mode`、`state`、`port`、`relay`、`dir`、`lan` 地址只在内网、`host`、`device`、`members`、`stored`、`note`、`svc`、
   `web`、`web_cert`、`web_off`），bash `eval` 它，说部署了还是更新了、要放行哪些端口、网页端怎么样了，地址是内网的 `fail_warn team_lan`，接着
   `team_settle`，`result` 的 `team_deployed`。
+- 装好以后记下装到了哪（`admin.json` 的 `deploy`：目标、SSH 端口、目录、`-i` 的私钥，见「删除 Team」）。再部署时写的（App、终端里问到的）就是
+  记下的那台：没写的 `-p`、`-i`、`--dir` 照记下的（`team_deploy` 读 `team-leave plan` 后面那几栏，只认记下的、照默认猜的不算；私钥文件不在了
+  plan 不给），这一次又记下它们；写了别的服务器（搬过去）的只照写的。3.6.5 以前 App 里的「更新服务器」不认记下的私钥（照 ssh 的配置登录，
+  还把记下的私钥清掉），`--dir` 装在别处的更新会在默认目录装成新的一份。
 
 ### App 里
 
@@ -425,9 +429,10 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 4.6）；是哪个 Team 由 `DEPLOY_PY` / `DEPLOY_WORDS` / `DEPLOY_WHAT` / `DEPLOY_FAIL` / `DEPLOY_AT` / `DEPLOY_MSG` 说（`team_deploy` 设好），所以表单的
 标题和说明说的是这个 Team。
 
-- `hub_deploy_ask`（`PROMPT_GUI`，不写服务器）：先问一页（`hub.deploy`：地址、SSH 用户、端口；接着服务器的预填它的地址和 root、22，`message`
-  说是更新、填别的服务器就是搬过去），再 `py team-deploy 编号 目标 --ssh-port 端口 --batch --check` 查登录得上不（`ssh_check`：只运行 `true`，
-  什么都不装）。不成时 stdout 是 `ssh_trouble` 按 ssh 最后说的话分的原因码：
+- `hub_deploy_ask`（`PROMPT_GUI`，不写服务器）：先问一页（`hub.deploy`：地址、SSH 用户（可以空着：照 ssh 的配置，3.6.5 起）、端口；部署时
+  记下的那台预填它——记下的没写用户的用户一栏是空的，没写端口的是 22；没记下、接着服务器的预填它的地址和 root、22；`message` 说是更新、填别的服务器就是搬过去，
+  记下了私钥的还说照哪把登录），再 `py team-deploy 编号 目标 --ssh-port 端口 [--identity 私钥] --batch --check` 查登录得上不（`ssh_check`：
+  只运行 `true`，什么都不装；填的就是记下的那台时带着记下的私钥：`F_ident`）。不成时 stdout 是 `ssh_trouble` 按 ssh 最后说的话分的原因码：
   - `ssh`（连不上：地址、端口不对，主机名解析不了……，`SSH 连不上 目标：ssh 说的最后一行`）带着原因重问这一页；
   - `ssh_auth`（密钥登录不了、服务器认密码或者 keyboard-interactive；还有 `Too many authentication failures`：ssh-agent 里的密钥太多，服务器只让
     试几次（`MaxAuthTries`），没轮到密码就断了，`LogLevel=ERROR` 时这是 ssh 说的最后一句）接着问密码（`hub.password`）；
@@ -436,6 +441,8 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
     运行），选「加好了，再试」再查（还不认带着原因重问，这回认密码了回去问密码）；还没有密钥的先问要不要生成一把（`ssh-keygen -t ed25519 -N ''`，
     `~/.ssh/id_ed25519` 已经有了、只缺公钥文件的不覆盖，说怎么补）；私钥有密码（App 里没法输）、要用别的私钥的选「在终端里部署」：
     `gui_terminal hub_deploy`，`argv` 是 `team deploy <编号的前 8 位> 用户@地址 -p 端口`，App 照 `terminal` 事件交给终端；
+    照记下的私钥（`F_ident`）登录不了的不给这一页（ssh 只试那一把，加这台 Mac 的公钥没用；有密码的私钥 App 里也没法输）：`hub_ssh` 停下，
+    原因里说不认哪把私钥、在终端里怎么做（同删除时）；
   - `ssh_hostkey`（主机密钥和 known_hosts 里的不一样：说 `ssh-keygen -R`）是 `hub_ssh`，停下。
 - 问到的密码经 `askpass_run`（和配置路由器的 `router_ssh_password` 共用：700 的临时目录里的 FIFO，写的一方是 bash 内建的 printf，askpass 读一次
   就删掉，ssh 再问读不到东西也不会卡住）交给 `--askpass --check`：用了密码还 `Permission denied`（服务器认密码）是 `ssh_denied`（密码不对，重问，
@@ -448,8 +455,8 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   `LogLevel=ERROR` 不让「Warning: Permanently added」混进 ssh 最后说的那一行；`--askpass` 带 `PubkeyAuthentication=no`、
   `PreferredAuthentications=keyboard-interactive,password`、`NumberOfPasswordPrompts=1`，不带 `BatchMode`（它连 SSH_ASKPASS 也不问）。
 - 终端里不问这些：服务器写在命令行上，ssh 自己问密码、问要不要认这台主机（有终端时不带 `--batch`）；终端里没写服务器（App 失败页的「改在
-  终端里完成」交过来的就是不带服务器的 `cca team deploy 编号`）时 `hub_deploy_where` 先问地址（接着的预填）、SSH 用户（root）、端口（22），
-  没有终端的照旧说用法。SSH 的目标不记：App 里再部署预填的是接着的那台的地址和 root、22，经别的用户、端口、ssh 配置里的别名部署的要自己改。
+  终端里完成」交过来的就是不带服务器的 `cca team deploy 编号`）时 `hub_deploy_where` 先问地址、SSH 用户、端口（预填同 `hub_deploy_ask`：
+  记下的那台，没记下的接着的地址、root、22；记下的没写用户的，用户这一问留空是照 ssh 的配置），没有终端的照旧说用法。
 - `cca team new` 在 App 里不写名字时问（`team.new`，校验 `teamname`），接着一页多选问放进哪些账号（`team.accounts`，见「管理员这一头」），
   成了是 `team_created`；部署成了 `team_deployed`，地址是内网的另有 `team_lan`。
 - 页面：Team 卡片下面「新建 Team…」（`Handoff.teamNew`），还没接上服务器的 Team 那一行有「部署到我的服务器…」，接着的在「更多」里
@@ -463,7 +470,7 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 
 - 去哪卸（辅助程序 `admin.rs` 的 `undeploy_plan`，`team-leave plan` 那一行后面的四栏：目标、SSH 端口、目录、记下的；部署时写了私钥的再加一栏私钥）：
   `cca team deploy` 装好以后在 `admin.json` 记下 `deploy`（`target`、`ssh_port`：没写是空的、照 ssh 的配置，`dir`，`identity`（3.6.4 起）：`-i` 的绝对路径——`~/`
-  换成主目录、相对的接上当时的目录，没写是空的；没接上也记：服务器上装着），照它；每次部署都照这一次登录上的办法重记（这次没写 `-i` 的就没有）。
+  换成主目录、相对的接上当时的目录，没写是空的；没接上也记：服务器上装着），照它；每次部署都照这一次的重记（再部署到记下的那台、没写 `-i` 的照记下的那把，见「经 SSH 装」；写了别的服务器又没写 `-i` 的就没有）。
   私钥文件不在了不给那一栏（照 ssh 的配置登录）。从接着的一台换到别的地址（`cca team attach` 接上了别的）就不算了（新的那台不知道是怎么装的）。没记下的（以前的版本部署的、手动装的）照部署的默认猜：`root@`服务器的地址、22、
   `/opt/cca-team-<编号的前 8 位>`（最后一栏是 0，同意的说明里说是猜的、不对怎么写清楚）；猜错了没关系：安装脚本带着根公钥核对目录里装的是不是
   这个 Team 的（`taken`），没装是 `none`，都什么不动、算没卸成。证书照证书机构验的（没钉指纹：托管平台、自己配的反向代理）不是安装脚本直接装的，
@@ -824,10 +831,11 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `dash -n` 过得去、没有 `CCA_HUB_MANAGED`）；App 里新建（`team.new` → `team.accounts` → `team_created`：选项和 `team-candidates` 的一样多、自己加的预先选好；都不勾是空的 Team，勾了的连同节点
   放进去），终端里按编号选（没有的编号重问），没有终端时不问，`--accounts` 写了这台设备上没有的是 `team_accounts`、什么都不建；没写服务器、`--reset` 是 `team_usage`，端口写错了也是、
   不连服务器；登录不了 `team_ssh`；`cca team deploy` 装好（systemd，`team_lan` 在 `team_deployed` 前面，内网地址不开网页端，`.env` 里只有公开的
-  根公钥）；App 里再部署（预填 127.0.0.1、root、22，说数据不变，先查登录 `SSH root@hubbox :: true`；`nohub` 带着 ssh 的原因重问，密钥不行问密码、
+  根公钥）；App 里再部署（预填部署时记下的 hubbox、root、22，说数据不变，先查登录 `SSH root@hubbox :: true`；`nohub` 带着 ssh 的原因重问，密钥不行问密码、
   经 askpass 部署，`prompts_hub_deploy.jsonl` 交给契约测试；错了三次 `hub_ssh`；只认密钥时生成密钥、给出加公钥那一行、「在终端里部署」的
-  `terminal` 事件）；终端里不写服务器时问；`cca team hosted sealos`；删除 Team（`cca team leave`）：没记下部署到哪的同意说明里说照默认猜的
+  `terminal` 事件）；终端里不写服务器时问（三问都照记下的预填，都留空）；`cca team hosted sealos`；删除 Team（`cca team leave`）：没记下部署到哪的同意说明里说照默认猜的
   `root@127.0.0.1`，SSH 连不上时命令行里不删、说加 `--keep-server`，App 里卸不成问 `team.keep_server`（答否不删；手写的部署记录指着连不上的
   `root@127.0.0.1`、答是照样删，`team_left` 说哪台上的没卸掉、怎么自己卸载）；记下了私钥的：同意的说明里说是哪把，它登录不了、服务器只认密钥时
-  不问 `hub.pubkey`、直接问 `team.keep_server`（原因里说不认哪把私钥），照记下的经密码卸掉时查登录带着 `-i`（`ssh.env`）（`prompts_team_delete.jsonl` 交给契约测试），
+  不问 `hub.pubkey`、直接问 `team.keep_server`（原因里说不认哪把私钥），照记下的经密码卸掉时查登录带着 `-i`（`ssh.env`）（`prompts_team_delete.jsonl` 交给契约测试）；记下了私钥以后再部署：App 里那一页预填记下的那台、
+  说照哪把私钥登录，查登录、部署的 ssh 都带着它，终端里写了记下的那台、没写 `-p`、`-i` 照记下的端口、私钥，部署记录里接着记着，
   `--keep-server` 不碰服务器。假 ssh 碰到 127.0.0.1、localhost 一律连不上（不让猜的目标落到路由器的假命令上）。

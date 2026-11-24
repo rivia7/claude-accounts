@@ -3674,7 +3674,7 @@ out=$(runev cca team deploy "${TMDID:0:8}" root@hubbox --port "$TMDPORT" 2>&1); 
 ok "cca team deploy：经 SSH 装好（systemd + python3；服务名、目录是这个 Team 的）、自动接上（result 事件 team_deployed）；服务器上只有公开的根公钥；地址是内网的：说一声（team_lan），手机的网页端不开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署「机房组」的同步服务器到 root@hubbox（/opt/${TMDSVC}，systemd + python3，端口 ${TMDPORT}，服务名 ${TMDSVC}），接上了" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && evbefore fail:team_lan result:team_deployed && printf "%s" "$out" | grep -q "手机的网页端没开：127.0.0.1 是内网地址" && grep -q "^CCA_TEAM_ROOT=AAAA" "$TMDD/.env" && ! grep -q ADMIT "$TMDD/.env" && ! grep -rq "PRIVATE KEY" "$TMDD/.env" "$TMDD/app" && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
 TMDPIN=$(tmdpin); rm -f "$TMDD/certs/cert.pem" "$TMDD/certs/key.pem"; : > "$T/ssh.log"   # 服务器上的证书没了：更新时重新生成，这台设备照新的指纹重新接上
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
-ok "App 里再部署（不写服务器）：一页填地址、SSH 用户、端口（标题说的是这个 Team，预填它现在接着的地址，说数据不变）；先查登录得上不，再部署：只更新（result 事件 team_deployed）；证书是新生成的：照新的指纹重新接上" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and \"机房组\" in e[\"title\"] and [f[\"id\"] for f in e[\"fields\"]] == [\"host\", \"user\", \"port\"] and [f[\"value\"] for f in e[\"fields\"]] == [\"127.0.0.1\", \"root\", \"22\"] and \"数据不变\" in e[\"message\"]" && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && grep -q "^SSH root@hubbox :: true$" "$T/ssh.log" && [ -n "$TMDPIN" ] && [ "$(tmdpin)" != "$TMDPIN" ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
+ok "App 里再部署（不写服务器）：一页填地址、SSH 用户、端口（标题说的是这个 Team，预填部署时记下的那台，说数据不变）；先查登录得上不，再部署：只更新（result 事件 team_deployed）；证书是新生成的：照新的指纹重新接上" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and \"机房组\" in e[\"title\"] and [f[\"id\"] for f in e[\"fields\"]] == [\"host\", \"user\", \"port\"] and [f[\"value\"] for f in e[\"fields\"]] == [\"hubbox\", \"root\", \"22\"] and \"数据不变\" in e[\"message\"]" && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && grep -q "^SSH root@hubbox :: true$" "$T/ssh.log" && [ -n "$TMDPIN" ] && [ "$(tmdpin)" != "$TMDPIN" ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
 HBPW="pw-$RANDOM$RANDOM$RANDOM"; printf '%s' "$HBPW" > "$T/hubbox/password"; : > "$T/ssh.log"; : > "$T/env.log"; : > "$T/ssh.env"; mkdir -p "$T/askpass.tmp" "$T/guifx4"
 hbans='{"hub.deploy":[{"host":"nohub","user":"root","port":"22"},{"host":"hubbox","user":"root","port":"22"}],"hub.password":[{"v":"wrong-pw"},{"v":"'$HBPW'"}]}'
 out=$(sess "$hbans" -- env TMPDIR="$T/askpass.tmp" cca team deploy 机房组 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx4/prompts_hub_deploy.jsonl"
@@ -3694,8 +3694,8 @@ echo once > "$T/hubbox/ssh_denied"
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.pubkey":[{"next":"retry"}]}' -- cca team deploy 机房组 2>&1); rc=$?
 ok "加好了公钥再试：登录上了，接着部署（只更新，result 事件 team_deployed）；已经有密钥的不再问要不要生成" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.deploy hub.pubkey" ] && evq "e.get(\"q\") == \"hub.pubkey\" and [f[\"id\"] for f in e[\"fields\"]] == [\"cmd\", \"next\"]" && [ "$(lastres)" = team_deployed ] && [ ! -e "$T/hubbox/ssh_denied" ]'
 rm -rf "$H/.ssh"; [ ! -e "$T/home.ssh" ] || mv "$T/home.ssh" "$H/.ssh"
-out=$(run CCA_TTY="$(ans hubbox '' '')" cca team deploy 机房组 2>&1); rc=$?
-ok "终端里不写服务器（App 里「改在终端里完成」）：问地址（接着的预填它的）、SSH 用户（root）、端口（22），再部署（只更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
+out=$(run CCA_TTY="$(ans '' '' '')" cca team deploy 机房组 2>&1); rc=$?
+ok "终端里不写服务器（App 里「改在终端里完成」）：问地址、SSH 用户、端口（都预填部署时记下的：hubbox、root、22），再部署（只更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
 out=$(run cca team hosted 机房组 sealos --dir "$T/tm-hosted" 2>&1); rc=$?
 ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -s "$T/tm-hosted/cca-presence.py" ] && [ -s "$T/tm-hosted/README.md" ] && printf "%s" "$out" | grep -q "环境变量：CCA_TEAM_ROOT=AAAA" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
 # 删除 Team（管理员的 cca team leave）：先经 SSH 卸掉它的同步服务器（cca team deploy 记下了装到哪：root@hubbox、端口 22、/opt/<服务名>），
@@ -3711,6 +3711,20 @@ ok "App 里删除：先问同意（consent.team_delete：说经 SSH 登录哪台
 # 不问加公钥那一页（ssh 只试写的那把，这台 Mac 默认的那把加上去也没用），算没卸成，问要不要照样删（原因里说是哪把私钥）
 : > "$T/hub_id"
 python3 -I -c 'import json, sys; p = sys.argv[1]; a = json.load(open(p)); a["deploy"]["identity"] = sys.argv[2]; open(p, "w").write(json.dumps(a))' "$H/.cca/teams/$TMDID/admin.json" "$T/hub_id"
+# 再部署（更新）也照部署时记下的：App 里那一页预填它、说照哪把私钥登录，填的就是它时查登录、部署的 ssh 都带着那把私钥（App 里没法写
+# -i）；终端里写的就是它、没写 -p、-i 时照记下的端口、私钥。部署记录里接着记着它
+tmdident() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["deploy"].get("identity", ""))' "$H/.cca/teams/$TMDID/admin.json" 2>/dev/null; }
+tmdtarget() { python3 -I -c 'import json, sys; p = sys.argv[1]; a = json.load(open(p)); a["deploy"]["target"] = sys.argv[2]; open(p, "w").write(json.dumps(a))' "$H/.cca/teams/$TMDID/admin.json" "$1"; }
+# 记下的目标没写用户（cca team deploy 机房组 hubbox：照 ssh 的配置）：SSH 用户那一栏可以空着，空着交上来的就是记下的那台
+tmdtarget hubbox; : > "$T/ssh.env"
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
+ok "记下的目标没写用户：App 里那一页的 SSH 用户预填空的（这一栏可以空着），空着交上来就是记下的那台：照记下的私钥登录，ssh 的目标不带用户；部署记录照旧" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and [f[\"value\"] for f in e[\"fields\"]] == [\"hubbox\", \"\", \"22\"] and [bool(f.get(\"optional\")) for f in e[\"fields\"]] == [False, True, False]" && [ "$(lastres)" = team_deployed ] && grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -q " hubbox " && ! grep "^ARGV" "$T/ssh.env" | grep -q "@hubbox" && ! grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -qvF -- "-i $T/hub_id -o IdentitiesOnly=yes" && [ "$(tmdident)" = "$T/hub_id" ] && python3 -c "import json,sys; sys.exit(json.load(open(sys.argv[1]))[\"deploy\"][\"target\"] != \"hubbox\")" "$H/.cca/teams/$TMDID/admin.json"'
+tmdtarget root@hubbox; : > "$T/ssh.env"
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
+ok "App 里再部署、部署时写了私钥：那一页预填记下的那台、说照哪把私钥登录；查登录、部署的 ssh 都带着它，部署记录里接着记着" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and [f[\"value\"] for f in e[\"fields\"]] == [\"hubbox\", \"root\", \"22\"] and \"照部署时写的私钥（$T/hub_id）\" in e[\"message\"]" && [ "$(lastres)" = team_deployed ] && [ "$(grep "^ARGV" "$T/ssh.env" | grep -vc " -G ")" -ge 2 ] && ! grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -qvF -- "-i $T/hub_id -o IdentitiesOnly=yes" && [ "$(tmdident)" = "$T/hub_id" ]'
+: > "$T/ssh.env"
+out=$(runev cca team deploy 机房组 root@hubbox 2>&1); rc=$?
+ok "终端里再部署、写的就是记下的那台、没写 -p、-i：照记下的端口、私钥登录（说用的是哪把），部署记录里接着记着" '[ $rc -eq 0 ] && [ "$(lastres)" = team_deployed ] && grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -F -- " -p 22 " | grep -qF -- "-i $T/hub_id -o IdentitiesOnly=yes" && printf "%s" "$out" | grep -qF "用私钥 $T/hub_id 登录" && [ "$(tmdident)" = "$T/hub_id" ]'
 echo always > "$T/hubbox/ssh_denied"
 out=$(sess '{"consent.team_delete":[{"v":"y"}],"team.keep_server":[{"v":"n"}]}' -- cca team leave 机房组 2>&1); rc=$?
 rm -f "$T/hubbox/ssh_denied"

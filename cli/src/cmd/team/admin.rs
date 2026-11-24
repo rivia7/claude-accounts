@@ -1122,8 +1122,8 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
         return Ok(());
     };
     let (t, a, _lk) = admin_of(&tid)?;
-    // 记下装到了哪台、用哪把私钥登录的（接没接上都是装在那里了）：删除 Team 时照它卸载（undeploy_plan）。这一次没写 -i 的就没有：
-    // 照这一次登录上的办法（ssh 的配置、密码）
+    // 记下装到了哪台、用哪把私钥登录的（接没接上都是装在那里了）：删除 Team 时照它卸载（undeploy_plan），再部署到这一台时照它登录
+    // （bash 的 team_deploy：没写 -i 时传进来的就是记下的那把）。这一次没有私钥的就没有：照 ssh 的配置、密码
     a.set(
         "deploy",
         dict! {
