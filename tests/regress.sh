@@ -1658,7 +1658,7 @@ ok "共享的设置里给了 Google Cloud 项目（各账号会用同一个项�
 n_p=$(grep -c "cca-agy-probe" agy.log); run CCA_TTY="$(ans)" cca agy @alice --version >/dev/null 2>&1; rc=$?
 ok "（探测结果按 agy 程序缓存，不每次都跑）" '[ $rc -eq 3 ] && [ "$(grep -c "cca-agy-probe" agy.log)" = "$n_p" ]'
 # 从以前的 cca 升级上来：只有它记下的 probe.json（只设了 SSH_CONNECTION 探测，像 1.5.16 那样说不存文件；程序文件对得上）
-python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["files"]=False; json.dump(j, open(sys.argv[2], "w"))' "$H/.cca/agy/probe2.json" "$H/.cca/agy/probe.json"
+"$TESTBIN" run -f j="$H/.cca/agy/probe2.json" 'j["files"]=False; print(json.dumps(j), end="")' > "$H/.cca/agy/probe.json"
 rm -f "$H/.cca/agy/probe2.json"; agy_old=$(cat "$H/.cca/agy/probe.json")
 touch "$T/agy_keychain"; n_p=$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)
 out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
