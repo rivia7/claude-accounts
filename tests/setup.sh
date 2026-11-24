@@ -944,11 +944,6 @@ echo '{"tokens":{"id_token":"master"}}' > "$X/auth.json"; echo master-install > 
 echo '{}' > "$X/.codex-global-state.json"
 # 假的 STUN 服务器（cca-test stun 沙箱，只在 127.0.0.1 上，泄露检测那一节才开）：回答 Binding 请求，说对方的公网 IP 是 $T/stun_ip
 # 里写的（IPv4），端口写进 $T/stun.port；每次回答记在 $T/stun.log。
-# regress.sh 里还有几行直接用 python3 跑 fake_browser.py、fake_stun.py、dockpl.py：先留一个只把参数转给 cca-test 的壳（进程号不变，
-# 回归照样 wait、kill 它），那几行改成直接调 "$TESTBIN" 以后删掉
-for s in fake_browser:browser fake_stun:stun dockpl:dockpl; do
-	printf 'import os, sys\nt = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cca-test")\nos.execv(t, [t, "%s"] + sys.argv[1:])\n' "${s#*:}" > "$T/${s%%:*}.py"
-done
 cat > "$T/edit.py" <<'S'
 #!/usr/bin/env python3
 # 假的编辑器（cca edit 用）：按环境变量 CCA_TEST_EDIT 里的一句 Python 改账号表（表在变量 j 里）

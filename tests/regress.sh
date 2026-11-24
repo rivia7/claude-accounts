@@ -394,7 +394,7 @@ rm -f "$T/oauth_flow"
 lp=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 LPU="https://claude.com/cai/oauth/authorize?code=true&client_id=c&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A$lp%2Fcallback&scope=user%3Ainference&code_challenge=CC&code_challenge_method=S256&state=st-page1&login_hint=alice%40example.com"
 : > open.log; rm -f "$T/clipboard"
-CCA_T="$T" python3 "$T/fake_browser.py" st-page1 good-page1 > "$T/page.txt" 2>&1 & fb=$!
+CCA_T="$T" "$TESTBIN" browser st-page1 good-page1 > "$T/page.txt" 2>&1 & fb=$!
 out=$(run CCA_LOGIN_WAIT=20 cca login-page alice@example.com --node US-A "$LPU" 2>"$T/lp.err"); rc=$?
 wait $fb
 ok "login-page：在账号专属的 Chrome 里经账号的端口打开登录页；接住带对的 state 跳回来的那一下（favicon、state 不对的不算），验证码进剪贴板、打到 stdout" '[ $rc -eq 0 ] && [ "$out" = "good-page1#st-page1" ] && [ "$(cat "$T/clipboard")" = "good-page1#st-page1" ] && grep -F "state=st-page1" open.log | grep -qF -- "--proxy-server=http://192.0.2.10:7901" && grep -F "state=st-page1" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && grep -qx "favicon 404" "$T/page.txt" && grep -qx "wrong 400" "$T/page.txt" && grep -qx "callback 200" "$T/page.txt" && grep -q "验证码已经复制到剪贴板" "$T/page.txt" && grep -q "回到服务器的终端粘贴" "$T/lp.err"'
@@ -615,7 +615,7 @@ ls_now=$(date +%s); while [ "$(date +%s)" = "$ls_now" ]; do sleep 0.1; done
 n0=$(grep -c "pixel.gif" curl.log)
 out=$(run cca check 2>&1)
 ok "cca check：DNS 重新测（不用启动时缓存的），注明解析器在哪；有泄露的那个账号另外说明" '[ "$(grep -c "pixel.gif" curl.log)" = $((n0 + 4)) ] && printf "%s" "$out" | grep -q "DNS 未发现地区异常（1 个解析器：United States；非浏览器实测） · WebRTC 没测成" && printf "%s" "$out" | grep -q "DNS 泄露（1 个解析器在中国大陆）" && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口"'
-python3 -I "$T/fake_stun.py" "$T" & STUN_PID=$!
+"$TESTBIN" stun "$T" & STUN_PID=$!
 for i in $(seq 1 50); do [ -s "$T/stun.port" ] && break; sleep 0.1; done; STUN="127.0.0.1:$(cat "$T/stun.port")"
 echo 192.0.2.77 > "$T/stun_ip"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
@@ -1568,7 +1568,7 @@ rm -f "$T/oauth_flow"
 lp=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 LPX="https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_x&redirect_uri=http%3A%2F%2Flocalhost%3A$lp%2Fauth%2Fcallback&scope=openid&code_challenge=CC&code_challenge_method=S256&state=st-cxpage&originator=codex_cli_rs"
 : > open.log; rm -f "$T/clipboard"
-CCA_T="$T" python3 "$T/fake_browser.py" st-cxpage good-cxpage > "$T/page.txt" 2>&1 & fb=$!
+CCA_T="$T" "$TESTBIN" browser st-cxpage good-cxpage > "$T/page.txt" 2>&1 & fb=$!
 out=$(run CCA_LOGIN_WAIT=20 cca codex login-page alice@example.com --node US-B "$LPX" 2>/dev/null); rc=$?
 wait $fb
 ok "cca codex login-page：在 Codex 账号专属的 Chrome 里经它的端口打开（补上 login_hint），接住 /auth/callback 的验证码" '[ $rc -eq 0 ] && [ "$out" = "good-cxpage#st-cxpage" ] && [ "$(cat "$T/clipboard")" = "good-cxpage#st-cxpage" ] && grep -F "state=st-cxpage" open.log | grep -qF -- "--user-data-dir=$CD/chrome" && grep -F "state=st-cxpage" open.log | grep -qF -- "--proxy-server=http://192.0.2.10:7902" && grep -F "state=st-cxpage" open.log | grep -qF "login_hint=alice%40example.com" && grep -qx "callback 200" "$T/page.txt"'
@@ -4124,7 +4124,7 @@ out=$(ru cca local udp on US-B 2>&1 </dev/null); rc=$?
 ok "cca local udp on 不转发 UDP 的节点：说清楚；非交互时不现选、不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "节点「US-B」不转发 UDP" && printf "%s" "$out" | grep -q "运行 cca local udp on 节点" && [ "$(admins)" = 0 ] && cfgok "not c[\"local\"].get(\"udp\")"'
 out=$(ru cca local udp on NOPE 2>&1 </dev/null); rc=$?
 ok "cca local udp on 认不出的节点：说内置代理里没有它的定义；非交互时不现选、不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理里没有节点「NOPE」的定义" && [ "$(admins)" = 0 ] && [ ! -e "$UR" ]'
-rm -f "$T/stun.port"; python3 -I "$T/fake_stun.py" "$T" & STUN_PID=$!
+rm -f "$T/stun.port"; "$TESTBIN" stun "$T" & STUN_PID=$!
 for i in $(seq 1 50); do [ -s "$T/stun.port" ] && break; sleep 0.1; done; STUN="127.0.0.1:$(cat "$T/stun.port")"
 echo 198.51.100.21 > "$T/stun_ip"
 : > gh.log
@@ -4429,7 +4429,7 @@ dkapp() {   # dkapp 名字 bundle-id [真程序]：沙箱里的假 App
 	printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>%s</string></dict></plist>\n' "$2" "$1" > "$DK/$1.app/Contents/Info.plist"
 	[ -z "${3:-}" ] || { cp "$3" "$DK/$1.app/Contents/MacOS/$1"; codesign -s - -f "$DK/$1.app" >/dev/null 2>&1; }
 }
-dk() { python3 -I "$T/dockpl.py" "$DK/dock.plist" "$@"; }   # set 最近使用的 [固定的] [show-recents] | get | add App
+dk() { "$TESTBIN" dockpl "$DK/dock.plist" "$@"; }   # set 最近使用的 [固定的] [show-recents] | get | add App
 kills() { local n; n=$(grep -c '^KILLALL Dock$' "$T/killall.log" 2>/dev/null); echo "${n:-0}"; }   # 重启了几次程序坞
 dkwait() { local i; for i in $(seq 1 100); do [ "$(grep -cxF -- "$3" "$1" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; sleep 0.1; done; return 1; }   # dkwait 文件 行数 那一行：等到有这么多行是这样的（最多 10 秒）
 hires() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }

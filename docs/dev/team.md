@@ -764,7 +764,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   （`team_joined`）、两个 Team 照先后列出、成员用不了 `team node`、`sync` 同步到新的一版并跟着改名、
   被移除以后 `sync` 说出来、`leave` 的同意事件和同意之后；换了版本以后的第一条命令（`update_after`：版本没换、全新安装的不提前；
   在 Team 里的马上同步到管理员刚发布的一版）。这一节结束时停掉两台服务器、删掉 `~/.cca/teams`。
-  `team node test` 的假内核：假 mihomo 看到入站 `cca-test-1` 就把状态放在 `$T/core_test`（`core_load` 另记 `listeners/<端口>`：入站名和节点），
+  `team node test` 的假内核：假 mihomo 看到入站 `cca-test-1` 就把状态放在 `$T/core_test`（`cca-test core-load` 另记 `listeners/<端口>`：入站名和节点），
   假 nc 认它的端口；假 curl 经它时照 `$T/trace/<节点>/<网站>` 回话（默认服务那边 `203.0.113.<100+序号>`、www.cloudflare.com
   `198.51.100.250`），`$T/trace_down/<节点>` 时连不上；直连节点服务器的端口看 `$T/tcp_open`（「主机 端口」一行一个）。
 - 节点（`tests/team.py` 的 `test_nodes`）：列出来不带密码、`accounts`；加（重名、不是对象、过不了 `fill_problems` 的不要）、复制（整份、
