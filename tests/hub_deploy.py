@@ -845,7 +845,7 @@ class DeployTest(Base):
         r = self.deploy(a, tid, b, HUB_SSH_HOST='10.0.0.5')
         self.assertEqual([kv(r.stdout)[k] for k in ('state', 'host')], ['update', '127.0.0.1:%d' % port])
         self.assertEqual(b.envfile(d)['CCA_HUB_HOST'], '127.0.0.1')
-        # 托管平台：生成部署文件（服务端程序、README；Railway 另有 Dockerfile），里面只有公开的根公钥（后面那一段）
+        # 托管平台：生成部署文件（服务端程序、Dockerfile、README），里面只有公开的根公钥（后面那一段）
         key = root.split()[1]
         kvs = lambda text: dict(tok.split('=', 1) for tok in shlex.split(text))   # 值里有换行（steps 是几行）：整个输出一起拆
         out = kvs(a.ok('team-hosted', tid, 'railway', '--dir', str(a.home / 'rw'), CCA_VERSION='9.9.9'))
@@ -855,14 +855,19 @@ class DeployTest(Base):
         self.assertIn('railway init --name %s' % svc, out['steps'])
         self.assertEqual((a.home / 'rw' / 'cca-presence.py').read_text(), (ROOT / 'server' / 'cca-presence.py').read_text())
         self.assertIn('cca team attach 甲组 https://', (a.home / 'rw' / 'README.md').read_text())
-        out = kvs(a.ok('team-hosted', tid, 'sealos'))
-        self.assertEqual(out['dir'], str(a.home / (svc + '-sealos')), '没写目录：~/<服务名>-<平台>')
-        self.assertIn('环境变量：CCA_TEAM_ROOT=%s' % key, out['steps'])
-        self.assertFalse((a.home / (svc + '-sealos') / 'Dockerfile').exists())
+        # 托管平台只有 Railway：不写平台就是它；没写目录：~/<服务名>-railway
+        out = kvs(a.ok('team-hosted', tid))
+        self.assertEqual(out['dir'], str(a.home / (svc + '-railway')), '没写目录：~/<服务名>-railway')
+        self.assertIn('railway init --name %s' % svc, out['steps'])
+        self.assertIn('ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=%s\n' % key, (a.home / (svc + '-railway') / 'Dockerfile').read_text())
+        # Sealos 不再支持（它的表单只能把服务端程序当文本挂进去）：说换 Railway 或者自己的服务器，什么都不生成
+        r = a.run('team-hosted', tid, 'sealos', '--dir', str(a.home / 'se'))
+        self.assertEqual((r.returncode, r.stdout), (1, 'usage\t不再支持 Sealos：部署到 Railway，或者自己的服务器（cca team deploy）\n'), r.stderr)
+        self.assertFalse((a.home / 'se').exists())
         (a.home / 'rw' / 'other.txt').write_text('x')
         self.assertEqual(self.code(a, 'team-hosted', tid, 'railway', '--dir', str(a.home / 'rw')), 'dir')
         self.assertEqual(self.code(a, 'team-hosted', tid, 'heroku'), 'usage')
-        self.assertNotIn(str(a.cca), ''.join(f.read_text() for d in ('rw', svc + '-sealos') for f in (a.home / d).iterdir()),
+        self.assertNotIn(str(a.cca), ''.join(f.read_text() for d in ('rw', svc + '-railway') for f in (a.home / d).iterdir()),
                          '部署文件里没有这台设备上的东西')
         # 写错的：没有这个 Team、Team 的部署没有 --reset、成员不是管理员
         env = dict(HUB_ENTER=str(b.enter), CCA_VERSION='9.9.9')

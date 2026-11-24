@@ -195,21 +195,19 @@ Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、�
 
 ### 托管平台
 
-没有服务器时部署到托管平台（Railway、Sealos）：在管理员的设备上 `cca team hosted Team [railway | sealos]`（只在终端里），生成部署文件
-（默认 `~/<服务名>-<平台>`，里面只有 Team 的根公钥：公开的），照着打出来的步骤部署（目录里的 README.md 也写着），再在管理员的设备上接上
+没有服务器时部署到托管平台 Railway：在管理员的设备上 `cca team hosted Team`（只在终端里），生成部署文件
+（默认 `~/<服务名>-railway`，里面只有 Team 的根公钥：公开的），照着打出来的步骤部署（目录里的 README.md 也写着），再在管理员的设备上接上
 平台给的公网地址：`cca team attach Team https://平台给的地址`（没写端口就是 443）。托管平台只转一个 HTTP 端口：上面的不给远程会话做中转，
 也没有网页端。
 
 - 程序照样是这一个，只是 `--behind-proxy`：只说 HTTP，HTTPS 由平台做（设备照系统的证书机构验平台的证书，接上时没有指纹）；
   每个 IP 的限额按 `X-Forwarded-For` 的最后一项算（平台的代理加的那一项，客户端改不了），同一个 IP 同时几个连接不限（连过来的都是代理）。
-- 平台的表单里只填得了环境变量和一条命令：环境变量 `CCA_HUB_HOSTED=1` 等于 `--mode team --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`
+- 平台上只给得了环境变量和一条命令（生成的 `Dockerfile` 里写好了）：环境变量 `CCA_HUB_HOSTED=1` 等于 `--mode team --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`
   （命令行里写了的照命令行的），`CCA_TEAM_ROOT` 是根公钥 `ssh-ed25519` 后面那一段，命令是 `python3 -I /app/cca-presence.py`。端口固定是 8080
   （平台的公网地址转到它）。`/data` 要挂一块存储：没有时不启动（不然重启一次记录就没了）。
 - Railway：生成的是 `Dockerfile`（`python:3.13-slim`，`ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=…`）和程序，用它的命令行工具
   `railway init`、`railway add`、`railway volume add --mount-path /data`、`railway up`、`railway domain --port 8080`。按用量计费（见它的价格页）；
   国内不一定连得上 `*.up.railway.app`。
-- Sealos（国内，要实名）：在它的「应用管理」里新建应用，镜像 `python:3.13-slim`、1 个实例、端口 8080 打开公网访问、启动命令、两个环境变量、
-  一块挂在 `/data` 的存储卷，再加一个配置文件 `/app/cca-presence.py`（内容就是这个程序）。
 - 更新：再运行一次 `cca team hosted`（这个 Team 接着的就是托管平台上的那一台时是更新），照打出来的步骤换上新的程序；数据在 `/data` 里照旧，
   设备不用重新加入。平台的界面会变，步骤以平台现在的为准。
 

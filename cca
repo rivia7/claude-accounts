@@ -6329,7 +6329,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
                       [--docker | --systemd] [--dir 目录]
                                                    经 SSH 把它的同步服务器装到自己的 Linux 服务器上、接上（再运行是更新；--script 只打出安装脚本）。
                                                    同时给这个 Team 的远程会话做中转，开手机的网页端（--no-web 不开）
-      cca team hosted Team [railway | sealos] [--dir 目录]   没有服务器：生成部署到托管平台的文件和步骤
+      cca team hosted Team [railway] [--dir 目录]  没有服务器：生成部署到托管平台（Railway）的文件和步骤
       cca team attach Team https://服务器:端口 [证书公钥的指纹…]   接上（换一台）同步服务器
       cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key '公钥']   给一台设备发邀请（--key：只认这把公钥）
       cca team devices Team [--json]               有哪些设备
@@ -6922,7 +6922,7 @@ team_new() {   # cca team new 名字 [--device 这台设备的名字] [--account
 	okay "建好了「${name}」（${tid:0:8}）：这台设备是它的管理员${n:+，放进了 ${n} 个账号（连同现在走的节点、别名）}"
 	say "  下一步：部署它的同步服务器（服务器上只放这把公开的根公钥，没有要保密的东西）"
 	say "    有自己的 Linux 服务器：cca team deploy ${tid:0:8} root@服务器"
-	say "    没有服务器：cca team hosted ${tid:0:8}（部署到 Railway 或者 Sealos）"
+	say "    没有服务器：cca team hosted ${tid:0:8}（部署到托管平台 Railway）"
 	say "    自己运行服务端的：--mode team --team-root '${root}'，然后 cca team attach ${tid:0:8} https://服务器:端口 [证书公钥的指纹]"
 	[ -n "$n" ] || say "  往里放账号：cca team map ${tid:0:8} 工具 邮箱 节点（这台设备上自己加的账号一次都放进去：cca team import ${tid:0:8} --mine）"
 	warn "根密钥只在这台设备上（~/.cca/teams/${tid}/）：它丢了这个 Team 就得重建。cca restore 的备份不带它，要自己留一份"
@@ -7083,30 +7083,26 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	gui_done team_deployed "「${name}」的同步服务器$([ "$state" = update ] && printf 已更新 || printf 已部署)（${host}）${webmsg}"
 }
 
-team_hosted() {   # cca team hosted Team [railway | sealos] [--dir 目录]：没有服务器时把 Team 的同步服务器部署到托管平台。生成部署文件，
-	                # 打出步骤（照着在平台上做），最后把平台给的公网地址交给 cca team attach。只在终端里（App 里还没有这一页）
-	local sel platform="" args=() out a dir="" steps="" tid="" name="" svc=""
-	[ $# -ge 1 ] || FAIL_CODE=team_usage die "用法: cca team hosted Team [railway | sealos] [--dir 目录]"
+team_hosted() {   # cca team hosted Team [railway] [--dir 目录]：没有服务器时把 Team 的同步服务器部署到托管平台（只有 Railway，不写就是它）。
+	                # 生成部署文件，打出步骤（照着在平台上做），最后把平台给的公网地址交给 cca team attach。只在终端里（App 里还没有这一页）
+	local sel platform=railway args=() out a dir="" steps="" tid="" name="" svc=""
+	[ $# -ge 1 ] || FAIL_CODE=team_usage die "用法: cca team hosted Team [railway] [--dir 目录]"
 	sel=$1; shift
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--dir) [ $# -ge 2 ] || FAIL_CODE=team_usage die "用法: cca team hosted Team [railway | sealos] [--dir 目录]"; args+=(--dir "$2"); shift ;;
-			railway|sealos) platform=$1 ;;
-			*) FAIL_CODE=team_usage die "用法: cca team hosted Team [railway | sealos] [--dir 目录]" ;;
+			--dir) [ $# -ge 2 ] || FAIL_CODE=team_usage die "用法: cca team hosted Team [railway] [--dir 目录]"; args+=(--dir "$2"); shift ;;
+			railway|sealos) platform=$1 ;;   # sealos 照样交给辅助程序：它说不再支持、换成什么（team_usage）
+			*) FAIL_CODE=team_usage die "用法: cca team hosted Team [railway] [--dir 目录]" ;;
 		esac
 		shift
 	done
-	if [ -z "$platform" ]; then
-		interactive || FAIL_CODE=team_usage die "用法: cca team hosted Team [railway | sealos] [--dir 目录]"
-		platform=$(hub_platform_ask) || return 1
-	fi
 	out=$(py team-hosted "$sel" "$platform" ${args[@]+"${args[@]}"}) || team_fail "$out" "没生成成部署文件"
 	eval "$out"   # dir steps tid name svc
 	okay "「${name}」的同步服务器的部署文件生成在 ${dir}（说明在里面的 README.md）。照下面做："
 	printf '%s\n' "$steps" | sed 's/^/    /' >&2
 	say "  部署好以后，把平台给的公网地址（https://…）接上："
 	say "    cca team attach ${tid:0:8} https://平台给的地址"
-	say "  新版 cca 带着新版的服务端程序：再运行一次 cca team hosted ${tid:0:8} ${platform}，照 README.md 的「更新」做"
+	say "  新版 cca 带着新版的服务端程序：再运行一次 cca team hosted ${tid:0:8}，照 README.md 的「更新」做"
 }
 
 team_attach() {   # cca team attach Team https://服务器:端口 [证书公钥的指纹…]
@@ -7183,7 +7179,7 @@ team_revoke() {   # cca team revoke Team 设备：移除一台设备（或者撤
 }
 
 # 部署 Team 的同步服务器（cca team deploy）、删除 Team 时卸载它（cca team leave）时问服务器、查登录、问密码、给出加公钥那一行的几段
-# （docs/dev/team.md「部署」「删除 Team」）。名字、题号里的 hub（hub.deploy、hub.password、hub.pubkey、hub.platform，原因码 hub_ssh、
+# （docs/dev/team.md「部署」「删除 Team」）。名字、题号里的 hub（hub.deploy、hub.password、hub.pubkey，原因码 hub_ssh、
 # 交给终端的 hub_deploy）是原来部署自己的同步服务器时起的，照旧（PROTOCOL 4.1、4.6）。是哪个 Team、部署还是卸载由这几项说
 # （team_deploy、team_undeploy 设好）
 # ---------------------------------------------------------------------------
@@ -7400,25 +7396,6 @@ hub_deploy_run() {   # hub_deploy_run 目标 参数…：部署一次，辅助�
 	else out=$(py "${DEPLOY_PY[@]}" "$@"); fi
 }
 
-hub_platform_ask() {   # 部署到哪个托管平台：打出 railway 或者 sealos（App 里是 hub.platform）；取消返回 1
-	local a
-	if [ -n "$PROMPT_GUI" ]; then
-		gui_ask choice "部署到哪个托管平台？" railway q=hub.platform "title=部署到托管平台" label=平台 \
-			"hint=不用买服务器：平台给一个 https 的公网地址，服务端程序在它上面运行，数据存在它的存储里" \
-			"opt=railway"$'\t'"Railway"$'\t'"海外的平台：要 Railway 的账号和它的命令行工具（railway）。国内直连不一定稳" \
-			"opt=sealos"$'\t'"Sealos"$'\t'"国内的平台（要实名）：在它的网页上照着填表单"
-		return
-	fi
-	say "部署到哪个托管平台？"
-	say "  1) Railway：海外的平台，要 Railway 的账号和它的命令行工具（railway）。国内直连不一定稳"
-	say "  2) Sealos：国内的平台（要实名），在它的网页上照着填表单"
-	a=$(ask "选一个 [1/2]: " "")
-	case "$a" in
-		1|railway|Railway) printf railway ;;
-		2|sealos|Sealos) printf sealos ;;
-		*) say "  已取消"; return 1 ;;
-	esac
-}
 cmd_policy() {   # cca [codex] policy …：维护者共享的账号 3.6.0 起去掉了（改用 Team），只说一声。界面 App 不再调它：_gui state 的 config.policy
 	               # 总是关着的样子（PROTOCOL 2.2）
 	die "维护者共享的账号（cca policy）3.6.0 起去掉了，改用 Team：向 Team 的管理员要一个邀请链接，运行 cca team join 加入；自己的几台设备之间同步：cca team new"

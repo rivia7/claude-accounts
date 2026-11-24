@@ -3798,8 +3798,11 @@ ok "加好了公钥再试：登录上了，接着部署（只更新，result 事
 rm -rf "$H/.ssh"; [ ! -e "$T/home.ssh" ] || mv "$T/home.ssh" "$H/.ssh"
 out=$(run CCA_TTY="$(ans '' '' '')" cca team deploy 机房组 2>&1); rc=$?
 ok "终端里不写服务器（App 里「改在终端里完成」）：问地址、SSH 用户、端口（都预填部署时记下的：hubbox、root、22），再部署（只更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
-out=$(run cca team hosted 机房组 sealos --dir "$T/tm-hosted" 2>&1); rc=$?
-ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -s "$T/tm-hosted/cca-presence.py" ] && [ -s "$T/tm-hosted/README.md" ] && printf "%s" "$out" | grep -q "环境变量：CCA_TEAM_ROOT=AAAA" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
+# 托管平台只有 Railway：不写平台就是它（以前问选哪个）；写 sealos 交给辅助程序，说不再支持、换什么，什么都不生成
+out=$(run cca team hosted 机房组 --dir "$T/tm-hosted" 2>&1); rc=$?
+ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -s "$T/tm-hosted/cca-presence.py" ] && [ -s "$T/tm-hosted/README.md" ] && grep -q "^ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=AAAA" "$T/tm-hosted/Dockerfile" && printf "%s" "$out" | grep -q "railway up --detach" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
+out=$(runev cca team hosted 机房组 sealos --dir "$T/tm-sealos" 2>&1); rc=$?
+ok "cca team hosted 机房组 sealos：不再支持 Sealos（fail 事件 team_usage，说换 Railway 或者自己的服务器），什么都不生成" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再支持 Sealos：部署到 Railway，或者自己的服务器（cca team deploy）" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && [ ! -e "$T/tm-sealos" ]'
 # 删除 Team（管理员的 cca team leave）：先经 SSH 卸掉它的同步服务器（cca team deploy 记下了装到哪：root@hubbox、端口 22、/opt/<服务名>），
 # 卸好了才删这台设备上的。卸不成：命令行里不删，说加 --keep-server；App 里问要不要照样删（team.keep_server）。安装脚本的 --uninstall 细的在
 # tests/hub_deploy.py

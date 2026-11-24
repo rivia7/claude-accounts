@@ -23,6 +23,7 @@ use std::sync::LazyLock;
 
 pub mod deploy;
 pub mod hosted;
+pub mod payload;
 
 /// 这个模块的子命令：只剩打出安装脚本（cca team deploy --script、release.sh 的 cca-hub-install.sh）
 pub const CMDS: &[Cmd] = &[Cmd::all("hub-installer", deploy::cmd_hub_installer)];
@@ -163,7 +164,7 @@ pub fn host_of(url: &str) -> String {
     url.split_once("://").map_or(url, |x| x.1).trim_end_matches('/').to_string()
 }
 
-/// https://地址 没写端口时补上 443：托管平台（Railway、Sealos）给的公网地址只到主机名。写了端口的、带路径的原样（url_ok 再查）
+/// https://地址 没写端口时补上 443：托管平台（Railway）给的公网地址只到主机名。写了端口的、带路径的原样（url_ok 再查）
 pub fn with_https_port(url: &str) -> String {
     let url = url.trim_end_matches('/');
     let Some(rest) = url.strip_prefix("https://") else { return url.to_string() };

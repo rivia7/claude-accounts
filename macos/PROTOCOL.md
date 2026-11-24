@@ -975,7 +975,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `hub.password` | `team deploy <Team>`（App 里）；`team leave <Team>`（App 里删除 Team：卸载它的同步服务器时） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（卸载）（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对：部署时是 `fail` 的 `hub_ssh`，卸载时接着问 `team.keep_server`；错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
 | `hub.pubkey` | `team deploy <Team>`、`team leave <Team>`（App 里；「在终端里部署」「在终端里卸载」交给终端的命令照是哪一种） | `code`、`choice` | 服务器只认 SSH 密钥、不认这台设备的（不让用密码）：有密钥时 `cmd`（`code`：在服务器上运行的那一行，把这台设备的公钥加进 `~/.ssh/authorized_keys`）和 `next`（`retry` 加好了，再试 / `terminal` 在终端里部署（卸载））；再试还不认时带着原因（`cmd` 的 `error`）重问，这回认密码了接着 `hub.password`。还没有密钥时只有 `next`（`keygen` 生成一把 `~/.ssh/id_ed25519`，ed25519、没有密码，生成了再问这一页 / `terminal`）。选 `terminal`：`terminal` 事件（`code` 是 `hub_deploy`，`argv` 带上服务器和端口），退出码非 0。照部署时写的私钥（`-i`）登录（部署、删除时填的就是记下的那台）、服务器不认它的不问这一页（加这台设备的公钥没用）：部署是 `fail` 的 `hub_ssh`，删除接着 `team.keep_server`，原因里都说不认哪把私钥 |
 | `team.keep_server` | `team leave <Team>`（管理员删除 Team：同意以后，卸载它的同步服务器没成时） | `confirm`（默认否，`severity` 是 `warn`） | 仍然删掉这个 Team 吗、服务器上的服务留着：`detail` 说为什么没卸成（SSH 登录不上、那个目录里没装、装着别的 Team 的……）和服务器上怎么自己卸载（`sudo sh cca-hub-install.sh --uninstall --dir 目录`）。答是：删掉这台设备上的（`result` 的 `team_left`）；答否（默认）：什么都不删，按取消收场（`fail` 的 `cancelled`）。终端里没人能答时不删，原因里说确定只删这台设备上的就加 `--keep-server` |
-| `hub.platform` | `team hosted <Team>`（没写平台时；App 不调这条命令，一般在终端里问） | `choice` | 部署到哪个托管平台：`railway`（海外的，要它的账号和命令行工具）/ `sealos`（国内的，要实名，在网页上填表单）。取消就是不部署 |
+| `hub.platform` | `team hosted <Team>`（没写平台时；App 不调这条命令，一般在终端里问） | `choice` | 部署到哪个托管平台：`railway`（海外的，要它的账号和命令行工具）/ `sealos`（国内的，要实名，在网页上填表单）。取消就是不部署。**从这一版起不再问**（只剩 Railway：没写平台就是它，写 `sealos` 是 `fail` 的 `team_usage`）；这一行留着给以前的版本 |
 | `team.new` | `team new`（App 里，不写名字） | `text` | 新建 Team：名字（校验 teamname：1～64 个字符，不能有控制字符）。建在这台设备上（它是管理员），接着问 `team.accounts`（这台设备上没有能放的账号时不问），成了 `result` 的 `team_created`（`message` 说放进了几个账号），接着要部署它的同步服务器 |
 | `team.accounts` | `team new`（没写 `--accounts` 时） | `multi`（`optional`，`min` 是 0） | 这台设备上哪些账号连同现在走的节点、别名放进新建的 Team：每个选项是一个账号（`label` 是工具、别名和邮箱，`note` 是走哪个节点、已经在哪个 Team 里），只列能放的（自己加的官方账号，和这台设备当管理员的别的 Team 里的）。自己加的预先选好：写在 `value` 里、`default` 是空的（都不勾交上来是空的答案：一个都不放）。页上有 `submit`（「新建」）。3.5.5 起；以前的 cca 新建时不问，建的是空的 Team |
 | `team.join` | `team join` | `secret` | Team 的邀请链接（`cca-team1.` 开头的一行：管理员发给这台设备的，一个邀请只能加入一台设备）。链接不对（少了一截、不是邀请链接）、服务器不认、过期了、用过了（`team_link`、`team_denied`、`team_expired`、`team_used`）时带着原因（`error`）重问。配置向导、终端里的安装（`onboard.team`、`install.team` 答有）问的这一页是可选的（`optional`）：留空交上来是先不加入，接着往下做 |
@@ -1090,7 +1090,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
 自己的几台设备之间同步改用 Team（4.14：建一个 Team（新建时选上这台设备自己的账号，或者之后 `cca team import <Team> --mine`），部署它的服务器，
 再给别的设备发邀请）。以前加入过、部署过的设备，cca 升级后第一次运行时删掉本机记着的加入信息、密钥和经它同步来的数据（服务器上的不管）。
 `hello` 没有 `hub` 了，旧版的 App 照它不显示那一块、不调 `cca hub`；部署 Team 的服务器沿用了那时的题号（`hub.deploy`、`hub.password`、
-`hub.pubkey`、`hub.platform`）、原因码 `hub_ssh` 和交给终端的 `hub_deploy`。
+`hub.pubkey`；`hub.platform` 从这一版起不再用：托管平台只剩 Railway，不用问）、原因码 `hub_ssh` 和交给终端的 `hub_deploy`。
 
 ### 4.14 Team：`cca team`
 
@@ -1121,7 +1121,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   服务器上、接上；App 里不写服务器，在提问会话里问（`hub.deploy`、`hub.password`、`hub.pubkey`，登录不上时的原因码是 `hub_ssh`，4.6）；
   成了 `result` 的 `team_deployed`（`message` 里说手机的网页端开没开、证书拿到没有），地址是内网的另有 `fail` 的 `team_lan`、换了服务器
   原来那台上没收尾成的有 `team_forward`（做完了、带着提醒）。一台服务器上每个 Team 一个服务（`cca-team-<编号的前 8 位>`，带远程会话的中转、
-  手机的网页端和给网页端要证书的证书助手），再运行是更新。没有服务器的：`cca team hosted <Team>`（终端里：生成部署到托管平台的文件和步骤）。
+  手机的网页端和给网页端要证书的证书助手），再运行是更新。没有服务器的：`cca team hosted <Team>`（终端里：生成部署到托管平台 Railway 的文件和步骤）。
 - **同步配置**（`cca team sync`）：各个 Team 同步一次，有新的一版马上照它改账号表、同步路由器。跑完为止。
 - **加入**（`cca team join`）：提问会话（`team.join`：一个密文输入框，贴邀请链接）。邀请是凭证、只能用一次，只经提问会话的管道交给 cca。
   成了 `result` 的 `team_joined`；加入了、配置还没同步下来时前面有 `fail` 的 `team_sync`（退出码照样是 0）。这台设备在 Team 里的名字用管理员发邀请时

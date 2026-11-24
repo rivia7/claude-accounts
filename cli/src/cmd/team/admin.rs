@@ -1242,20 +1242,31 @@ pub fn undeploy_plan(t: &Team) -> Option<UndeployPlan> {
     })
 }
 
-/// py team-hosted Team railway|sealos [--dir 目录]：没有服务器时把这个 Team 的同步服务器部署到托管平台：生成部署文件（team_files）。
-/// 这个 Team 已经接着一台照证书机构验的服务器（托管平台上的：没有指纹）时是更新。stdout 是 sh 的 键=值：dir、steps、tid、name、svc。
-/// 原因码：no_team、not_admin、usage、dir、key
+/// py team-hosted Team [railway] [--dir 目录]：没有服务器时把这个 Team 的同步服务器部署到托管平台（只有 Railway，平台可以不写）：
+/// 生成部署文件（team_files）。这个 Team 已经接着一台照证书机构验的服务器（托管平台上的：没有指纹）时是更新。stdout 是 sh 的 键=值：
+/// dir、steps、tid、name、svc。原因码：no_team、not_admin、usage（写了别的平台；sealos 说不再支持）、dir、key
 pub fn cmd_team_hosted(args: &[String]) -> R<()> {
-    let (sel, platform, dir) = match args {
-        [s, p] => (s, p, None),
-        [s, p, flag, d] if flag == "--dir" && !d.is_empty() => (s, p, Some(d.as_str())),
-        _ => return Err(Fail::Die("用法: py team-hosted Team railway|sealos [--dir 目录]".into())),
+    const USAGE: &str = "用法: py team-hosted Team [railway] [--dir 目录]";
+    let [sel, rest @ ..] = args else { return Err(Fail::Die(USAGE.into())) };
+    let rest = match rest {
+        [p, more @ ..] if !p.starts_with('-') => match p.as_str() {
+            "railway" => more,
+            // Sealos 的表单只能把服务端程序当成文本的配置文件挂进容器：换成编译好的程序以后放不进去（docs/dev/team.md「托管平台」）
+            "sealos" => return fail("usage", "不再支持 Sealos：部署到 Railway，或者自己的服务器（cca team deploy）"),
+            _ => return fail("usage", "托管平台只有 Railway：写 railway，或者不写"),
+        },
+        _ => rest,
+    };
+    let dir = match rest {
+        [] => None,
+        [flag, d] if flag == "--dir" && !d.is_empty() => Some(d.as_str()),
+        _ => return Err(Fail::Die(USAGE.into())),
     };
     let (t, _a, _lk) = admin_of(sel)?;
     let Some(key) = t.root.split(' ').nth(1) else { return fail("key", "这个 Team 的根公钥读不出来") };
     let svc = format!("cca-team-{}", &t.id[..8]);
     let update = t.attached() && t.pins.is_empty();
-    match team_files(platform, dir, key, &svc, &t.name, update)? {
+    match team_files(dir, key, &svc, &t.name, update)? {
         Ok((dir, steps)) => {
             sh(&[
                 ("dir", dir.as_str()),

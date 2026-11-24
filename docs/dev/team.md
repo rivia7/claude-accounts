@@ -296,7 +296,7 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   `sudo sh 脚本 --team-root 'ssh-ed25519 AAAA…' [--host …] [--port …] [--relay-port … | --no-relay] [--web-port … | --no-web] [--docker | --systemd] [--dir …]`，
   最后打出管理员接上它的那一行（`cca team attach Team https://地址:端口 sha256//指纹`，地址和指纹都是公开的）。`--relay-port`、`--no-relay`
   只有这样运行时写得了：`cca team deploy` 不传它们。
-- **托管平台**（`cca team hosted Team [railway | sealos] [--dir 目录]`，只在终端里）：见下面「托管平台」。
+- **托管平台**（`cca team hosted Team [railway] [--dir 目录]`，只在终端里；只有 Railway）：见下面「托管平台」。
 
 **一台服务器上几个 Team**（用户定的：每个 Team 一个服务，服务端进程还是只管一个）：安装脚本（`server/hub-install.sh` 的 `team_setup`）里
 服务名、系统用户、容器名都是 `cca-team-<Team 编号的前 8 位>`（编号是根公钥的 SHA-256，脚本里拿 openssl 算，和辅助程序的 `team_id` 一样），
@@ -497,26 +497,27 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 
 ### 托管平台
 
-- `cca team hosted Team [railway | sealos] [--dir 目录]`（`py team-hosted`，`cmd/hub/hosted.rs` 的 `team_files`）：没有服务器时部署到 Railway 或者
-  Sealos（2026-11 调研过的两家：国外一家、国内一家；Cloudflare 那种要另写一份服务端，不做）。只在终端里：平台不写时问（`hub_platform_ask`，
-  终端里 1/2，提问会话里是 `hub.platform`——App 不调这条命令；没有终端时说用法）。
-- 服务端是同一个程序，平台做 HTTPS：`--behind-proxy`（只说 HTTP；限流按 `X-Forwarded-For` 的最后一项，同一个 IP 的连接数不限）；平台的表单
-  只填得了环境变量和一条命令，所以 `CCA_HUB_HOSTED=1` 等于 `--mode team --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`（端口固定
+- `cca team hosted Team [railway] [--dir 目录]`（`py team-hosted`，`cmd/hub/hosted.rs` 的 `team_files`）：没有服务器时部署到 Railway
+  （2026-11 调研过的；Cloudflare 那种要另写一份服务端，不做）。托管平台只有它这一家，平台可以不写；只在终端里（App 不调这条命令）。
+  以前还有国内的 Sealos，去掉了：它的表单只能把服务端程序当成文本的配置文件挂进容器，服务端换成编译好的程序（cca-core）以后挂不进去，
+  要用它就得先把容器镜像推到镜像仓库里。现在写 `sealos` 是 `team_usage`（说换 Railway 或者自己的服务器 `cca team deploy`），
+  以前不写平台时问的那一题（`hub.platform`）也不问了（PROTOCOL 4.6 里那一行留着：删掉要升 `GUI_API`）。
+- 服务端是同一个程序，平台做 HTTPS：`--behind-proxy`（只说 HTTP；限流按 `X-Forwarded-For` 的最后一项，同一个 IP 的连接数不限）；平台上
+  只给得了环境变量和一条命令，所以 `CCA_HUB_HOSTED=1` 等于 `--mode team --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`（端口固定
   8080：Railway 的 `PORT` 不用，`railway domain --port 8080`），`/data` 不在时不启动；根公钥是 `CCA_TEAM_ROOT`（`ssh-ed25519` 后面那一段）。
   生成的设置里没有中转、网页端：托管平台上的 Team 服务器不给远程会话做中转。
-- 生成部署文件（目录默认 `~/<服务名>-<平台>`；目录里只能有这几个文件和点开头的，不然 `dir`；这几个文件再运行时照样覆盖——更新要的——
-  `fs::put` 跟着符号链接写，目录里有人放了同名的链接时写到它指的地方）：服务端程序 `cca-presence.py`、`README.md`（第一次部署、更新的步骤），
-  Railway 另有 `Dockerfile`（`python:3.13-slim`、`ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=…`；不用 railway.json：它的 config-as-code 已经不推荐了，
-  挂载存储也没写进文档）；Sealos 表单里的配置文件 `/app/cca-presence.py` 就是程序的内容。文件里只有根公钥（公开的）。stdout 是 `sh` 的 键=值
-  （`dir`、`steps`、`tid`、`name`、`svc`）。`steps` 是要做的几步：Railway 是一行一行的命令（`cd 目录`、`railway login`、`init --name <服务名>`、
-  `add --service <服务名>`、`volume add --mount-path /data`、`up --detach`、`domain --port 8080`；没有 `#` 注释：交互的 zsh 默认不认它），Sealos
-  是表单里各项填什么（镜像、固定 1 个实例、容器端口 8080 打开公网访问、启动命令、两个环境变量、`/data` 的存储卷、配置文件）。
+- 生成部署文件（目录默认 `~/<服务名>-railway`；目录里只能有这几个文件和点开头的，不然 `dir`；这几个文件再运行时照样覆盖——更新要的——
+  `fs::put` 跟着符号链接写，目录里有人放了同名的链接时写到它指的地方）：服务端程序 `cca-presence.py`、`README.md`（第一次部署、更新的步骤）、
+  `Dockerfile`（`python:3.13-slim`、`ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=…`；不用 railway.json：它的 config-as-code 已经不推荐了，
+  挂载存储也没写进文档）。文件里只有根公钥（公开的）。stdout 是 `sh` 的 键=值（`dir`、`steps`、`tid`、`name`、`svc`）。`steps` 是要做的几步，
+  一行一条命令（`cd 目录`、`railway login`、`init --name <服务名>`、`add --service <服务名>`、`volume add --mount-path /data`、`up --detach`、
+  `domain --port 8080`；没有 `#` 注释：交互的 zsh 默认不认它）。
 - 部署好了：`cca team attach Team https://平台给的地址`（平台给的地址只到主机名：没写端口时 `cmd_team_attach` 补上 443（`with_https_port`），
   再照 `url_ok` 查；不写指纹：照系统的证书机构验平台的证书，curl 不带 `-k`、`--pinnedpubkey`；验不过接不上）。
-  这个 Team 已经接着一台没有指纹的服务器时再运行是更新（步骤只剩换上新版的程序：Railway 是 `railway up --detach`，Sealos 是「变更」里换配置
-  文件的内容），数据在 `/data` 里照旧，设备不用重新加入。
+  这个 Team 已经接着一台没有指纹的服务器时再运行是更新（步骤只剩换上新版的程序：`railway up --detach`），数据在 `/data` 里照旧，
+  设备不用重新加入。
 
-还没做的：托管平台的那一页（App 里）；Railway、Sealos 上没真的部署过 Team 的服务器（步骤照它们现在的文档写，生成的 README 里说以平台现在
+还没做的：托管平台的那一页（App 里）；Railway 上没真的部署过 Team 的服务器（步骤照它现在的文档写，生成的 README 里说以平台现在
 的界面为准）；安装脚本在一台真的 Linux 云服务器上用 Docker 装过、更新过多次（2026-11-22 起，`cca team deploy` 经 SSH：同一台上两个 Team，
 网页端、共用的证书助手、从各自的证书助手搬到共用的都在它上面做过），systemd 那一种只在假服务器 `tests/hub_box.py` 上跑过（证书助手换成假的；
 `tests/linux.sh` 会在各个发行版的容器里跑同一份测试）。`cca team deploy` 传不了 `--relay-port`、`--no-relay`（要换中转的端口、不开中转的，在服务器上直接运行安装脚本）。
@@ -840,7 +841,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   不连服务器；登录不了 `team_ssh`；`cca team deploy` 装好（systemd，`team_lan` 在 `team_deployed` 前面，内网地址不开网页端，`.env` 里只有公开的
   根公钥）；App 里再部署（预填部署时记下的 hubbox、root、22，说数据不变，先查登录 `SSH root@hubbox :: true`；`nohub` 带着 ssh 的原因重问，密钥不行问密码、
   经 askpass 部署，`prompts_hub_deploy.jsonl` 交给契约测试；错了三次 `hub_ssh`；只认密钥时生成密钥、给出加公钥那一行、「在终端里部署」的
-  `terminal` 事件）；终端里不写服务器时问（三问都照记下的预填，都留空）；`cca team hosted sealos`；删除 Team（`cca team leave`）：没记下部署到哪的同意说明里说照默认猜的
+  `terminal` 事件）；终端里不写服务器时问（三问都照记下的预填，都留空）；`cca team hosted`（不写平台就是 Railway：Dockerfile 里是根公钥）、写 `sealos` 是 `team_usage`、什么都不生成；删除 Team（`cca team leave`）：没记下部署到哪的同意说明里说照默认猜的
   `root@127.0.0.1`，SSH 连不上时命令行里不删、说加 `--keep-server`，App 里卸不成问 `team.keep_server`（答否不删；手写的部署记录指着连不上的
   `root@127.0.0.1`、答是照样删，`team_left` 说哪台上的没卸掉、怎么自己卸载）；记下了私钥的：同意的说明里说是哪把，它登录不了、服务器只认密钥时
   不问 `hub.pubkey`、直接问 `team.keep_server`（原因里说不认哪把私钥），照记下的经密码卸掉时查登录带着 `-i`（`ssh.env`）（`prompts_team_delete.jsonl` 交给契约测试）；记下了私钥以后再部署：App 里那一页预填记下的那台、
