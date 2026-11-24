@@ -672,7 +672,7 @@ rm -rf "$T/dns" "$T/geo" "$T/stun_ip" "$H/.cca/leak.json"
 fi
 if sect 3e; then
 # 3e. 远程会话（docs/dev/remote.md）：开关没开、不在终端里时照原样直接运行；开着、又在终端里时客户端跑在会话宿主里
-#     （环境、参数、退出码都和直接运行一样）。宿主和接入端自己的行为在 tests/remote_host.py（unit 一节）
+#     （环境、参数、退出码都和直接运行一样）。宿主和接入端自己的行为在 tests/remote_host.rs（unit 一节）
 rs_pty() {   # rs_pty 一项环境：在真的终端里（script，不设 CCA_TTY）运行 cca @alice --version，退出码写进 $T/rs.rc，完了建 $T/rs.done
 	rm -f "$T/rs.done" "$T/rs.rc"
 	{ for i in $(seq 1 300); do [ -f "$T/rs.done" ] && break; sleep 0.1; done; } |
@@ -4666,7 +4666,7 @@ ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装�
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'suite_ok usage_view'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'suite_ok mail_view'
-ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'python3 "$D/remote_host.py" 2>/dev/null'
+ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'suite_ok remote_host'
 ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
 ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_ok acme'
