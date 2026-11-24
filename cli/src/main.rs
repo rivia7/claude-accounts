@@ -4,6 +4,7 @@
 mod cmd;
 mod core;
 mod py;
+mod server;
 
 use py::{Fail, R};
 
@@ -34,6 +35,10 @@ fn main() {
 }
 
 fn run(args: Vec<String>) -> R<()> {
+    // Team 的同步服务器、证书助手是常驻的服务，不是这台机器上 cca 的一部分：下面那几步（认当前是哪种工具、读账号表里的模型名）都不做
+    if let Some(c) = args.first().and_then(|s| server::standalone(s)) {
+        return (c.run)(&args[1..]);
+    }
     core::tool::init_current()?;
     let Some(c) = args.first().and_then(|sub| cmd::find(sub)) else {
         let listed = py::obj::V::List(py::obj::str_list(&args)).py_repr();

@@ -15,30 +15,14 @@ use crate::py::path::{abspath, expanduser};
 use crate::py::proc::{getenv, Cmd as Proc, In, Out, ProcError};
 use crate::py::re::Re;
 use crate::py::{text, Fail, R};
+// 网页端的文件：安装脚本里每个是一段 base64，写进 app/web/。表和服务端用的是同一张（server/web.rs）
+use crate::server::web::FILES as WEB;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 const TEMPLATE: &str = include_str!("../../../../server/hub-install.sh");
 pub(super) const SERVER: &str = include_str!("../../../../server/cca-presence.py");
 const ACME: &str = include_str!("../../../../server/cca-acme.py");
-/// 网页端的文件（server/web/ 里服务端给出去的那几种，和 xterm.js 的许可）：安装脚本里每个是一段 base64，写进 app/web/。
-/// 目录里新加了文件要加在这里（测试照目录核对）
-const WEB: [(&str, &[u8]); 14] = [
-    ("app.css", include_bytes!("../../../../server/web/app.css")),
-    ("app.js", include_bytes!("../../../../server/web/app.js")),
-    ("core.js", include_bytes!("../../../../server/web/core.js")),
-    ("icon-180.png", include_bytes!("../../../../server/web/icon-180.png")),
-    ("icon-192.png", include_bytes!("../../../../server/web/icon-192.png")),
-    ("icon-512.png", include_bytes!("../../../../server/web/icon-512.png")),
-    ("index.html", include_bytes!("../../../../server/web/index.html")),
-    ("logo.svg", include_bytes!("../../../../server/web/logo.svg")),
-    ("manifest.webmanifest", include_bytes!("../../../../server/web/manifest.webmanifest")),
-    ("xterm-addon-fit.js", include_bytes!("../../../../server/web/xterm-addon-fit.js")),
-    ("xterm-LICENSE.txt", include_bytes!("../../../../server/web/xterm-LICENSE.txt")),
-    ("xterm.css", include_bytes!("../../../../server/web/xterm.css")),
-    ("xterm.js", include_bytes!("../../../../server/web/xterm.js")),
-    ("README.md", include_bytes!("../../../../server/web/README.md")),
-];
 /// 模板里换成版本、服务端程序这些的那一行
 const EMBED: &str = "# @CCA-HUB-EMBED@\n";
 /// 服务端程序、证书助手、网页端的文件放在 here-document 里，这是它们的结束行（程序里不能有这一行：测试查；release.sh、regress 照它们

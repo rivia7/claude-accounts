@@ -26,7 +26,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / 'server' / 'cca-presence.py'
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helper_bin import HELPER   # noqa: E402
+from helper_bin import HELPER, PY_ONLY, RUST_SERVER, SERVER_ARGV, exited   # noqa: E402
 
 sys.dont_write_bytecode = True   # 不在 server/ 里留下 __pycache__
 spec = importlib.util.spec_from_file_location('cca_presence_server', SERVER)
@@ -82,13 +82,16 @@ class Server:
         assert team_root, '服务器只有 Team 的一种：要给根公钥'
         self.d, self.proxied = d, proxied
         tls = ['--behind-proxy'] if proxied else ['--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem')]
-        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port')] + tls + [
+        args = SERVER_ARGV + ['--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port')] + tls + [
                 '--team-root', team_root, '--state', str(d / 'state.json'), '--ttl', ttl, '--idle', idle]
         (d / 'port').unlink() if (d / 'port').exists() else None
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         for _ in range(100):
             if (d / 'port').exists():
                 break
+            why = exited(self.proc)
+            if why:
+                raise AssertionError(why)
             time.sleep(0.05)
         self.port = int((d / 'port').read_text())
 
@@ -348,6 +351,8 @@ class ServerTest(unittest.TestCase):
         raw = (self.d / 'keys.json').read_text()
         self.assertFalse(self.fp(self.dev2pub) in raw or 'bob-mini' in raw, '文件里没有它的指纹、名字')
         self.assertEqual(self.call('keys', key='dev2', get=[a1])[0], 403, '移除的设备不能再问')
+        if RUST_SERVER:   # 下面是直接调 Python 那一份的 Store（上限换小了）：PY_ONLY
+            return
         # 存满了（MAX_KEYS 个账号）：新的账号不收，已有的照常换
         store = self.store()
         fp = self.fp(self.devpub)
@@ -427,6 +432,8 @@ class ServerTest(unittest.TestCase):
         raw = (self.d / 'cost-slots.json').read_text()
         self.assertFalse(fb in raw or b2['c'] in raw, '文件里也没有了')
         self.assertEqual(self.call('ledger', key='dev2', get=[a1])[0], 403, '移除的设备不能再问')
+        if RUST_SERVER:   # 下面是直接调 Python 那一份的 Store（上限换小了、时间自己给）：PY_ONLY
+            return
         store = self.store()
         store.data['machines'] = {fa: {'name': 'alice-mbp', 'key': self.devpub, 'dev': self.DEV},
                                   fb: {'name': 'bob-mini', 'key': self.dev2pub, 'dev': self.DEV2}}
@@ -459,6 +466,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(store.team_enroll({self.DEV2: (fd, ' '.join(self.evilpub.split()[:2]), 'bob-mini')}, now + 2000)[0], 200)
         self.assertEqual({aid: sorted(s) for aid, s in store.cost['acc'].items()}, {x: [fa]})
 
+    @unittest.skipIf(RUST_SERVER, PY_ONLY)
     def test_cost_leftovers(self):
         """以前的版本移除设备时留下的：照旧的根公钥接着用（重启、更新）时清掉——不在名单里的设备传的折合金额删掉，
         记下的 API key 的密文留着、不再记着是它传的；名单里的照旧"""
@@ -814,6 +822,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         d.mkdir(exist_ok=True)
         return srvmod.Store(str(d / 'state.json'), 150, 600, 30 * 86400, **kw)
 
+    @unittest.skipIf(RUST_SERVER, PY_ONLY)
     def test_store(self):
         """过期、清理、上限、换模式：直接调 Store（不用真的等）"""
         log = mock.patch.object(sys, 'stderr', io.StringIO())   # Store 往 stderr 记的那几句不混进测试的输出
@@ -923,7 +932,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         写着它），以前的维护者的服务器（--mode maintainer、--release-key）起不来"""
         d = self.d / 'cli'
         d.mkdir()
-        base = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--behind-proxy', '--state', str(d / 'state.json'), '--mode', 'team']
+        base = SERVER_ARGV + ['--listen', '127.0.0.1:0', '--behind-proxy', '--state', str(d / 'state.json'), '--mode', 'team']
         for extra, env in (([], {}), (['--team-root', 'nope'], {}), (['--team-root', 'ssh-rsa AAAA'], {}), ([], {'CCA_TEAM_ROOT': 'x'})):
             r = subprocess.run(base + extra, env=dict(os.environ, **env), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, timeout=20)
@@ -951,7 +960,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         # 只写后面那一段（安装脚本、托管平台的环境变量里这样写：没有空格）；托管平台上（CCA_HUB_HOSTED=1）给了根公钥就是 Team 的服务器，
         # 不用再写 --mode
         (d / 'port').unlink()
-        hosted = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--state', str(d / 'hosted.json'), '--port-file', str(d / 'port')]
+        hosted = SERVER_ARGV + ['--listen', '127.0.0.1:0', '--state', str(d / 'hosted.json'), '--port-file', str(d / 'port')]
         p = subprocess.Popen(hosted, env=dict(os.environ, CCA_HUB_HOSTED='1', CCA_TEAM_ROOT=self.pubs['root'].split()[1]),
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
@@ -965,7 +974,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
             p.wait(5)
             p.stderr.close()
         if not os.path.isdir('/data'):   # 托管平台上没挂存储（默认的状态文件在 /data 下）：不启动
-            r = subprocess.run([sys.executable, '-I', str(SERVER)], env=dict(os.environ, CCA_HUB_HOSTED='1', CCA_TEAM_ROOT=self.pubs['root'].split()[1]),
+            r = subprocess.run(SERVER_ARGV, env=dict(os.environ, CCA_HUB_HOSTED='1', CCA_TEAM_ROOT=self.pubs['root'].split()[1]),
                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
             self.assertEqual(r.returncode, 2)
             self.assertIn('没有 /data', r.stderr)
@@ -993,7 +1002,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         finally:
             for x in socks:
                 x.close()
-        bad = subprocess.run([sys.executable, '-I', str(SERVER), '--behind-proxy', '--cert', 'x', '--key', 'y', '--mode', 'team',
+        bad = subprocess.run(SERVER_ARGV + ['--behind-proxy', '--cert', 'x', '--key', 'y', '--mode', 'team',
                               '--team-root', self.pubs['root'], '--state', str(self.d / 'x.json')],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
         self.assertEqual(bad.returncode, 2, '--behind-proxy 不用证书')
@@ -1836,6 +1845,7 @@ class ClientTest(Sessions, unittest.TestCase):
             self.assertFalse((a.cca / 'cost' / f).exists(), '没有别的服务器的那一份（不带前缀的）')
 
 
+@unittest.skipIf(RUST_SERVER, PY_ONLY)
 class VerifyTest(unittest.TestCase):
     """服务器自己验 SSHSIG（RFC 8032 的 Ed25519）：和 ssh-keygen 的结果一致，改过的、换了钥匙或命名空间的一律不收"""
     def test_against_ssh_keygen(self):

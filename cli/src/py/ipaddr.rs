@@ -1,5 +1,5 @@
-//! `ipaddress`：认 IP 地址、是不是私有 / 本机 / 公网地址、所在的网段。规则是 CPython 3.14 的
-//! （私有网段的名单各版本改过几次），对照数据在 tests/vectors/ipaddress.json。
+//! `ipaddress`：认 IP 地址、是不是私有 / 本机 / 公网 / 链路本地 / 多播 / 没指定 / 留着没分配的地址、所在的网段。规则是 CPython 3.14 的
+//! （私有网段的名单各版本改过几次），对照数据在 tests/vectors/ipaddress.json（后加的四项在测试里的那张表）。
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -145,6 +145,70 @@ impl Ip {
         }
     }
 
+    /// `ip.is_link_local`：169.254.0.0/16、fe80::/10
+    pub fn is_link_local(&self) -> bool {
+        match *self {
+            Ip::V4(ip) => in4(ip, [169, 254, 0, 0], 16),
+            Ip::V6(ip) => match ip.to_ipv4_mapped() {
+                Some(v4) => Ip::V4(v4).is_link_local(),
+                None => in6(ip, "fe80::", 10),
+            },
+        }
+    }
+
+    /// `ip.is_multicast`：224.0.0.0/4、ff00::/8
+    pub fn is_multicast(&self) -> bool {
+        match *self {
+            Ip::V4(ip) => in4(ip, [224, 0, 0, 0], 4),
+            Ip::V6(ip) => match ip.to_ipv4_mapped() {
+                Some(v4) => Ip::V4(v4).is_multicast(),
+                None => in6(ip, "ff00::", 8),
+            },
+        }
+    }
+
+    /// `ip.is_unspecified`：0.0.0.0、::
+    pub fn is_unspecified(&self) -> bool {
+        match *self {
+            Ip::V4(ip) => ip == Ipv4Addr::UNSPECIFIED,
+            Ip::V6(ip) => match ip.to_ipv4_mapped() {
+                Some(v4) => Ip::V4(v4).is_unspecified(),
+                None => ip == Ipv6Addr::UNSPECIFIED,
+            },
+        }
+    }
+
+    /// `ip.is_reserved`：IETF 留着没分配的。IPv4 是 240.0.0.0/4；IPv6 是下面这一串（2000::/3、fc00::/7、fe80::/10、fec0::/10、
+    /// ff00::/8 以外的全部：`::1` 也在里面）
+    pub fn is_reserved(&self) -> bool {
+        match *self {
+            Ip::V4(ip) => in4(ip, [240, 0, 0, 0], 4),
+            Ip::V6(ip) => match ip.to_ipv4_mapped() {
+                Some(v4) => Ip::V4(v4).is_reserved(),
+                None => {
+                    let nets = [
+                        ("::", 8),
+                        ("100::", 8),
+                        ("200::", 7),
+                        ("400::", 6),
+                        ("800::", 5),
+                        ("1000::", 4),
+                        ("4000::", 3),
+                        ("6000::", 3),
+                        ("8000::", 3),
+                        ("a000::", 3),
+                        ("c000::", 3),
+                        ("e000::", 4),
+                        ("f000::", 5),
+                        ("f800::", 6),
+                        ("fe00::", 9),
+                    ];
+                    nets.iter().any(|&(n, b)| in6(ip, n, b))
+                }
+            },
+        }
+    }
+
     /// `str(ipaddress.ip_network(str(ip) + '/前缀长度', strict=False))`
     pub fn network(&self, bits: u32) -> String {
         match *self {
@@ -228,6 +292,99 @@ mod tests {
                 (Err(e), None, Some(want)) => assert_eq!(e, &*want, "{input}"),
                 (got, _, _) => panic!("{input:?}：Rust 给的是 {got:?}，Python 给的是 {out:?}"),
             }
+        }
+    }
+
+    /// 后加的四项（证书助手拿它们挡掉不是公网的地址）：期望的值是 CPython 3.14 的 ipaddress 给的，挑的是各个网段的两头。
+    /// 映射的 IPv4（`::ffff:a.b.c.d`）照里面那个 IPv4 地址算
+    #[test]
+    fn link_local_multicast_unspecified_reserved_match_cpython() {
+        // 地址、is_link_local、is_multicast、is_unspecified、is_reserved
+        let cases = [
+            ("0.0.0.0", false, false, true, false),
+            ("0.0.0.1", false, false, false, false),
+            ("8.8.8.8", false, false, false, false),
+            ("10.0.0.1", false, false, false, false),
+            ("100.64.0.1", false, false, false, false),
+            ("127.0.0.1", false, false, false, false),
+            ("169.253.255.255", false, false, false, false),
+            ("169.254.0.0", true, false, false, false),
+            ("169.254.1.1", true, false, false, false),
+            ("169.254.255.255", true, false, false, false),
+            ("169.255.0.0", false, false, false, false),
+            ("192.0.2.10", false, false, false, false),
+            ("198.51.100.7", false, false, false, false),
+            ("223.255.255.255", false, false, false, false),
+            ("224.0.0.0", false, true, false, false),
+            ("224.0.0.1", false, true, false, false),
+            ("239.255.255.255", false, true, false, false),
+            ("240.0.0.0", false, false, false, true),
+            ("240.0.0.1", false, false, false, true),
+            ("255.255.255.254", false, false, false, true),
+            ("255.255.255.255", false, false, false, true),
+            ("::", false, false, true, true),
+            ("::1", false, false, false, true),
+            ("::2", false, false, false, true),
+            ("::ffff:0.0.0.0", false, false, true, false),
+            ("::ffff:8.8.8.8", false, false, false, false),
+            ("::ffff:127.0.0.1", false, false, false, false),
+            ("::ffff:169.254.1.1", true, false, false, false),
+            ("::ffff:224.0.0.1", false, true, false, false),
+            ("::ffff:240.0.0.1", false, false, false, true),
+            ("::ffff:255.255.255.255", false, false, false, true),
+            ("64:ff9b::1", false, false, false, true),
+            ("ff:ffff::1", false, false, false, true),
+            ("100::1", false, false, false, true),
+            ("1ff::1", false, false, false, true),
+            ("200::1", false, false, false, true),
+            ("3ff::1", false, false, false, true),
+            ("400::1", false, false, false, true),
+            ("7ff::1", false, false, false, true),
+            ("800::1", false, false, false, true),
+            ("fff::1", false, false, false, true),
+            ("1000::1", false, false, false, true),
+            ("1fff::1", false, false, false, true),
+            ("2000::1", false, false, false, false),
+            ("2001:db8::1", false, false, false, false),
+            ("2606:4700:4700::1111", false, false, false, false),
+            ("3fff:ffff::1", false, false, false, false),
+            ("4000::1", false, false, false, true),
+            ("5fff::1", false, false, false, true),
+            ("6000::1", false, false, false, true),
+            ("7fff::1", false, false, false, true),
+            ("8000::1", false, false, false, true),
+            ("9fff::1", false, false, false, true),
+            ("a000::1", false, false, false, true),
+            ("bfff::1", false, false, false, true),
+            ("c000::1", false, false, false, true),
+            ("dfff::1", false, false, false, true),
+            ("e000::1", false, false, false, true),
+            ("efff::1", false, false, false, true),
+            ("f000::1", false, false, false, true),
+            ("f7ff::1", false, false, false, true),
+            ("f800::1", false, false, false, true),
+            ("fbff::1", false, false, false, true),
+            ("fc00::1", false, false, false, false),
+            ("fdff::1", false, false, false, false),
+            ("fe00::1", false, false, false, true),
+            ("fe7f:ffff::1", false, false, false, true),
+            ("fe80::", true, false, false, false),
+            ("fe80::1", true, false, false, false),
+            ("febf:ffff::1", true, false, false, false),
+            ("fec0::1", false, false, false, false),
+            ("feff::1", false, false, false, false),
+            ("ff00::", false, true, false, false),
+            ("ff02::1", false, true, false, false),
+            ("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", false, true, false, false),
+            ("fe80::1%eth0", true, false, false, false),
+            ("ff02::1%en0", false, true, false, false),
+            ("::%lo0", false, false, true, true),
+        ];
+        assert_eq!(cases.len(), 78);
+        for (input, link_local, multicast, unspecified, reserved) in cases {
+            let ip = ip_address(input).unwrap().ip;
+            let got = (ip.is_link_local(), ip.is_multicast(), ip.is_unspecified(), ip.is_reserved());
+            assert_eq!(got, (link_local, multicast, unspecified, reserved), "{input}");
         }
     }
 }

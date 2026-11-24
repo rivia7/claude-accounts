@@ -124,8 +124,13 @@ tm_srv() {   # tm_srv 目录 根公钥 [端口 [服务器的别的参数…]]：
 	local dir=$1 root=$2 port=${3:-0} i
 	shift 2; [ $# -eq 0 ] || shift
 	rm -f "$dir/port"
-	python3 -I "$D/../server/cca-presence.py" --mode team --team-root "$root" --listen "127.0.0.1:$port" --port-file "$dir/port" \
-		--cert "$dir/cert.pem" --key "$dir/key.pem" --state "$dir/state.json" "$@" >>"$dir/log" 2>&1 &
+	if [ "${CCA_TEST_SERVER:-}" = rust ]; then   # 辅助程序里的 Rust 版（tests/helper_bin.py 的 SERVER_ARGV 认的是同一个开关）；参数一样
+		"$HELPER_BIN" team-server --mode team --team-root "$root" --listen "127.0.0.1:$port" --port-file "$dir/port" \
+			--cert "$dir/cert.pem" --key "$dir/key.pem" --state "$dir/state.json" "$@" >>"$dir/log" 2>&1 &
+	else
+		python3 -I "$D/../server/cca-presence.py" --mode team --team-root "$root" --listen "127.0.0.1:$port" --port-file "$dir/port" \
+			--cert "$dir/cert.pem" --key "$dir/key.pem" --state "$dir/state.json" "$@" >>"$dir/log" 2>&1 &
+	fi
 	TMPID=$!; TMPIDS="$TMPIDS $TMPID"
 	for i in $(seq 1 50); do [ -s "$dir/port" ] && return 0; sleep 0.1; done; return 1
 }

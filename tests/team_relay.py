@@ -14,7 +14,8 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from presence import SERVER, Device, make_cert, openssl_pin, wait_for   # noqa: E402
+from helper_bin import SERVER_ARGV, exited   # noqa: E402
+from presence import Device, make_cert, openssl_pin, wait_for   # noqa: E402
 import remote_relay as rr   # noqa: E402
 
 TEAM_KEY, OWN_KEY, OTHER_KEY = 'alice(alice@example.com)', 'mine(dave@example.com)', 'other(bob@example.com)'
@@ -26,13 +27,19 @@ class TeamServer:
         d.mkdir()
         make_cert(d)
         self.d = d
-        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--port-file', str(d / 'port'), '--cert', str(d / 'cert.pem'),
+        args = SERVER_ARGV + ['--listen', '127.0.0.1:0', '--port-file', str(d / 'port'), '--cert', str(d / 'cert.pem'),
                 '--key', str(d / 'key.pem'), '--team-root', root, '--state', str(d / 'state.json'), '--ttl', '60',
                 '--idle', '600', '--relay-listen', '127.0.0.1:0', '--relay-port-file', str(d / 'rport')]
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        def written(name):   # 端口文件里写的；服务器没起来就退出了的话马上算失败（带上它说的话），不干等
+            why = exited(self.proc)
+            if why:
+                raise AssertionError(why)
+            return (d / name).exists() and (d / name).read_text()
         try:
-            self.port = int(wait_for('Team 的服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
-            wait_for('它的数据端口起来', lambda: (d / 'rport').exists() and (d / 'rport').read_text())
+            self.port = int(wait_for('Team 的服务器起来', lambda: written('port')))
+            wait_for('它的数据端口起来', lambda: written('rport'))
         except BaseException:
             self.stop()
             raise
@@ -234,11 +241,17 @@ class NoRelayTest(rr.Base):
         d = self.d / 'team-srv'
         d.mkdir()
         make_cert(d)
-        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--port-file', str(d / 'port'), '--cert', str(d / 'cert.pem'),
+        args = SERVER_ARGV + ['--listen', '127.0.0.1:0', '--port-file', str(d / 'port'), '--cert', str(d / 'cert.pem'),
                 '--key', str(d / 'key.pem'), '--team-root', root, '--state', str(d / 'state.json')]
         proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: (proc.kill(), proc.wait()))
-        port = int(wait_for('Team 的服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
+
+        def written():   # 端口文件里写的；服务器没起来就退出了的话马上算失败，不干等
+            why = exited(proc)
+            if why:
+                raise AssertionError(why)
+            return (d / 'port').exists() and (d / 'port').read_text()
+        port = int(wait_for('Team 的服务器起来', written))
         admin.ok('team-attach', tid, 'https://127.0.0.1:%d' % port, openssl_pin(d / 'cert.pem'))
         admin.ok('team-map', tid, 'claude', 'alice@example.com', 'US-A')
         dev = self.device('box')   # 在测试组里（它的服务器开着中转）

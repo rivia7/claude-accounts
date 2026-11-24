@@ -17,9 +17,9 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helper_bin import ACME_ARGV   # noqa: E402  证书助手用哪一份跑（平常是 server/cca-acme.py）
 from presence import ROOT, wait_for   # noqa: E402
 
-ACME = ROOT / 'server' / 'cca-acme.py'
 FAKE = ROOT / 'tests' / 'acme_fake.py'
 
 
@@ -61,7 +61,7 @@ class AcmeTest(unittest.TestCase):
         return 'https://127.0.0.1:%d/dir' % port
 
     def acme(self, directory, *args, ids=('127.0.0.1',), once=True, any_ip=True):
-        argv = [sys.executable, '-I', str(ACME), '--out', str(self.d / 'cert'), '--account', str(self.d / 'account'),
+        argv = ACME_ARGV + ['--out', str(self.d / 'cert'), '--account', str(self.d / 'account'),
                 '--listen', '127.0.0.1:%d' % self.http_port, '--directory', directory, '--ca', str(self.cad / 'ca.pem'), *args]
         for i in ids:
             argv += ['--id', i]
@@ -187,7 +187,7 @@ class AcmeTest(unittest.TestCase):
 
     def teams(self, directory, *args, once=True):
         """几个 Team 共用的证书助手（--teams）：登记在 teams/，证书存在 store/，放进 out/<服务名>/"""
-        argv = [sys.executable, '-I', str(ACME), '--teams', str(self.d / 'teams'), '--store', str(self.d / 'store'), '--out', str(self.d / 'out'),
+        argv = ACME_ARGV + ['--teams', str(self.d / 'teams'), '--store', str(self.d / 'store'), '--out', str(self.d / 'out'),
                 '--account', str(self.d / 'account'), '--listen', '127.0.0.1:%d' % self.http_port, '--directory', directory,
                 '--ca', str(self.cad / 'ca.pem'), '--any-ip', *args] + (['--once'] if once else [])
         if not once:
@@ -255,7 +255,7 @@ class AcmeTest(unittest.TestCase):
     def test_the_responder_and_running_forever(self):
         """不带 --once：拿到证书以后接着运行（等着续）；应答的端口上别的路径都是 404"""
         directory = self.authority()
-        argv = [sys.executable, '-I', str(ACME), '--out', str(self.d / 'cert'), '--account', str(self.d / 'account'), '--listen', '127.0.0.1:%d' % self.http_port,
+        argv = ACME_ARGV + ['--out', str(self.d / 'cert'), '--account', str(self.d / 'account'), '--listen', '127.0.0.1:%d' % self.http_port,
                 '--directory', directory, '--ca', str(self.cad / 'ca.pem'), '--id', '127.0.0.1', '--any-ip', '--port-file', str(self.d / 'aport')]
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (p.kill(), p.wait(), p.stderr.close()))

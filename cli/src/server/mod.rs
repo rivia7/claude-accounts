@@ -1,0 +1,243 @@
+//! Team 的同步服务器（`cca-core team-server`）和证书助手（`cca-core team-acme`）：`server/cca-presence.py`、
+//! `server/cca-acme.py` 的 Rust 版。
+//!
+//! 和别的子命令不一样的地方：
+//! - 它们是常驻的服务，跑在 Team 管理员的 Linux 服务器上（systemd 的专用用户、容器里），不是这台机器上 cca 的一部分：不认
+//!   “当前是哪种工具”、不读账号表。所以 main 一开头就按名字把它们分出去（`standalone`），辅助程序平常开头做的那几步都不做。
+//! - 一个连接一个线程，发布版是 `panic = "abort"`：哪个线程 panic 一次，整个服务就没了。所以这棵目录里不许 `unwrap`、
+//!   `expect`、下标、`panic!`、`unreachable!`（下面那行 lint 守着；测试模块各自放开）。线上来的字节经游标（`wire::Cur`）
+//!   一段一段取，长度用 `checked_add`，还没查过上限的长度不拿去分配内存。
+//! - `py::obj::V` 里是 `Rc`，不能跨线程：请求的 JSON 在处理它的那个线程里解析、检查，取成普通的值再放进共用的状态。
+//! - 正则只用 `re!`（整个进程一份）；`py::re::compile` 的缓存是每个线程各一份的，这里不用。
+//! - 启动的路上不加东西：这里没有一上来就算的全局量，用到时才算。
+//!
+//! Python 那一份是规矩：行为、回的内容、日志里的每句话都照它。注释里的「Py:行号」指 server/cca-presence.py，
+//! 「Acme:行号」指 server/cca-acme.py。分几个阶段移植：还没移植到的地方先回一句「未完成」（`unfinished`）。
+//!
+//! 各个文件：
+//! - `limits`：各种上限（测试可以换小的）、限流的令牌桶、用过的 nonce、同时处理几个连接
+//! - `omap`：记着先后的字典（状态文件里各项的先后要和 Python 写的一样）
+//! - `wire`：线上来的东西怎么查——游标、数字、各个正则、请求里各项的检查
+//! - `sshsig`：验 `ssh-keygen -Y sign` 的签名（SSHSIG，Ed25519）
+//! - `x509`：读证书里的几项（有效期、给哪些地址的、公钥）
+//! - `tls`：服务端的证书和私钥、网页端那张会换的证书、连证书机构用的客户端设置
+//! - `store`：state.json、keys.json、cost-slots.json、team-docs.json 和它们的各个 op
+//! - `remote`、`relay`：远程会话的中转——配对、票据、会话的记录，数据端口
+//! - `http`、`front`、`handler`：读请求写回应、接连接起线程、一个请求怎么处理
+//! - `ws`、`web`：网页端——WebSocket、页面的文件
+//! - `cli`：`team-server` 的参数和启动
+//! - `acme`：证书助手
+
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::unreachable,
+    clippy::todo,
+    clippy::unimplemented
+)]
+// 骨架阶段：接口先定下来，后面几个阶段才一处处接上，这之前大半没人调。全部接上以后去掉这一行
+#![allow(dead_code)]
+
+pub mod acme;
+pub mod cli;
+pub mod front;
+pub mod handler;
+pub mod http;
+pub mod limits;
+pub mod omap;
+pub mod relay;
+pub mod remote;
+pub mod sshsig;
+pub mod store;
+pub mod tls;
+pub mod web;
+pub mod wire;
+pub mod ws;
+pub mod x509;
+
+use crate::cmd::Cmd;
+use crate::py::{Fail, R};
+use std::sync::{Arc, Mutex};
+
+// ---- Python 那一份开头的常量：先后、注释照它（Py:67-110）。几个测试要换小的上限在 limits::Limits 里 ----
+
+/// 接口的版本（请求和回的内容里的 v）（Py:67）
+pub const API: i64 = 1;
+/// 设备给请求签名用的命名空间（Py:68）
+pub const NS_REPORT: &str = "cca-presence";
+/// 一个请求的内容最多这么大（Py:69）
+pub const MAX_BODY: usize = 64 * 1024;
+/// 签名（解开 base64 以后）最多这么大（Py:70）
+pub const MAX_SIG: usize = 4096;
+/// 请求里的时间和服务器差多少秒以内（Py:71）
+pub const TS_WINDOW: i64 = 300;
+/// 一次上报 / 查询最多几个账号（Py:72）
+pub const MAX_ACCOUNTS: usize = 64;
+/// 一台设备上一个账号最多几个会话（Py:73）
+pub const MAX_UNITS: usize = 64;
+/// 同时处理的连接（Py:74）
+pub const MAX_CONN: usize = 64;
+/// 同一个 IP 同时几个连接（Py:75）
+pub const MAX_CONN_IP: usize = 8;
+/// 一个连接从接进来起最多多少秒，到点就断（Py:76）
+pub const CONN_DEADLINE: i64 = 15;
+/// TLS 握手最多多少秒（Py:77）
+pub const HANDSHAKE_TIMEOUT: i64 = 5;
+/// 上报的“开了多久、闲置多久”最大多少秒（Py:78）
+pub const MAX_AGE: i64 = 10 * 365 * 86400;
+/// 交换密文的请求（/v1/keys、/v1/ledger）一次最多这么大（Py:79）
+pub const MAX_SYNC_BODY: usize = 1 << 20;
+/// 一份 API key 的密文（base64）最长多少个字符（Py:81）
+pub const MAX_KEY_BLOB: usize = 8192;
+/// 一份折合金额的密文（base64）最长多少个字符（Py:82）
+pub const MAX_COST_BLOB: usize = 98304;
+/// 交换密文的 op → 一份密文最长多少个字符（Py:87）
+pub const SYNC_OPS: [(&str, usize); 2] = [("keys", MAX_KEY_BLOB), ("ledger", MAX_COST_BLOB)];
+/// 邀请多久过期：最短、最长（秒）（Py:102）
+pub const INVITE_TTL: (i64, i64) = (60, 30 * 86400);
+/// 过期的、用掉的邀请记多久（Py:103）
+pub const INVITE_KEEP: i64 = 30 * 86400;
+/// 配置的序号比它小：各种语言的 JSON 都读得准的整数（Py:104）
+pub const SEQ_MAX: i64 = 1 << 53;
+/// 一台设备的配置（密文，base64）最长多少个字符（Py:105）
+pub const MAX_TEAM_DOC: usize = 131072;
+/// 配置的签名（armored 签名的 base64）最长多少个字符（Py:106）
+pub const MAX_TEAM_SIG: usize = 1024;
+/// team_enroll、team_put 一次最多几台设备（Py:107）
+pub const MAX_TEAM_BATCH: usize = 64;
+/// 所有设备的配置（密文，base64）加起来最多这么多个字符（Py:108）
+pub const TEAM_DOCS_BYTES: usize = 16 << 20;
+/// 要 Team 的根密钥签名的 op（Py:109）
+pub const TEAM_ADMIN_OPS: [&str; 5] = ["team_enroll", "team_invite", "team_put", "team_members", "team_revoke"];
+/// 只有 Team 的服务器有的 op：管理员的那几个加上设备的三个（Py:110）
+pub const TEAM_OPS: [&str; 8] =
+    ["team_enroll", "team_invite", "team_put", "team_members", "team_revoke", "team_join", "team_get", "team_leave"];
+
+// ---- 远程会话的中转、网页端（Py:901-941） ----
+
+/// 中转的 op（开了中转才认）（Py:901）
+pub const RELAY_OPS: [&str; 9] =
+    ["pair_open", "pair_put", "pair_get", "pair_commit", "pair_close", "pair_drop", "relay_host", "relay_attach", "relay_list"];
+/// 访客（手机上的网页端）能发的（Py:904）
+pub const GUEST_OPS: [&str; 7] = ["pair_put", "pair_get", "pair_commit", "pair_close", "pair_drop", "relay_attach", "relay_list"];
+/// 配对码多久过期（Py:905）
+pub const PAIR_TTL: i64 = 600;
+/// pair_get 最多等对方多久，要比 CONN_DEADLINE 短（Py:907）
+pub const PAIR_WAIT: i64 = 10;
+/// 同时等着的 pair_get，多了的不等、马上回（Py:908）
+pub const PAIR_WAITERS: usize = 16;
+/// 配对时交换的一份密文（base64）最长多少个字符（Py:909）
+pub const PAIR_MSG: usize = 2048;
+/// 这么久没用过的配对删掉（Py:912）
+pub const EDGE_IDLE: i64 = 180 * 86400;
+/// 票据多久过期，只能用一次（Py:913）
+pub const TICKET_TTL: i64 = 30;
+/// 会话的说明（密文，base64）最长多少个字符（Py:917）
+pub const DIR_BLOB: usize = 4096;
+/// 数据端口同时几个连接（Py:918）
+pub const RELAY_CONN: usize = 256;
+/// 数据端口上同一个 IP 同时几个连接（Py:919）
+pub const RELAY_CONN_IP: usize = 32;
+/// 一头还没转出去的超过这么多，就先不从另一头读（Py:920）
+pub const RELAY_QUEUE: usize = 256 * 1024;
+/// 这么久一个字节都没有的连接断开（Py:921）
+pub const RELAY_IDLE: i64 = 90;
+/// 会话的控制连接断了以后，会话留这么久等它重连（Py:922）
+pub const RELAY_GRACE: i64 = 60;
+/// 连上以后这么久还没说完开场白就断开（Py:923）
+pub const PREAMBLE_WAIT: i64 = 5;
+/// 接入方等宿主那一头连上来最多这么久（Py:924）
+pub const JOIN_WAIT: i64 = 10;
+/// 控制连接上一帧最长（Py:925）
+pub const CTL_FRAME: usize = 32 * 1024;
+/// 控制连接上帧的类型（Py:926）
+pub const F_JOIN: u8 = 0x02;
+pub const F_PING: u8 = 0x06;
+pub const F_PONG: u8 = 0x07;
+pub const F_ANNOUNCE: u8 = 0x08;
+pub const F_BYE: u8 = 0x09;
+/// 网页端同时几条 WebSocket（Py:927）
+pub const WS_CONN: usize = 64;
+/// 网页端同一个 IP 同时几条 WebSocket（Py:928）
+pub const WS_CONN_IP: usize = 8;
+/// WebSocket 一帧最长（Py:929）
+pub const WS_FRAME: usize = 1 << 20;
+/// 一头这么久写不动、一帧这么久收不齐：断开（Py:930）
+pub const WS_STALL: i64 = 20;
+/// 两头这么久都没有动静：断开（Py:931）
+pub const WS_IDLE: i64 = 100;
+/// 算 Sec-WebSocket-Accept 用的那一串（Py:932）
+pub const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+/// 页面的文件：后缀 → Content-Type（Py:937-938）
+pub const WEB_TYPES: [(&str, &str); 6] = [
+    (".html", "text/html; charset=utf-8"),
+    (".js", "text/javascript; charset=utf-8"),
+    (".css", "text/css; charset=utf-8"),
+    (".png", "image/png"),
+    (".svg", "image/svg+xml"),
+    (".webmanifest", "application/manifest+json"),
+];
+/// 网页的一个文件最长（Py:939）
+pub const WEB_FILE: usize = 2 << 20;
+
+/// 一个服务共用的东西：两个监听（原来的端口、网页端另开的端口）是同一个服务，状态、限流、用过的 nonce 都是同一份（Py:2037-2047）
+pub struct Ctx {
+    /// 状态文件那几份
+    pub store: Mutex<store::Store>,
+    /// 中转记着的（开了 --relay-listen 才有）
+    pub remote: Option<Arc<remote::Shared>>,
+    /// 数据端口的那条线程（网页端的 WebSocket 要交连接给它）
+    pub relay: Option<Arc<relay::Handle>>,
+    /// 网页端（给了 --web-url 才有）
+    pub web: Option<web::Web>,
+    /// 限流、用过的 nonce
+    pub guards: Mutex<limits::Guards>,
+    /// 启动时验签自检的结果（/v1/health 的 sig_ok）
+    pub sig_ok: bool,
+}
+
+/// 这两条子命令
+pub const CMDS: &[Cmd] = &[Cmd::all("team-server", cli::cmd_team_server), Cmd::all("team-acme", acme::cmd_team_acme)];
+
+/// 是不是这里的子命令：是的话 main 直接运行它，不做辅助程序平常开头的那几步（认当前是哪种工具、读账号表里的模型名——
+/// 那些都要读 HOME 下 cca 的文件，服务器上跑它的那个用户没有、也不该有）。只是比两次名字
+pub fn standalone(name: &str) -> Option<&'static Cmd> {
+    CMDS.iter().find(|c| c.name == name)
+}
+
+/// 还没移植到的地方先回这个错：说清楚是哪一块（各阶段填上以后就没人用它了）
+pub(crate) fn unfinished<T>(what: &str) -> R<T> {
+    Err(Fail::Die(format!("cca-core: {what}：未完成（Rust 版还在移植）")))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    /// 两条子命令都登记了，别的名字不归这里
+    #[test]
+    fn standalone_knows_only_its_two_commands() {
+        assert_eq!(standalone("team-server").unwrap().name, "team-server");
+        assert_eq!(standalone("team-acme").unwrap().name, "team-acme");
+        assert!(standalone("team-join").is_none() && standalone("env").is_none() && standalone("").is_none());
+        // 平常的那张表里也查得到（`cca-core 不认识的名字` 的报错、名字不重复的检查都照它）
+        assert!(crate::cmd::find("team-server").is_some() && crate::cmd::find("team-acme").is_some());
+    }
+
+    /// 成组的常量和 Python 的一样：TEAM_OPS 是管理员的那几个加上设备的三个
+    #[test]
+    fn op_lists_match_python() {
+        assert_eq!(&TEAM_OPS[..5], &TEAM_ADMIN_OPS[..]);
+        assert_eq!(&TEAM_OPS[5..], &["team_join", "team_get", "team_leave"]);
+        assert!(GUEST_OPS.iter().all(|op| RELAY_OPS.contains(op)));
+        assert!(!GUEST_OPS.contains(&"pair_open") && !GUEST_OPS.contains(&"relay_host"));
+        assert_eq!((MAX_AGE, SEQ_MAX, INVITE_TTL), (315_360_000, 9_007_199_254_740_992, (60, 2_592_000)));
+        // 客户端那边写死的同一个值（辅助程序传密文、分批时照它们）
+        assert_eq!(MAX_COST_BLOB, crate::cmd::cost::COST_BLOB_MAX);
+        assert_eq!(MAX_ACCOUNTS, crate::cmd::cost::COST_BATCH);
+        assert_eq!((MAX_TEAM_DOC, SEQ_MAX), (crate::cmd::team::doc::DOC_MAX, crate::cmd::team::doc::SEQ_MAX));
+    }
+}

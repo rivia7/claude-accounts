@@ -73,6 +73,7 @@ const MODULES: &[&[Cmd]] = &[
     hub::CMDS,
     team::CMDS,
     pack::CMDS,
+    crate::server::CMDS,
 ];
 
 /// 按名字找子命令
@@ -287,7 +288,7 @@ mod tests {
 
     /// 原来的 149 个子命令（加上切换以后新加的）除了特意去掉的（REMOVED）一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）、
     /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）、`hub-…`（一键部署的安装脚本，见 hub/deploy.rs）、`team-…`（Team，
-    /// 见 team.rs、team/admin.rs）和 ADDED；没有登记两次的
+    /// 见 team.rs、team/admin.rs；team-server、team-acme 是 Team 的同步服务器和证书助手，见 server/）和 ADDED；没有登记两次的
     #[test]
     fn every_original_command_is_there_and_listed_once() {
         let mut seen = Vec::new();

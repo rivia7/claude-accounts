@@ -24,6 +24,7 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helper_bin import PY_ONLY, RUST_SERVER   # noqa: E402
 from presence import ROOT, keygen, make_ca_cert, sign, srvmod, wait_for   # noqa: E402
 import remote_relay as rr   # noqa: E402
 from remote_relay import Base, F_ANNOUNCE, F_JOIN, SOCKS, ctl, dial, read_ctl, read_exact, read_line   # noqa: E402
@@ -936,6 +937,7 @@ class ShellOffTest(Base):
         self.assertEqual(self.call(a, 'pair_get', rid='0' * 32)[0], 404)
 
 
+@unittest.skipIf(RUST_SERVER, PY_ONLY)
 class UrlTest(unittest.TestCase):
     def test_the_web_url_is_written_the_way_browsers_say_it(self):
         """--web-url 要和浏览器发的 Origin 逐字相等才让开 WebSocket：主机小写、默认的端口不写"""
@@ -949,6 +951,7 @@ class UrlTest(unittest.TestCase):
             self.assertIsNone(srvmod.web_origin(bad), bad)
 
 
+@unittest.skipIf(RUST_SERVER, PY_ONLY)
 class FilesTest(unittest.TestCase):
     """页面的文件（server/web/）：服务器读得进去、只发该发的；别人的代码（xterm.js）和说明里记的校验和一样；
     页面自己不引别处的东西、没有内联的脚本（内容安全策略不许，写了也不会跑）"""

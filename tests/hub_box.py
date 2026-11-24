@@ -95,6 +95,10 @@ def start(argv, env, svc='cca-hub'):
     acme = [i for i, x in enumerate(argv) if x.endswith('/cca-acme.py')]
     if acme:   # 证书助手：不真的去找 Let's Encrypt，换成假的（照 --id 写一张自签的证书；acme_fail 在时什么都不写）
         argv = [sys.executable, os.path.join(box, 'acme_stub.py')] + argv[acme[0] + 1:]
+    srv = [i for i, x in enumerate(argv) if x.endswith('/cca-presence.py')]
+    impl = os.path.join(box, 'server_impl')
+    if srv and os.path.exists(impl):   # CCA_TEST_SERVER=rust（Box 写下的）：服务端换成辅助程序里的 Rust 版，参数原样
+        argv = [open(impl).read().strip(), 'team-server'] + argv[srv[0] + 1:]
     with open(os.path.join(box, 'server.log'), 'a') as log, open(os.path.join(box, 'server.argv'), 'a') as a:
         a.write(' '.join(argv) + '\n')
         p = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
@@ -294,6 +298,9 @@ class Box:
         self.fake('docker', '#!%s\n%s' % (sys.executable, DOCKER) if docker else MISSING)
         os.symlink(SH, self.bin / 'sh')
         (d / 'acme_stub.py').write_text(ACME_STUB)
+        if os.environ.get('CCA_TEST_SERVER') == 'rust':   # 服务端用辅助程序里的 Rust 版（tests/helper_bin.py 说的那个开关）：
+            from helper_bin import HELPER                 # 假的 systemctl、docker 是另外的进程（环境是这台假服务器的），照这个文件认
+            (d / 'server_impl').write_text(HELPER)
         (d / 'ip').write_text(ip)
         self.dir = self.root / 'opt' / 'cca-hub'   # 以前的自己的同步服务器装在这里（卸载它的用例）
         self.env = {'PATH': '%s:/usr/bin:/bin' % self.bin, 'CCA_HUB_ROOT': str(self.root), 'HUB_BOX': str(d), 'HOME': str(d),

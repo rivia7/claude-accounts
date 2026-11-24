@@ -21,8 +21,8 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helper_bin import HELPER   # noqa: E402
-from presence import ROOT, SERVER, Device, Team, make_cert, openssl_pin, srvmod, wait_for   # noqa: E402
+from helper_bin import HELPER, PY_ONLY, RUST_SERVER, SERVER_ARGV, exited   # noqa: E402
+from presence import ROOT, Device, Team, make_cert, openssl_pin, srvmod, wait_for   # noqa: E402
 from remote_host import CLIENT, Term   # noqa: E402
 import spec_wire as sw   # noqa: E402
 
@@ -110,7 +110,7 @@ class RelayServer:
         for name in ('port', 'rport', 'wport'):
             (d / name).unlink(missing_ok=True)
         root = ' '.join((d / 'root.pub').read_text().split()[:2])
-        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port'),
+        args = SERVER_ARGV + ['--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port'),
                 '--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem'), '--team-root', root,
                 '--state', str(d / 'state.json'), '--ttl', '60', '--idle', '600']
         if relay:
@@ -119,9 +119,15 @@ class RelayServer:
             args += ['--relay-port', str(sniff.port)]
         args += list(extra)   # 网页端的那几个参数（tests/web_relay.py）
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        def written(name):   # 端口文件里写的；服务器没起来就退出了的话马上算失败（带上它说的话），不干等
+            why = exited(self.proc)
+            if why:
+                raise AssertionError(why)
+            return (d / name).exists() and (d / name).read_text()
         try:
-            self.port = int(wait_for('服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
-            self.rport = int(wait_for('数据端口起来', lambda: (d / 'rport').exists() and (d / 'rport').read_text())) if relay else None
+            self.port = int(wait_for('服务器起来', lambda: written('port')))
+            self.rport = int(wait_for('数据端口起来', lambda: written('rport'))) if relay else None
         except BaseException:
             self.proc.kill()
             self.proc.wait()
@@ -531,6 +537,7 @@ class ServerTest(Base):
         self.assertEqual(oct((self.d / 'remote.json').stat().st_mode & 0o777), '0o600')
 
 
+@unittest.skipIf(RUST_SERVER, PY_ONLY)
 class LimitsTest(unittest.TestCase):
     """服务器的限额和记账：直接调 Remote（不经网络、不签名，时间由用例给）"""
     def setUp(self):
