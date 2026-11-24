@@ -4605,6 +4605,6 @@ ok "uninstall --no-backup：不留备份，照样删掉 ~/.cca；~/.local/bin �
 # 单独的一个，这里照旧删掉这一份（只这个版本的，名字是它的 SHA-256）
 [ -z "$hs" ] || rm -f "$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
 fi
-ok "断言里没有求值器不认识的写法（cca-test 的退出码 2；不认识的都记在 ${CCA_TEST_TRAP}：取反的断言遇到它会悄悄通过）" '[ ! -s "$CCA_TEST_TRAP" ]'
+ok "断言里没有求值器不认识的写法（cca-test 的退出码 2；不认识的都记在沙箱旁边的 .trap 文件里：取反的断言遇到它会悄悄通过）" '[ ! -s "$CCA_TEST_TRAP" ]'
 [ ! -s "$CCA_TEST_TRAP" ] || sed 's/^/      | /' "$CCA_TEST_TRAP"
 echo "---- $pass passed, $fail failed"
