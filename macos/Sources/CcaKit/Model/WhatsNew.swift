@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.6", title: "Team 里每台设备都看得到各台设备的折合金额", points: [
+            .init(symbol: "chart.bar.xaxis",
+                  text: "Team 给的 Claude、Codex 账号，这台设备没登录也看得到 Team 里各台设备的折合金额，账号页和「折合金额」页的设备菜单里能切到各台设备。"),
+            .init(symbol: "trash",
+                  text: "从 Team 里移除的、自己退出的设备不再列出：「共享与同步」和折合金额里都没有它；管理员「更新服务器」一次，服务器也删掉它同步过的折合金额。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "Team 里的设备都更新到 3.6.6 以后才看得到彼此的；还没更新的设备传上来的，仍然要登录着那个账号才看得到。"),
+        ]),
         ReleaseNote(version: "3.6.5", title: "App 里更新 Team 的服务器时照部署时的私钥登录", points: [
             .init(symbol: "key",
                   text: "App 里的「更新服务器」预填部署时记下的那台；填的还是它时照部署时用 -i 写的私钥登录，更新后接着记着，删除 Team 时也照它。"),
