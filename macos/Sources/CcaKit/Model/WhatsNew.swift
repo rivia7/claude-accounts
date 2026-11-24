@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.8", title: "折合金额按模型分开，认不出账号的用量也看得到", points: [
+            .init(symbol: "chart.bar.xaxis",
+                  text: "「折合金额」页的合计和账号页的「折合金额」下面按模型列出金额和请求数（近 12 周，按日时近 30 天），Team 里各台设备的加在一起。"),
+            .init(symbol: "questionmark.circle",
+                  text: "认不出是哪个账号的用量（Claude App 里的 Code 会话、旧版 Claude Code）每台设备也同步到 Team，在「折合金额」页最下面单列一组，不算进合计。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "补上 GPT-6.2 Astra、Sol 的价格。更新后重新统计一遍；别的设备也更新到 3.6.8 以后，才看得到它们按模型的和认不出账号的用量。"),
+        ]),
         ReleaseNote(version: "3.6.7", title: "账号页的设备菜单只列用过这个账号的设备", points: [
             .init(symbol: "desktopcomputer",
                   text: "账号页「折合金额」右上角的设备菜单只列用过这个账号的设备，只在别的 Team 里的设备不再出现在这个账号下。"),
