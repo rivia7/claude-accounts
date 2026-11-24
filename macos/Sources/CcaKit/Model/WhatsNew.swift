@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.12", title: "Antigravity 账号页不再显示英文", points: [
+            .init(symbol: "text.bubble",
+                  text: "额度的组名改成中文（Gemini 模型；Claude、GPT 模型），agy 给的英文说明不再显示，认不出时间窗口的额度叫「其他额度」。"),
+            .init(symbol: "rectangle.compress.vertical",
+                  text: "一组只有一个额度、没有百分比时，「不可用」或「还剩 N 次」直接写在组名后面，不再另起一行重复组名。"),
+        ]),
         ReleaseNote(version: "3.6.11", title: "App 里显示 Antigravity 的额度", points: [
             .init(symbol: "gauge.with.dots.needle.33percent",
                   text: "Antigravity 账号的账号页按组显示额度（Gemini 模型和 Claude、GPT 模型），每组照 Claude 的样子画 5 小时、本周；侧栏、菜单栏和总览卡片写各组里用得最多的那个。"),
