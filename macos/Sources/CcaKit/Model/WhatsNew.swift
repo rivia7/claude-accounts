@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.9", title: "Claude App 里的会话也认得出账号", points: [
+            .init(symbol: "person.crop.circle.badge.checkmark",
+                  text: "这台设备有认不出账号的 Claude App 会话时，「折合金额」页合计下面有「记下账号…」（或者 cca cost hook on）：问过你以后在 ~/.claude/settings.json 里加一条 hook，App 里的 Code 会话开始时记下 App 登录的账号，以后的用量算进这个账号。"),
+            .init(symbol: "arrow.triangle.swap",
+                  text: "在别的账号下续接的会话，续接以后的用量算进新的账号（Claude Code 在会话记录里照旧写原来的账号）。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "更新后重新统计一遍。不想记了用 cca cost hook off；关掉折合金额、卸载 cca 时这条 hook 自动去掉。"),
+        ]),
         ReleaseNote(version: "3.6.8", title: "折合金额按模型分开，认不出账号的用量也看得到", points: [
             .init(symbol: "chart.bar.xaxis",
                   text: "「折合金额」页的合计和账号页的「折合金额」下面按模型列出金额和请求数（近 12 周，按日时近 30 天），Team 里各台设备的加在一起。"),
