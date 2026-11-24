@@ -1,0 +1,696 @@
+{
+ "_": "Python 的 Store（server/cca-presence.py）照这些请求、这些时间走一遍的结果：每一步回的状态码和内容、往 stderr 说的话、变了的状态文件的内容。store::tests::replays_the_python_store 照样走一遍，逐字节对。有意改了行为就直接改这份数据",
+ "root": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI",
+ "files": {
+  "state.json": "{\"v\": 1, \"seq\": 0, \"machines\": {\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\": {\"name\": \"\\u4e66\\u623f\\u7684 Mac\", \"key\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\", \"joined\": 1101, \"dev\": \"0101010101010101\", \"proof\": \"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}, \"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\": {\"name\": \"bob-mini\", \"key\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\", \"joined\": 1700000000.5, \"dev\": \"0202020202020202\"}}, \"beats\": {\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\": {\"seen\": 1700000100.25, \"end\": null}, \"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\": {\"seen\": 1700000090, \"end\": \"down\"}}, \"units\": {\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\": {\"01010101010101010101010101010101\": {\"cli\": [[1700000000.125, 1700000050.5]], \"app\": null, \"used\": 1700000050.5}, \"02020202020202020202020202020202\": {\"cli\": [], \"app\": [1699990000, 1699990100], \"used\": 1699990100}}, \"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\": {\"01010101010101010101010101010101\": {\"cli\": [], \"app\": null, \"used\": 0}}}, \"note\": {\"k\": [1, 2.5, \"\\u503c\", true, null, 1e+22, 12345678901234567890, -0.0, \"a\\u2028b\\u007f\\\"\\\\\\t\"]}, \"team\": {\"root\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\", \"label\": \"\\u6d4b\\u8bd5\", \"gen\": \"abababababababababababababababab\", \"spent\": {\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\": 1699000000.75}, \"invites\": {\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\": {\"dev\": \"0303030303030303\", \"exp\": 1700003600.0, \"at\": 1700000000.0}}, \"more\": [1.0, {\"k\": null}]}, \"tail\": [1, 2]}",
+  "keys.json": "{\n \"v\": 1,\n \"acc\": {\n  \"01010101010101010101010101010101\": {\n   \"blob\": {\n    \"n\": \"CgoKCgoKCgoKCgoKCgoKCgoK\",\n    \"c\": \"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL\",\n    \"t\": \"DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=\"\n   },\n   \"fp\": \"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\n   \"name\": \"书房的 Mac\",\n   \"at\": 1700000001.5\n  },\n  \"03030303030303030303030303030303\": {\n   \"blob\": {\n    \"n\": \"FBQUFBQUFBQUFBQUFBQUFBQU\",\n    \"c\": \"FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUV\",\n    \"t\": \"FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY=\"\n   },\n   \"fp\": \"SHA256:xcTb/ZL8NmQsvo9k2j/c7dIyp7nvDnswfPZHlzcZwz0\",\n   \"name\": \"old\",\n   \"at\": 1699000000\n  },\n  \"04040404040404040404040404040404\": {\n   \"blob\": {\n    \"n\": \"Hh4eHh4eHh4eHh4eHh4eHh4e\",\n    \"c\": \"Hx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8f\",\n    \"t\": \"ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA=\"\n   },\n   \"at\": 5\n  }\n },\n \"extra\": {\n  \"x\": 1\n }\n}",
+  "cost-slots.json": "{\"v\":1,\"acc\":{\"01010101010101010101010101010101\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"blob\":{\"n\":\"KCgoKCgoKCgoKCgoKCgoKCgo\",\"c\":\"KSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkp\",\"t\":\"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\"},\"name\":\"书房的 Mac\",\"at\":1700000002.25},\"SHA256:xcTb/ZL8NmQsvo9k2j/c7dIyp7nvDnswfPZHlzcZwz0\":{\"blob\":{\"n\":\"MjIyMjIyMjIyMjIyMjIyMjIy\",\"c\":\"MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz\",\"t\":\"NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ=\"},\"name\":\"old\",\"at\":1699999000}},\"02020202020202020202020202020202\":{\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"blob\":{\"n\":\"PDw8PDw8PDw8PDw8PDw8PDw8\",\"c\":\"PT09PT09PT09PT09PT09PT09PT09PT09\",\"t\":\"Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4=\"},\"name\":\"bob-mini\",\"at\":1699999999}}}}",
+  "team-docs.json": "{\"v\": 1, \"docs\": {\"0101010101010101\": {\"seq\": 3, \"ct\": {\"n\": \"RkZGRkZGRkZGRkZGRkZGRkZG\", \"c\": \"R0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dH\", \"t\": \"SEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEg=\"}, \"sig\": \"QUJDRA==\", \"at\": 1700000003.5}, \"0909090909090909\": {\"seq\": 1, \"ct\": {\"n\": \"UFBQUFBQUFBQUFBQUFBQUFBQ\", \"c\": \"UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFR\", \"t\": \"UlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlI=\"}, \"sig\": \"QUJDRA==\", \"at\": 1700000004}}}"
+ },
+ "steps": [
+  {
+   "op": "_open",
+   "fp": null,
+   "now": 0,
+   "body": null,
+   "code": 0,
+   "reply": null,
+   "said": [],
+   "files": {
+    "keys.json": "{\"v\":1,\"acc\":{\"01010101010101010101010101010101\":{\"blob\":{\"n\":\"CgoKCgoKCgoKCgoKCgoKCgoK\",\"c\":\"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL\",\"t\":\"DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=\"},\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"at\":1700000001.5},\"03030303030303030303030303030303\":{\"blob\":{\"n\":\"FBQUFBQUFBQUFBQUFBQUFBQU\",\"c\":\"FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUV\",\"t\":\"FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY=\"},\"at\":1699000000},\"04040404040404040404040404040404\":{\"blob\":{\"n\":\"Hh4eHh4eHh4eHh4eHh4eHh4e\",\"c\":\"Hx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8f\",\"t\":\"ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA=\"},\"at\":5}},\"extra\":{\"x\":1}}",
+    "cost-slots.json": "{\"v\":1,\"acc\":{\"01010101010101010101010101010101\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"blob\":{\"n\":\"KCgoKCgoKCgoKCgoKCgoKCgo\",\"c\":\"KSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkp\",\"t\":\"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\"},\"name\":\"书房的 Mac\",\"at\":1700000002.25}},\"02020202020202020202020202020202\":{\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"blob\":{\"n\":\"PDw8PDw8PDw8PDw8PDw8PDw8\",\"c\":\"PT09PT09PT09PT09PT09PT09PT09PT09\",\"t\":\"Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4=\"},\"name\":\"bob-mini\",\"at\":1699999999}}}}",
+    "team-docs.json": "{\"v\":1,\"docs\":{\"0101010101010101\":{\"seq\":3,\"ct\":{\"n\":\"RkZGRkZGRkZGRkZGRkZGRkZG\",\"c\":\"R0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dH\",\"t\":\"SEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEg=\"},\"sig\":\"QUJDRA==\",\"at\":1700000003.5}}}"
+   }
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000200.75,
+   "body": "{\"units\": {\"01010101010101010101010101010101\": {\"cli\": [[100, 20.5], [3600, 0]], \"app\": [50, 10]}, \"05050505050505050505050505050505\": {\"cli\": [], \"app\": null}}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"ttl\":150.0,\"idle\":600.0}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"name\":\"bob-mini\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\",\"joined\":1700000000.5,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"seen\":1700000090,\"end\":\"down\"}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000201.5,
+   "body": "{\"units\": {}, \"end\": \"none\"}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"ttl\":150.0,\"idle\":600.0}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"name\":\"bob-mini\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\",\"joined\":1700000000.5,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"seen\":1700000201.5,\"end\":\"none\"}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000202.0,
+   "body": "{\"units\": {\"01010101010101010101010101010101\": {\"cli\": [[5, 5]]}}, \"end\": \"none\"}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000202.0,
+   "body": "{\"units\": {\"01010101010101010101010101010101\": {\"cli\": [[5, 5]]}}, \"end\": \"later\"}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000202.0,
+   "body": "{\"units\": {\"01010101010101010101010101010101\": {\"cli\": [[5, -1]]}}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000202.0,
+   "body": "{\"units\": {\"01010101010101010101010101010101\": {\"cli\": [[5, true]]}}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000203.125,
+   "body": "{\"units\": {\"02020202020202020202020202020202\": {\"app\": [7.5, 0.25]}}, \"end\": \"down\"}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"ttl\":150.0,\"idle\":600.0}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"name\":\"bob-mini\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\",\"joined\":1700000000.5,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"seen\":1700000203.125,\"end\":\"down\"}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"02020202020202020202020202020202\":{\"cli\":[],\"app\":[1700000195.625,1700000202.875],\"used\":1700000202.875}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "view",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000260.0,
+   "body": "{\"accounts\": [\"01010101010101010101010101010101\", \"02020202020202020202020202020202\", \"05050505050505050505050505050505\", \"01010101010101010101010101010101\", \"06060606060606060606060606060606\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"me_name\":\"bob-mini\",\"ttl\":150.0,\"idle\":600.0,\"accounts\":{\"01010101010101010101010101010101\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"state\":\"in_use\",\"cli\":2,\"app\":true,\"since_age\":3659,\"idle_age\":59,\"used_age\":59,\"seen_age\":59}],\"02020202020202020202020202020202\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"state\":\"none\",\"cli\":0,\"app\":false,\"since_age\":null,\"idle_age\":null,\"used_age\":10160,\"seen_age\":59},{\"fp\":\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\",\"name\":\"bob-mini\",\"state\":\"offline\",\"cli\":0,\"app\":true,\"since_age\":64,\"idle_age\":57,\"used_age\":57,\"seen_age\":57}],\"05050505050505050505050505050505\":[],\"06060606060606060606060606060606\":[]}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "view",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700001000.5,
+   "body": "{\"accounts\": [\"01010101010101010101010101010101\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"me_name\":\"书房的 Mac\",\"ttl\":150.0,\"idle\":600.0,\"accounts\":{\"01010101010101010101010101010101\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"state\":\"offline\",\"cli\":2,\"app\":true,\"since_age\":4400,\"idle_age\":800,\"used_age\":800,\"seen_age\":800}]}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "view",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700001000.5,
+   "body": "{\"accounts\": [\"01010101010101010101010101010101\", \"nope\"]}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "view",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700001000.5,
+   "body": "{\"accounts\": \"01010101010101010101010101010101\"}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "view",
+   "fp": "SHA256:xcTb/ZL8NmQsvo9k2j/c7dIyp7nvDnswfPZHlzcZwz0",
+   "now": 1700001000.5,
+   "body": "{\"accounts\": []}",
+   "code": 200,
+   "reply": "{\"v\":1,\"me_name\":null,\"ttl\":150.0,\"idle\":600.0,\"accounts\":{}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "keys",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000300.5,
+   "body": "{\"put\": {\"02020202020202020202020202020202\": {\"n\": \"WlpaWlpaWlpaWlpaWlpaWlpa\", \"c\": \"W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tb\", \"t\": \"XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw=\"}}, \"get\": [\"01010101010101010101010101010101\", \"03030303030303030303030303030303\", \"04040404040404040404040404040404\", \"06060606060606060606060606060606\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"me_name\":\"书房的 Mac\",\"keys\":{\"01010101010101010101010101010101\":{\"blob\":{\"n\":\"CgoKCgoKCgoKCgoKCgoKCgoK\",\"c\":\"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL\",\"t\":\"DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=\"},\"name\":\"书房的 Mac\",\"me\":true,\"age\":299},\"03030303030303030303030303030303\":{\"blob\":{\"n\":\"FBQUFBQUFBQUFBQUFBQUFBQU\",\"c\":\"FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUV\",\"t\":\"FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY=\"},\"name\":null,\"me\":false,\"age\":1000300},\"04040404040404040404040404040404\":{\"blob\":{\"n\":\"Hh4eHh4eHh4eHh4eHh4eHh4e\",\"c\":\"Hx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8f\",\"t\":\"ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA=\"},\"name\":null,\"me\":false,\"age\":1700000296},\"02020202020202020202020202020202\":{\"blob\":{\"n\":\"WlpaWlpaWlpaWlpaWlpaWlpa\",\"c\":\"W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tb\",\"t\":\"XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw=\"},\"name\":\"书房的 Mac\",\"me\":true,\"age\":0}}}",
+   "said": [],
+   "files": {
+    "keys.json": "{\"v\":1,\"acc\":{\"01010101010101010101010101010101\":{\"blob\":{\"n\":\"CgoKCgoKCgoKCgoKCgoKCgoK\",\"c\":\"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL\",\"t\":\"DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=\"},\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"at\":1700000001.5},\"03030303030303030303030303030303\":{\"blob\":{\"n\":\"FBQUFBQUFBQUFBQUFBQUFBQU\",\"c\":\"FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUV\",\"t\":\"FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY=\"},\"at\":1699000000},\"04040404040404040404040404040404\":{\"blob\":{\"n\":\"Hh4eHh4eHh4eHh4eHh4eHh4e\",\"c\":\"Hx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8f\",\"t\":\"ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA=\"},\"at\":5},\"02020202020202020202020202020202\":{\"blob\":{\"n\":\"WlpaWlpaWlpaWlpaWlpaWlpa\",\"c\":\"W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tb\",\"t\":\"XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw=\"},\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"at\":1700000300.5}},\"extra\":{\"x\":1}}"
+   }
+  },
+  {
+   "op": "keys",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000301.0,
+   "body": "{\"get\": [\"02020202020202020202020202020202\", \"02020202020202020202020202020202\", \"01010101010101010101010101010101\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"me_name\":\"bob-mini\",\"keys\":{\"02020202020202020202020202020202\":{\"blob\":{\"n\":\"WlpaWlpaWlpaWlpaWlpaWlpa\",\"c\":\"W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tb\",\"t\":\"XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw=\"},\"name\":\"书房的 Mac\",\"me\":false,\"age\":0},\"01010101010101010101010101010101\":{\"blob\":{\"n\":\"CgoKCgoKCgoKCgoKCgoKCgoK\",\"c\":\"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL\",\"t\":\"DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=\"},\"name\":\"书房的 Mac\",\"me\":false,\"age\":300}}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "keys",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000302.0,
+   "body": "{\"put\": {\"02020202020202020202020202020202\": {\"n\": \"W1tbW1tbW1tbW1tbW1tbW1tb\", \"c\": \"XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc\", \"t\": \"XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV0=\", \"x\": 1}}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "keys",
+   "fp": "SHA256:xcTb/ZL8NmQsvo9k2j/c7dIyp7nvDnswfPZHlzcZwz0",
+   "now": 1700000302.0,
+   "body": "{\"put\": {\"02020202020202020202020202020202\": {\"n\": \"XFxcXFxcXFxcXFxcXFxcXFxc\", \"c\": \"XV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1d\", \"t\": \"Xl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl4=\"}}}",
+   "code": 403,
+   "reply": "{\"error\":\"denied\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "ledger",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000400.25,
+   "body": "{\"put\": {\"01010101010101010101010101010101\": {\"n\": \"ZGRkZGRkZGRkZGRkZGRkZGRk\", \"c\": \"ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVl\", \"t\": \"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=\"}, \"02020202020202020202020202020202\": {\"n\": \"bm5ubm5ubm5ubm5ubm5ubm5u\", \"c\": \"b29vb29vb29vb29vb29vb29vb29vb29vb29vb29v\", \"t\": \"cHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHA=\"}}, \"get\": [\"01010101010101010101010101010101\", \"02020202020202020202020202020202\"], \"have\": {\"01010101010101010101010101010101\": {\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\": \"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\"}}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"me_name\":\"bob-mini\",\"cost\":{\"01010101010101010101010101010101\":[{\"fp\":\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\",\"name\":\"bob-mini\",\"me\":true,\"revoked\":false,\"tag\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=\",\"age\":0},{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"me\":false,\"revoked\":false,\"tag\":\"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\",\"age\":398}],\"02020202020202020202020202020202\":[{\"fp\":\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\",\"name\":\"bob-mini\",\"me\":true,\"revoked\":false,\"tag\":\"cHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHA=\",\"age\":0}]},\"missing\":{\"01010101010101010101010101010101\":[],\"02020202020202020202020202020202\":[{\"name\":\"书房的 Mac\",\"used_age\":10300}]}}",
+   "said": [],
+   "files": {
+    "cost-slots.json": "{\"v\":1,\"acc\":{\"01010101010101010101010101010101\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"blob\":{\"n\":\"KCgoKCgoKCgoKCgoKCgoKCgo\",\"c\":\"KSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkp\",\"t\":\"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\"},\"name\":\"书房的 Mac\",\"at\":1700000002.25},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"blob\":{\"n\":\"ZGRkZGRkZGRkZGRkZGRkZGRk\",\"c\":\"ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVl\",\"t\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=\"},\"name\":\"bob-mini\",\"at\":1700000400.25}},\"02020202020202020202020202020202\":{\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"blob\":{\"n\":\"bm5ubm5ubm5ubm5ubm5ubm5u\",\"c\":\"b29vb29vb29vb29vb29vb29vb29vb29vb29vb29v\",\"t\":\"cHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHA=\"},\"name\":\"bob-mini\",\"at\":1700000400.25}}}}"
+   }
+  },
+  {
+   "op": "ledger",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000401.0,
+   "body": "{\"get\": [\"01010101010101010101010101010101\", \"02020202020202020202020202020202\", \"05050505050505050505050505050505\", \"06060606060606060606060606060606\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"me_name\":\"书房的 Mac\",\"cost\":{\"01010101010101010101010101010101\":[{\"fp\":\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\",\"name\":\"bob-mini\",\"me\":false,\"revoked\":false,\"tag\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=\",\"age\":1,\"blob\":{\"n\":\"ZGRkZGRkZGRkZGRkZGRkZGRk\",\"c\":\"ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVl\",\"t\":\"ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=\"}},{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"me\":true,\"revoked\":false,\"tag\":\"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\",\"age\":399}],\"02020202020202020202020202020202\":[{\"fp\":\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\",\"name\":\"bob-mini\",\"me\":false,\"revoked\":false,\"tag\":\"cHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHA=\",\"age\":1,\"blob\":{\"n\":\"bm5ubm5ubm5ubm5ubm5ubm5u\",\"c\":\"b29vb29vb29vb29vb29vb29vb29vb29vb29vb29v\",\"t\":\"cHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHA=\"}}],\"05050505050505050505050505050505\":[],\"06060606060606060606060606060606\":[]},\"missing\":{\"01010101010101010101010101010101\":[],\"02020202020202020202020202020202\":[],\"05050505050505050505050505050505\":[],\"06060606060606060606060606060606\":[]}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "ledger",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000401.0,
+   "body": "{\"get\": [\"01010101010101010101010101010101\"], \"have\": {\"01010101010101010101010101010101\": {\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\": \"x\"}}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "ledger",
+   "fp": "SHA256:xcTb/ZL8NmQsvo9k2j/c7dIyp7nvDnswfPZHlzcZwz0",
+   "now": 1700000401.0,
+   "body": "{\"get\": [\"01010101010101010101010101010101\"]}",
+   "code": 403,
+   "reply": "{\"error\":\"denied\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_invite",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000500.5,
+   "body": "{\"token\": \"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\", \"dev\": \"0404040404040404\", \"ttl\": 3600}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"invites\":2,\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"name\":\"bob-mini\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\",\"joined\":1700000000.5,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"seen\":1700000203.125,\"end\":\"down\"}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"02020202020202020202020202020202\":{\"cli\":[],\"app\":[1700000195.625,1700000202.875],\"used\":1700000202.875}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0},\"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\":{\"dev\":\"0404040404040404\",\"exp\":1700004100.5,\"at\":1700000500.5}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "team_invite",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000500.5,
+   "body": "{\"token\": \"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\", \"dev\": \"0404040404040404\", \"ttl\": 59}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_invite",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000500.5,
+   "body": "{\"token\": \"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\", \"dev\": \"0404040404040404\", \"ttl\": 3600.0}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_invite",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000500.5,
+   "body": "{\"token\": \"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\", \"dev\": \"0606060606060606\", \"ttl\": 60}",
+   "code": 409,
+   "reply": "{\"error\":\"used\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_invite",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000500.5,
+   "body": "{\"token\": \"fbbbb6de2aa74c3c9570d2d8db1de31eadb66113c96034a7adb21243754d7683\", \"dev\": \"0101010101010101\", \"ttl\": 60}",
+   "code": 409,
+   "reply": "{\"error\":\"taken\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_join",
+   "fp": "SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc",
+   "now": 1700000510.75,
+   "body": "{\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\\n\", \"name\": \"bob-mini\", \"token\": \"cccccccccccccccccccccccccccccccc\", \"proof\": \"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=\"}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"name\":\"bob-mini-2\",\"dev\":\"0404040404040404\",\"members\":3,\"gen\":\"abababababababababababababababab\"}",
+   "said": [
+    "cca-presence: 加入了一台设备，现在 3 台"
+   ],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"name\":\"bob-mini\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\",\"joined\":1700000000.5,\"dev\":\"0202020202020202\"},\"SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc\":{\"name\":\"bob-mini-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\",\"joined\":1700000510.75,\"dev\":\"0404040404040404\",\"proof\":\"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"seen\":1700000203.125,\"end\":\"down\"}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\":{\"02020202020202020202020202020202\":{\"cli\":[],\"app\":[1700000195.625,1700000202.875],\"used\":1700000202.875}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75,\"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\":1700000510.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "team_join",
+   "fp": "SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc",
+   "now": 1700000511.0,
+   "body": "{\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\", \"name\": \"bob-mini\", \"token\": \"cccccccccccccccccccccccccccccccc\"}",
+   "code": 403,
+   "reply": "{\"error\":\"used\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_join",
+   "fp": "SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI",
+   "now": 1700000511.0,
+   "body": "{\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\", \"name\": \" pad\", \"token\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_join",
+   "fp": "SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI",
+   "now": 1700000511.0,
+   "body": "{\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\", \"name\": \"d\", \"token\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"proof\": \"short\"}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_join",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000511.0,
+   "body": "{\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\", \"name\": \"again\", \"token\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "code": 409,
+   "reply": "{\"error\":\"taken\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_join",
+   "fp": "SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI",
+   "now": 1700003600.0,
+   "body": "{\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\", \"name\": \"late\", \"token\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "code": 403,
+   "reply": "{\"error\":\"expired\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_put",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000600.5,
+   "body": "{\"docs\": {\"0101010101010101\": {\"seq\": 4, \"ct\": {\"n\": \"eHh4eHh4eHh4eHh4eHh4eHh4\", \"c\": \"eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5\", \"t\": \"enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eno=\"}, \"sig\": \"QUJD\"}, \"0404040404040404\": {\"seq\": 1, \"ct\": {\"n\": \"goKCgoKCgoKCgoKCgoKCgoKC\", \"c\": \"g4ODg4ODg4ODg4ODg4ODg4ODg4ODg4OD\", \"t\": \"hISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ=\"}, \"sig\": \"QUJD\"}, \"0f0f0f0f0f0f0f0f\": {\"seq\": 1, \"ct\": {\"n\": \"jIyMjIyMjIyMjIyMjIyMjIyM\", \"c\": \"jY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2N\", \"t\": \"jo6Ojo6Ojo6Ojo6Ojo6Ojo6Ojo6Ojo6Ojo6Ojo6Ojo4=\"}, \"sig\": \"QUJD\"}}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"stored\":[\"0101010101010101\",\"0404040404040404\"],\"stale\":{},\"unknown\":[\"0f0f0f0f0f0f0f0f\"],\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {
+    "team-docs.json": "{\"v\":1,\"docs\":{\"0101010101010101\":{\"seq\":4,\"ct\":{\"n\":\"eHh4eHh4eHh4eHh4eHh4eHh4\",\"c\":\"eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5\",\"t\":\"enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eno=\"},\"sig\":\"QUJD\",\"at\":1700000600.5},\"0404040404040404\":{\"seq\":1,\"ct\":{\"n\":\"goKCgoKCgoKCgoKCgoKCgoKC\",\"c\":\"g4ODg4ODg4ODg4ODg4ODg4ODg4ODg4OD\",\"t\":\"hISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ=\"},\"sig\":\"QUJD\",\"at\":1700000600.5}}}"
+   }
+  },
+  {
+   "op": "team_put",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000601.0,
+   "body": "{\"docs\": {\"0101010101010101\": {\"seq\": 2, \"ct\": {\"n\": \"eHh4eHh4eHh4eHh4eHh4eHh4\", \"c\": \"eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5\", \"t\": \"enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eno=\"}, \"sig\": \"QUJD\"}, \"0404040404040404\": {\"seq\": 1, \"ct\": {\"n\": \"g4ODg4ODg4ODg4ODg4ODg4OD\", \"c\": \"hISEhISEhISEhISEhISEhISEhISEhISE\", \"t\": \"hYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYU=\"}, \"sig\": \"QUJD\"}}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"stored\":[],\"stale\":{\"0101010101010101\":4,\"0404040404040404\":1},\"unknown\":[],\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_put",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000602.5,
+   "body": "{\"docs\": {\"0404040404040404\": {\"seq\": 1, \"ct\": {\"n\": \"goKCgoKCgoKCgoKCgoKCgoKC\", \"c\": \"g4ODg4ODg4ODg4ODg4ODg4ODg4ODg4OD\", \"t\": \"hISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ=\"}, \"sig\": \"QUJD\"}}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"stored\":[\"0404040404040404\"],\"stale\":{},\"unknown\":[],\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {
+    "team-docs.json": "{\"v\":1,\"docs\":{\"0101010101010101\":{\"seq\":4,\"ct\":{\"n\":\"eHh4eHh4eHh4eHh4eHh4eHh4\",\"c\":\"eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5\",\"t\":\"enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eno=\"},\"sig\":\"QUJD\",\"at\":1700000600.5},\"0404040404040404\":{\"seq\":1,\"ct\":{\"n\":\"goKCgoKCgoKCgoKCgoKCgoKC\",\"c\":\"g4ODg4ODg4ODg4ODg4ODg4ODg4ODg4OD\",\"t\":\"hISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ=\"},\"sig\":\"QUJD\",\"at\":1700000602.5}}}"
+   }
+  },
+  {
+   "op": "team_put",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000603.0,
+   "body": "{\"docs\": {}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_put",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000603.0,
+   "body": "{\"docs\": {\"0404040404040404\": {\"seq\": 9007199254740992, \"ct\": {\"n\": \"goKCgoKCgoKCgoKCgoKCgoKC\", \"c\": \"g4ODg4ODg4ODg4ODg4ODg4ODg4ODg4OD\", \"t\": \"hISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ=\"}, \"sig\": \"QUJD\"}}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_get",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000700.0,
+   "body": "{\"have\": 4}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"dev\":\"0101010101010101\",\"me_name\":\"书房的 Mac\",\"seq\":4,\"doc\":null,\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_get",
+   "fp": "SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc",
+   "now": 1700000701.5,
+   "body": "{}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"dev\":\"0404040404040404\",\"me_name\":\"bob-mini-2\",\"seq\":1,\"doc\":{\"seq\":1,\"ct\":{\"n\":\"goKCgoKCgoKCgoKCgoKCgoKC\",\"c\":\"g4ODg4ODg4ODg4ODg4ODg4ODg4ODg4OD\",\"t\":\"hISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ=\"},\"sig\":\"QUJD\"},\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_get",
+   "fp": "SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc",
+   "now": 1700000701.5,
+   "body": "{\"have\": 0}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_get",
+   "fp": "SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA",
+   "now": 1700000702.0,
+   "body": "{\"have\": 7}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"dev\":\"0202020202020202\",\"me_name\":\"bob-mini\",\"seq\":0,\"doc\":null,\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_get",
+   "fp": "SHA256:xcTb/ZL8NmQsvo9k2j/c7dIyp7nvDnswfPZHlzcZwz0",
+   "now": 1700000702.0,
+   "body": "{}",
+   "code": 403,
+   "reply": "{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_members",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000800.5,
+   "body": "{}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"members\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"书房的 Mac\",\"joined_age\":1699999700,\"seen_age\":100,\"dev\":\"0101010101010101\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"seq\":4,\"have\":4},{\"fp\":\"SHA256:baqJQcVDEweKmw1OiZxGooCG2MGxYtwsQQzzOstxmiA\",\"name\":\"bob-mini\",\"joined_age\":800,\"seen_age\":98,\"dev\":\"0202020202020202\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\",\"proof\":null,\"seq\":0,\"have\":7},{\"fp\":\"SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc\",\"name\":\"bob-mini-2\",\"joined_age\":290,\"seen_age\":99,\"dev\":\"0404040404040404\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\",\"proof\":\"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=\",\"seq\":1,\"have\":null}],\"invites\":[{\"dev\":\"0303030303030303\",\"expires_in\":2800,\"seq\":0}],\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_enroll",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000900.25,
+   "body": "{\"devices\": {\"0101010101010101\": {\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\", \"name\": \"bob-mini-2\"}, \"0505050505050505\": {\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\", \"name\": \"书房的 Mac\"}, \"0202020202020202\": {\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\", \"name\": \"bob-新\"}}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"names\":{\"0101010101010101\":\"bob-mini-2-2\",\"0505050505050505\":\"书房的 Mac\",\"0202020202020202\":\"bob-新\"},\"members\":4,\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"bob-mini-2-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc\":{\"name\":\"bob-mini-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\",\"joined\":1700000510.75,\"dev\":\"0404040404040404\",\"proof\":\"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=\"},\"SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"joined\":1700000900.25,\"dev\":\"0505050505050505\"},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"name\":\"bob-新\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"joined\":1700000900.25,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75,\"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\":1700000510.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}",
+    "cost-slots.json": "{\"v\":1,\"acc\":{\"01010101010101010101010101010101\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"blob\":{\"n\":\"KCgoKCgoKCgoKCgoKCgoKCgo\",\"c\":\"KSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkp\",\"t\":\"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\"},\"name\":\"书房的 Mac\",\"at\":1700000002.25}}}}"
+   }
+  },
+  {
+   "op": "team_enroll",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000901.0,
+   "body": "{\"devices\": {\"0707070707070707\": {\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\", \"name\": \"x\"}}}",
+   "code": 409,
+   "reply": "{\"error\":\"taken\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_enroll",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000901.0,
+   "body": "{\"devices\": {\"0707070707070707\": {\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\", \"name\": \"x\"}}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_enroll",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000901.0,
+   "body": "{\"devices\": {\"0707070707070707\": {\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYG\", \"name\": \"x\"}, \"0808080808080808\": {\"pub\": \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYG\", \"name\": \"y\"}}}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_members",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000902.0,
+   "body": "{}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"members\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"bob-mini-2-2\",\"joined_age\":1699999801,\"seen_age\":202,\"dev\":\"0101010101010101\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"seq\":4,\"have\":4},{\"fp\":\"SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc\",\"name\":\"bob-mini-2\",\"joined_age\":391,\"seen_age\":200,\"dev\":\"0404040404040404\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\",\"proof\":\"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=\",\"seq\":1,\"have\":null},{\"fp\":\"SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI\",\"name\":\"书房的 Mac\",\"joined_age\":2,\"seen_age\":null,\"dev\":\"0505050505050505\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"proof\":null,\"seq\":0,\"have\":null},{\"fp\":\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\",\"name\":\"bob-新\",\"joined_age\":2,\"seen_age\":null,\"dev\":\"0202020202020202\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"proof\":null,\"seq\":0,\"have\":null}],\"invites\":[{\"dev\":\"0303030303030303\",\"expires_in\":2698,\"seq\":0}],\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "ledger",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000903.0,
+   "body": "{\"get\": [\"01010101010101010101010101010101\", \"02020202020202020202020202020202\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"me_name\":\"bob-mini-2-2\",\"cost\":{\"01010101010101010101010101010101\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"bob-mini-2-2\",\"me\":true,\"revoked\":false,\"tag\":\"KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=\",\"age\":901}],\"02020202020202020202020202020202\":[]},\"missing\":{\"01010101010101010101010101010101\":[],\"02020202020202020202020202020202\":[]}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "keys",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000904.0,
+   "body": "{\"get\": [\"01010101010101010101010101010101\", \"02020202020202020202020202020202\", \"03030303030303030303030303030303\", \"04040404040404040404040404040404\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"me_name\":\"bob-mini-2-2\",\"keys\":{\"01010101010101010101010101010101\":{\"blob\":{\"n\":\"CgoKCgoKCgoKCgoKCgoKCgoK\",\"c\":\"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL\",\"t\":\"DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=\"},\"name\":\"书房的 Mac\",\"me\":true,\"age\":902},\"02020202020202020202020202020202\":{\"blob\":{\"n\":\"WlpaWlpaWlpaWlpaWlpaWlpa\",\"c\":\"W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tb\",\"t\":\"XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw=\"},\"name\":\"书房的 Mac\",\"me\":true,\"age\":604},\"03030303030303030303030303030303\":{\"blob\":{\"n\":\"FBQUFBQUFBQUFBQUFBQUFBQU\",\"c\":\"FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUV\",\"t\":\"FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY=\"},\"name\":null,\"me\":false,\"age\":1000904},\"04040404040404040404040404040404\":{\"blob\":{\"n\":\"Hh4eHh4eHh4eHh4eHh4eHh4e\",\"c\":\"Hx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8f\",\"t\":\"ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA=\"},\"name\":null,\"me\":false,\"age\":1700000899}}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "_open",
+   "fp": null,
+   "now": 0,
+   "body": null,
+   "code": 0,
+   "reply": null,
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_members",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700000905.5,
+   "body": "{}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"members\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"bob-mini-2-2\",\"joined_age\":1699999804,\"seen_age\":705,\"dev\":\"0101010101010101\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"seq\":4,\"have\":null},{\"fp\":\"SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc\",\"name\":\"bob-mini-2\",\"joined_age\":395,\"seen_age\":null,\"dev\":\"0404040404040404\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\",\"proof\":\"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=\",\"seq\":1,\"have\":null},{\"fp\":\"SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI\",\"name\":\"书房的 Mac\",\"joined_age\":5,\"seen_age\":null,\"dev\":\"0505050505050505\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"proof\":null,\"seq\":0,\"have\":null},{\"fp\":\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\",\"name\":\"bob-新\",\"joined_age\":5,\"seen_age\":null,\"dev\":\"0202020202020202\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"proof\":null,\"seq\":0,\"have\":null}],\"invites\":[{\"dev\":\"0303030303030303\",\"expires_in\":2694,\"seq\":0}],\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA",
+   "now": 1700000906.5,
+   "body": "{\"units\": {\"01010101010101010101010101010101\": {\"cli\": [[1, 1]]}}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"ttl\":150.0,\"idle\":600.0}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"bob-mini-2-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:gnDfULwoGkHCZ0cpikt5ZjeLoa9Yyo7dmFepI3UZQWc\":{\"name\":\"bob-mini-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD\",\"joined\":1700000510.75,\"dev\":\"0404040404040404\",\"proof\":\"CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=\"},\"SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"joined\":1700000900.25,\"dev\":\"0505050505050505\"},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"name\":\"bob-新\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"joined\":1700000900.25,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"seen\":1700000906.5,\"end\":null}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000905.5,1700000905.5]],\"app\":null,\"used\":1700000905.5}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75,\"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\":1700000510.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "team_revoke",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700001000.0,
+   "body": "{\"dev\": \"0404040404040404\"}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"members\":3}",
+   "said": [
+    "cca-presence: 移除了一台设备，现在 3 台"
+   ],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"bob-mini-2-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI\":{\"name\":\"书房的 Mac\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"joined\":1700000900.25,\"dev\":\"0505050505050505\"},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"name\":\"bob-新\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"joined\":1700000900.25,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"seen\":1700000906.5,\"end\":null}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000905.5,1700000905.5]],\"app\":null,\"used\":1700000905.5}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75,\"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\":1700000510.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}",
+    "team-docs.json": "{\"v\":1,\"docs\":{\"0101010101010101\":{\"seq\":4,\"ct\":{\"n\":\"eHh4eHh4eHh4eHh4eHh4eHh4\",\"c\":\"eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5\",\"t\":\"enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eno=\"},\"sig\":\"QUJD\",\"at\":1700000600.5}}}"
+   }
+  },
+  {
+   "op": "team_revoke",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700001001.0,
+   "body": "{\"dev\": \"0404040404040404\"}",
+   "code": 404,
+   "reply": "{\"error\":\"no_device\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_revoke",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700001001.0,
+   "body": "{\"dev\": \"nope\"}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_leave",
+   "fp": "SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI",
+   "now": 1700001002.5,
+   "body": "{}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"members\":2}",
+   "said": [
+    "cca-presence: 移除了一台设备，现在 2 台"
+   ],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"bob-mini-2-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"name\":\"bob-新\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"joined\":1700000900.25,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"seen\":1700000906.5,\"end\":null}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000905.5,1700000905.5]],\"app\":null,\"used\":1700000905.5}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75,\"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\":1700000510.75},\"invites\":{\"3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547\":{\"dev\":\"0303030303030303\",\"exp\":1700003600.0,\"at\":1700000000.0}},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "team_leave",
+   "fp": "SHA256:v56LLWsNzmslc8ACmJ+JqO4DU592MxGavqfSqKZS8jI",
+   "now": 1700001003.0,
+   "body": "{}",
+   "code": 403,
+   "reply": "{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_revoke",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1700001004.0,
+   "body": "{\"dev\": \"0303030303030303\"}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"members\":2}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"bob-mini-2-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"name\":\"bob-新\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"joined\":1700000900.25,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"seen\":1700000906.5,\"end\":null}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000905.5,1700000905.5]],\"app\":null,\"used\":1700000905.5}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{\"bdb339768bc5e4fecbe55a442056919b2b325907d49bcbf3bf8de13781996a83\":1699000000.75,\"cd93782b7fb95559de14f738b65988af85d41dc1565f7c7d1ed2d035665b519c\":1700000510.75},\"invites\":{},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "view",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700001005.0,
+   "body": "{\"accounts\": [\"01010101010101010101010101010101\", \"02020202020202020202020202020202\", \"05050505050505050505050505050505\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"me_name\":\"bob-mini-2-2\",\"ttl\":150.0,\"idle\":600.0,\"accounts\":{\"01010101010101010101010101010101\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"bob-mini-2-2\",\"state\":\"offline\",\"cli\":2,\"app\":true,\"since_age\":4404,\"idle_age\":804,\"used_age\":804,\"seen_age\":804},{\"fp\":\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\",\"name\":\"bob-新\",\"state\":\"in_use\",\"cli\":1,\"app\":false,\"since_age\":100,\"idle_age\":100,\"used_age\":100,\"seen_age\":98}],\"02020202020202020202020202020202\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"bob-mini-2-2\",\"state\":\"none\",\"cli\":0,\"app\":false,\"since_age\":null,\"idle_age\":null,\"used_age\":10905,\"seen_age\":804}],\"05050505050505050505050505050505\":[]}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "team_members",
+   "fp": "SHA256:09QkquZLUjGOrwjhgurMrPxGOTH4y1Co8OcwmYIRZqY",
+   "now": 1702592512.0,
+   "body": "{}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"members\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"bob-mini-2-2\",\"joined_age\":1702591411,\"seen_age\":2591507,\"dev\":\"0101010101010101\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"seq\":4,\"have\":null},{\"fp\":\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\",\"name\":\"bob-新\",\"joined_age\":2591612,\"seen_age\":2591606,\"dev\":\"0202020202020202\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"proof\":null,\"seq\":0,\"have\":null}],\"invites\":[],\"gen\":\"abababababababababababababababab\"}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"bob-mini-2-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"name\":\"bob-新\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"joined\":1700000900.25,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1700000200.75,\"end\":null},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"seen\":1700000906.5,\"end\":null}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000100.75,1700000180.25],[1699996600.75,1700000200.75]],\"app\":[1700000150.75,1700000190.75],\"used\":1700000200.75},\"02020202020202020202020202020202\":{\"cli\":[],\"app\":null,\"used\":1699990100}},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"01010101010101010101010101010101\":{\"cli\":[[1700000905.5,1700000905.5]],\"app\":null,\"used\":1700000905.5}}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{},\"invites\":{},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "view",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1703456020.0,
+   "body": "{\"accounts\": [\"01010101010101010101010101010101\", \"02020202020202020202020202020202\", \"05050505050505050505050505050505\"]}",
+   "code": 200,
+   "reply": "{\"v\":1,\"me_name\":\"bob-mini-2-2\",\"ttl\":150.0,\"idle\":600.0,\"accounts\":{\"01010101010101010101010101010101\":[{\"fp\":\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\",\"name\":\"bob-mini-2-2\",\"state\":\"offline\",\"cli\":2,\"app\":true,\"since_age\":3459419,\"idle_age\":3455819,\"used_age\":3455819,\"seen_age\":3455819},{\"fp\":\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\",\"name\":\"bob-新\",\"state\":\"offline\",\"cli\":1,\"app\":false,\"since_age\":3455114,\"idle_age\":3455114,\"used_age\":3455114,\"seen_age\":3455114}],\"02020202020202020202020202020202\":[],\"05050505050505050505050505050505\":[]}}",
+   "said": [],
+   "files": {}
+  },
+  {
+   "op": "report",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1703456021.0,
+   "body": "{\"units\": {}}",
+   "code": 200,
+   "reply": "{\"v\":1,\"ok\":true,\"ttl\":150.0,\"idle\":600.0}",
+   "said": [],
+   "files": {
+    "state.json": "{\"v\":1,\"seq\":0,\"machines\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"name\":\"bob-mini-2-2\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"joined\":1101,\"dev\":\"0101010101010101\",\"proof\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"SHA256:JRp7tI7Meq1UAkL99HeWdwYGfeoqeGzeDjapVjNvKkA\":{\"name\":\"bob-新\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUF\",\"joined\":1700000900.25,\"dev\":\"0202020202020202\"}},\"beats\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{\"seen\":1703456021.0,\"end\":null}},\"units\":{\"SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA\":{}},\"note\":{\"k\":[1,2.5,\"值\",true,null,1e+22,12345678901234567890,-0.0,\"a b\\\"\\\\\\t\"]},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"label\":\"测试\",\"gen\":\"abababababababababababababababab\",\"spent\":{},\"invites\":{},\"more\":[1.0,{\"k\":null}]},\"tail\":[1,2]}"
+   }
+  },
+  {
+   "op": "nope",
+   "fp": "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+   "now": 1700000000.0,
+   "body": "{}",
+   "code": 400,
+   "reply": "{\"error\":\"bad\"}",
+   "said": [],
+   "files": {}
+  }
+ ]
+}

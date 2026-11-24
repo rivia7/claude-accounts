@@ -1,0 +1,1217 @@
+{
+"_":"Recorded from server/cca-presence.py (Python 3.14.0, --behind-proxy) by a scratch script: what the server answers to raw requests, byte for byte. send: parts, a string is text, [text, n] is that text n times; every character is one byte (latin-1), also in recv. eof: the client closes its sending side after the request. The Date value is replaced by @. log: what the server wrote to stderr during the run (after the start-up line).",
+"root":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI",
+"state":"{\"v\":1,\"seq\":0,\"machines\":{},\"beats\":{},\"units\":{},\"team\":{\"root\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI\",\"gen\":\"abababababababababababababababab\",\"invites\":{},\"spent\":{}}}",
+"log":"",
+"cases":[
+{
+"name":"health 1.0",
+"send":[
+"GET /v1/health HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health 1.1 with headers",
+"send":[
+"GET /v1/health HTTP/1.1\r\nHost: x\r\nAccept: */*\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health, bare LF",
+"send":[
+"GET /v1/health HTTP/1.0\n\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health, no blank line, EOF",
+"send":[
+"GET /v1/health HTTP/1.0\r\n"
+],
+"eof":true,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health, no newline at all, EOF",
+"send":[
+"GET /v1/health HTTP/1.0"
+],
+"eof":true,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health 0.9 (two words)",
+"send":[
+"GET /v1/health\r\n\r\n"
+],
+"eof":false,
+"recv":"{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health explicit HTTP/0.9",
+"send":[
+"GET /v1/health HTTP/0.9\r\n\r\n"
+],
+"eof":false,
+"recv":"{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health HTTP/0.09",
+"send":[
+"GET /v1/health HTTP/0.09\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health HTTP/1.9",
+"send":[
+"GET /v1/health HTTP/1.9\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health HTTP/01.00",
+"send":[
+"GET /v1/health HTTP/01.00\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health with query",
+"send":[
+"GET /v1/health?x=1&y=?z HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health with double slash",
+"send":[
+"GET ///v1/health HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health, tabs between words",
+"send":[
+"GET\t/v1/health \t HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health, trailing CRs",
+"send":[
+"GET /v1/health HTTP/1.0\r\r\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health, leading spaces",
+"send":[
+"  GET /v1/health HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"health, nbsp between words",
+"send":[
+"GET\u00a0/v1/health\u001fHTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"not found",
+"send":[
+"GET /nope HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"root without web",
+"send":[
+"GET / HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"relay ws without web",
+"send":[
+"GET /v1/relay/ws?t=00000000000000000000000000000000 HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"health path with suffix",
+"send":[
+"GET /v1/health/ HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"path without slash",
+"send":[
+"GET v1/health HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"HEAD",
+"send":[
+"HEAD /v1/health HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 501 Unsupported method ('HEAD')\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 482\r\n\r\n"
+},
+{
+"name":"PUT",
+"send":[
+"PUT /v1/health HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 501 Unsupported method ('PUT')\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 481\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 501</p>\n        <p>Message: Unsupported method ('PUT').</p>\n        <p>Error code explanation: 501 - Server does not support this operation.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"lower-case get",
+"send":[
+"get /v1/health HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 501 Unsupported method ('get')\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 481\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 501</p>\n        <p>Message: Unsupported method ('get').</p>\n        <p>Error code explanation: 501 - Server does not support this operation.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"odd method",
+"send":[
+"<\u00e9&>'\"\\ /x HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 501 Unsupported method ('<\u00e9&>\\'\"\\\\')\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 498\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 501</p>\n        <p>Message: Unsupported method ('&lt;\u00c3\u00a9&amp;&gt;\\'\"\\\\').</p>\n        <p>Error code explanation: 501 - Server does not support this operation.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"method with control char",
+"send":[
+"G\u0001\u0085T /x HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad request syntax ('G\\x01\\x85T /x HTTP/1.0')\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 502\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request syntax ('G\\x01\\x85T /x HTTP/1.0').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/2.0",
+"send":[
+"GET /v1/health HTTP/2.0\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 505</p>\n        <p>Message: Invalid HTTP version (2.0).</p>\n        <p>Error code explanation: 505 - Cannot fulfill request.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/10.5",
+"send":[
+"GET /v1/health HTTP/10.5\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 505</p>\n        <p>Message: Invalid HTTP version (10.5).</p>\n        <p>Error code explanation: 505 - Cannot fulfill request.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/1.x",
+"send":[
+"GET /v1/health HTTP/1.x\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('HTTP/1.x').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/1",
+"send":[
+"GET /v1/health HTTP/1\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('HTTP/1').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/1.2.3",
+"send":[
+"GET /v1/health HTTP/1.2.3\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('HTTP/1.2.3').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/.1",
+"send":[
+"GET /v1/health HTTP/.1\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('HTTP/.1').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/ long digits",
+"send":[
+"GET /v1/health HTTP/1.00000000001\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('HTTP/1.00000000001').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HTTP/ superscript digit",
+"send":[
+"GET /v1/health HTTP/1.\u00b2\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('HTTP/1.\u00c2\u00b2').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"http/1.0 lower",
+"send":[
+"GET /v1/health http/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('http/1.0').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"FTP/1.0",
+"send":[
+"GET /v1/health FTP/1.0 <b>&\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('&lt;b&gt;&amp;').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"one word",
+"send":[
+"GARBAGE\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request syntax ('GARBAGE').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"one word with markup",
+"send":[
+"<script>&\u00e9\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request syntax ('&lt;script&gt;&amp;\u00c3\u00a9').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"four words",
+"send":[
+"GET /a /b HTTP/1.0\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad request syntax ('GET /a /b HTTP/1.0')\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 498\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request syntax ('GET /a /b HTTP/1.0').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"five words bad version",
+"send":[
+"A B C D E\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad request version ('E').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"POST 0.9",
+"send":[
+"POST /v1/report\r\n\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 400</p>\n        <p>Message: Bad HTTP/0.9 request type ('POST').</p>\n        <p>Error code explanation: 400 - Bad request syntax or unsupported method.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"empty line",
+"send":[
+"\r\n"
+],
+"eof":false,
+"recv":""
+},
+{
+"name":"only spaces",
+"send":[
+"   \r\n\r\n"
+],
+"eof":false,
+"recv":""
+},
+{
+"name":"nothing",
+"send":[],
+"eof":true,
+"recv":""
+},
+{
+"name":"request line 65536 bytes",
+"send":[
+"GET /",
+[
+"a",
+65520
+],
+" HTTP/1.0\r\n",
+"\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"request line 65537 bytes",
+"send":[
+"GET /",
+[
+"a",
+65532
+]
+],
+"eof":false,
+"recv":"HTTP/1.0 414 URI Too Long\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 444\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 414</p>\n        <p>Message: URI Too Long.</p>\n        <p>Error code explanation: 414 - URI is too long.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"99 headers",
+"send":[
+"GET /v1/health HTTP/1.0\r\n",
+[
+"X-A: b\r\n",
+99
+],
+"\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"100 headers",
+"send":[
+"GET /v1/health HTTP/1.0\r\n",
+[
+"X-A: b\r\n",
+100
+],
+"\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 431 Too many headers\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 458\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 431</p>\n        <p>Message: Too many headers.</p>\n        <p>Error code explanation: 431 - got more than 100 headers.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"100 headers, EOF instead of blank",
+"send":[
+"GET /v1/health HTTP/1.0\r\n",
+[
+"X-A: b\r\n",
+100
+]
+],
+"eof":true,
+"recv":"HTTP/1.0 431 Too many headers\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 458\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 431</p>\n        <p>Message: Too many headers.</p>\n        <p>Error code explanation: 431 - got more than 100 headers.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"HEAD with 100 headers",
+"send":[
+"HEAD /v1/health HTTP/1.0\r\n",
+[
+"X-A: b\r\n",
+100
+],
+"\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 431 Too many headers\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 458\r\n\r\n"
+},
+{
+"name":"header line 65536 bytes",
+"send":[
+"GET /v1/health HTTP/1.0\r\nX-A: ",
+[
+"b",
+65529
+],
+"\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"header line 65537 bytes",
+"send":[
+"GET /v1/health HTTP/1.0\r\nX-A: ",
+[
+"b",
+65532
+]
+],
+"eof":false,
+"recv":"HTTP/1.0 431 Line too long\r\nServer: cca-presence/1 \r\nDate: @\r\nConnection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: 480\r\n\r\n<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 431</p>\n        <p>Message: Line too long.</p>\n        <p>Error code explanation: 431 - got more than 65536 bytes when reading header line.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"0.9 with 100 headers",
+"send":[
+"GET /v1/health\r\n",
+[
+"X-A: b\r\n",
+100
+],
+"\r\n"
+],
+"eof":false,
+"recv":"<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <style type=\"text/css\">\n            :root {\n                color-scheme: light dark;\n            }\n        </style>\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 431</p>\n        <p>Message: Too many headers.</p>\n        <p>Error code explanation: 431 - got more than 100 headers.</p>\n    </body>\n</html>\n"
+},
+{
+"name":"post without length",
+"send":[
+"POST /v1/report HTTP/1.0\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length abc",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: abc\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length empty",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length:\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length -1",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: -1\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 413 Content Too Large\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length 1.0",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 1.0\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length 0x2",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 0x2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length with spaces and plus",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length:  \t +2 \r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length with underscore",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 1_0\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}        "
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length 1__0",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 1__0\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post length twice: first wins",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 2\r\nContent-Length: 99\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post lower-case header names",
+"send":[
+"POST /v1/report HTTP/1.0\r\ncontent-length: 2\r\nx-cca-sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post too big",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 65537\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 413 Content Too Large\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post too big for view",
+"send":[
+"POST /v1/view HTTP/1.0\r\nContent-Length: 65537\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 413 Content Too Large\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sync too big",
+"send":[
+"POST /v1/keys HTTP/1.0\r\nContent-Length: 1048577\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 413 Content Too Large\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post team_put too big",
+"send":[
+"POST /v1/team_put HTTP/1.0\r\nContent-Length: 1048577\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 413 Content Too Large\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post huge length",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 1000000000000000000000000000000\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 413 Content Too Large\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post exactly at the limit, short body",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 65536\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":true,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post ledger over the small limit, short body",
+"send":[
+"POST /v1/ledger HTTP/1.0\r\nContent-Length: 65537\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":true,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post team_enroll over the small limit",
+"send":[
+"POST /v1/team_enroll HTTP/1.0\r\nContent-Length: 65537\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 413 Content Too Large\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post no sig",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post empty sig",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: \r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig not base64",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: !!!!\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig with trailing space",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl \r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig with leading spaces",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig:    bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post sig after a tab",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig:\tbm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post sig QUJD",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJD\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post sig QUJ",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJ\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig QUJDRA==",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJDRA==\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post sig QUJDRA=",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJDRA=\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig QUJDRA===",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJDRA===\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig QUJD====",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJD====\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig =QUJD",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: =QUJD\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig QUJDRB==",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJDRB==\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post sig QUJDR===",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJDR===\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig QUJDRA==QUJD",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QUJDRA==QUJD\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig QU=JD",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QU=JD\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig urlsafe alphabet",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: QU-_\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig ====",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: ====\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig too long",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig at the limit",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA==\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post sig twice: bad one first",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: !!!!\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post sig twice: good one first",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\nX-Cca-Sig: !!!!\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post upper-case header names",
+"send":[
+"POST /v1/report HTTP/1.0\r\nCONTENT-LENGTH: 80\r\nX-CCA-SIG: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post length with vertical tab and nbsp",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\u000b\u00a0\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"get with a body",
+"send":[
+"GET /v1/health HTTP/1.0\r\nContent-Length: 5\r\n\r\nhello"
+],
+"eof":false,
+"recv":"HTTP/1.0 200 OK\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 252\r\nCache-Control: no-store\r\n\r\n{\"v\":1,\"ok\":true,\"sig_ok\":true,\"machines\":0,\"seq\":0,\"mode\":\"team\",\"ops\":[\"report\",\"view\",\"keys\",\"ledger\",\"team_enroll\",\"team_invite\",\"team_put\",\"team_members\",\"team_revoke\",\"team_join\",\"team_get\",\"team_leave\"],\"team\":\"d3d424aae64b52318eaf08e182eaccac\"}"
+},
+{
+"name":"post short body",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{"
+],
+"eof":true,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post body longer than length",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}{}{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post empty body",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 0\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post unknown op",
+"send":[
+"POST /v1/nope HTTP/1.0\r\nContent-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"post old machines op",
+"send":[
+"POST /v1/machines HTTP/1.0\r\nContent-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"post relay op, relay off",
+"send":[
+"POST /v1/pair_open HTTP/1.0\r\nContent-Length: 83\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"pair_open\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"post path without /v1/",
+"send":[
+"POST /report HTTP/1.0\r\nContent-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"post path /v1/",
+"send":[
+"POST /v1/ HTTP/1.0\r\nContent-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"post path with query",
+"send":[
+"POST /v1/report?x=1 HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 404 Not Found\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 21\r\nCache-Control: no-store\r\n\r\n{\"error\":\"not_found\"}"
+},
+{
+"name":"post double slash path",
+"send":[
+"POST //v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post not json",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 4\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\nnope"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post not utf-8",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 31\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"\u00ff\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post json list",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 3\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n[1]"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post wrong v",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":2,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post v as string",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 82\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":\"1\",\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post op mismatch",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 78\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"view\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post no key",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 21\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post key not a fingerprint",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 42\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:short\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post key with newline",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 82\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\n\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post unknown device",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post unknown device, v 1.0",
+"send":[
+"POST /v1/view HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1.0,\"op\":\"view\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post unknown device, v true",
+"send":[
+"POST /v1/keys HTTP/1.0\r\nContent-Length: 81\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":true,\"op\":\"keys\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post unknown device, with BOM",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 83\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n\u00ef\u00bb\u00bf{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"post unknown device, duplicate keys",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 86\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":2,\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post unknown device, NaN in body",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 88\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"x\":NaN}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post team_get unknown device",
+"send":[
+"POST /v1/team_get HTTP/1.0\r\nContent-Length: 82\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"team_get\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post team_leave unknown device",
+"send":[
+"POST /v1/team_leave HTTP/1.0\r\nContent-Length: 84\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"team_leave\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"post admin op, not the root",
+"send":[
+"POST /v1/team_members HTTP/1.0\r\nContent-Length: 86\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"team_members\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 18\r\nCache-Control: no-store\r\n\r\n{\"error\":\"denied\"}"
+},
+{
+"name":"post team_join without pub",
+"send":[
+"POST /v1/team_join HTTP/1.0\r\nContent-Length: 83\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"team_join\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 18\r\nCache-Control: no-store\r\n\r\n{\"error\":\"denied\"}"
+},
+{
+"name":"post team_join pub of another key",
+"send":[
+"POST /v1/team_join HTTP/1.0\r\nContent-Length: 215\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"team_join\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"pub\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB\",\"token\":\"00000000000000000000000000000000\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 18\r\nCache-Control: no-store\r\n\r\n{\"error\":\"denied\"}"
+},
+{
+"name":"folded sig header",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEg\r\n c2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"junk line hides later headers",
+"send":[
+"POST /v1/report HTTP/1.0\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\nthis is junk\r\nContent-Length: 2\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"junk line after both headers",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\nthis is junk\r\nX-B: c\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"header name with space hides later headers",
+"send":[
+"POST /v1/report HTTP/1.0\r\nX Y: z\r\nContent-Length: 2\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"empty header name is skipped",
+"send":[
+"POST /v1/report HTTP/1.0\r\n: x\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"leading continuation is skipped",
+"send":[
+"POST /v1/report HTTP/1.0\r\n continued\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"From line is skipped",
+"send":[
+"POST /v1/report HTTP/1.0\r\nFrom someone\r\nContent-Length: 80\r\nFrom other\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"From line last",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\nFrom other\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"bare CR ends the headers",
+"send":[
+"POST /v1/report HTTP/1.0\r\nX-A: b\r\r\nContent-Length: 2\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"bare CR after the length",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"vertical tab does not split a header line",
+"send":[
+"POST /v1/report HTTP/1.0\r\nX-A: b\u000bContent-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"NEL does not split a header line",
+"send":[
+"POST /v1/report HTTP/1.0\r\nX-A: b\u0085Content-Length: 2\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"header value keeps inner spaces",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length: 80\r\nX-Cca-Sig: bm90IGEg c2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 400 Bad Request\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"header without space after colon",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length:80\r\nX-Cca-Sig:bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"header name with high byte hides later headers",
+"send":[
+"POST /v1/report HTTP/1.0\r\nX-\u00e9: 1\r\nContent-Length: 2\r\n\r\n{}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+},
+{
+"name":"header with bare LF line ends",
+"send":[
+"POST /v1/report HTTP/1.0\nContent-Length: 80\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\n\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"continuation of the length",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length:\r\n 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 403 Forbidden\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 67\r\nCache-Control: no-store\r\n\r\n{\"error\":\"unknown_device\",\"gen\":\"abababababababababababababababab\"}"
+},
+{
+"name":"header name ends with a space",
+"send":[
+"POST /v1/report HTTP/1.0\r\nContent-Length : 80\r\nX-Cca-Sig: bm90IGEgc2lnbmF0dXJl\r\n\r\n{\"v\":1,\"op\":\"report\",\"key\":\"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+],
+"eof":false,
+"recv":"HTTP/1.0 411 Length Required\r\nServer: cca-presence/1 \r\nDate: @\r\nContent-Type: application/json\r\nContent-Length: 15\r\nCache-Control: no-store\r\n\r\n{\"error\":\"bad\"}"
+}
+]
+}

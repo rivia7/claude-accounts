@@ -1,35 +1,410 @@
-//! 一个请求怎么回：Python 的 `Handler.do_GET`、`static`、`websocket`、`client_ip`、`do_POST`、`team_op`（Py:1817-2029）。
+//! 一个请求怎么处理：Python 的 `Handler` 里的 do_GET、do_POST、team_op、static、websocket、client_ip（Py:1817-2029）。
 //!
-//! `handle` 不碰套接字：进来的是读好的请求，出去的是 `Outcome`（回什么），写出去、升级成 WebSocket 以后的事由 front.rs 做。
-//! 这样每一种回复都能直接在测试里比。
+//! 这里不碰连接：请求读好了（`http::Request`）进来，出去的是要回什么（`Outcome`），由 front.rs 写出去。检查的先后、每一步回的
+//! 状态码和 error 都照 Python（设备、界面 App、测试都是照着这些分情况的）：
 //!
-//! do_POST 的先后要和 Python 的一步不差（Py:1901-1997）：按 IP 限流 → Content-Length → 正文的上限（keys、ledger、team_put 是
-//! `MAX_SYNC_BODY`，别的 `MAX_BODY`）→ 签名那个头 → 认不认这个 op（没开中转时不认中转的那几个）→ JSON → v、op、key →
-//! 这把密钥是谁的、验签名（team_join 拿要加入的那把、管理员的 op 拿根密钥、访客拿 `Remote::guest_key` 给的）→ 按设备限流
-//! （验签之后才扣）→ 时间 → nonce → 各个 op。
+//! POST /v1/<op>（Py:1901-1997）：
+//! 1. 按 IP 限流（429 rate）；Content-Length 不是数（411 bad）、是负的或者过了上限（413 bad；keys、ledger、team_put 是 1 MiB，
+//!    别的 64 KiB）——到这里为止是 `admit`：这几步在读正文之前，过了才去读那么多个字节
+//! 2. 正文没读全、X-Cca-Sig 不是 base64、是空的、解出来超过 4096 个字节（400 bad）
+//! 3. 不认识的 op（404 not_found；中转的那几个没开中转时也不认）
+//! 4. 正文不是 JSON、不是字典、v 不是 1、op 和地址里的不一样、key 不是指纹的样子（400 bad）
+//! 5. 验签名，三种：team_join 拿请求里要加入的那把公钥验（没有这个邀请和签名不对回一样的 403 denied；签名对了才说邀请是过期了
+//!    还是用过了）；管理员的 op 拿 Team 的根公钥验（403 denied）；别的拿名单里这台设备的公钥验（不在名单里：403 unknown_device
+//!    带着 gen；发的是中转的请求时可能是访客，问 `Remote::guest_key`）
+//! 6. 按指纹限流（验了签名才扣；管理员的 op 另算）（429 rate）；ts 和服务器的时间差超过 300 秒（400 clock 带着 now）；
+//!    nonce 不是 32 个十六进制字符（400 bad）、用过了（409 replay）
+//! 7. 记下这台设备刚来过，然后才是各个 op 自己的事：Team 的和 report、keys、ledger、view 在 `Store::op`，中转的在
+//!    `remote::handle_op`
 //!
-//! 现在只有接口：里面的还没移植。
+//! GET（Py:1817-1888）：/v1/health；开着网页端时 /v1/relay/ws（升级成 WebSocket）和页面的文件；别的 404 not_found。
+//!
+//! 存不了这一类的错（`Store::op`、`remote::handle_op` 给的 Err）：Python 里是没人接的异常，在日志里说一句
+//! `cca-presence: 处理请求出错：…`、不回就断开（Py:2095-2096）。这里也是（`Outcome::Close`）。
+//!
+//! 锁：Store、Remote、Guards 各一把，这里从不同时拿两把——除了 `handle_op` 拿着 Remote 的锁回头问设备的名字（先 Remote 后
+//! Store，只有这一个方向）。验签名不拿着锁做。
+//!
+//! 时间：`handle`、`admit`、`answer` 自己看钟；测试用带 `_at` 的那几个，时间是给的。
 
-use super::http::Request;
-use super::Ctx;
+use super::http::{Method, Request};
+use super::store::{say, Invite};
+use super::web::{Web, WebFile};
+use super::{remote, sshsig, wire, Ctx};
+use super::{API, MAX_BODY, MAX_SIG, MAX_SYNC_BODY, NS_REPORT, RELAY_OPS, SYNC_OPS, TEAM_ADMIN_OPS, TEAM_OPS, TS_WINDOW, WS_GUID};
+use crate::dict;
 use crate::py::obj::V;
+use crate::py::{base64, hash, ipaddr, json, text, time, uni, Fail, R};
 use std::net::IpAddr;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// 一个请求的结果
+/// 一个请求的结果：front.rs 照它写回复
 pub enum Outcome {
-    /// JSON 的回复：状态码、内容（写成紧凑的 UTF-8，带 `Cache-Control: no-store`，Py:1808-1815）
+    /// 状态码和一个 JSON（紧凑的 UTF-8，带 Cache-Control: no-store）
     Json(u16, V),
-    /// 别的回复（网页端的文件、304）：状态码、要加的头（照先后）、正文
+    /// 别的回复（网页端的文件、304）：状态码、要带的头（照先后）、正文
     Raw { code: u16, headers: Vec<(String, String)>, body: Vec<u8> },
-    /// 升级成 WebSocket：accept 是 Sec-WebSocket-Accept 的值，ip 是限流用的那个地址（已经占了 `Web` 的一个名额：
-    /// 这条连接完了要 `Web::free(ip)`）
+    /// 升级成 WebSocket：回 101（accept 是 Sec-WebSocket-Accept 的值），这条连接从此交给 WebSocket 的泵。已经占了网页端的
+    /// 一个名额（`Web::take(ip)`）：连接结束时调用方一定要 `Web::free(ip)`
     Upgrade { accept: String, ip: String },
-    /// 不回，直接断开
+    /// 不回，直接断开（处理时出了错：已经在日志里说过了）
     Close,
 }
 
-/// peer 是连过来的地址；proxied：在代理后面（--behind-proxy），限流照 X-Forwarded-For 的最后一项（Py:1890-1899）
-pub fn handle(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request) -> Outcome {
-    let _ = (ctx, peer, proxied, req);
-    Outcome::Close // 还没移植
+/// 拿锁。别的线程拿着它时 panic 了（发布版是 abort，到不了；测试里会）也接着用：里面的状态每一步都是完整的
+pub(super) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+fn error(code: u16, what: &str) -> Outcome {
+    Outcome::Json(code, V::Dict(dict! { "error" => what }))
+}
+
+/// 处理时出了错（存不了……）：在日志里说一句，不回（Py:2095-2096）
+fn failed(e: &Fail) -> Outcome {
+    say(format!("cca-presence: 处理请求出错：{e}"));
+    Outcome::Close
+}
+
+/// 一个读好了的请求（正文已经在 req.body 里）怎么回。连接上的请求是分两步走的（`admit`、读正文、`answer`：见 front.rs），
+/// 这里是把两步连起来：正文比 Content-Length 说的长时只看前面那么多
+pub fn handle(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request) -> Outcome {
+    match admit(ctx, peer, proxied, req) {
+        Ok(n) => answer(ctx, peer, proxied, req, n),
+        Err(out) => out,
+    }
+}
+
+/// 读正文之前的那几步（Py:1903-1912）：过了是正文有多少个字节（GET 没有这几步，是 0），没过是要回的
+pub fn admit(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request) -> Result<usize, Outcome> {
+    admit_at(ctx, peer, proxied, req, time::monotonic())
+}
+
+/// 正文读好以后（req.body：读到的那些，对方提前断开时比 n 短）的那几步。n 是 `admit` 给的
+pub fn answer(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, n: usize) -> Outcome {
+    answer_at(ctx, peer, proxied, req, n, time::time(), time::monotonic())
+}
+
+/// mono 是单调时钟（限流用的）
+fn admit_at(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, mono: f64) -> Result<usize, Outcome> {
+    if req.method != Method::Post {
+        return Ok(0);
+    }
+    if !lock(&ctx.guards).ip.take(&client_ip(peer, proxied, req), mono) {
+        return Err(error(429, "rate"));
+    }
+    let op = op_of(req);
+    let big = SYNC_OPS.iter().any(|(name, _)| *name == op) || op == "team_put"; // 交换密文的、管理员存各台设备的配置的
+    match content_length(req.header("Content-Length").unwrap_or_default()) {
+        Length::Invalid => Err(error(411, "bad")),
+        Length::Bytes(n) if n <= if big { MAX_SYNC_BODY } else { MAX_BODY } => Ok(n),
+        Length::Negative | Length::Bytes(_) => Err(error(413, "bad")),
+    }
+}
+
+/// now 是服务器的时间（验 ts、记时间用的），mono 是单调时钟（限流用的）
+fn answer_at(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, n: usize, now: f64, mono: f64) -> Outcome {
+    match req.method {
+        Method::Get => get(ctx, peer, proxied, req, now, mono),
+        Method::Post => post(ctx, req, n, now, mono),
+    }
+}
+
+/// 地址里的 op：`/v1/` 后面的全部（带着 `?` 的话连它一起：那就哪个 op 都不是）（Py:1909）
+fn op_of(req: &Request) -> &str {
+    req.target.strip_prefix("/v1/").unwrap_or_default()
+}
+
+/// 按哪个 IP 限流（Py:1890-1899）：--behind-proxy 时是 X-Forwarded-For 最后一项（平台的代理加的；前面的是客户端自己写的，
+/// 能乱填），没有、不像 IP 时和平时一样是连过来的地址
+pub fn client_ip(peer: IpAddr, proxied: bool, req: &Request) -> String {
+    if proxied {
+        let all = req.header_all("X-Forwarded-For").join(",");
+        let last = text::strip(all.rsplit(',').next().unwrap_or_default());
+        if let Ok(ip) = ipaddr::ip_address(last) {
+            return ip.text();
+        }
+    }
+    peer.to_canonical().to_string() // 听 IPv6 时连过来的 IPv4 地址（::ffff:a.b.c.d）照 IPv4 的写
+}
+
+/// Content-Length 那个头读出来的
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Length {
+    /// 不是数（Python 的 int() 不认）：411
+    Invalid,
+    /// 负的：413
+    Negative,
+    /// 这么多个字节（大得放不下的记成最大的数：反正过了上限）
+    Bytes(usize),
+}
+
+/// 照 Python 的 `int(值)` 读（Py:1906；和真的服务器对过，见 tests/vectors/server_http.json）：前后的空白不算（ASCII 里只有空格、
+/// \t \n \v \f \r 这六个——\x1c 到 \x1f 不算——，别的是 Unicode 认的空白），可以带一个正负号，数字之间可以隔一个下划线，
+/// 数字多于 4300 个不认（sys.get_int_max_str_digits）
+fn content_length(value: &str) -> Length {
+    const MAX_DIGITS: usize = 4300;
+    let space = |c: char| if c.is_ascii() { matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r') } else { uni::is_space(c) };
+    let body = value.trim_matches(space);
+    let (negative, digits) = match body.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, body.strip_prefix('+').unwrap_or(body)),
+    };
+    let (mut n, mut count, mut after_digit) = (0usize, 0usize, false);
+    for c in digits.chars() {
+        if c == '_' && after_digit {
+            after_digit = false;
+            continue;
+        }
+        let Some(d) = uni::decimal_value(c).and_then(|d| usize::try_from(d).ok()) else {
+            return Length::Invalid;
+        };
+        n = n.saturating_mul(10).saturating_add(d);
+        count = count.saturating_add(1);
+        after_digit = true;
+    }
+    if !after_digit || count > MAX_DIGITS {
+        return Length::Invalid; // 一个数字都没有、结尾是下划线、太长
+    }
+    if negative && n > 0 {
+        Length::Negative
+    } else {
+        Length::Bytes(n)
+    }
+}
+
+// ---- GET ----
+
+fn get(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f64) -> Outcome {
+    let (path, _, query) = text::partition(&req.target, "?");
+    if path == "/v1/health" {
+        let relay_port = ctx.remote.as_ref().map(|sh| lock(&sh.m).port());
+        let health = lock(&ctx.store).health(ctx.sig_ok, relay_port);
+        if let (Some(web), Some(d)) = (&ctx.web, health.as_dict()) {
+            d.set("web", web.url.as_str());
+        }
+        return Outcome::Json(200, health);
+    }
+    if let Some(web) = &ctx.web {
+        if path == "/v1/relay/ws" {
+            return websocket(ctx, web, query, peer, proxied, req, now, mono);
+        }
+        // 'index.html' if path == '/' else path[1:]
+        let mut rest = path.chars();
+        rest.next();
+        if let Some(f) = web.files.get(if path == "/" { "index.html" } else { rest.as_str() }) {
+            return page(ctx, web, f, peer, proxied, req, mono);
+        }
+    }
+    error(404, "not_found")
+}
+
+/// 网页端的一个文件。每次都问一下变了没有（no-cache + ETag）：页面更新了手机上马上就是新的（Py:1832-1851）
+fn page(ctx: &Ctx, web: &Web, f: &WebFile, peer: IpAddr, proxied: bool, req: &Request, mono: f64) -> Outcome {
+    if !lock(&ctx.guards).ip.take(&client_ip(peer, proxied, req), mono) {
+        return error(429, "rate");
+    }
+    let same = req.header("If-None-Match") == Some(f.etag.as_str());
+    let gz = f.gz.as_deref().filter(|gz| !gz.is_empty() && req.header("Accept-Encoding").unwrap_or_default().contains("gzip"));
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let mut add = |name: &str, value: &str| headers.push((name.to_string(), value.to_string()));
+    let body = match (same, gz) {
+        (true, _) => &[][..],
+        (false, Some(gz)) => gz,
+        (false, None) => &f.raw[..],
+    };
+    if !same {
+        add("Content-Type", f.ctype);
+        add("Content-Length", &body.len().to_string());
+        if gz.is_some() {
+            add("Content-Encoding", "gzip");
+        }
+    }
+    add("ETag", &f.etag);
+    add("Cache-Control", "no-cache");
+    add("Vary", "Accept-Encoding");
+    for (name, value) in &web.headers {
+        add(name, value);
+    }
+    Outcome::Raw { code: if same { 304 } else { 200 }, headers, body: body.to_vec() }
+}
+
+/// GET /v1/relay/ws?t=<票据的编号>：网页端进数据端口的路。只认自己那一页发起的（Origin）、手里有一张没用过的接入票据的
+/// （没有凭证的人开不了、占不了名额）；进得了中转靠的还是开场白里证明有票据的密钥（Py:1853-1870）
+#[allow(clippy::too_many_arguments)]
+fn websocket(ctx: &Ctx, web: &Web, query: &str, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f64) -> Outcome {
+    let h = |name: &str| req.header(name);
+    let key = h("Sec-WebSocket-Key").unwrap_or_default();
+    if h("Upgrade").unwrap_or_default().to_lowercase() != "websocket"
+        || !h("Connection").unwrap_or_default().to_lowercase().contains("upgrade")
+        || h("Sec-WebSocket-Version") != Some("13")
+        || !wire::ws_key_re().matches(key)
+    {
+        return error(400, "bad");
+    }
+    if h("Origin").is_some_and(|origin| origin != web.origin) {
+        return error(403, "denied");
+    }
+    let ip = client_ip(peer, proxied, req);
+    if !lock(&ctx.guards).ip.take(&ip, mono) {
+        return error(429, "rate");
+    }
+    let ticket = wire::ws_ticket_re().match_(query).map(|t| t.g(1).to_string());
+    let claimed = match (&ticket, &ctx.remote) {
+        (Some(tid), Some(sh)) => lock(&sh.m).ws_claim(tid, now),
+        _ => false,
+    };
+    if !claimed {
+        return error(403, "ticket");
+    }
+    if !web.take(&ip) {
+        return error(429, "busy");
+    }
+    let accept = base64::b64encode(&hash::sha1(format!("{key}{WS_GUID}")));
+    Outcome::Upgrade { accept, ip }
+}
+
+// ---- POST ----
+
+fn post(ctx: &Ctx, req: &Request, n: usize, now: f64, mono: f64) -> Outcome {
+    let op = op_of(req);
+    let body = req.body.get(..n).unwrap_or(&req.body);
+    // base64.b64decode(…, validate=True)：不是 base64 的当作没有签名
+    let sig = base64::b64decode(req.header("X-Cca-Sig").unwrap_or_default(), true).unwrap_or_default();
+    if body.len() != n || sig.is_empty() || sig.len() > MAX_SIG {
+        return error(400, "bad");
+    }
+    // 没开中转时和旧版服务器一样：不认中转的那几个 op。别的都不认：以前维护者的服务器的设备清单（/v1/machines）也是
+    let relay = ctx.remote.as_deref().filter(|_| RELAY_OPS.contains(&op));
+    let sync = SYNC_OPS.iter().any(|(name, _)| *name == op);
+    if !(matches!(op, "report" | "view") || sync || relay.is_some() || TEAM_OPS.contains(&op)) {
+        return error(404, "not_found");
+    }
+    let Some(jv) = std::str::from_utf8(body).ok().and_then(|text| json::loads(text).ok()) else {
+        return error(400, "bad");
+    };
+    let Some(j) = jv.as_dict() else {
+        return error(400, "bad");
+    };
+    // j.get('v') == API：照 Python 的相等（1.0、true 也算）
+    if !(j.get("v").is_some_and(|v| v.py_eq(&V::Int(API))) && j.str("op").as_deref() == Some(op)) {
+        return error(400, "bad");
+    }
+    let Some(fp) = j.str("key").filter(|fp| wire::fp_re().matches(fp)) else {
+        return error(400, "bad");
+    };
+    let fp: &str = &fp;
+
+    // 签名：公钥那一行（ssh-ed25519 AAAA…）→ 是不是它在 cca-presence 这个命名空间里对正文签的
+    let signed_by = |line: &str| sshsig::key_blob(line).is_some_and(|blob| sshsig::ssh_verify(&blob, NS_REPORT, body, &sig));
+    let admin = TEAM_ADMIN_OPS.contains(&op);
+    let mut guest: Option<String> = None;
+    if op == "team_join" {
+        // 拿邀请加入：拿要加入的这把密钥签名；没有这个邀请和签名不对回一样的 403（不留判断口）。签名对了、邀请过期了或者用过了
+        // 才说是哪一种（拿着真的邀请的人才问得出来）（Py:1935-1944）
+        let line = j.str("pub").and_then(|p| wire::key_re().match_(&p).map(|k| format!("ssh-ed25519 {}", k.g(1))));
+        let own = line.as_deref().filter(|line| sshsig::key_blob(line).is_some_and(|blob| sshsig::key_fp(&blob) == fp));
+        let state = match own {
+            Some(_) => {
+                let mut st = lock(&ctx.store);
+                match st.root_fp() == fp {
+                    true => Invite::Missing,
+                    false => st.invite_state(&j.get("token").unwrap_or(V::None), now),
+                }
+            }
+            None => Invite::Missing,
+        };
+        if state == Invite::Missing || !own.is_some_and(signed_by) {
+            return error(403, "denied");
+        }
+        if let Some(why) = state.error() {
+            return error(403, why);
+        }
+    } else if admin {
+        // 管理员的：拿 Team 的根密钥签名（key 是根公钥的指纹）（Py:1945-1947）
+        let root = {
+            let st = lock(&ctx.store);
+            (st.root_fp() == fp).then(|| st.root_key().to_string())
+        };
+        if !root.is_some_and(|line| signed_by(&line)) {
+            return error(403, "denied");
+        }
+    } else {
+        let key = lock(&ctx.store).machine_key(fp);
+        match key {
+            Some(line) => {
+                if !signed_by(&line) {
+                    return error(403, "denied");
+                }
+            }
+            None => {
+                // 不在名单里、发的是中转的请求：可能是访客（手机上的网页端，和哪台设备配了对、或者正拿着配对码来配对）。
+                // 不在名单里（被移除了、记录清掉了：设备看 gen 分清是哪种）；访客的签名不对也回这一个：从回的内容里分不出
+                // “没有这个配对”和“有、但签名不对”（Py:1949-1955）
+                guest = relay.and_then(|sh| lock(&sh.m).guest_key(fp, op, &jv, now)).filter(|line| !line.is_empty());
+                if !guest.as_deref().is_some_and(signed_by) {
+                    let gen = lock(&ctx.store).gen().to_string();
+                    return Outcome::Json(403, V::Dict(dict! { "error" => "unknown_device", "gen" => gen }));
+                }
+            }
+        }
+    }
+
+    {
+        // 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额（Py:1958-1960）
+        let mut guards = lock(&ctx.guards);
+        let bucket = if admin { &mut guards.root } else { &mut guards.fp };
+        if !bucket.take(fp, mono) {
+            return error(429, "rate");
+        }
+    }
+    // abs(ts - now) > TS_WINDOW：布尔值不算数；NaN 比什么都不大，算在窗口里（Python 也是）；放不进 i64 的整数离现在远得很
+    let window = TS_WINDOW as f64;
+    let stale = match j.get("ts") {
+        Some(V::Int(ts)) => (ts as f64 - now).abs() > window,
+        Some(V::Float(ts)) => (ts - now).abs() > window,
+        _ => true,
+    };
+    if stale {
+        return Outcome::Json(400, V::Dict(dict! { "error" => "clock", "now" => now }));
+    }
+    let Some(nonce) = j.str("nonce").filter(|nonce| wire::nonce_re().matches(nonce)) else {
+        return error(400, "bad");
+    };
+    if !lock(&ctx.guards).nonces.add(&nonce, now) {
+        return error(409, "replay");
+    }
+    // 设备的请求。加入的那一次在加入时记（没加入成的不记）；访客不是这里的设备（Py:1969-1970）
+    if op != "team_join" && !admin && guest.is_none() {
+        lock(&ctx.store).seen(fp, now);
+    }
+
+    let done = if TEAM_OPS.contains(&op) {
+        team_op(ctx, op, fp, &jv, now)
+    } else if let Some(sh) = relay {
+        remote::handle_op(sh, op, fp, &jv, now, guest.as_deref(), &|fp| lock(&ctx.store).name_of(fp))
+    } else {
+        lock(&ctx.store).op(op, fp, &jv, now)
+    };
+    match done {
+        Ok((code, reply)) => Outcome::Json(code, reply),
+        Err(e) => failed(&e),
+    }
+}
+
+/// Team 的 op（Py:1971-1977、1999-2029）。有设备的密钥不再认了（管理员重新登记、移除了设备，设备自己退出了）：它的配对、会话
+/// 跟着清掉——先放开 Store 的锁再去拿 Remote 的
+fn team_op(ctx: &Ctx, op: &str, fp: &str, j: &V, now: f64) -> R<(u16, V)> {
+    let mut st = lock(&ctx.store);
+    let (code, reply) = st.op(op, fp, j, now)?;
+    if let Some(sh) = ctx.remote.as_ref().filter(|_| code == 200 && matches!(op, "team_enroll" | "team_revoke" | "team_leave")) {
+        let fps = st.fps();
+        drop(st);
+        lock(&sh.m).keep_only(&fps, now)?;
+    }
+    Ok((code, reply))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+pub(in crate::server) mod tests;
