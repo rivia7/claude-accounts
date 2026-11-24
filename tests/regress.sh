@@ -3402,7 +3402,7 @@ cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
 
 fi
 if sect 11b3d; then
-# 11b3d. Team（docs/dev/team.md）：cca team 的命令行一层（事情在辅助程序里：tests/team.py 细测）。真的 server/cca-presence.py --mode team。
+# 11b3d. Team（docs/dev/team.md）：cca team 的命令行一层（事情在辅助程序里：tests/team.rs 细测）。真的 server/cca-presence.py --mode team。
 # 先是这台 Mac 当管理员（成员由照 server/README.md 独立实现的那一头 tm_spec 扮演），再是它当成员（管理员由它扮演）
 cp "$H/.cca/accounts.json" "$T/tm-accounts.bak"; cp "$H/.cca/config.json" "$T/tm-config.bak"   # 加入 Team 以后账号表照它的配置改：这一节结束时还原
 out=$(run cca team 2>&1); rc=$?
@@ -4509,7 +4509,7 @@ ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'suite_ok 
 ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'suite_ok client_updates'
 ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'suite_ok presence'
-ok "Team：辅助程序建 Team、接上服务器、邀请、加入、同步配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'python3 "$D/team.py" 2>/dev/null'
+ok "Team：辅助程序建 Team、接上服务器、邀请、加入、同步配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'suite_ok team'
 ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'suite_ok usage_view'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'suite_ok cost_view'

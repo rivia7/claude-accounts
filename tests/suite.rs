@@ -20,6 +20,7 @@ mod presence;
 mod remote_host;
 mod router_merge;
 mod shared_state;
+mod team;
 mod usage_view;
 
 fn main() {
@@ -40,6 +41,7 @@ fn main() {
             isolation_apps::MODULE,
             client_updates::MODULE,
             presence::MODULE,
+            team::MODULE,
             usage_view::MODULE,
             cost_view::MODULE,
             mail_view::MODULE,

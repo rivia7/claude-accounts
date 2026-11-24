@@ -727,32 +727,32 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 
 - `tests/presence.rs` 里 Team 的服务器那几条（`flow`、`records_lost`、`cli`、`behind_proxy`；回归的 unit 一节收整个模块的结果）：真的服务器进程、真的 `ssh-keygen` 签名，客户端是照文档独立实现的
   `tests/spec_wire.py`；签请求的辅助函数在 `SignedCalls` 里。
-  - `test_flow`：`/v1/health`；管理员的 op 只认根密钥（设备的密钥、冒用根公钥指纹的别的密钥、改过的请求）；根密钥登记、加入不了；登记、
+  - `flow`：`/v1/health`；管理员的 op 只认根密钥（设备的密钥、冒用根公钥指纹的别的密钥、改过的请求）；根密钥登记、加入不了；登记、
     邀请（令牌和那串随机数不落在服务器上）、加入（没有这个邀请 / 签名不对一样的 403，用过了、同一个编号再发前一个作废、直接登记了邀请作废）；
     配置（只取得到自己的、签名照根公钥验、认证带着设备和序号、补齐到 1024、序号往回走的不存、设备手里的比存着的新也照给、还没加入的先存着）；
     名单（`seq`、`have`）；API key、折合金额照旧；请求的大小（`team_put` 1 MB，别的 64 KB）；
     移除、退出（配置、上报的记录和传过的折合金额跟着删）；换了密钥的设备重新登记；重启接着用、换了根公钥从头开始。
-  - `test_records_lost`：状态文件丢了（根公钥照旧）以后 `gen` 变了，用过的邀请加不回来，管理员照留着的公钥登记回去、同一个序号再存一次配置。
-  - `test_store`：直接调 `Store`（不用真的等）测过期、清理（邀请清掉时给它存的配置跟着删、只剩配置的编号也移除得掉）、邀请 / 配置 / 设备数的上限、
+  - `records_lost`：状态文件丢了（根公钥照旧）以后 `gen` 变了，用过的邀请加不回来，管理员照留着的公钥登记回去、同一个序号再存一次配置。
+  - 服务端自己的单元测试（`cli/src/server/store/tests.rs`，时间自己给、不用真的等）：过期、清理（邀请清掉时给它存的配置跟着删、只剩配置的编号也移除得掉）、邀请 / 配置 / 设备数的上限、
     手改坏了的状态文件、别的模式留下的状态文件。
-  - `test_cli`：启动参数（根公钥从 `--team-root` 或者 `CCA_TEAM_ROOT` 来、只写后面那一段也认；托管的预设 `CCA_HUB_HOSTED=1` 下给了根公钥就是 Team 的服务器，
-    没有 `/data` 不启动）。`test_behind_proxy`：只说 HTTP、不用证书，按 `X-Forwarded-For` 的最后一项限流，同一个 IP 的连接数不限。
+  - `cli`：启动参数（根公钥从 `--team-root` 或者 `CCA_TEAM_ROOT` 来、只写后面那一段也认；托管的预设 `CCA_HUB_HOSTED=1` 下给了根公钥就是 Team 的服务器，
+    没有 `/data` 不启动）。`behind_proxy`：只说 HTTP、不用证书，按 `X-Forwarded-For` 的最后一项限流，同一个 IP 的连接数不限。
   - 形状不对的请求直接调解析函数（`parse_enroll`、`parse_team_docs`）；`admin()` 遇到 429 等一会儿再试。
 - `cargo test team`（`cmd/team/doc.rs`、`core/team.rs`）：编号、邀请链接、从 `k` 派生的令牌 / 设备编号 / 密钥、签的那一段字节、解 `tests/spec_wire.py`
   封的密文（`cli/tests/vectors/team_doc_ct.json`：它固定 nonce 封的），都和独立实现的那一份逐字节对得上；配置明文的检查。
-- `tests/team.py`（回归的 unit 一节）：辅助程序对着真的 `--mode team` 服务器，各台设备各一个临时 HOME（`presence.Device`）。
-  - `test_admin_local`：建 Team 只在本机、文件的权限、`k` 不落盘（照主密钥算得出来）、没接上服务器时导入和 `map` 只改本机、接不上的各种原因。
-  - `test_lifecycle`：接上、导入、邀请（那串随机数和令牌不在管理员这台的任何文件、请求、curl 的命令行里，也不在服务器上）、加入（没成什么都不留、
+- `tests/team.rs`（回归的 unit 一节）：辅助程序对着真的 `--mode team` 服务器，各台设备各一个临时 HOME（`tests/kit/fleet.rs` 的 `Device`）。
+  - `admin_local`：建 Team 只在本机、文件的权限、`k` 不落盘（照主密钥算得出来）、没接上服务器时导入和 `map` 只改本机、接不上的各种原因。
+  - `lifecycle`：接上、导入、邀请（那串随机数和令牌不在管理员这台的任何文件、请求、curl 的命令行里，也不在服务器上）、加入（没成什么都不留、
     用过的邀请、已经在里面）、成员用不了管理员的命令、**独立实现的那一份拿邀请加入并解开辅助程序封的配置**、名单、改授权 / `map` 以后设备同步到新的一版、
     没变的不重新发布、移除（设备知道被移除了、拿新的邀请再加入；管理员那边不再记它、`team-devices` 不列）、退出（管理员那边不再记它，
-    3.6.5 及以前留下的 `revoked` / `left` 对一遍时删掉；管理员的 plan 带着去哪卸载）。`test_rename` 里改自己退出了的设备是 `no_device`。
-  - `test_delete_plan`：删除 Team 时去哪卸载（没部署过的没有；记下的照它，装好了没接上、再手动接上的也是；记下的私钥文件在才给那一栏；换到别的地址照部署的默认猜，空栏照样占一栏）、
-    `team-undeploy` 只收 SSH 的几项和 `--dir`、`apply --server-gone` 不再告诉服务器。`test_ca_mode` 里照证书机构验的不猜。
-  - `test_spec_admin`：**管理员由独立实现的那一份扮演**：它封的、签的辅助程序解得开；不是根密钥签的、别的设备的那一份、内容不对的、比手里旧的都不要；
+    3.6.5 及以前留下的 `revoked` / `left` 对一遍时删掉；管理员的 plan 带着去哪卸载）。`rename` 里改自己退出了的设备是 `no_device`。
+  - `delete_plan`：删除 Team 时去哪卸载（没部署过的没有；记下的照它，装好了没接上、再手动接上的也是；记下的私钥文件在才给那一栏；换到别的地址照部署的默认猜，空栏照样占一栏）、
+    `team-undeploy` 只收 SSH 的几项和 `--dir`、`apply --server-gone` 不再告诉服务器。`ca_mode` 里照证书机构验的不猜。
+  - `spec_admin`：**管理员由独立实现的那一份扮演**：它封的、签的辅助程序解得开；不是根密钥签的、别的设备的那一份、内容不对的、比手里旧的都不要；
     配置里说服务器搬了跟着换，新的那台上没有这台设备是 `lost`。
-  - `test_records_lost_and_move`：服务器的状态文件丢了以后管理员登记回去、重新发布（没用掉的邀请跟着没了）；换一台服务器，设备从原来那台上知道新的地址，
+  - `records_lost_and_move`：服务器的状态文件丢了以后管理员登记回去、重新发布（没用掉的邀请跟着没了）；换一台服务器，设备从原来那台上知道新的地址，
     没用掉的邀请在原来那台上撤回了；原来那台连不上时说一声。
-  - `test_server_lies`：服务器把一台设备的公钥换了（停下来改它的状态文件）——记下的不照它改、名单里说一声；它那边的配置没了——重新发布；它乱说序号
+  - `server_lies`：服务器把一台设备的公钥换了（停下来改它的状态文件）——记下的不照它改、名单里说一声；它那边的配置没了——重新发布；它乱说序号
     （假 curl 照 `~/reply/team_put` 回话：比记着的小、大得离谱、不是数）——不信、记着的序号不动；说得过去的只追一次；回话里没提到的设备不当成不在了。
   - 别的：没带认证码加入的设备（独立实现的那一头不带 `proof`）公钥不记、`problem` 说一声；index.json 没了也列得出来；team.json 坏了、管理员的密钥还在时
     拿这个 Team 的邀请来加入不删东西。
@@ -767,30 +767,30 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `team node test` 的假内核：假 mihomo 看到入站 `cca-test-1` 就把状态放在 `$T/core_test`（`cca-test core-load` 另记 `listeners/<端口>`：入站名和节点），
   假 nc 认它的端口；假 curl 经它时照 `$T/trace/<节点>/<网站>` 回话（默认服务那边 `203.0.113.<100+序号>`、www.cloudflare.com
   `198.51.100.250`），`$T/trace_down/<节点>` 时连不上；直连节点服务器的端口看 `$T/tcp_open`（「主机 端口」一行一个）。
-- 节点（`tests/team.py` 的 `test_nodes`）：列出来不带密码、`accounts`；加（重名、不是对象、过不了 `fill_problems` 的不要）、复制（整份、
+- 节点（`tests/team.rs` 的 `nodes`）：列出来不带密码、`accounts`；加（重名、不是对象、过不了 `fill_problems` 的不要）、复制（整份、
   模板不变）、去掉（账号、`dialer-proxy`、`install_node` 用着的不行）；没人用的节点不改成员设备的配置，`map` 到它以后才发出去（连同安装用的节点）；
   `install`（没有的节点、空的、成员设备不行；换了每台设备的配置带着新的、原来的不再带，没变不发布，`-` 不再指定）；
   `testconfig` 的入站、带上的节点、权限、要测的网站、不写节点是全部；`verdict` 的几种结果和 `--json`；没接上服务器的 Team 只改本机。
   `cargo test nodes`：`judge` 的各种情况。
-- 账号表照配置改（`tests/team.py` 的 `test_accounts_follow`）：加入以后 alice 的节点照 Team 的（说「按「测试组」的配置固定」）、补上别名，本来就有的
+- 账号表照配置改（`tests/team.rs` 的 `accounts_follow`）：加入以后 alice 的节点照 Team 的（说「按「测试组」的配置固定」）、补上别名，本来就有的
   账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了收起来（`parked`），再给回来照原来的键；不再给本来就有的
   那个，账号留着；被移除以后 Team 加的收起来。
   regress 11b3d：管理员自己这台 `grant … none`（导入的账号不进这台 Mac 的账号表），成员加入以后 alice 的节点由 Team 定、说一声；这一节结束时
   账号表和配置照开头的还原。`cmd/hub.rs` 的单元测试 `route_table`：账号走哪一类服务器看是谁定的。
-- 别名（`tests/team.py` 的 `test_aliases`、`test_alias_per_tool`）：各工具各自从 `team-1` 编、同一个邮箱在两个工具里各有各的号（成员设备上各工具的
+- 别名（`tests/team.rs` 的 `aliases`、`alias_per_tool`）：各工具各自从 `team-1` 编、同一个邮箱在两个工具里各有各的号（成员设备上各工具的
   账号表各用各的）、3.5.3-beta.5 的 Team 发布时照各工具重新编、成员设备上没有记录的旧编号跟着换、几个账号对调别名一次换好、`team-name` 改名字；
   导入时编号、再导入（先后变了、多了账号）编号不变、去掉的号不再用；两个 Team 都有 `team-1` 时后加入的
   那个在成员设备上叫「Team 的名字-1」；`team-alias` 的原因码（不合规、重名、没有这个账号、不是管理员）；改了以后成员设备上照 Team 给的用着的
   （连同撞了以后换成的）跟着改、自己改过的不跟；管理员这台设备上只有邮箱的不补、以前加进来的不跟；以前的 Team 发布时补上编号。
   `core/policy.rs` 的单元测试 `alias_fallback_names`：「Team 的名字-N」怎么拼、截短、拼不出来的时候。
-- 同步经 Team 的服务器（`tests/team.py` 的 `test_pipelines`）：Team 给的账号记下 API key、同步折合金额、看设备，请求都是这台设备在 Team 里的
+- 同步经 Team 的服务器（`tests/team.rs` 的 `pipelines`）：Team 给的账号记下 API key、同步折合金额、看设备，请求都是这台设备在 Team 里的
   密钥签的、账号摘要是照 Team 的盐算的；服务器上存的密文照文档（`spec_wire`）拿 Team 的盐解得开；别的服务器的状态文件没有；被移除以后
   不再发请求，留下的状态文件删掉了。
-- 上报进程（`test_agent`，起真的 `presence-agent`）：没有会话开着时一次都不报、自己退出；开着时拿 Team 的密钥报；进程开着时加入第二个 Team
+- 上报进程（`agent`，起真的 `presence-agent`）：没有会话开着时一次都不报、自己退出；开着时拿 Team 的密钥报；进程开着时加入第二个 Team
   （另一台服务器）接着就有一路，各报各的账号；被第一个 Team 的管理员移除以后那一路停了（再开会话也不报），另一路照旧。假 ps 的进程表里
   一行都没有时上报进程当成没问到（真的 ps 不会这样）：这条测试先放一个不相干的进程。
 - 回归 11b3d：`_gui state` 里 Team 给的账号 `hub` 是 `team`、`team` 是编号，`config.hubs` 里有那个 Team，别的账号没有 `team`。
-- 导入、新建时放进账号（`tests/team.py`）：`test_import_mine`：只加自己的官方账号。`test_new_with_accounts`：新建时能放的（自己加的、这台设备当管理员的
+- 导入、新建时放进账号（`tests/team.rs`）：`import_mine`：只加自己的官方账号。`new_with_accounts`：新建时能放的（自己加的、这台设备当管理员的
   Team 里的；成员的 Team、第三方 API 账号的不能）、写错了什么都不建、照账号表的先后放、别名带进去（默认样子的另编）、节点的定义连同 dialer 带过来、
   发布出去、`all`。
 - 3.6.0 去掉映射以后（回归）：`cca policy …` 只说一句、退出码不是 0，`cca _policy-fetch` 什么都不做；升级上来的沙箱里留着 `~/.cca/policy/`、
@@ -833,7 +833,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     `test_ssh_and_cert`（ssh 连不上、登录不了；服务器上的证书没了重新生成时照新的重新接上）、`test_undeploy`（删除 Team 时卸载：记下了装到哪、`-i` 记成绝对路径（相对的、`~/` 的）；
     目录里装的是别的 Team 的 `taken`、没装的 `install`，都不动；`--check` 什么都不动；卸好了 stdout 是目录、同一台上别的 Team 照旧）。
 - 服务端的托管预设、`--behind-proxy` 在 `tests/presence.rs` 的 `cli`、`behind_proxy`；不写指纹的服务器（托管平台上的）
-  照证书机构验在 `tests/team.py` 的 `test_ca_mode`。
+  照证书机构验在 `tests/team.rs` 的 `ca_mode`。
 - 回归 11b3d 的部署（`hubbox`：`cca-test hub-box` 建的假服务器（`tests/kit/hubbox.rs`），假 ssh 认得 `hubbox`、`*@hubbox`，交给它的 `enter`；`$T/hubbox/ssh_denied` 时
   登录不了，`$T/hubbox/password` 在时不认密钥、只认这个密码；`nohub` 是解析不了的主机名）：`--script`（带着版本、两段程序和网页端的文件原样、
   `dash -n` 过得去、没有 `CCA_HUB_MANAGED`）；App 里新建（`team.new` → `team.accounts` → `team_created`：选项和 `team-candidates` 的一样多、自己加的预先选好；都不勾是空的 Team，勾了的连同节点
