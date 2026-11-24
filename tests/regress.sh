@@ -159,7 +159,7 @@ evn() { grep -c "\"ev\":\"$1\"" "$T/ev.jsonl"; }   # 这种事件有几条
 runev() { : > "$T/ev.jsonl"; run CCA_EVENTS="$T/ev.jsonl" "$@" </dev/null; }   # 带事件文件运行（stdin 不是终端：App 就是这样调的）
 claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
 # Team 的服务器（真的 server/cca-presence.py --mode team，127.0.0.1 上、测试证书）和照 server/README.md 独立实现的那一头
-# （tests/spec_wire.py，不用 cca 的代码：扮演管理员、别的设备）。11b2 起的几节都用；各节自己起、自己停（tm_stop），退出时停掉还开着的
+# （tests/kit/spec.rs，经 cca-test spec 调；不用 cca 的代码：扮演管理员、别的设备）。11b2 起的几节都用；各节自己起、自己停（tm_stop），退出时停掉还开着的
 tm_cert() { mkdir -p "$1"; openssl ecparam -name prime256v1 -genkey -noout -out "$1/key.pem" 2>/dev/null; openssl req -new -x509 -key "$1/key.pem" -subj /CN=cca-team -days 2 -out "$1/cert.pem" 2>/dev/null; }
 tm_srv() {   # tm_srv 目录 根公钥 [端口 [服务器的别的参数…]]：起一台 Team 的服务器（证书在 目录/cert.pem；状态文件 目录/state.json 留着，
 	           # 重启后接着用；实际的端口写在 目录/port），进程号在 TMPID
@@ -186,86 +186,19 @@ tm_stop_all() {   # 退出时：停掉还开着的（分节续跑时快照里记
 	TMPIDS=""
 }
 tm_pin() { printf 'sha256//%s' "$(openssl x509 -in "$1/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"; }   # 和部署时一样用 openssl 算
-tm_spec() {   # tm_spec 操作 参数…：照文档独立实现的那一头（不用 cca 的代码）
-	python3 -B - "$D" "$@" <<'PY'
-import hashlib, json, sys
-sys.path.insert(0, sys.argv[1])
-import spec_wire as sw
-op, a = sys.argv[2], sys.argv[3:]
-pub_of = lambda p: ' '.join(open(p + '.pub').read().split()[:2])
-names = lambda doc: [p['name'] for p in (doc['nodes'] or {}).get('proxies', [])]
-def opened(inv, key, port):   # 取这台设备的配置、验过根密钥的签名、解开：(序号, 明文)
-    token, dev, keys = sw.invite_parts(inv['k'])
-    st, j = sw.post(key, port, 'team_get', {})
-    env, tid = j['doc'], sw.team_id('ssh-ed25519 ' + inv['r'])
-    assert sw.team_doc_verify('ssh-ed25519 ' + inv['r'], tid, dev, env['seq'], env['ct'], env['sig']), '不是根密钥签的'
-    return env['seq'], sw.team_doc_open(keys, tid, dev, env['seq'], env['ct'])
-if op == 'join':   # join 邀请链接 密钥文件 端口 [名字]：一台设备拿这个邀请加入（名字默认 dan-air）、同步配置、验签、解开；打印 给了哪些账号 和 节点的名字
-    link, key, port = a[0], a[1], int(a[2])
-    inv = sw.invite_decode(link)
-    token, dev, keys = sw.invite_parts(inv['k'])
-    pub = pub_of(key)
-    st, j = sw.post(key, port, 'team_join', {'pub': pub, 'name': a[3] if a[3:] else 'dan-air', 'token': token, 'proof': sw.team_pub_proof(inv['k'], pub)})
-    if st != 200:
-        sys.exit('join %s %s' % (st, j))
-    seq, doc = opened(inv, key, port)
-    print(json.dumps({'accounts': doc['accounts'], 'nodes': names(doc), 'seq': seq}, sort_keys=True))
-elif op == 'doc':   # doc 邀请链接 密钥文件 端口：加入了的那一头再取一次、验签、解开；打印 安装客户端用的节点、节点的名字 和 序号
-    seq, doc = opened(sw.invite_decode(a[0]), a[1], int(a[2]))
-    print(json.dumps({'install_node': doc['install_node'], 'nodes': names(doc), 'seq': seq}, sort_keys=True))
-elif op == 'get':   # get 邀请链接 密钥文件 端口：再取一次（状态码；被移除了是 403）
-    st, j = sw.post(a[1], int(a[2]), 'team_get', {})
-    print(st, j.get('error') or '', (j.get('doc') or {}).get('seq') or j.get('seq') or '')
-elif op in ('admin', 'put'):
-    # admin 根密钥 端口 地址 指纹 那串随机数 序号 名字 节点 [lock]：给那串随机数的设备存一份配置（alice 走这个节点；lock：alice 叫 team-1，锁定别名）
-    # put 根密钥 端口 地址 指纹 那串随机数 序号 名字 'JSON' [签名的密钥]：同上，配置照 JSON 改（accounts、aliases、nodes、install_node、
-    # salt……）；写了签名的密钥时配置拿它签（不是根密钥签的：像服务器被人冒充，存上去的请求照样是管理员签的）
-    # 序号是 1 时先发邀请。打印邀请链接
-    root, port, url, pin, secret, seq, name = a[0], int(a[1]), a[2], a[3], a[4], int(a[5]), a[6]
-    pub = pub_of(root)
-    token, dev, keys = sw.invite_parts(secret)
-    tid = sw.team_id(pub)
-    if seq == 1:
-        st, j = sw.post(root, port, 'team_invite', {'token': hashlib.sha256(token.encode()).hexdigest(), 'dev': dev, 'ttl': 600})
-        assert st == 200, (st, j)
-    doc = {'v': 1, 'at': 1790000000 + seq, 'name': name, 'salt': 'cd' * 16, 'server': {'u': url, 'p': [pin]},
-           'accounts': {}, 'aliases': {}, 'install_node': '', 'nodes': None}
-    if op == 'admin':
-        doc['accounts'] = {'claude': {'alice@example.com': a[7]}}
-        if a[8:] == ['lock']:
-            doc.update(aliases={'alice@example.com': 'team-1'}, tool_aliases={'claude': {'alice@example.com': 'team-1'}}, alias_lock=True)
-    else:
-        doc.update(json.loads(a[7]))
-    signer = a[8] if op == 'put' and a[8:] else root
-    ct = sw.team_doc_seal(keys, tid, dev, seq, doc)
-    st, j = sw.post(root, port, 'team_put', {'docs': {dev: {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(signer, tid, dev, seq, ct)}}})
-    assert (st, j.get('stored')) == (200, [dev]), (st, j)
-    print(sw.invite_encode(url, [pin], pub, secret, name))
-elif op == 'revoke':   # revoke 根密钥 端口 那串随机数
-    print(sw.post(a[0], int(a[1]), 'team_revoke', {'dev': sw.invite_parts(a[2])[1]})[0])
-PY
+tm_spec() {   # tm_spec 操作 参数…：照文档独立实现的那一头（tests/kit/spec.rs，不用 cca 的代码）。各个操作怎么做见 tests/tool/spec.rs：
+	# join 邀请链接 密钥文件 端口 [名字]：一台设备拿这个邀请加入（名字默认 dan-air）、同步配置、验签、解开；打印 给了哪些账号 和 节点的名字
+	# doc 邀请链接 密钥文件 端口：加入了的那一头再取一次、验签、解开；打印 安装客户端用的节点、节点的名字 和 序号
+	# get 邀请链接 密钥文件 端口：再取一次（状态码；被移除了是 403）
+	# admin 根密钥 端口 地址 指纹 那串随机数 序号 名字 节点 [lock]：给那串随机数的设备存一份配置（alice 走这个节点；lock：alice 叫 team-1，锁定别名）
+	# put 根密钥 端口 地址 指纹 那串随机数 序号 名字 'JSON' [签名的密钥]：同上，配置照 JSON 改（accounts、aliases、nodes、install_node、
+	# salt……）；写了签名的密钥时配置拿它签（不是根密钥签的：像服务器被人冒充，存上去的请求照样是管理员签的）
+	# admin、put 序号是 1 时先发邀请，打印邀请链接。revoke 根密钥 端口 那串随机数：移除那台设备，打印状态码
+	"$TESTBIN" spec "$@"
 }
 tm_fake() {   # tm_fake 名字 '配置 JSON'：直接写一个这台设备加入了的 Team（没接服务器：像同步配置以后的样子，只是不联网），打印它的编号。
 	            # 配置的样子照 cmd/team/doc.rs 的 doc_problems；不验签（同步时才验，辅助程序读的是验过的那一份）
-	python3 -I - "$H/.cca/teams" "$1" "$2" <<'PY'
-import json, os, sys
-d, name, doc = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-tid = '4f' * 16
-os.makedirs(os.path.join(d, tid), mode=0o700, exist_ok=True)
-base = {'v': 1, 'name': name, 'salt': 'cd' * 16, 'server': {'u': 'https://127.0.0.1:9', 'p': []}, 'accounts': {}, 'aliases': {}, 'install_node': '', 'nodes': None}
-base.update(doc)
-team = {'v': 1, 'id': tid, 'name': name, 'url': '', 'pins': [], 'root': 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI' + 'A' * 43, 'role': 'member',
-        'dev': '5e' * 16, 'device': 'test-mac', 'joined_at': 1790000000, 'gen': 1}
-for f, j in (('team.json', team), ('doc.json', {'v': 1, 'seq': 1, 'at': 1790000000, 'doc': base})):
-    with open(os.path.join(d, tid, f), 'w') as fh:
-        json.dump(j, fh, ensure_ascii=False)
-idx = os.path.join(d, 'index.json')
-order = json.load(open(idx)).get('order', []) if os.path.exists(idx) else []
-with open(idx, 'w') as fh:
-    json.dump({'v': 1, 'order': order + ([tid] if tid not in order else [])}, fh)
-ck = os.path.join(d, 'checked'); open(ck, 'a').close(); os.utime(ck)   # 不在后台同步配置（team_hook）：这个 Team 没有服务器
-print(tid)
-PY
+	"$TESTBIN" spec tm-fake "$H/.cca/teams" "$1" "$2"
 }
 # 分节续跑（省开发时间；发版和平时照样跑全量，sect 恒为真）：
 #   CKPT=目录 bash tests/regress.sh                       跑一次全量，在每节开头存下沙箱快照（tar $T + 变量）
@@ -2390,7 +2323,7 @@ out=$(sess '{"onboard.team":[{"v":"n"}]}' -- cca _onboard 2>&1); rc=$?
 ok "配置向导：路由器已配好、已有账号 → 只问有没有 Team 的邀请链接（只有这一步：标题不写第几步，默认没有）；答没有：记下 onboarded、给完成事件、不动账号表" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.team ] && evq "e.get(\"q\") == \"onboard.team\" and e[\"title\"] == \"加入 Team\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"n\"" && [ "$(tsum)" = "$onb_before" ] && gj state | jok "cfg.get(\"onboarded\") is True" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\"" && [ "$(onb_teams)" = 0 ]'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 ssh-keygen -q -t ed25519 -N '' -C onb -f "$T/onb-root" </dev/null >/dev/null 2>&1
-TL9=$(python3 -I -c 'import base64,sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(sw.invite_encode("https://127.0.0.1:9", ["sha256//" + base64.b64encode(bytes(32)).decode()], open(sys.argv[2]).read(), "7e" * 16, "向导组"))' "$D" "$T/onb-root.pub")   # 照文档拼的邀请：服务器连不上
+TL9=$("$TESTBIN" spec invite-encode "https://127.0.0.1:9" "sha256//$(printf 'A%.0s' $(seq 1 43))=" "$T/onb-root.pub" "$(printf '7e%.0s' $(seq 1 16))" 向导组)   # 照文档拼的邀请（指纹是 32 个零字节的）：服务器连不上
 out=$(sess "{\"onboard.team\":[{\"v\":\"y\"}],\"team.join\":[{\"v\":\"$TL9\"}]}" -- cca _onboard 2>&1); rc=$?
 ok "配置向导第 1 步答有、加入没成（服务器连不上）：不重问，向导照样做完、记下 onboarded；没加入成的原因留作提醒（fail 事件 team_unreachable），最后的结果还是 onboarded；事件里没有邀请链接" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team team.join" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_unreachable\"" && [ "$(lastres)" = onboarded ] && [ "$(onb_teams)" = 0 ] && gj state | jok "cfg.get(\"onboarded\") is True" && ! grep -qF "$TL9" "$T/ev.jsonl"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
@@ -3333,28 +3266,7 @@ ok "（准备）管理员邀请 dan-air（也给它 alice），它照文档加�
 # 记下的 API key 同步给登录了 alice 的其他设备：dan-air 也登录着 alice（身份 u-alice-0001：真的 accountUuid 是 UUID，cca 只认 8 个字符以上的），照 server/README.md 写的格式解开、封好，用自己
 # 在 Team 里的密钥和服务器交换（盐是阁楼组的配置里的）。这台 Mac 记下、删掉后马上在后台同步；之后的 cca _key-sync force 是同一件事，测试里直接跑
 dkey() {   # dkey get | junk | put KEY|- 时间：dan-air 取 alice 现在的（打印 JSON；none：没有；bad：认证不过）/ 传一份伪造的 / 传一份
-	python3 -B - "$D" "$T/dan" "$GLPORT" "$@" <<'PY'
-import base64, json, secrets, sys
-sys.path.insert(0, sys.argv[1])
-import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
-key, port, op = sys.argv[2], int(sys.argv[3]), sys.argv[4]
-aid = sw.aid_of('cd' * 16, 'claude', 'alice@example.com')
-keys = sw.derive(sw.KEYSHARE, 'cd' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
-b64 = lambda x: base64.b64encode(x).decode()
-if op == 'get':
-    extra = {'get': [aid]}
-elif op == 'junk':
-    extra = {'put': {aid: {'n': b64(secrets.token_bytes(16)), 'c': b64(secrets.token_bytes(256)), 't': b64(secrets.token_bytes(32))}}}
-else:
-    extra = {'put': {aid: sw.keyshare_seal(keys, aid, {'v': 1, 'key': None if sys.argv[5] == '-' else sys.argv[5], 'at': float(sys.argv[6])})}}
-status, j = sw.post(key, port, 'keys', extra)
-if status != 200:
-    sys.exit(1)
-if op == 'get':
-    rec = j['keys'].get(aid)
-    d = rec and sw.keyshare_open(keys, aid, rec['blob'])
-    print('none' if not rec else 'bad' if d is None else json.dumps({'key': d['key'], 'at': d['at'], 'from': rec['name'], 'len': len(rec['blob']['c'])}))
-PY
+	"$TESTBIN" spec dkey "$T/dan" "$GLPORT" "$@"   # 照 server/README.md 的格式独立实现的（tests/kit/spec.rs，不用 cca 的代码）
 }
 dkval() { dkey get | python3 -c 'import json,sys; d=sys.stdin.read().strip(); print(json.loads(d)["key"] if d.startswith("{") else d)'; }   # 服务器上 alice 现在的 key（None：删掉了）
 dkwait() { local i; for i in $(seq 1 40); do [ "$(dkval)" = "$1" ] && return 0; sleep 0.5; done; return 1; }   # 后台的同步是 background 优先级：最多等 20 秒
@@ -3380,32 +3292,8 @@ ok "这台 Mac 上没有、dan-air 又记下了：cca key alice --show 先同步
 # 折合金额经服务器交换：各台设备只写自己的那一份，密文（3.6.6 起密钥整个 Team 共用，只由盐派生，标签是 cca-cost-v2；认证里带着账号摘要和设备指纹）。
 # 10g 里 alice 在这台 Mac 上 4 次请求、折合 0.026 美元。dan-air 照 server/README.md 写的格式封好、解开
 dcost() {   # dcost get | put 时间 美元：dan-air 解开这台 Mac 传的 alice 的那一份（打印 JSON；none：没有；bad：认证不过；明文没补齐到 1024 字节的整数倍时出错）/ 传自己的那一份
-	python3 -B - "$D" "$T/dan" "$GLPORT" "$H/.cca/teams/$GLTID/id_ed25519.pub" "$@" <<'PY'
-import json, sys, time
-sys.path.insert(0, sys.argv[1])
-import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
-key, port, me, op = sys.argv[2], int(sys.argv[3]), sw.fp_of(sys.argv[4]), sys.argv[5]
-# oget / oput：认不出是哪个账号的那一份（3.6.8 起：固定的账号摘要，同一把密钥）
-aid = sw.orphan_aid('cd' * 16) if op[0] == 'o' else sw.aid_of('cd' * 16, 'claude', 'alice@example.com')
-op = op.lstrip('o')
-keys = sw.team_keys('cd' * 16)
-if op == 'get':
-    extra = {'get': [aid]}
-else:
-    hour = str(int(float(sys.argv[6]) // 3600 * 3600))
-    row = [int(float(sys.argv[7]) * 1e6), 1, 100, 10, 0, 0, 0]
-    doc = {'v': 1, 'at': time.time(), 'h': {hour: row}, 'hm': {hour: {'claude-opus-5-5': row}}, 'um': []}
-    extra = {'put': {aid: sw.cost_seal(keys, aid, sw.fp_of(key + '.pub'), doc)}}
-status, j = sw.post(key, port, 'ledger', extra)
-if status != 200:
-    sys.exit(1)
-if op == 'get':
-    row = next((x for x in j['cost'].get(aid, []) if x['fp'] == me and 'blob' in x), None)
-    d = row and sw.cost_open(keys, aid, me, row['blob'])
-    print('none' if not row else 'bad' if d is None else json.dumps({'usd': sum(x[0] for x in d['h'].values()) / 1e6,
-                                                                      'requests': sum(x[1] for x in d['h'].values()), 'name': row['name'],
-                                                                      'models': sorted({m for x in d.get('hm', {}).values() for m in x})}))
-PY
+	# 照 server/README.md 的格式独立实现的（tests/kit/spec.rs，不用 cca 的代码）。oget / oput：认不出是哪个账号的那一份（3.6.8 起：固定的账号摘要，同一把密钥）
+	"$TESTBIN" spec dcost "$T/dan" "$GLPORT" "$H/.cca/teams/$GLTID/id_ed25519.pub" "$@"
 }
 out=$(run cca cost sync --now --json 2>/dev/null </dev/null); rc=$?
 ok "cost sync --now --json：开了设备统计、alice 是 Team 给的：加密传给服务器（服务器上没有邮箱、登录身份、金额，600）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"sync\"][\"state\"] == \"ok\" and isinstance(d[\"sync\"][\"checked_epoch\"], float)" && [ "$(stat -f %Lp "$GLD/cost-slots.json")" = 600 ] && ! grep -q "example.com\|u-alice\|26000" "$GLD/cost-slots.json"'
@@ -3426,47 +3314,7 @@ ok "dan-air 传了它认不出账号的那一份（1.5 美元）：unattributed.
 # 配对、列表、接入、加密本身在 tests/remote_relay.py（unit 一节）。另一台机器还是 dan-air，照 server/README.md 的格式自己说话
 dpair() {   # dpair join 配对码 | show 文件：dan-air 输入这台 Mac 显示的配对码 / 自己显示一个（写进文件），等对方输入。配好打印“配对编号 密钥”
 	          # dpair web 配对码（DPAIR_KEY=密钥）：手机上的网页端——一把不在设备清单里的密钥输入这台 Mac 给网页端开的配对码，公钥带在请求里
-	python3 -B - "$D" "${DPAIR_KEY:-$T/dan}" "$GLPORT" "$@" <<'PY'
-import secrets, sys
-sys.path.insert(0, sys.argv[1])
-import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
-key, port, op = sys.argv[2], int(sys.argv[3]), sys.argv[4]
-me = sw.fp_of(key + '.pub')
-
-
-def call(op, **extra):
-    status, j = sw.post(key, port, op, extra)
-    if status != 200:
-        sys.exit('%s：%s %s' % (op, status, j))
-    return j
-
-
-n = secrets.token_bytes(32)
-if op in ('join', 'web'):
-    kc, keys, rid = sw.pair_keys(sw.code_bytes(sys.argv[5]))
-    extra = {'pub': ' '.join(open(key + '.pub').read().split()[:2])} if op == 'web' else {}
-    call('pair_put', rid=rid, m=sw.pair_msg(keys, rid, 'b', me, n, 'phone' if op == 'web' else 'dan'), **extra)
-    theirs = sw.pair_open(keys, rid, 'a', call('pair_get', rid=rid)['m'])
-    p, pid = sw.pair_secret(kc, bytes.fromhex(theirs['n']), n, theirs['fp'], me)
-else:
-    c = secrets.token_bytes(10)
-    kc, keys, rid = sw.pair_keys(c)
-    call('pair_open', rid=rid)
-    call('pair_put', rid=rid, m=sw.pair_msg(keys, rid, 'a', me, n, 'dan'))
-    with open(sys.argv[5] + '.tmp', 'w') as f:
-        f.write(sw.code_text(c) + '\n')
-    __import__('os').replace(sys.argv[5] + '.tmp', sys.argv[5])
-    for _ in range(30):
-        j = call('pair_get', rid=rid, wait=2)
-        if j['m']:
-            break
-    else:
-        sys.exit('没等到对方输入')
-    theirs = sw.pair_open(keys, rid, 'b', j['m'])
-    p, pid = sw.pair_secret(kc, n, bytes.fromhex(theirs['n']), me, theirs['fp'])
-call('pair_commit', rid=rid, pid=pid)
-print(pid, p.hex())
-PY
+	"$TESTBIN" spec dpair "${DPAIR_KEY:-$T/dan}" "$GLPORT" "$@"   # 照 server/README.md 的格式独立实现的（tests/kit/spec.rs，不用 cca 的代码）
 }
 out=$(runev cca remote pair 2>&1); rc=$?
 out2=$(run CCA_TTY="$(ans n)" cca remote pair 2>&1); rc2=$?
@@ -3555,7 +3403,7 @@ cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
 fi
 if sect 11b3d; then
 # 11b3d. Team（docs/dev/team.md）：cca team 的命令行一层（事情在辅助程序里：tests/team.py 细测）。真的 server/cca-presence.py --mode team。
-# 先是这台 Mac 当管理员（成员由照 server/README.md 独立实现的 spec_wire 扮演），再是它当成员（管理员由 spec_wire 扮演）
+# 先是这台 Mac 当管理员（成员由照 server/README.md 独立实现的那一头 tm_spec 扮演），再是它当成员（管理员由它扮演）
 cp "$H/.cca/accounts.json" "$T/tm-accounts.bak"; cp "$H/.cca/config.json" "$T/tm-config.bak"   # 加入 Team 以后账号表照它的配置改：这一节结束时还原
 out=$(run cca team 2>&1); rc=$?
 TMLS=$(run cca team ls --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["teams"])')
@@ -3593,7 +3441,7 @@ out=$(run CLAUDECODE=1 cca team invite 书房组 dan-air 2>&1); rc=$?
 ok "cca team invite：在 Claude Code 的会话里不给邀请链接（会进对话记录）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在 Claude Code 里不显示邀请链接" && ! printf "%s" "$out" | grep -q "cca-team1\."'
 : > "$T/curl.argv"; : > "$T/env.log"
 TMLINK=$(run cca team invite 书房组 dan-air --accounts claude:alice@example.com 2>"$T/tm-invite.err"); rc=$?
-TMK=$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(sw.invite_decode(sys.argv[2])["k"])' "$D" "$TMLINK" 2>/dev/null)
+TMK=$("$TESTBIN" spec invite-decode "$TMLINK" k 2>/dev/null)
 ok "cca team invite：邀请链接打到 stdout（只这一行），说明在 stderr；那串随机数不在子进程的命令行（curl、env）里，也不落在这台 Mac 和服务器上" '[ $rc -eq 0 ] && [ "$(printf "%s\n" "$TMLINK" | wc -l | tr -d " ")" = 1 ] && [ "${TMLINK#cca-team1.}" != "$TMLINK" ] && grep -q "只显示这一次" "$T/tm-invite.err" && ! grep -q "cca-team1" "$T/tm-invite.err" && [ -n "$TMK" ] && ! grep -qF "$TMK" "$T/curl.argv" "$T/env.log" && ! grep -rqF "$TMK" "$H/.cca/teams" "$TMA/state.json"'
 ssh-keygen -q -t ed25519 -N '' -C dan -f "$T/tm-dan" </dev/null >/dev/null 2>&1
 out=$(tm_spec join "$TMLINK" "$T/tm-dan" "$TMAPORT" 2>&1)
@@ -3856,7 +3704,7 @@ out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave --keep-server 2>&1); rc
 ok "管理员 --keep-server：不碰服务器（说它留着、怎么自己卸载），这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && printf "%s" "$out" | grep -q "留着不卸，要自己卸载（在服务器上运行 sudo sh cca-hub-install.sh --uninstall --dir /opt/cca-team-${TMID:0:8}）" && ! grep -qE "^SSH ([^ ]*@)?(127\.0\.0\.1|hubbox) " "$T/ssh.log" && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
 # --- 换了版本以后的第一条命令（update_after）：各个 Team 同步配置这次不等间隔（在后台）。照 update/ran（上一次运行的版本）认；以前的
 #     版本不记 ran：没有 ran、有更新留下的上一个版本（update/cca.prev.version）也算换了版本，全新安装的两样都没有，不算。这台 Mac
-#     先拿一个新的邀请重新加入客厅组（spec_wire 扮演管理员）
+#     先拿一个新的邀请重新加入客厅组（照文档独立实现的那一头 tm_spec 扮演管理员）
 TMUP="$H/.cca/update"; TMS3=$(printf '3a%.0s' $(seq 1 16))
 tmu_mt() { stat -f %m "$H/.cca/teams/checked" 2>/dev/null; }   # 上一次同步配置的时候（钩子做了就会变）
 tmu_back() { touch -t "$(date -v-30M +%Y%m%d%H%M.%S)" "$H/.cca/teams/checked"; }   # 半个小时前刚做过：平时这时不再做
@@ -4343,7 +4191,7 @@ fi
 if sect 11b6; then
 # 11b6. 服务器上安装（CCA_REMOTE_LOGIN=1：Mac 上走服务器的流程）：从没配置过路由器、直连不通（假 curl：direct_down 连不上，direct_loc 是
 #       直连的出口地区）时，cca install、cca add 不问路由器，先问有没有 Team 的邀请链接（默认没有）。有就加入（Team 的服务器是真的
-#       server/cca-presence.py --mode team，管理员由 spec_wire 扮演），导入 Team 的配置指定的安装节点和给这台设备的账号的节点，配置内置代理
+#       server/cca-presence.py --mode team，管理员由照文档独立实现的那一头 tm_spec 扮演），导入 Team 的配置指定的安装节点和给这台设备的账号的节点，配置内置代理
 #       （假内核、假的界面 App），经安装节点装 Claude Code（不再先直连、不另外问），Team 给的账号自动加进来。没有、到了那一步留空：粘贴
 #       一条自己的代理当可选节点，配置内置代理。直连通的照旧问路由器。一键安装时带着 CCA_POLICY_REPO（3.6.0 以前打开维护者的共享）：
 #       只说一声去掉了。这一节结束时停掉 Team 的服务器，假命令还原
