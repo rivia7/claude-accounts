@@ -642,7 +642,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    /// 内存里的假钥匙串，照 tests/mail_view.py 的 Keystore 里那个写（和 tests/setup.sh 的假 security 一样认 -a、-s、-X）
+    /// 内存里的假钥匙串，照 tests/mail_view.rs 的假 security（原来 Keystore 里那个）写（和 tests/setup.sh 的假 security 一样认 -a、-s、-X）
     #[derive(Default)]
     struct Keychain {
         /// ((服务名, 账户名), 秘密)，先存的在前
@@ -693,7 +693,7 @@ mod tests {
         }
     }
 
-    /// tests/mail_view.py 的 Keystore.test_write_replaces_the_same_account_only_and_delete_can_pick_one
+    /// tests/mail_view.rs 的 write_replaces_the_same_account_only_and_delete_can_pick_one（原来 Keystore 的那一条）
     #[test]
     fn write_replaces_the_same_account_only_and_delete_can_pick_one() {
         let kc = Keychain::install();

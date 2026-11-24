@@ -314,7 +314,7 @@ ok "Team：辅助程序建 Team、接上服务器、邀请、加入、同步配�
 ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
-ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'python3 "$D/mail_view.py" 2>/dev/null'
+ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'suite_run mail_view'
 ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'python3 "$D/remote_host.py" 2>/dev/null'
 ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
 ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
@@ -449,7 +449,7 @@ ok "删掉刚加的 新号：账号表、启动器都照旧" '[ "$(cat "$H/.cca/
 fi
 if sect 3b3; then
 # 3b3. 邮箱助手（cca mail）：Claude 账号的登录邮件转发到一个 Gmail，登录时 cca 经 IMAP（只读）找到它，在账号专属的 Chrome 里打开
-# 里面的登录链接。假的 Gmail 是 tests/mail_fake.py（真的 TLS、只读 IMAP：会改邮箱的命令一律回 BAD 并记 VIOLATION），经它的假代理
+# 里面的登录链接。假的 Gmail 是 cca-test 的 mail serve（tests/kit/mailfake.rs；真的 TLS、只读 IMAP：会改邮箱的命令一律回 BAD 并记 VIOLATION），经它的假代理
 # （一个端口同时认 SOCKS5 和 HTTP CONNECT）连，证书是测试的 CA（CCA_MAIL_CAFILE：只在连的是本机时才信）；系统代理由假 scutil 给
 # （$T/scutil.txt）。meml UID 收件人 记号 [选项…] 往所有邮件里放一封登录邮件（链接是 https://claude.ai/magic-link#记号）
 MB="$T/mailbox"

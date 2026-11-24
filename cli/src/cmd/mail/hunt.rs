@@ -728,7 +728,7 @@ mod tests {
         }
     }
 
-    /// 对照数据里 tests/mail_fake.py 做的登录邮件（judge 一节里的 good、to bob……）
+    /// 对照数据里原来的 tests/mail_fake.py（现在是 kit::mailfake）做的登录邮件（judge 一节里的 good、to bob……）
     fn eml(name: &str) -> Vec<u8> {
         let c =
             vectors("judge").into_iter().find(|c| c.at("name").py_str() == name).unwrap_or_else(|| panic!("对照数据里没有 {name}"));

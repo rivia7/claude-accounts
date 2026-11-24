@@ -775,9 +775,9 @@ mod tests {
         assert!(route(Some("socks5://127.0.0.1:7901"), None, Some(bad)).unwrap_err().is("AttributeError"));
     }
 
-    /// tests/mail_view.py 的 Wire.test_tls_is_always_verified 的后一半（「HOME 是用户真正的主目录：只给测试的 CA 不认」）：
+    /// 原来 tests/mail_view.py 的 Wire.test_tls_is_always_verified（现在 tests/mail_view.rs 的 tls_is_always_verified）的后一半（「HOME 是用户真正的主目录：只给测试的 CA 不认」）：
     /// 那一条在外面测不了——辅助程序要在真的主目录下跑才走得到。这里钉住认不认的规则；不认的时候握手确实过不了，
-    /// tests/mail_view.py 的同名用例用空的 CCA_MAIL_CAFILE 测
+    /// tests/mail_view.rs 的那一条用空的 CCA_MAIL_CAFILE 测
     #[test]
     fn test_ca_only_in_a_swapped_home_and_to_this_machine() {
         fn ip(s: &'static str) -> impl FnOnce() -> Option<IpAddr> {

@@ -1,4 +1,4 @@
-//! 照 Python 的语义写的几个小函数：假 Gmail 是照 mail_fake.py 一行行搬过来的，空白、拆行、整数、repr、真假、时间都要和 Python 一样
+//! 照 Python 的语义写的几个小函数：假 Gmail 是照原来的 tests/mail_fake.py 一行行搬过来的，空白、拆行、整数、repr、真假、时间都要和 Python 一样
 //! （辅助程序的 IMAP 客户端是照着原来那一份写的）。
 
 use crate::json::{float_repr, Value};
