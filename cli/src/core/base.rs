@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn credential_sources_are_reserved() {
-        // tests/isolation_settings.py 的 test_claude_configuration_cannot_replace_credential_sources：换掉账号目录、登录凭证来源的
+        // tests/isolation_settings.rs 的 claude_configuration_cannot_replace_credential_sources：换掉账号目录、登录凭证来源的
         // 变量，共享的设置里不能有（SETTINGS_BAD），第三方 API 账号的 env 里也不能设（ENV_RESERVED）。后两项是原来的 Python 给的
         for (name, reserved, settings_bad) in [
             ("CLAUDE_CONFIG_DIR", true, true),

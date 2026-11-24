@@ -1436,7 +1436,7 @@ mod tests {
 
     #[test]
     fn api_env_never_carries_reserved_names() {
-        // tests/isolation_settings.py 的 test_claude_configuration_cannot_replace_credential_sources：换掉账号目录、登录凭证来源的
+        // tests/isolation_settings.rs 的 claude_configuration_cannot_replace_credential_sources：换掉账号目录、登录凭证来源的
         // 变量就算写进了第三方 API 账号的 env（校验账号表时会拒绝），也不交给 Claude Code。期望值是原来的 api_env 给的
         let env_of = |account: &str| json::dumps(&V::Dict(api_env(&json::loads(account).unwrap().as_dict().unwrap())), json::LINE);
         let bare = r#"{"ANTHROPIC_BASE_URL": "https://example.invalid", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}"#;

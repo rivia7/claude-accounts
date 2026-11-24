@@ -53,7 +53,7 @@
 
 - `tests/path_unhint.sh`（回归的 unit 一节）：把 `path_unhint` 从 `cca` 里切出来，临时目录当 HOME 跑各种情况（逐字节还原、权限、
   目录里还有别的命令、改过的、链接、写不了、几个文件都有）。
-- `tests/isolation_apps.py`（unit 一节）：把 `cmd_restore` 切出来配上桩，查不了桌面 App、账号专属的 Chrome 的进程时停下，不问、不动。
+- `tests/isolation_apps.rs`（unit 一节）：把 `cmd_restore` 切出来配上桩，查不了桌面 App、账号专属的 Chrome 的进程时停下，不问、不动。
 - regress 第 12 节：`cca restore` 在 App 开着、有远程会话时停下；`cca uninstall` 输错确认词、`--no-backup` 的清单、不认识的参数、
   账号专属的 Chrome 开着时停下；整条 `cca uninstall`（原来 `restore` 的那些断言，加上缓存目录、App 留在 `~/Library` 里的、
   启动文件里那两行留着的情况）；最后用仓库里的 cca 对一份空的 `~/.cca` 跑 `cca uninstall --no-backup`（不留备份、

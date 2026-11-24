@@ -729,7 +729,7 @@ mod tests {
         assert!(!geo_fresh(&V::Dict(dict! { "cc" => "us" }), now) && !geo_fresh(&V::str("us"), now) && !geo_fresh(&V::None, now));
         assert!(geo_fresh(&V::Dict(dict! { "t" => true }), 5.0)); // 布尔值也是数
         let dns = |age: f64, ok: V| V::Dict(dict! { "t" => now - age, "ok" => ok, "servers" => List::new() });
-        // 测成的 6 小时、没测成的 10 分钟（tests/isolation_leaks.py：空的 DNS 结果只短暂缓存）
+        // 测成的 6 小时、没测成的 10 分钟（tests/isolation_leaks.rs：空的 DNS 结果只短暂缓存）
         assert!(
             leak_dns_fresh(Some(&dns(LEAK_DNS_TTL - 5.0, true.into())), 0.0)
                 && !leak_dns_fresh(Some(&dns(LEAK_DNS_TTL + 5.0, true.into())), 0.0)

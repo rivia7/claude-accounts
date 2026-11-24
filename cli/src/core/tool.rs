@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn profile_names_match_discovery() {
-        // tests/isolation_settings.py 的 test_profile_names_match_discovery_and_cannot_escape_checked_files：能选的 profile 就是
+        // tests/isolation_settings.rs 的 profile_names_match_discovery_and_cannot_escape_checked_files：能选的 profile 就是
         // ~/.codex 里会被找到、照样校验的那个文件，名字逃不出这个目录。后两项是原来的 Python 给的：
         // codex_profile_file(名字 + '.config.toml')、codex_profile_name(名字)
         for (name, file, selectable) in [

@@ -71,7 +71,7 @@
 - `RELEASE_KEY`：`cca` ↔ `install.sh` ↔ `~/.ssh/cca_release_ed25519.pub`（release.sh 会检查）
 - 辅助程序的四个目标：`cca` 的 `helper_find` ↔ `cca-core pack`（`cli/src/cmd/pack.rs`）的 `TARGETS` ↔ `release.sh` 的 `TARGETS` ↔ `install.sh` 查的机器种类；`cca` 里以 `HELPER_SUMS=""` 开头的那一行由 `cca-core pack` 填上；它接在后面的那几段的格式 ↔ `cca` 的 `helper_unpack`（`sed` 切出来、`base64` 解码、`gunzip`）↔ `cli/src/cmd/hub/payload.rs`（同样读那几段，取出 Linux 的两份给 Team 的服务器；它的 `LINUX` 要在 `TARGETS` 里）
 - bash 里 `py 子命令` 的参数和输出 ↔ `cli/src/cmd/` 里那个子命令（`CMDS` 表）
-- 辅助程序里的常量 ↔ tests/ 下把它当黑盒测的那几份里写死的同一个值：`UDP_HELPER`（`cli/src/cmd/corenet/udp.rs`）↔ `tests/local_udp.rs`，`LEAK_FAIL_TTL`（`cli/src/cmd/leak.rs`）↔ `tests/isolation_leaks.py`
+- 辅助程序里的常量 ↔ tests/ 下把它当黑盒测的那几份里写死的同一个值：`UDP_HELPER`（`cli/src/cmd/corenet/udp.rs`）↔ `tests/local_udp.rs`，`LEAK_FAIL_TTL`（`cli/src/cmd/leak.rs`）↔ `tests/isolation_leaks.rs`
 - App 的接口：PROTOCOL.md ↔ Swift 模型 ↔ regress 的 10g；`router_sh` 的 `status` 输出 ↔ `cmd_gui_live` 的 `GUI_SLOT_RE`（regress 守着）
 - Claude App 的会话记下账号（`cca cost hook`）：写进用户共享的 `~/.claude/settings.json` 的命令（`cost.rs` 的 `desktop_hook_command`、`DESKTOP_HOOK_MARK`）↔ bash 的 `_session-start` 分支（`--desktop` 原样交给 `py session-start`）↔ `cmd_session_start` 的 `--desktop`：已经加上的 hook 留在各台设备的设置里，改了这几处也要一直认原来的命令（`off`、卸载照 `DESKTOP_HOOK_MARK` 认出它）；同意项 `cost_hook`、结果 `cost_hook`、`unattributed.app_hook`：`cca` ↔ PROTOCOL（2.2、3.5、4.1、4.2）↔ Swift 的 `ConsentItem`、`ResultCode`、`CostAppHook` ↔ `macos/Tests/Fixtures/state.json`
 - `VERSION` ↔ `WhatsNew.swift` 最前面的 `ReleaseNote`（`macos/test.sh` 查用词和版本先后）
@@ -91,7 +91,7 @@
 - 和手机配对在界面里：同意项 `remote_pair` 的范围 `web`、题号 `remote.pair_web`、字段的种类 `qr`、hello 的 `remote_web`、`peers[].web`：`cca` ↔ PROTOCOL（2.1、4.2、4.6、9.1、9.2）↔ Swift（`PromptKind.qr`、`Handoff.remotePairWeb`、`HelloDoc.remoteWeb`、`RemotePeer.web`）↔ `macos/Tests/Fixtures`（`flow_remote_pair_--web.flow`、`remote_list.json`、`hello.json`）
 - 网页端的页面（`server/web/`）：xterm.js 换版本时那四个文件和 `server/web/README.md` 里的版本、校验和一起换；目录里新加文件 ↔ `tests/web_relay.py` `FilesTest` 的名单 ↔ 服务器的 `WEB_TYPES`；`macos/Sources/CcaApp/LogoGlyph.swift` ↔ `server/web/logo.svg`（照它手写的同一个字形）、`icon-*.png`（`macos/tools/make-icon --flat` 画的）；页面里的类名别叫 `terminal`（xterm.js 给自己的根元素用了）
 - 每个 Team 各用各的中转服务器：`cli/src/cmd/remote/relay.rs` 的 `session_hub`（会话走哪台）↔ `cmd/hub.rs` 的 `route` / `core/policy.rs` 的 `policy_sources`（账号是谁给的）；配对表的 `hub`（`peers.rs`：Team 的编号；没有这一项的是 3.6.0 以前经维护者的服务器配的，读的时候丢掉）↔ `remote list --json` 的 `peers[].team`、`relay.hubs` ↔ PROTOCOL 9.1 ↔ Swift 的 `RemoteHub`、`RemotePeer.team` ↔ `macos/Tests/Fixtures/remote_list.json`；bash 的 `--team 名字`（`remote_hub_args`）↔ 辅助程序的 `--hub`（`pair.rs` 的 `hub_named`）↔ App 的 `RemoteHub.arguments`；Team 服务器的数据端口：`server/hub-install.sh` 的 `pick_relay`、`.env` 的 `CCA_HUB_RELAY`、`compose_yaml` 里带 `@RELAY@` 的那几处 ↔ `tests/hub_box.py` 假的 docker 解释它的那几行 ↔ `deploy.rs` 的 `report`（`relay`）↔ bash `team_deploy` 说要放行的端口
-- 证书助手：`server/cca-acme.py` ↔ `tests/acme_fake.py`（照 RFC 8555 / 8738 和证书种类的草案核对它的请求；改了流程两边一起看）；它写的文件名（`fullchain.pem`、`privkey.pem`）↔ 服务端的 `--web-cert` / `--web-key`；Let's Encrypt 的规矩（短期证书那一种的名字 `shortlived`、续的时机、限额）变了要改它开头的说明和 `RETRY`、`cert_state.fraction`
+- 证书助手：`server/cca-acme.py` ↔ `tests/kit/acmefake.rs`（照 RFC 8555 / 8738 和证书种类的草案核对它的请求；改了流程两边一起看）；它写的文件名（`fullchain.pem`、`privkey.pem`）↔ 服务端的 `--web-cert` / `--web-key`；Let's Encrypt 的规矩（短期证书那一种的名字 `shortlived`、续的时机、限额）变了要改它开头的说明和 `RETRY`、`cert_state.fraction`
 
 ## 细节在哪
 动到哪一块，先读 `docs/dev/` 下对应的那一份（这一块怎么测也写在里面）：

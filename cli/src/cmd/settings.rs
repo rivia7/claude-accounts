@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn toml_config_reads_real_toml() {
-        // tests/isolation_settings.py 的 test_rollout_repair_uses_real_toml_and_reports_invalid_config 里 read_toml_config 的那部分
+        // tests/isolation_settings.rs 的 rollout_repair_uses_real_toml_and_reports_invalid_config 里 read_toml_config 的那部分
         let d = tmpdir("toml");
         let file = format!("{d}/config.toml");
         assert!(read_toml_config(&file).unwrap().is_empty());
