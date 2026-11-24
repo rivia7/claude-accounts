@@ -72,6 +72,18 @@ struct Employee: Equatable, Sendable, Identifiable {
     var since: Double? { account.cliSince }
     /// 在用（App 开着或者命令行里有会话；生病、休息时也照样记得）
     var isWorking: Bool { account.isWorking }
+    /// 犯困（工位上的人头一点一点、头顶一个快没电的电池在闪）：额度快用完了（小标记里的 nearLimit）、头条是在用或空闲；
+    /// 或者额度用完了、桌面 App / 命令行还开着（在用，额度用完跟在后面：不然从 92% 到用完，人反倒精神了）。
+    /// 头条是别的（没登录、登错号、线路有问题、用完了趴着睡）时照那件事画
+    var drowsy: Bool {
+        switch mood {
+        case .working:
+            if case .resting = trouble { return true }
+            return flags.contains(.nearLimit)
+        case .idle: return flags.contains(.nearLimit)
+        case .absent, .wrongPerson, .expired, .unwell, .resting: return false
+        }
+    }
 
     static func department(of a: Account) -> Department {
         a.isAPI ? .contractors : .official(a.tool)

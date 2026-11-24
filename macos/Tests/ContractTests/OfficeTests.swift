@@ -135,6 +135,14 @@ func officeTests() async {
           && Employee.make(acct(), usage: nil, live: slot("closed"), now: now0).trouble == .unwell(.portClosed))
     let near = Employee.make(acct(["health": health("ok", dns: "leak")]), usage: usage(five: 92), live: nil, now: now0)
     check("快用完、泄露是小标记，不改头条", near.mood == .idle && near.flags == [.nearLimit, .leak])
+    check("快用完：在用、空闲的人都犯困", near.drowsy
+          && Employee.make(acct(["app": ["running": true]]), usage: usage(five: 92), live: nil, now: now0).drowsy)
+    check("用完了、命令行还开着：照样犯困（不然从 92% 到用完反倒精神了）；没在用的趴着睡，不算", tired.drowsy
+          && !Employee.make(acct(), usage: usage(five: 100), live: nil, now: now0).drowsy)
+    check("额度还多、数据旧了：不犯困", !Employee.make(acct(["app": ["running": true]]), usage: usage(five: 50), live: nil, now: now0).drowsy
+          && !Employee.make(acct(), usage: usage(five: 95, stale: true), live: nil, now: now0).drowsy)
+    check("线路有问题、没登录：照那件事画，不犯困", !Employee.make(acct(), usage: usage(five: 92), live: slot("closed"), now: now0).drowsy
+          && !Employee.make(acct(["login": "logged_out"]), usage: usage(five: 92), live: nil, now: now0).drowsy)
     check("没装 App、没检测过的小标记", Employee.make(missing, usage: nil, live: nil, now: now0).flags == [.noApp]
           && Employee.make(acct(["health": NSNull()]), usage: nil, live: nil, now: now0).flags == [.neverChecked])
     let outdated = Employee.make(acct(["app": ["running": true]]), usage: usage(five: 10, outdated: "Pro"), live: nil, now: now0)

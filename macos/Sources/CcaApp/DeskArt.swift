@@ -1,8 +1,9 @@
 import SwiftUI
 
 // 办公室里一个工位的插画（Canvas 画的，没有图片资源）：桌子、显示器、椅子、坐着的人（身子是账号色，脸是账号的头像）。
-// 设计空间 240×168，按宽度缩放。显示器上演这个账号此刻在干什么；会动的部分（打字、滚动的代码、热气、zZ、汗）只在
-// animate 时走（窗口看得见、没开“减少动态效果”），帧率看状态，没人、坐着陌生人的工位不走。
+// 设计空间 240×168，按宽度缩放。显示器上演这个账号此刻在干什么；会动的部分（打字、滚动的代码、热气、zZ、汗、犯困时点头）只在
+// animate 时走（窗口看得见、没开“减少动态效果”），帧率看状态，没人、坐着陌生人的工位不走。额度快用完（或者用完了、还开着）时在用、空闲的人犯困
+// （Employee.drowsy）：头一点一点，打字的手跟着停，头顶一个快没电的电池在闪；姿势还是原来的，一眼看得出在用还是空闲。
 // 家具一律中性灰（不带含义），账号色只用在人、地毯和屏幕上。套餐的档位不画进来：看卡片上的徽章。
 
 /// 人的姿势
@@ -63,7 +64,7 @@ extension Employee {
         switch pose {
         case .typing: return 10
         case .sleeping, .sweating: return 6
-        case .relaxed: return 4
+        case .relaxed: return drowsy ? 8 : 4   // 点头 4 帧太卡
         case .away, .stranger: return nil
         }
     }
@@ -87,7 +88,7 @@ struct DeskScene: View {
         let e = employee
         let painter = DeskPainter(pose: e.pose, screen: e.screen, accent: e.account.lineColor,
                                   palette: OfficePalette(scheme),
-                                  laptop: e.department == .contractors)
+                                  laptop: e.department == .contractors, drowsy: e.drowsy)
         GeometryReader { g in
             let s = g.size.width / Self.design.width
             let fps = e.deskFPS
@@ -95,12 +96,14 @@ struct DeskScene: View {
             ZStack(alignment: .topLeading) {
                 TimelineView(.animation(minimumInterval: 1 / (fps ?? 1), paused: !running)) { ctx in
                     let t = running ? ctx.date.timeIntervalSinceReferenceDate : Self.stillPhase
-                    Canvas { c, _ in
-                        c.scaleBy(x: s, y: s)
-                        painter.draw(&c, t: t)
+                    ZStack(alignment: .topLeading) {
+                        Canvas { c, _ in
+                            c.scaleBy(x: s, y: s)
+                            painter.draw(&c, t: t)
+                        }
+                        faces(painter, s, t: t)   // 头像跟着同一个时钟：犯困时头一点一点
                     }
                 }
-                faces(painter, s)
                 screenText(painter, s)
             }
         }
@@ -108,9 +111,9 @@ struct DeskScene: View {
         .accessibilityHidden(true)
     }
 
-    /// 脸（账号的头像）；陌生人是灰色的问号，真主人的头像别在显示器角上；没人时别在外套上。
+    /// 脸（账号的头像）；陌生人是灰色的问号，真主人的头像别在显示器角上；没人时别在外套上。犯困时头往前垂下去（nod）
     @ViewBuilder
-    private func faces(_ p: DeskPainter, _ s: CGFloat) -> some View {
+    private func faces(_ p: DeskPainter, _ s: CGFloat, t: Double) -> some View {
         let a = employee.account
         switch p.pose {
         case .away:
@@ -126,9 +129,10 @@ struct DeskScene: View {
             BadgeAvatar(account: a, size: 16 * s)
                 .position(x: (p.monitor.maxX - 3) * s, y: (p.monitor.minY + 3) * s)
         default:
+            let n = p.nod(t)
             BadgeAvatar(account: a, size: p.headSize * s)
-                .rotationEffect(.degrees(p.pose == .sleeping ? -14 : 0))
-                .position(x: p.head.x * s, y: p.head.y * s)
+                .rotationEffect(.degrees(p.pose == .sleeping ? -14 : -20 * n))
+                .position(x: (p.head.x - 3 * n) * s, y: (p.head.y + 6.5 * n) * s)
         }
     }
 
@@ -189,6 +193,8 @@ struct DeskPainter {
     let palette: OfficePalette
     /// 外包（第三方 API 账号）：桌上是笔记本，不是显示器
     let laptop: Bool
+    /// 犯困（Employee.drowsy，只在打字、往后靠这两个姿势时是 true）
+    var drowsy = false
 
     // MARK: 几何（设计空间 240×168，y 向下）
 
@@ -225,6 +231,19 @@ struct DeskPainter {
 
     var headSize: CGFloat { pose == .sleeping ? 26 : 30 }
 
+    /// 犯困时头往下垂了多少（0…1）：3.6 秒一个来回，前一半醒着，然后慢慢垂下去、一下子抬起来（打了个盹又惊醒）。
+    /// 静止的那一帧（DeskScene.stillPhase）落在垂到大半的时候：不动时也看得出在犯困
+    func nod(_ t: Double) -> Double {
+        guard drowsy else { return 0 }
+        let u = (t / 3.6 + 0.6).truncatingRemainder(dividingBy: 1)
+        switch u {
+        case ..<0.5: return 0
+        case ..<0.8: let x = (u - 0.5) / 0.3; return x * x * (3 - 2 * x)
+        case ..<0.86: return 1 - (u - 0.8) / 0.06
+        default: return 0
+        }
+    }
+
     /// 趴着时身子从胯弯过弓起来的背、低下去接到头上（二次曲线的控制点）；别的姿势身子是直的。
     /// 身子要是直着往上伸，头落在它前下方，看着像头掉在了桌上
     var back: CGPoint? { pose == .sleeping ? CGPoint(x: 178, y: 78) : nil }
@@ -233,12 +252,12 @@ struct DeskPainter {
     private func arm(_ t: Double) -> (from: CGPoint, elbow: CGPoint, hand: CGPoint)? {
         switch pose {
         case .typing:
-            let bob = CGFloat(1.4 * sin(2 * .pi * 3 * t))
+            let bob = CGFloat(1.4 * sin(2 * .pi * 3 * t) * (1 - nod(t)))   // 犯困：头垂下去时手停下
             return (CGPoint(x: 177, y: 74), CGPoint(x: 158, y: 102), CGPoint(x: 128, y: 102 + bob))
         case .stranger:
             return (CGPoint(x: 177, y: 74), CGPoint(x: 158, y: 102), CGPoint(x: 128, y: 102))
-        case .relaxed:
-            return (CGPoint(x: 195, y: 74), CGPoint(x: 182, y: 104), CGPoint(x: 160, y: 100))
+        case .relaxed:   // 犯困：端着杯子的手跟着往下沉一点
+            return (CGPoint(x: 195, y: 74), CGPoint(x: 182, y: 104), CGPoint(x: 160, y: 100 + 2.5 * nod(t)))
         case .sleeping:
             return (CGPoint(x: 162, y: 100), CGPoint(x: 152, y: 108), CGPoint(x: 122, y: 104))
         case .sweating:
@@ -281,6 +300,7 @@ struct DeskPainter {
         case .sweating: drawSweat(&c, t: t)
         default: break
         }
+        if drowsy { drawLowBattery(&c, t: t) }
     }
 
     private func drawChairBack(_ c: inout GraphicsContext) {
@@ -491,6 +511,17 @@ struct DeskPainter {
             z.addLine(to: CGPoint(x: o.x, y: o.y + size))
             z.addLine(to: CGPoint(x: o.x + size, y: o.y + size))
             c.stroke(z, with: .color(palette.zzz.opacity(sin(.pi * p))), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+        }
+    }
+
+    /// 犯困：头顶一个快没电的电池（橙色），剩下的那一格一闪一闪。不跟着头动，好认
+    private func drawLowBattery(_ c: inout GraphicsContext, t: Double) {
+        let w: CGFloat = 20, h: CGFloat = 10
+        let o = CGPoint(x: head.x - (w + 3) / 2, y: head.y - headSize / 2 - h - 7)
+        c.stroke(rr(o.x, o.y, w, h, 3), with: .color(.orange), lineWidth: 1.5)
+        c.fill(rr(o.x + w + 1, o.y + h / 2 - 2.25, 2, 4.5, 1), with: .color(.orange))   // 正极
+        if (t / 1.2).truncatingRemainder(dividingBy: 1) < 0.6 {   // 静止的那一帧亮着
+            c.fill(rr(o.x + 2.5, o.y + 2.5, 4, h - 5, 1), with: .color(.orange))
         }
     }
 

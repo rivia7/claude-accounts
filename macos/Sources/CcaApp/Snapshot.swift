@@ -443,12 +443,14 @@ enum Snapshot {
 }
 /// 工位画廊：一行一种账号（几种账号色、第三方 API 的笔记本；套餐档位不进插画），一列一种状态。
 private struct DeskGallery: View {
-    private struct Look { let caption: String; let mood: Employee.Mood; let app: Bool; let sessions: Int }
+    private struct Look { let caption: String; let mood: Employee.Mood; let app: Bool; let sessions: Int; var flags: [Employee.Flag] = [] }
     private struct Tier { let caption: String; let plan: String; let tier: PlanTier; let api: Bool; let color: String }
 
     private static let looks = [
         Look(caption: "App + 命令行", mood: .working, app: true, sessions: 2), Look(caption: "命令行", mood: .working, app: false, sessions: 1),
         Look(caption: "App", mood: .working, app: true, sessions: 0), Look(caption: "空闲", mood: .idle, app: false, sessions: 0),
+        Look(caption: "快用完 · 命令行", mood: .working, app: false, sessions: 1, flags: [.nearLimit]),
+        Look(caption: "快用完 · 空闲", mood: .idle, app: false, sessions: 0, flags: [.nearLimit]),
         Look(caption: "额度用完", mood: .resting(until: Date().timeIntervalSince1970 + 7800), app: false, sessions: 0),
         Look(caption: "没登录", mood: .absent, app: false, sessions: 0),
         Look(caption: "登错号", mood: .wrongPerson(loginEmail: "eve@example.com"), app: false, sessions: 0),
@@ -487,7 +489,7 @@ private struct DeskGallery: View {
                                 "login": t.api ? "api" : "logged_in", "plan": t.plan, "plan_tier": t.tier.rawValue,
                                 "app": ["running": l.app], "cli": ["running": l.sessions > 0, "sessions": l.sessions, "since_epoch": now - 600]]
         if !t.api { d["badge"] = ["label": "工", "color": t.color] }
-        return Employee(account: Account.sample(d), mood: l.mood, flags: [])
+        return Employee(account: Account.sample(d), mood: l.mood, flags: l.flags)
     }
 }
 #endif
