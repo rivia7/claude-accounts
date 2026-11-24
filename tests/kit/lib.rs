@@ -13,6 +13,7 @@ pub mod mailfake;
 pub mod plist;
 pub mod proc;
 pub mod pty;
+pub mod sandbox;
 pub mod server;
 pub mod spec;
 pub mod tls;
