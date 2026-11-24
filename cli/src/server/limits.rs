@@ -65,6 +65,8 @@ pub struct Buckets {
     burst: f64,
     /// 键 → (还剩几个, 上次是什么时候)
     b: HashMap<String, (f64, f64)>,
+    /// 上次把整张表过一遍是什么时候
+    swept: f64,
 }
 
 impl Buckets {
@@ -72,15 +74,20 @@ impl Buckets {
     const SWEEP_OVER: usize = 4096;
     /// 这么多秒没动过的算很久（Py:362）
     const SWEEP_IDLE: f64 = 600.0;
+    /// 过了一遍以后至少隔这么多秒再过。Python 是键多了以后每次都过一遍：600 秒里来过几万个不同的地址时（每个只来一次，
+    /// 没有一个到期），每个请求都要拿着锁把整张表数一遍，别的请求都等着。隔一秒过一遍，清掉的东西一样
+    const SWEEP_GAP: f64 = 1.0;
 
     pub fn new(rate: f64, burst: f64) -> Buckets {
-        Buckets { rate, burst, b: HashMap::new() }
+        Buckets { rate, burst, b: HashMap::new(), swept: f64::NEG_INFINITY }
     }
 
     /// 这个键还有没有配额：有就扣一个。now 是单调时钟（`py::time::monotonic()`）
     pub fn take(&mut self, key: &str, now: f64) -> bool {
-        if self.b.len() > Self::SWEEP_OVER {
+        // now < swept：时钟倒着走了（不该有），照常过一遍
+        if self.b.len() > Self::SWEEP_OVER && (now - self.swept >= Self::SWEEP_GAP || now < self.swept) {
             self.b.retain(|_, v| now - v.1 < Self::SWEEP_IDLE);
+            self.swept = now;
         }
         let (tokens, last) = self.b.get(key).copied().unwrap_or((self.burst, now));
         let tokens = self.burst.min(tokens + (now - last) * self.rate);
@@ -255,6 +262,25 @@ mod tests {
         assert!(b.take("late", 600.0), "这一次先清：0 秒的那 4096 个正好满 600 秒");
         assert_eq!(b.len(), 2);
         assert!(b.take("fresh", 600.0));
+    }
+
+    /// 键很多、又都没到期时不是每次都把整张表过一遍：过了一遍以后隔一秒才再过（到期的晚不到一秒清掉，给不给配额不受影响）
+    #[test]
+    fn buckets_sweep_at_most_once_a_second() {
+        let mut b = Buckets::new(2.0, 120.0);
+        assert!(b.take("old", 0.0));
+        for i in 0..4100 {
+            assert!(b.take(&format!("ip-{i}"), 0.5));
+        }
+        assert_eq!(b.len(), 4101);
+        assert!(b.take("a", 600.0), "过一遍：只有 0 秒的那一个满 600 秒了");
+        assert_eq!(b.len(), 4101);
+        assert!(b.take("b", 600.6), "0.5 秒的那 4100 个到期了，可离上一遍还不到一秒：先不过");
+        assert_eq!(b.len(), 4102);
+        assert!(b.take("c", 601.0), "满一秒了：过一遍");
+        assert_eq!(b.len(), 3);
+        // 配额照旧各算各的
+        assert!(b.take("a", 601.0) && b.take("ip-0", 601.0));
     }
 
     /// nonce：用过的 660 秒里不认第二次，过了就又能用（那时请求里的时间早就不在 5 分钟的窗口里了）
