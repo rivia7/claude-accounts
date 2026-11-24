@@ -32,9 +32,15 @@ pub=$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' cca)
 # （--locked）；程序里不留这台机器的路径（--remap-path-prefix：依赖库出错位置的字符串里本来带着 ~/.cargo 的绝对路径）
 echo "• 编辅助程序（四种机器）…"
 TARGETS="aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl"
+# Linux 的两份是在这台 Mac 上交叉编译的：辅助程序带着 ring（TLS、签名），它里面的 C 和汇编要 cli/musl-env.sh 指定编译器和归档工具
+# （缺 rustup 的 llvm-tools 组件时它自己说）。四个目标一条 cargo 命令编：cargo 自己并行，不用一个一个等（各个目标最后那一步的
+# LTO 是单线程的）
+( . cli/musl-env.sh ) || fail "交叉编译 Linux 的目标的环境没备好（上面那一句说了缺什么）"
+targs=""; for t in $TARGETS; do targs="$targs --target $t"; done
+# shellcheck disable=SC2086
+( cd cli && . ./musl-env.sh && RUSTFLAGS="--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=." cargo build --release --locked $targs ) >/dev/null 2>&1 ||
+	fail "辅助程序编不出来：cd cli && . ./musl-env.sh && cargo build --release --locked${targs}（没装哪个目标就先 rustup target add 它）"
 for t in $TARGETS; do
-	( cd cli && RUSTFLAGS="--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=." cargo build --release --locked --target "$t" ) >/dev/null 2>&1 ||
-		fail "辅助程序编不出来：cd cli && cargo build --release --locked --target ${t}（没装这个目标就先 rustup target add ${t}）"
 	! LC_ALL=C grep -qaF "$HOME/" "cli/target/$t/release/cca-core" || fail "辅助程序（${t}）里带着这台机器的路径"
 	# 编出来的确实是这种机器的程序（Linux 的两份在这台 Mac 上运行不了，至少看文件头：64 位、静态链接）
 	case "$t" in
