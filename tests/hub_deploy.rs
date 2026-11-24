@@ -1226,6 +1226,20 @@ fn dir(t: &mut Ctx) {
     assert_eq!(r.code, 1);
     assert_in("/srv 里没有装过 Team 的同步服务器", &r.err);
     assert_eq!((fsx::read_text(&precious).as_str(), b.log("chown.log").as_str()), ("别人的数据", ""));
+    // 共用的证书助手的目录：装、卸载都不认（里面有 .env，不拦的话当成以前装的 Team：装会盖掉它的程序和 .env，卸载会删掉它的账户）
+    let acme_env = opt(&b, ASVC).join(".env");
+    std::fs::create_dir_all(opt(&b, ASVC)).expect("建证书助手的目录");
+    fsx::write(&acme_env, "CCA_HUB_MODE=systemd\n");
+    for args in [
+        vec!["--team-root", root.as_str(), "--dir", "/opt/cca-team-acme", "--host", "127.0.0.1"],
+        vec!["--uninstall", "--dir", "/opt/cca-team-acme/"],
+    ] {
+        let r = fx.try_install(&b, &args);
+        assert_eq!(r.code, 1, "{args:?}");
+        assert_in("共用的证书助手装在那里", &r.err);
+    }
+    assert_eq!((fsx::read_text(&acme_env).as_str(), names(&opt(&b, ASVC))), ("CCA_HUB_MODE=systemd\n", vec![".env".to_string()]));
+    std::fs::remove_dir_all(opt(&b, ASVC)).expect("收掉证书助手的目录");
     let port = team_port();
     fx.install(&b, &["--team-root", &root, "--dir", "/srv/team/", "--host", "127.0.0.1", "--port", &port.to_string()]);
     let hub = b.root.join("srv/team");

@@ -186,7 +186,7 @@ fw_hint() {   # 这台服务器自己的防火墙没放行这几个端口：说�
 }
 
 # --- 装在哪 ----------------------------------------------------------------------------------------------------------------
-dir_check() {   # --dir：/ 下面的一个目录（不是 /，没有空的、.、.. 这样的一节），只用字母、数字和 . _ - /；末尾的 / 去掉。hub-deploy 的 dir_of 一样。
+dir_check() {   # --dir：/ 下面的一个目录（不是 /，没有空的、.、.. 这样的一节），只用字母、数字和 . _ - /，不是共用的证书助手的目录（$AD）；末尾的 / 去掉。hub-deploy 的 dir_of 一样。
 	                # 不能在 systemd 方式的服务看不到、写不了，或者重启就清掉的地方（unit_file 的 ProtectSystem=full、ProtectHome、PrivateTmp、PrivateDevices）
 	case "$D" in /*) ;; *) die usage "--dir 要是绝对路径" ;; esac
 	case "${D%/}/" in
@@ -195,6 +195,7 @@ dir_check() {   # --dir：/ 下面的一个目录（不是 /，没有空的、.�
 			die usage "--dir 不能在 /usr、/etc、/home、/root、/run、/tmp 这些下面（systemd 方式的服务看不到、写不了那里）：${D}" ;;
 	esac
 	D=${D%/}
+	case "$D/" in "$AD"/*) die usage "--dir 不能是 ${AD}（或者它下面）：几个 Team 共用的证书助手装在那里" ;; esac
 }
 team_setup() {   # 每个 Team 一个服务（名字里带 Team 编号的前 8 位：根公钥的 SHA-256），目录默认 /opt/<服务名>
 	TEAMROOT=${TEAMROOT#ssh-ed25519 }

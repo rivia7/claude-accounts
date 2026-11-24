@@ -219,8 +219,11 @@ const DIR_HIDDEN: [&str; 17] = [
     "/sbin", "/lib", "/lib64",
 ];
 
-/// --dir：/ 下面的一个目录（不是 /，没有空的、.、.. 这样的一节），只用字母、数字和 . _ - /，不在 DIR_HIDDEN 下面；末尾的 / 去掉。
-/// 和安装脚本的 dir_check 一样
+/// 几个 Team 共用的证书助手装在这里（安装脚本的 AD）：Team 的服务器不能装进去，照它卸载会把证书助手的程序和账户删掉
+const ACME_DIR: &str = "/opt/cca-team-acme";
+
+/// --dir：/ 下面的一个目录（不是 /，没有空的、.、.. 这样的一节），只用字母、数字和 . _ - /，不在 DIR_HIDDEN 下面，不是 ACME_DIR；
+/// 末尾的 / 去掉。和安装脚本的 dir_check 一样
 fn dir_of(d: &str) -> Result<String, &'static str> {
     let d = d.strip_suffix('/').unwrap_or(d);
     let ok = d.strip_prefix('/').is_some_and(|rest| rest.split('/').all(|p| !p.is_empty() && p != "." && p != ".."))
@@ -230,6 +233,9 @@ fn dir_of(d: &str) -> Result<String, &'static str> {
     }
     if DIR_HIDDEN.iter().any(|h| d.strip_prefix(h).is_some_and(|r| r.is_empty() || r.starts_with('/'))) {
         return Err("--dir 不能在 /usr、/etc、/home、/root、/run、/tmp 这些下面（systemd 方式的服务看不到、写不了那里）");
+    }
+    if d.strip_prefix(ACME_DIR).is_some_and(|r| r.is_empty() || r.starts_with('/')) {
+        return Err("--dir 不能是 /opt/cca-team-acme（或者它下面）：几个 Team 共用的证书助手装在那里");
     }
     Ok(d.to_string())
 }
@@ -830,6 +836,10 @@ mod tests {
         ] {
             assert!(dir_of(d).is_err_and(|why| why.contains("systemd 方式的服务看不到")), "{d}");
         }
+        for d in ["/opt/cca-team-acme", "/opt/cca-team-acme/", "/opt/cca-team-acme/x"] {
+            assert!(dir_of(d).is_err_and(|why| why.contains("共用的证书助手")), "{d}");
+        }
+        assert_eq!(dir_of("/opt/cca-team-acme2").as_deref(), Ok("/opt/cca-team-acme2"));
     }
 
     #[test]

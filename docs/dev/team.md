@@ -343,7 +343,7 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   `die deps`，说这个发行版怎么装）。
 - `--dir`：`/` 下面的一个目录，只认字母、数字和 `._/-`，没有空的、`.`、`..` 这样的一节，末尾的 `/` 去掉，不能在 `/usr`、`/etc`、`/home`、
   `/root`、`/run`、`/tmp` 这些下面（`DIR_HIDDEN`：systemd 方式的 unit 带着 `ProtectSystem=full`、`ProtectHome`、`PrivateTmp`、`PrivateDevices`，
-  服务看不到、写不了那里，`/etc` 下面的还能起来、要写状态时才出错；`/run` 重启就清掉）；安装脚本的 `dir_check` 和辅助程序的 `dir_of` 一样查。
+  服务看不到、写不了那里，`/etc` 下面的还能起来、要写状态时才出错；`/run` 重启就清掉）；安装脚本的 `dir_check` 和辅助程序的 `dir_of` 一样查；也不能是几个 Team 共用的证书助手的目录（`/opt/cca-team-acme`，脚本里的 `AD`、`deploy.rs` 的 `ACME_DIR`：它里面也有 `.env`，不拦的话会被当成以前装的 Team，卸载时连证书机构那里的账户一起删掉）。
   要是还没有、空的，或者以前装过的（有 `.cca-hub` 或者 `.env`，`dir_ours`）：别人的目录不碰，里面的 `data`、`certs` 会被 chown，卸载时会删。
 - 装好的样子：`.cca-hub`（记着这个目录是安装脚本装的、服务名）；`app/`（755：服务端程序 `cca-core` 755，`name` 644——Team 的名字，下面
   「Team 的名字」）；`certs/`（700：`key.pem` 600、`cert.pem` 644，自签
