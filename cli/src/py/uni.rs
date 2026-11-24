@@ -1,5 +1,5 @@
-//! 字符的分类：占几格、能不能打印、算不算空白和数字。表在 uni_tables.rs（由 tools/gen_unicode.py 从 Python 的
-//! unicodedata 生成），所以和原来 Python 实现的判断一样；不用 Rust 标准库和别的库里的同名判断（范围不一样）。
+//! 字符的分类：占几格、能不能打印、算不算空白和数字。表在 uni_tables.rs（取自 CPython 3.14 的
+//! unicodedata，已经固定），所以和原来 Python 实现的判断一样；不用 Rust 标准库和别的库里的同名判断（范围不一样）。
 
 #[path = "uni_tables.rs"]
 mod tables;

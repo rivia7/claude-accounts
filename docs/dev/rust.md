@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | `cli/src/main.rs` | 入口：按第一个参数找子命令（`cmd::find`），没人接的错误说一句、退出码 1 |
-| `cli/src/py/` | Python 兼容层：值（`obj::{V, Dict, List}`）、JSON、正则、文字、路径、文件、子进程、时间、摘要、属性列表、TOML、TLS、zlib、gzip……行为照 CPython（有从真的 Python 取的对照数据：`cli/tests/vectors/*.json`，`cli/tools/gen_vectors.py` 生成） |
+| `cli/src/py/` | Python 兼容层：值（`obj::{V, Dict, List}`）、JSON、正则、文字、路径、文件、子进程、时间、摘要、属性列表、TOML、TLS、zlib、gzip……行为照 CPython（有当初从 CPython 3.14 取的对照数据：`cli/tests/vectors/*.json`，已经固定） |
 | `cli/src/core/` | 地基：目录和常量（`base`）、三种工具（`tool`：原来的 `Tool` / `CodexTool` / `AgyTool`，`t()` 是当前工具）、账号表（`model`）、Team 的配置并进账号表（`policy`：名字是维护者的映射那时起的）、对账（`ctx`）、同步摘要（`sync`） |
 | `cli/src/cmd/<模块>.rs` | 子命令，一个模块一份，每份末尾有自己的 `CMDS` 表（子命令名 → 函数、哪几种工具能用） |
 | `cli/Cargo.toml`、`Cargo.lock` | 依赖是白名单（见下面「依赖」）；版本锁在 `Cargo.lock`，一律 `--locked` |
@@ -65,7 +65,7 @@ cargo build --release --locked --target x86_64-unknown-linux-musl   # 交叉编�
 - `cargo test`：兼容层对着 CPython 的对照数据（`tests/vectors/`）、各模块的内部函数。原来 Python 单元测试里只能调内部函数的检查搬到了这里
 - `tests/*.py`（回归的 unit 一节）：把辅助程序当黑盒跑（`tests/helper_bin.py` 给出它在哪：`CCA_HELPER`，没有就是 `cli/target/release/cca-core`）。临时 HOME、PATH 上放假命令；单独跑之前先 `cargo build --release`
 - `tests/regress.sh`：整条 `cca` 命令的行为。开头先编辅助程序；10g 里测“怎么找到辅助程序”（没编出来、`CCA_HELPER`、第一次解出来、不再解、清旧的、文件不完整、校验值不对、缓存目录是链接、没有这种机器的、缺 `base64`、两个同时第一次运行）；`mkver` 做的假发布版像真的一样接着辅助程序
-- 移植时用过的对拍（原来的 Python 和 cca-core 在同一份沙箱上各跑一遍、逐字节比）和从原来的 Python 生成对照数据的脚本已经删了：以后的开发直接照 Rust 来，行为用 `cargo test`、`tests/*.py`、回归测。`cli/tests/vectors/` 里从原来的 Python 取的那几份（`src_*.json`、`usage.json`、`corenet.json`、`clients.json`、`mail.json`）成了固定的数据，有意改了行为就直接改它们或者改测试；只照 CPython 标准库生成的表和对照数据（`cli/tools/gen_vectors.py`、`gen_unicode.py`、`gen_clients_tables.py`、`gen_mail_tables.py`）照旧能重新生成
+- 移植时用过的对拍（原来的 Python 和 cca-core 在同一份沙箱上各跑一遍、逐字节比）和从原来的 Python 生成对照数据的脚本已经删了：以后的开发直接照 Rust 来，行为用 `cargo test`、`tests/*.py`、回归测。`cli/tests/vectors/` 里从原来的 Python 取的那几份（`src_*.json`、`usage.json`、`corenet.json`、`clients.json`、`mail.json`）成了固定的数据，有意改了行为就直接改它们或者改测试；只照 CPython 标准库生成的表（`cli/src/py/uni_tables.rs`、`xml_tables.rs`、`zip_cp437.rs`、`cmd/mail/html5.rs`、`cmd/clients/casefold_table.rs`）和对照数据（`cli/tests/vectors/` 里其余的几份）也固定了：生成它们的脚本（`cli/tools/gen_*.py`）跟着仓库里别的 Python 一起删了，要看去 git 历史里翻。兼容层的行为以这些数据为准，不再跟着 CPython 的新版本走
 - Linux：`tests/linux.sh` 用 musl 的那一份（`--docker` 时在宿主机上先交叉编译；见 `docs/dev/linux.md`）
 
 ## 量过的

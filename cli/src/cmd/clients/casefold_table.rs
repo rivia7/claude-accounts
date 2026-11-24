@@ -1,4 +1,4 @@
-// 由 cli/tools/gen_clients_tables.py 生成，不要手改。Unicode 16.0.0（CPython 3.14 的 str.casefold）。
+// 取自 CPython 3.14 的 str.casefold（Unicode 16.0.0），已经固定，不要手改；当初的生成脚本（cli/tools/gen_clients_tables.py）在 git 历史里。
 
 /// `c.casefold()` 和 c 不一样的字符：(字符, 变成什么)，按字符排好（1557 项）
 #[rustfmt::skip]

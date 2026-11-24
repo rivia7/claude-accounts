@@ -66,8 +66,8 @@
 | `sh(K=v)` / `sh_arrays(N=[…])` | `core::base::{sh, sh_vals, sh_array}` |
 | `notice(code, text, k=v)` | `core::base::notice(code, text, dict!{…})` |
 
-兼容层里新加东西（写在 `cli/src/py/` 下）照同样的规矩：行为照 CPython，期望值从真的 Python 取（`cli/tools/gen_vectors.py`
-那种对照数据最好）。
+兼容层（`cli/src/py/`）里已经有的东西行为照当初的 CPython 3.14，对照数据（`cli/tests/vectors/`）已经固定，生成它们的脚本删了
+（仓库里不再有 Python）。新加的东西不必再照 Python：把行为写清楚、配上单元测试。
 
 ## 别的模块里已经有的
 

@@ -4,7 +4,7 @@
 //! NFD 用 `unicode-normalization` 库，它的 Unicode 版本（18.0）比 CPython 3.14 的（16.0）新。库认、CPython 还不认的字符——
 //! 新收进来的带分解的字符、新的组合符号——两边结果会不一样（Python 原样留着、不参与重排）：这种字符记在 `NEWER` 里，照 Python 的
 //! 来。单元测试拿 CPython 的整张分解表、整张组合类表（tests/vectors/clients.json 里记的是摘要）核对；对不上时（换了库的版本）
-//! 照测试里写的办法重新生成 `NEWER`。
+//! 照测试里写的办法补上 `NEWER`。
 
 #[path = "casefold_table.rs"]
 mod table;
@@ -12,8 +12,8 @@ mod table;
 use unicode_normalization::UnicodeNormalization;
 
 /// Unicode 16.0 以后才有的、带分解或者组合类不是 0 的字符（`unicode-normalization` 认、CPython 3.14 不认）：照 Python 的原样留着。
-/// 现在是 68 个新的组合符号（带分解的新字符一个也没有）。由 `python3 -I cli/tools/gen_clients_tables.py newer 导出的表` 生成
-/// （导出的办法见下面的单元测试）
+/// 现在是 68 个新的组合符号（带分解的新字符一个也没有）。当初是拿 CPython 3.14 的 unicodedata 和库导出的表比出来的
+/// （脚本 cli/tools/gen_clients_tables.py newer 在 git 历史里）；换库的版本时怎么补见下面的单元测试
 const NEWER: &[(u32, u32)] = &[
     (0x5c8, 0x5c9),
     (0x1acf, 0x1af0),
@@ -101,8 +101,9 @@ mod tests {
         assert!(table::CASEFOLD.windows(2).all(|w| w[0].0 < w[1].0));
 
         // 整张表：每个字符分解成什么、组合类是几（重排靠它），都要和 CPython 的一样。算上 NEWER 里的例外以后比摘要；
-        // 设了 CCA_CLIENTS_UNICODE_DUMP=文件 时把库自己的（不算例外的）两张表写到那个文件里，交给
-        // `python3 -I cli/tools/gen_clients_tables.py newer 文件` 算出 NEWER 该是什么
+        // 设了 CCA_CLIENTS_UNICODE_DUMP=文件 时把库自己的（不算例外的）两张表写到那个文件里。换库的版本、摘要对不上时：
+        // 换之前、换之后各导出一份，比一下（两份都按码位从小到大，一行一项），多出来的字符就是库新认的，加进 NEWER；
+        // 原来就有的字符变了的话 NEWER 管不了，要看那个字符怎么处理
         let (mut nfd_sum, mut ccc_sum, mut dump) = (Sha256Stream::new(), Sha256Stream::new(), String::new());
         let dumping = std::env::var_os("CCA_CLIENTS_UNICODE_DUMP").is_some();
         let hex = |s: &str| s.chars().map(|x| format!("{:x}", x as u32)).collect::<Vec<_>>().join(",");

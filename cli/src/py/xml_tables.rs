@@ -1,4 +1,4 @@
-// 由 cli/tools/gen_clients_tables.py 生成，不要手改。expat 2.7.4（CPython 3.14 的 pyexpat）一个字符一个字符试出来的。
+// 拿 expat 2.7.4（CPython 3.14 的 pyexpat）一个字符一个字符试出来的，已经固定，不要手改；当初的生成脚本（cli/tools/gen_clients_tables.py）在 git 历史里。
 
 /// U+0080 以上能当名字开头的字符（UTF-8 的文档；别的编码里 U+0100 以上的也是这张）（202 段）
 #[rustfmt::skip]

@@ -1,6 +1,6 @@
 //! `base64` / `binascii.a2b_base64`：和 CPython 一样的宽严。不严格时不认识的字符丢掉、凑够一组填充就不再往后看；
 //! 报错的那几句话也一样（调用方多半只接 ValueError，但有的会把原因显示出来）。照 CPython 3.14 核对过
-//! （tests/vectors/base64.json，tools/gen_vectors.py 生成）。
+//! （tests/vectors/base64.json：当初用 CPython 生成的，已经固定）。
 
 use super::fail::{Fail, R};
 

@@ -1,5 +1,5 @@
 //! `zlib`：压缩和限长的解压（折合金额和别的设备交换的那一份是压缩的 JSON）。解压的结果照 CPython 核对过
-//! （tests/vectors/zlib.json，tools/gen_vectors.py 生成）。
+//! （tests/vectors/zlib.json：当初用 CPython 生成的，已经固定）。
 //!
 //! 压缩出来的字节和 CPython 的 zlib 不逐字节一样（两个实现找重复的办法不同，长短也会差一点），解出来的内容一样：
 //! 用在只要求“对方解得开”的地方；要逐字节一样的地方（摘要的输入）不能用压缩过的。

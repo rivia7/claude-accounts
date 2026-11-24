@@ -2,7 +2,7 @@
 //!
 //! 共享的 config.toml、`-c` 给的设置解析失败必须拦住启动，认什么、不认什么要和原来完全一样，所以不用现成的 TOML 库
 //! （它们认 TOML 1.1 的写法，重复定义、不合法的日期报不报错也各有出入），而是把那个解析器一个函数一个函数照搬过来：
-//! 函数名、先后、出错的说法和位置都一样。对照数据在 tests/vectors/toml.json（tools/gen_vectors.py 用 CPython 生成）。
+//! 函数名、先后、出错的说法和位置都一样。对照数据在 tests/vectors/toml.json（当初用 CPython 生成的，已经固定）。
 //!
 //! 值是 `py::obj::V`：表是 `Dict`（键的先后就是文件里的先后）、数组是 `List`，字符串、布尔、整数、小数各是各的。
 //! - 放不进 i64 的整数是 `V::Big`（十进制数字）。十进制超过 4300 位的 0x / 0o / 0b 整数 Python 自己也转不成十进制
@@ -1112,7 +1112,7 @@ mod tests {
     use super::*;
     use crate::py::json;
 
-    /// 对照数据里日期、时间和太大的整数的记法（见 tools/gen_vectors.py 的 toml_plain）
+    /// 对照数据里日期、时间和太大的整数的记法（生成对照数据时定的）
     fn marked(t: &Temporal) -> V {
         let kind = match (t.date.is_some(), t.time.is_some()) {
             (true, true) => "datetime",

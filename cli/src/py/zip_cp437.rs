@@ -1,4 +1,4 @@
-// 由 cli/tools/gen_clients_tables.py 生成，不要手改。CPython 3.14 的 cp437 编码。
+// 取自 CPython 3.14 的 cp437 编码，已经固定，不要手改；当初的生成脚本（cli/tools/gen_clients_tables.py）在 git 历史里。
 
 /// cp437 的 0x80–0xFF 依次是这些字符（0x00–0x7F 和 ASCII 一样）
 #[rustfmt::skip]

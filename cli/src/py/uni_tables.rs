@@ -1,4 +1,4 @@
-// 由 cli/tools/gen_unicode.py 生成，不要手改。Unicode 16.0.0（CPython 3.14 的 unicodedata）。
+// 取自 CPython 3.14 的 unicodedata（Unicode 16.0.0），已经固定，不要手改；当初的生成脚本（cli/tools/gen_unicode.py）在 git 历史里。
 
 /// `unicodedata.east_asian_width(c) in "WF"`：终端里占两格的字符（122 段）
 #[rustfmt::skip]

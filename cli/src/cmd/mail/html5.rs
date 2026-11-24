@@ -1,5 +1,5 @@
-// 由 cli/tools/gen_mail_tables.py 生成，不要手改。CPython 3.14 的 html.entities.html5、html._invalid_charrefs、
-// html._invalid_codepoints。
+// 取自 CPython 3.14 的 html.entities.html5、html._invalid_charrefs、html._invalid_codepoints，已经固定，不要手改；
+// 当初的生成脚本（cli/tools/gen_mail_tables.py）在 git 历史里。
 
 /// `html.entities.html5`：名字（有的带分号、有的不带，都是原样的键）→ 字符（2231 项）
 #[rustfmt::skip]

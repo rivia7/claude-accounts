@@ -1,5 +1,5 @@
 //! `plistlib`：属性列表的 XML 和二进制两种格式，读和写。照 CPython 3.14 的 plistlib 移植，输出逐字节一样
-//! （tests/vectors/plist.json，tools/gen_vectors.py 生成）。
+//! （tests/vectors/plist.json：当初用 CPython 生成的，已经固定）。
 //!
 //! 出错时的异常类和 Python 对得上（调用方靠 `except (OSError, ValueError)` 这些分情况）：
 //! - InvalidFileException、ValueError、binascii.Error → `Fail::Value`（说明也一样）
