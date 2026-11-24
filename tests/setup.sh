@@ -944,13 +944,10 @@ echo '{"tokens":{"id_token":"master"}}' > "$X/auth.json"; echo master-install > 
 echo '{}' > "$X/.codex-global-state.json"
 # 假的 STUN 服务器（cca-test stun 沙箱，只在 127.0.0.1 上，泄露检测那一节才开）：回答 Binding 请求，说对方的公网 IP 是 $T/stun_ip
 # 里写的（IPv4），端口写进 $T/stun.port；每次回答记在 $T/stun.log。
-cat > "$T/edit.py" <<'S'
-#!/usr/bin/env python3
-# 假的编辑器（cca edit 用）：按环境变量 CCA_TEST_EDIT 里的一句 Python 改账号表（表在变量 j 里）
-import json, os, sys
-p = sys.argv[1]; j = json.load(open(p))
-exec(os.environ['CCA_TEST_EDIT'])
-json.dump(j, open(p, 'w'), indent=2, ensure_ascii=False)
+cat > "$T/edit.sh" <<'S'
+#!/bin/bash
+# 假的编辑器（cca edit 用）：按环境变量 CCA_TEST_EDIT 里的一句语句改账号表（表在变量 j 里；语句交给 cca-test 的求值器），写回去时缩进 2 格、中文原样
+exec "$CCA_T/cca-test" edit --indent 2 --unicode "j=$1" "$CCA_TEST_EDIT"
 S
 # --- 内置代理：假的 mihomo 内核，打包成官方 Release 的文件名（假 curl 从 $T/mihomo/ 给），SHA256 写进 $T/mihomo/sha256
 # （regress.sh 的 mkver 把测试版 cca 里写死的校验值换成它）。状态在 $T/core：起来后建 up、记下主目录 home 和 pid，
@@ -1009,5 +1006,5 @@ mkdir -p "$HOME/.local/bin" && ln -sf "$T/$n.off" "$HOME/.local/bin/$n" || exit 
 echo "INSTALL-DONE $n via=$via" >> "$T/install.log"
 echo "Installation complete (fake $n)"
 S
-chmod +x "$T"/bin/* "$T"/rbin/* "$T/edit.py"
+chmod +x "$T"/bin/* "$T"/rbin/* "$T/edit.sh"
 echo "sandbox ready: $T"

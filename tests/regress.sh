@@ -116,28 +116,9 @@ ok_why() {   # DEBUG_OUT 时：$out 的最后几行，和断言里（按顶层�
 	printf '%s\n' "${out:-}" | tail -n 25 | sed 's/^/      | /'
 	while IFS= read -r -d '' part; do
 		eval "$part" >/dev/null 2>&1 || { printf '      ✗ %s\n' "$part"; break; }
-	done < <(python3 -I -c '
-import sys
-s, parts, cur, q, i = sys.argv[1], [], "", None, 0
-while i < len(s):
-    c = s[i]
-    if q:
-        cur += c
-        if c == "\\" and q == "\"" and i + 1 < len(s):
-            cur += s[i + 1]; i += 1
-        elif c == q:
-            q = None
-    elif c in "\x27\"":
-        q = c; cur += c
-    elif s.startswith(" && ", i):
-        parts.append(cur); cur = ""; i += 3
-    else:
-        cur += c
-    i += 1
-parts.append(cur)
-sys.stdout.write("".join(p.strip() + "\0" for p in parts))' "$1")
+	done < <("$TESTBIN" split-and "$1")
 }
-edit_table() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); $1; json.dump(j,open(p,'w'),indent=2,ensure_ascii=False)" "${2:-$H/.cca/accounts.json}"; }   # [账号表]
+edit_table() { "$TESTBIN" edit --indent 2 --unicode "j=${2:-$H/.cca/accounts.json}" "$1"; }   # [账号表]
 RC="$R/etc/openclash/custom.yaml"
 nl_() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); print((c["listeners"]||[]).count { |l| l["name"].start_with?("cca-") })' "$RC"; }
 first() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); g=(c["proxy-groups"]||[]).find { |x| x["name"]==ARGV[1] }; print(g ? g["proxies"][0] : "-")' "$RC" "$1"; }
@@ -145,19 +126,19 @@ sel() { cat "$R/sel/$1" 2>/dev/null || echo -; }
 unlisten() { grep -vx "$1" "$R/listening" > "$R/l.tmp"; mv "$R/l.tmp" "$R/listening"; }   # 路由器上这个端口不再监听
 reloads() { grep -c '^RELOAD' router.log 2>/dev/null || echo 0; }
 restarts() { grep -c '^RESTART' router.log 2>/dev/null || echo 0; }   # OpenClash 重启（假的 init 脚本记的）
-cfgv() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$H/.cca/config.json" "$1"; }
-cfgok() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "$H/.cca/config.json" "$1"; }   # config.json（c）满足条件
-tblok() { python3 -c "import json,sys; t=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "${2:-$H/.cca/accounts.json}" "$1"; }   # 账号表（t）满足条件
+cfgv() { "$TESTBIN" val -f "c=$H/.cca/config.json" -- "$1"; }
+cfgok() { "$TESTBIN" check -f "c=$H/.cca/config.json" -- "$1"; }   # config.json（c）满足条件
+tblok() { "$TESTBIN" check -f "t=${2:-$H/.cca/accounts.json}" -- "$1"; }   # 账号表（t）满足条件
 # 图形界面（cca App）的接口（macos/PROTOCOL.md）：gj = cca _gui …；jok 断言 stdin 的 JSON；事件文件（CCA_EVENTS）的断言
 gj() { run cca _gui "$@" </dev/null 2>/dev/null; }
 jok() {   # jok '条件' < JSON：stdin 的 JSON（d）满足条件。条件里 tab("accounts.json") 读 ~/.cca 里的文件（保持键的顺序），cfg 是 config.json，
           # acct(工具序号, 键) 是 _gui state 里的账号，uacct(键) 是 usage --json 里的账号
-	python3 -c 'import json,sys; H=sys.argv[2]; tab=lambda n: json.load(open(H+"/"+n)); cfg=tab("config.json"); d=json.load(sys.stdin); acct=lambda t, k: next(a for a in d["tools"][t]["accounts"] if a["key"] == k); uacct=lambda k: next(a for a in d["accounts"] if a["key"] == k); sys.exit(0 if eval(sys.argv[1]) else 1)' "$1" "$H/.cca"
+	"$TESTBIN" jok "$1" "$H/.cca"
 }
-evq() { python3 -c 'import json,sys; ev=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]; sys.exit(0 if any(eval(sys.argv[2]) for e in ev) else 1)' "$T/ev.jsonl" "$1"; }   # 事件文件里有一条（e）满足条件
+evq() { "$TESTBIN" evq "$T/ev.jsonl" "$1"; }   # 事件文件里有一条（e）满足条件
 evn() { grep -c "\"ev\":\"$1\"" "$T/ev.jsonl"; }   # 这种事件有几条
 runev() { : > "$T/ev.jsonl"; run CCA_EVENTS="$T/ev.jsonl" "$@" </dev/null; }   # 带事件文件运行（stdin 不是终端：App 就是这样调的）
-claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
+claude_device() { "$TESTBIN" val -f "d=$1/claude/.claude.json" 'd["userID"] + ":" + d["machineID"]'; }
 # Team 的服务器（真的 server/cca-presence.py --mode team，127.0.0.1 上、测试证书）和照 server/README.md 独立实现的那一头
 # （tests/kit/spec.rs，经 cca-test spec 调；不用 cca 的代码：扮演管理员、别的设备）。11b2 起的几节都用；各节自己起、自己停（tm_stop），退出时停掉还开着的
 tm_cert() { mkdir -p "$1"; openssl ecparam -name prime256v1 -genkey -noout -out "$1/key.pem" 2>/dev/null; openssl req -new -x509 -key "$1/key.pem" -subj /CN=cca-team -days 2 -out "$1/cert.pem" 2>/dev/null; }
@@ -254,7 +235,7 @@ _BASEF=" $(compgen -A function 2>/dev/null | tr '\n' ' ')"   # 函数基线：�
 if sect 1; then
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
-ok "install：从路由器的节点里选可选节点" 'python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"nodes\"]==[\"US-A\",\"US-B\",\"US-C\",\"US-D\"] else 1)" "$H/.cca/config.json" && printf "%s" "$out" | grep -q "账号可选的出口节点：US-A、US-B、US-C、US-D"'
+ok "install：从路由器的节点里选可选节点" '"$TESTBIN" check -f "j=$H/.cca/config.json" "j[\"nodes\"]==[\"US-A\",\"US-B\",\"US-C\",\"US-D\"]" && printf "%s" "$out" | grep -q "账号可选的出口节点：US-A、US-B、US-C、US-D"'
 ok "install：建端口池前先问，提示重载约 20 秒" 'printf "%s" "$out" | grep -q "约 20 秒，期间局域网的新连接会中断"'
 ok "install：8 个槽位 7901-7908，CCA-1 默认 US-A，空槽位默认 REJECT" '[ "$(nl_)" = 8 ] && [ "$(first CCA-1)" = US-A ] && [ "$(first CCA-8)" = REJECT ] && [ "$(sel CCA-1)" = US-A ]'
 ok "install：只重载了一次" '[ "$(reloads)" = 1 ]'
@@ -301,7 +282,7 @@ n_login=$(grep -c "ARGS: auth login" claude.log)
 edit_table 'j["副号(bob@example.com)"] = j.pop("工作(bob@example.com)")'
 run CCA_TTY="$(ans)" cca @副号 --version >/dev/null 2>&1; rc=$?
 d2=$(grep "^ENV: " claude.log | tail -n 1 | sed 's/.*CLAUDE_CONFIG_DIR=\([^ ]*\).*/\1/')
-ok "改别名：同一个账号目录、不重新登录、端口仍是 7902、上次使用跟着改" '[ $rc -eq 3 ] && [ "$d1" = "$d2" ] && [ "$(grep -c "ARGS: auth login" claude.log)" = "$n_login" ] && python3 -c "import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c[\"ports\"].get(\"副号(bob@example.com)\")==7902 and c[\"last\"]==\"副号(bob@example.com)\" else 1)" "$H/.cca/config.json"'
+ok "改别名：同一个账号目录、不重新登录、端口仍是 7902、上次使用跟着改" '[ $rc -eq 3 ] && [ "$d1" = "$d2" ] && [ "$(grep -c "ARGS: auth login" claude.log)" = "$n_login" ] && "$TESTBIN" check -f "c=$H/.cca/config.json" "c[\"ports\"].get(\"副号(bob@example.com)\")==7902 and c[\"last\"]==\"副号(bob@example.com)\""'
 out=$(run CCA_TTY="$(ans)" cca login 副号 2>&1); rc=$?
 ok "Claude 改别名、退出再登录：设备标识保持不变" '[ $rc -eq 0 ] && [ "$(claude_device "$BD")" = "$bob_device" ] && [ "$(grep -cF "LOGIN-DEVICE $bob_device @ $BD/claude" claude.log)" = 2 ]'
 : > open.log
@@ -333,7 +314,7 @@ out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'http://localhost:1/callback?code=go
 ok "服务器上登录：也认浏览器地址栏里跳回 localhost 的整个网址（转给这次的端口，不照贴的）" '[ $rc -eq 0 ] && grep -q "OAUTH-EXCHANGE code=good-4" claude.log && grep -q "LOGIN alice@example.com" claude.log'
 rm -f "$T/oauth_flow"
 # Mac 上：cca login-page 用账号专属的 Chrome、经账号的端口打开登录页，接住跳回 localhost 的验证码（放进剪贴板，打到 stdout）
-lp=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+lp=$("$TESTBIN" port)
 LPU="https://claude.com/cai/oauth/authorize?code=true&client_id=c&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A$lp%2Fcallback&scope=user%3Ainference&code_challenge=CC&code_challenge_method=S256&state=st-page1&login_hint=alice%40example.com"
 : > open.log; rm -f "$T/clipboard"
 CCA_T="$T" "$TESTBIN" browser st-page1 good-page1 > "$T/page.txt" 2>&1 & fb=$!
@@ -349,7 +330,7 @@ out3=$(run cca login-page nobody@example.com "$LPU" 2>&1); rc3=$?
 ok "login-page：不是这个工具的登录页不打开（Codex 的提示用 cca codex login-page）；这台 Mac 上没有的账号说清楚" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这不是 Claude 的登录网址" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "Codex 账号用 cca codex login-page" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "这台 Mac 上没有 nobody@example.com 这个账号" && ! grep -q st-page1 open.log'
 # 占住回调的端口，一直占到下面 kill 它为止：后面这几次 login-page 都靠它（端口被占时打开登录页就返回）。以前只占 20 秒，机器慢时
 # （xprotectd 忙着扫新文件，每次运行慢好几倍）没跑到后面就放了，login-page 真的去等回调，干等 15 分钟才失败。都带 CCA_LOGIN_WAIT=20：端口万一空了最多等 20 秒
-python3 -c 'import socket, sys, time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); open(sys.argv[2], "w").close(); time.sleep(600)' "$lp" "$T/lp.busy" & busy=$!
+"$TESTBIN" hold-port "$lp" "$T/lp.busy" & busy=$!
 for i in $(seq 1 100); do [ -e "$T/lp.busy" ] && break; sleep 0.1; done   # 等它真的占上了（机器慢时 python 起来也要一会儿）
 out=$(run CCA_LOGIN_WAIT=20 cca login-page alice@example.com --node US-A "$LPU" 2>&1); rc=$?
 ok "login-page：回调的端口被别的程序占着：照样打开登录页，说清楚登录后从地址栏复制整个网址贴回服务器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "被别的程序占着" && grep -q "state=st-page1" open.log'
@@ -379,7 +360,7 @@ if sect 3b3; then
 MB="$T/mailbox"
 "$TESTBIN" mail serve "$MB" >/dev/null 2>&1 & MBP=$!
 for i in $(seq 1 100); do [ -f "$MB/ports.json" ] && break; sleep 0.1; done
-MPX=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$MB/ports.json")
+MPX=$("$TESTBIN" val -f "j=$MB/ports.json" 'j["proxy"]')
 MENV=(CCA_MAIL_CAFILE="$MB/pki/ca.pem" CCA_MAIL_POLL=0.2 CCA_MAIL_RETRY=0.2)
 meml() { "$TESTBIN" mail eml "$MB/box/all/$1.eml" --to "$2" --link "https://claude.ai/magic-link#$3" "${@:4}"; }
 out=$(run cca mail 2>&1); rc=$?
@@ -411,15 +392,15 @@ out=$(run "${MENV[@]}" CCA_TTY="$(ans)" cca login alice 2>&1); rc=$?
 rm -f "$T/mail_send" "$T/mail_login"
 ok "登录时：后台盯着 Gmail，登录邮件一到就在 alice 专属的 Chrome 里打开里面的链接，登录接着完成；登录结束就不再盯" '[ $rc -eq 0 ] && grep -q "MAIL-LOGIN opened" claude.log && grep -F "tok-L1" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && printf "%s" "$out" | grep -q "邮箱助手：已连上 inbox@example.com" && printf "%s" "$out" | grep -q "已在 alice@example.com 专属的浏览器里打开登录邮件里的链接" && printf "%s" "$out" | grep -q "已重新登录" && ! printf "%s" "$out" | grep -q "没通过核对" && gone "mail-watch alice@example.com" && ! grep -q VIOLATION "$MB/imap.log"'
 # 账号页的「邮箱」一节（PROTOCOL 4.11）：列表（_gui mail-list，只读 JSON，不含链接）、打开指定这一封（open --msg）、单独配 Gmail（setup --account）
-akey=$(python3 -c 'import json,sys;print([k for k in json.load(open(sys.argv[1])) if "alice@example.com" in k][0])' "$H/.cca/accounts.json")
-bkey=$(python3 -c 'import json,sys;print([k for k in json.load(open(sys.argv[1])) if "bob@example.com" in k][0])' "$H/.cca/accounts.json")
+akey=$("$TESTBIN" val -f "j=$H/.cca/accounts.json" '[k for k in j if "alice@example.com" in k][0]')
+bkey=$("$TESTBIN" val -f "j=$H/.cca/accounts.json" '[k for k in j if "bob@example.com" in k][0]')
 meml 5 alice@example.com tok-T5 --at $((now - 120))   # alice 的一封新登录邮件（uid 5 = 5.eml，tok-T5）
 out=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>&1); rc=$?
-mluser=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin)["user"])' 2>/dev/null)
-mlshape=$(printf '%s' "$out" | python3 -c 'import json,sys;d=json.load(sys.stdin);op=[r for r in d["rows"] if r["openable"]];print(1 if (d["error"] is None and all(r["to"]==["alice@example.com"] for r in d["rows"]) and op and op[0]["msg"] and op[0]["link_shape"] and "magic-link" in op[0]["link_shape"] and all("tok-" not in (r["link_shape"] or "") for r in d["rows"])) else 0)' 2>/dev/null)
+mluser=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'd["user"]' 2>/dev/null)
+mlshape=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'op=[r for r in d["rows"] if r["openable"]];1 if (d["error"] is None and all(r["to"]==["alice@example.com"] for r in d["rows"]) and op and op[0]["msg"] and op[0]["link_shape"] and "magic-link" in op[0]["link_shape"] and all("tok-" not in (r["link_shape"] or "") for r in d["rows"])) else 0' 2>/dev/null)
 ok "mail-list：实时列这个账号的登录邮件（元数据 + 核对结论 + 链接样子 + 不透明句柄），账号作用域（别的账号的不列），绝不含链接本身；只读" '[ $rc -eq 0 ] && [ "$mluser" = inbox@example.com ] && [ "$mlshape" = 1 ] && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -q VIOLATION "$MB/imap.log"'
 # 按 uid 精确取 T5（uid 5）的句柄，和排序 / 时间无关：打开它应得到 tok-T5
-handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if x["openable"] and x["msg"]["uid"] == 5][0]["msg"];print("%s:%s:%s"%(r["folder"],r["uid"],r["uidvalidity"]))' 2>/dev/null)
+handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | "$TESTBIN" val -f d=- 'r=[x for x in d["rows"] if x["openable"] and x["msg"]["uid"] == 5][0]["msg"];"%s:%s:%s"%(r["folder"],r["uid"],r["uidvalidity"])' 2>/dev/null)
 : > open.log
 out=$(run "${MENV[@]}" cca mail open "$akey" --msg "$handle" 2>&1); rc=$?
 ok "mail open --msg：按句柄重新取、再核对、打开指定的那一封（tok-T5），在 alice 的 Chrome 里经它的端口；链接不在输出里、不进 ~/.cca" '[ $rc -eq 0 ] && grep -F "https://claude.ai/magic-link#tok-T5" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -rqs "tok-T" "$H/.cca"'
@@ -428,20 +409,20 @@ fwdeml() { "$TESTBIN" mail eml "$MB/box/all/$1.eml" --to inbox@example.com --fro
 fwdeml 6 alice@example.com tok-F1 --at $((now - 60))
 fwdeml 7 alice@example.com tok-F2 --reply-to "X <evil@phisher.example.com>" --at $((now - 50))   # Reply-To 非 Anthropic（攻击变体）：登记了也拒
 aslug=$(basename "$AD")
-has6=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin)["rows"] if "noreply@relay.example.com" in r["from"]))' 2>/dev/null)
+has6=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | "$TESTBIN" val -f d=- 'sum(1 for r in d["rows"] if "noreply@relay.example.com" in r["from"])' 2>/dev/null)
 ok "信任转发中转：默认不开时，中转重签、去掉了 Anthropic 签名的邮件认不出账号、不进这个账号的列表" '[ "$has6" = 0 ]'
 out=$(run CCA_TTY="$(ans y)" cca mail trust-forwarder alice relay.example.com 2>&1); rc=$?
 ok "mail trust-forwarder：带不安全警告 + 确认，登记这个账号的信任中转（存 config.mail.accounts[acct_id].forwarder，各账号独立）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "不安全" && printf "%s" "$out" | grep -q "别名一旦泄露" && cfgok "c[\"mail\"][\"accounts\"][\"'"$aslug"'\"][\"forwarder\"] == \"relay.example.com\""'
 out=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>&1)
-f1ok=$(printf '%s' "$out" | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if x["msg"] and x["msg"]["uid"]==6];print(1 if (r and r[0]["openable"] and r[0]["via"]=="forwarder" and r[0]["verdict"]["ok"]) else 0)' 2>/dev/null)
-f2rej=$(printf '%s' "$out" | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if "noreply@relay.example.com" in x["from"] and x.get("msg") is None and x["verdict"]["why"]=="from"];print(1 if r else 0)' 2>/dev/null)
+f1ok=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'r=[x for x in d["rows"] if x["msg"] and x["msg"]["uid"]==6];1 if (r and r[0]["openable"] and r[0]["via"]=="forwarder" and r[0]["verdict"]["ok"]) else 0' 2>/dev/null)
+f2rej=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'r=[x for x in d["rows"] if "noreply@relay.example.com" in x["from"] and x.get("msg") is None and x["verdict"]["why"]=="from"];1 if r else 0' 2>/dev/null)
 ok "信任转发中转：登记后，中转转来、标注来自 Anthropic、它的 DKIM 覆盖 Reply-To 的登录邮件被路由到账号、经可信中转认（via=forwarder）、可打开；Reply-To 非 Anthropic 的拒；绝不含链接" '[ "$f1ok" = 1 ] && [ "$f2rej" = 1 ] && ! printf "%s" "$out" | grep -q "tok-F"'
-handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if x["openable"] and x["msg"]["uid"]==6][0]["msg"];print("%s:%s:%s"%(r["folder"],r["uid"],r["uidvalidity"]))' 2>/dev/null)
+handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | "$TESTBIN" val -f d=- 'r=[x for x in d["rows"] if x["openable"] and x["msg"]["uid"]==6][0]["msg"];"%s:%s:%s"%(r["folder"],r["uid"],r["uidvalidity"])' 2>/dev/null)
 : > open.log
 out=$(run "${MENV[@]}" cca mail open "$akey" --msg "$handle" 2>&1); rc=$?
 ok "信任转发中转：open --msg 按句柄打开这封（经可信中转认的），在 alice 的 Chrome 里打开 tok-F1" '[ $rc -eq 0 ] && grep -F "https://claude.ai/magic-link#tok-F1" open.log | grep -qF -- "--user-data-dir=$AD/chrome"'
 out=$(run cca mail trust-forwarder alice off 2>&1); rc=$?
-has6b=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin)["rows"] if "noreply@relay.example.com" in r["from"]))' 2>/dev/null)
+has6b=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | "$TESTBIN" val -f d=- 'sum(1 for r in d["rows"] if "noreply@relay.example.com" in r["from"])' 2>/dev/null)
 ok "mail trust-forwarder off：关掉后回到只认 Anthropic 直签，中转重签的邮件又不进列表了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已关闭" && ! cfgok "c.get(\"mail\",{}).get(\"accounts\",{}).get(\"'"$aslug"'\",{}).get(\"forwarder\")" && [ "$has6b" = 0 ]'
 rm -f "$MB/box/all/6.eml" "$MB/box/all/7.eml"
 printf '{"user":"bob-inbox@example.com","password":"abcdefghijklmnop"}' > "$MB/ctl.json"   # 让假 Gmail 认 bob-inbox（单一用户）：测这个账号单独配的 Gmail
@@ -449,7 +430,7 @@ out=$(run "${MENV[@]}" CCA_TTY="$(ans bob-inbox@example.com abcdefghijklmnop)" c
 bslug=$(basename "$(ls -d "$H"/.cca/accounts/bob-example-com-*)")
 ok "mail setup --account：这个账号单独用一个 Gmail（存进 mail.accounts[acct_id]、钥匙串按地址），默认那个不动、互不影响" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "副号 单独用这个 Gmail" && cfgok "c[\"mail\"][\"user\"] == \"inbox@example.com\"" && cfgok "c[\"mail\"][\"accounts\"][\"'"$bslug"'\"][\"user\"] == \"bob-inbox@example.com\"" && [ "$(cat "$T/keychain/cca-mail/bob-inbox@example.com")" = abcdefghijklmnop ] && [ -e "$T/keychain/cca-mail/inbox@example.com" ]'
 out=$(run "${MENV[@]}" cca _gui mail-list --account "副号(bob@example.com)" 2>&1); rc=$?
-mlbuser=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin)["user"])' 2>/dev/null)
+mlbuser=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'd["user"]' 2>/dev/null)
 ok "mail-list：账号单独配了 Gmail 就连它的（不是默认那个）" '[ $rc -eq 0 ] && [ "$mlbuser" = bob-inbox@example.com ]'
 printf '{}' > "$MB/ctl.json"   # 恢复假 Gmail 认默认 inbox@example.com
 out=$(run cca mail forget --account 副号 2>&1); rc=$?
@@ -476,7 +457,7 @@ if sect 3c; then
 # 3c. Claude App 多开：每个账号一份资料目录、走自己的端口；启动器跟着账号表走
 L="$H/Applications"; BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*)
 ok "启动器：每个账号一个，改别名后自动改名" '[ -x "$L/Claude alice.app/Contents/MacOS/cca-launcher" ] && [ -d "$L/Claude 副号.app" ] && [ ! -e "$L/Claude 工作.app" ] && plutil -extract CFBundleIdentifier raw "$L/Claude 副号.app/Contents/Info.plist" | grep -q "^local.cca.launcher.bob-example-com-"'
-badge() { python3 -c "import json,sys; print(\" \".join(json.load(open(sys.argv[1]))[\"badge\"]))" "$L/$1.app/Contents/Resources/cca-launcher.json"; }
+badge() { "$TESTBIN" val -f "j=$L/$1.app/Contents/Resources/cca-launcher.json" "\" \".join(j[\"badge\"])"; }
 ok "启动器图标：Claude 图标右下角加了账号标识（中文取头两个字，其它取首字母），各账号颜色不同" '[ "$(badge "Claude 副号" | cut -d" " -f1)" = 副号 ] && [ "$(badge "Claude alice" | cut -d" " -f1)" = A ] && [ "$(badge "Claude 副号" | cut -d" " -f2)" != "$(badge "Claude alice" | cut -d" " -f2)" ] && [ "$(sips -g pixelWidth "$L/Claude 副号.app/Contents/Resources/AppIcon.icns" | awk "/pixelWidth/ {print \$2}")" = 1024 ] && ! cmp -s "$T/Claude.app/Contents/Resources/electron.icns" "$L/Claude 副号.app/Contents/Resources/AppIcon.icns"'
 cat > "$T/alpha.js" <<'EOF'
 ObjC.import('AppKit');
@@ -642,7 +623,7 @@ ok "cca remote end 没有会话：退出码 65" '[ $rc -eq 65 ] && printf "%s" "
 touch "$T/hold"
 rs_pty CCA_REMOTE=1 &
 rs_bg=$!
-rs_sid=""; for rs_i in $(seq 1 150); do rs_sid=$(run cca remote list --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; s=json.load(sys.stdin)["sessions"]; print(s[0]["id"] if s else "")' 2>/dev/null); [ -n "$rs_sid" ] && break; sleep 0.1; done
+rs_sid=""; for rs_i in $(seq 1 150); do rs_sid=$(run cca remote list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- 's=d["sessions"]; s[0]["id"] if s else ""' 2>/dev/null); [ -n "$rs_sid" ] && break; sleep 0.1; done
 out=$(run CCA_TTY="$(ans n)" cca remote end 2>&1); rc=$?
 ok "cca remote end：只有一个会话时不用写编号；先说是哪个会话再问，答否不结束" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "^  ${rs_sid:0:8}  claude  alice@example.com" && printf "%s" "$out" | grep -q "没有结束" && [ -n "$(run cca remote list 2>/dev/null)" ]'
 out=$(runev cca remote end ffff0000 2>&1); rc=$?
@@ -917,7 +898,7 @@ hookless() {   # hookless "ARGS 那一行" 账号目录：--settings 是记下�
 S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
 : > ssh.log; : > "$T/env.log"; rm -f "$T/security.stdin"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/anthropic/ "$S1" kimi-k2 '')" cca add api 2>&1); rc=$?
-ok "add api：表里是对象（地址去掉末尾的 /，带 id，没有 key），直连不占端口、不同步路由器" '[ $rc -eq 0 ] && python3 -c "import json,sys; e=json.load(open(sys.argv[1]))[\"kimi\"]; c=json.load(open(sys.argv[2])); sys.exit(0 if e==dict(base_url=\"https://api.example.com/anthropic\", model=\"kimi-k2\", node=\"\", id=\"kimi\") and \"kimi\" not in c[\"ports\"] else 1)" "$H/.cca/accounts.json" "$H/.cca/config.json" && ! grep -q "sh -s" ssh.log && printf "%s" "$out" | grep -q "已添加第三方 API 账号 kimi"'
+ok "add api：表里是对象（地址去掉末尾的 /，带 id，没有 key），直连不占端口、不同步路由器" '[ $rc -eq 0 ] && "$TESTBIN" check -f "j=$H/.cca/accounts.json" -f "c=$H/.cca/config.json" "e=j[\"kimi\"]; e==dict(base_url=\"https://api.example.com/anthropic\", model=\"kimi-k2\", node=\"\", id=\"kimi\") and \"kimi\" not in c[\"ports\"]" && ! grep -q "sh -s" ssh.log && printf "%s" "$out" | grep -q "已添加第三方 API 账号 kimi"'
 ok "add api：key 经 security -i 的 stdin（十六进制）存进钥匙串，按接口的域名存，不出现在任何命令行里" '[ "$(kc kimi)" = "$S1" ] && [ "$(kch kimi)" = api.example.com ] && grep -q "add-generic-password -U -a api.example.com -s cca-api-kimi-" "$T/security.stdin" && ! grep -q "$S1" "$T/security.stdin" security.log "$T/env.log" ssh.log'
 n_trace=$(grep -c "cdn-cgi/trace" curl.log); n_login=$(grep -c "ARGS: auth login" claude.log); : > "$T/env.log"; rm -f "$T/claude.key"
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid ANTHROPIC_AUTH_TOKEN=sk-evil-0000 ANTHROPIC_MODEL=evil CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_CODE_USE_MANTLE=1 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 https_proxy=http://192.0.2.99:3128 HTTPS_PROXY=http://192.0.2.99:3128 cca @kimi --version 2>&1); rc=$?
@@ -950,35 +931,35 @@ out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
 ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）和它链到的共享目录（ide 除外）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录；再带着记下会话的 hook（--settings，都在用户的参数前面）" '[ $rc -eq 3 ] && [ "$(hookless "$(lastline ARGS)" "$AAD")" = "ARGS: --add-dir=${AAD} $SD $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
 ok "记忆目录交给 Claude Code 的是 ~/.claude 的真实路径（CLAUDE_CODE_REMOTE_MEMORY_DIR：账号的 projects 链到它；不然解析链接以后它认不出自己的记忆，读写都要确认）" '[ "$(lastenv | sed -n "s/.* CLAUDE_CODE_REMOTE_MEMORY_DIR=//p")" = "$H/.claude" ] && [ "$(readlink "$AAD/claude/projects")" = "$H/.claude/projects" ]'
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; a1=$(lastline ARGS)
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['claude_add_dir'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['claude_add_dir'] = False"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a2=$(lastline ARGS)
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('claude_add_dir'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c.pop('claude_add_dir')"
 ok "第三方 API 账号同样只放开它自己的目录和共享目录（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: --add-dir=${KAD} $SD $P1 --settings {" && [ "$(hookless "$a2" "$AAD")" = "ARGS: --version" ]'
 # Claude Code 2.1.329 起，没信任过的 --add-dir 目录每次启动都要问一遍（Adding a new directory，回答只管这一次会话）：启动前的
 # py sync 在 projects 里给交给它的每个目录记上 hasTrustDialogAccepted，账号的 .claude.json（Claude Code 读的那份）和主目录的都有
 trust_ok() {   # trust_ok .claude.json 目录…：每个目录在 projects 里都是 {"hasTrustDialogAccepted": true, …}
-	python3 -c 'import json,sys; p=json.load(open(sys.argv[1])).get("projects", {}); sys.exit(0 if all(isinstance(p.get(d), dict) and p[d].get("hasTrustDialogAccepted") is True for d in sys.argv[2:]) else 1)' "$@"
+	"$TESTBIN" check 'p=json.load(open(argv[0])).get("projects", {}); all(isinstance(p.get(d), dict) and p[d].get("hasTrustDialogAccepted") is True for d in argv[1:])' "$@"
 }
 tdirs=${SD//--add-dir=/}
 ok "启动前给交给 Claude Code 的每个 --add-dir 记上信任过（不然每次启动都要一个个确认）：官方账号、第三方 API 账号各自的 .claude.json 和主目录的 ~/.claude.json 里都有；claude_add_dir 关掉那一次不删" 'trust_ok "$AAD/claude/.claude.json" "$AAD" $tdirs && trust_ok "$KAD/claude/.claude.json" "$KAD" $tdirs && trust_ok "$H/.claude.json" "$AAD" "$KAD" $tdirs && ! trust_ok "$H/.claude.json" "$H/.claude"'
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['cost'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['cost'] = False"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a3=$(lastline ARGS)
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; s3=$(lastline SETTINGS); a4=$(lastline ARGS)
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('cost'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c.pop('cost')"
 ok "折合金额关掉了（config.json 的 cost 是 false）：不带记下会话的 hook（官方账号没有 --settings，第三方 API 账号的 --settings 里没有 hooks）" '[ "$a3" = "ARGS: --add-dir=${AAD} $SD $P1 --version" ] && printf "%s" "$s3" | grep -q "ANTHROPIC_BASE_URL" && ! printf "%s" "$a4" | grep -q "SessionStart"'
 out=$(run CCA_TTY="$(ans)" cca @alice -p hi 2>&1); rc=$?; h1=$(lastline HOOK)
 out2=$(run CCA_TTY="$(ans)" cca @kimi -p hi 2>&1); rc2=$?; h2=$(lastline HOOK)
 ok "Claude Code 开始会话时跑 --settings 里的 SessionStart hook：回调 cca _session-start，会话 id 记进这个账号目录的 sessions.jsonl（600）；hook 什么都不打印（stdout 会进 Claude 的上下文）、退出码 0；第三方 API 账号也记（统计时它的会话不算）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && printf "%s" "$h1" | grep -q " rc=0 stdout=0 stderr=0 " && printf "%s" "$h2" | grep -q " rc=0 stdout=0 stderr=0 " && grep -qF "\"sid\":\"${h1##*sid=}\"" "$AAD/sessions.jsonl" && grep -qF "\"sid\":\"${h2##*sid=}\"" "$KAD/sessions.jsonl" && [ "$(stat -f %Lp "$AAD/sessions.jsonl")" = 600 ] && ! grep -qF "${h1##*sid=}" "$KAD/sessions.jsonl"'
 cp "$H/.claude/settings.json" "$T/settings.bak"; n_args=$(grep -c "^ARGS: " claude.log)
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"ANTHROPIC_BASE_URL\"]=\"http://evil.invalid\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
+"$TESTBIN" edit "j=$H/.claude/settings.json" "j.setdefault(\"env\", {})[\"ANTHROPIC_BASE_URL\"]=\"http://evil.invalid\""
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "共享 settings.json 的 env 里有 ANTHROPIC_BASE_URL：拒绝启动并指出来" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（env.ANTHROPIC_BASE_URL）" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
 cp "$T/settings.bak" "$H/.claude/settings.json"
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j[\"apiKeyHelper\"]=\"echo x\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
+"$TESTBIN" edit "j=$H/.claude/settings.json" "j[\"apiKeyHelper\"]=\"echo x\""
 out=$(run CCA_TTY="$(ans)" cca @kimi --version 2>&1); rc=$?
 ok "共享 settings.json 里有 apiKeyHelper：第三方 API 账号也拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（apiKeyHelper）"'
 cp "$T/settings.bak" "$H/.claude/settings.json"
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"NO_PROXY\"]=\"*\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
+"$TESTBIN" edit "j=$H/.claude/settings.json" "j.setdefault(\"env\", {})[\"NO_PROXY\"]=\"*\""
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "共享 settings.json 的 env 里有 NO_PROXY：拒绝启动（会让请求绕过账号的端口）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了代理（env.NO_PROXY）"'
 cp "$T/settings.bak" "$H/.claude/settings.json"
@@ -1021,14 +1002,14 @@ out=$(run CCA_TTY="$(ans)" cca settings fix 2>&1); rc2=$?
 ok "修好以后账号照常启动，账号目录里的 settings.json 还是指向共享的那份；再运行一次 fix：没有要修的" '[ $rc -eq 3 ] && [ -L "$shared_client/settings.json" ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -qF "没有要修的"'
 rm -f "$H/.claude/$BK"; cp "$T/settings.fix.orig" "$H/.claude/settings.json"
 out=$(runev cca settings fix 2>&1); rc=$?
-SC=$(python3 -c 'import json,sys; print(next(e["grant"] for e in map(json.loads, open(sys.argv[1])) if e["ev"] == "consent"))' "$T/ev.jsonl" 2>/dev/null)
+SC=$("$TESTBIN" val -s "a1=$T/ev.jsonl" 'next(e["grant"] for e in map(json.loads, open(a1)) if e["ev"] == "consent")' 2>/dev/null)
 ok "非交互（界面 App）：记一条 consent（settings_fix，范围是这次要改的摘要，不带值），不改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"settings_fix\" and len(e[\"scope\"]) == 16 and \"sk-fix-0000\" not in str(e)" && [ "$SC" = "settings_fix:$(printf "%s" "$SC" | cut -d: -f2)" ] && cmp -s "$H/.claude/settings.json" "$T/settings.fix.orig"'
 runev CCA_GRANT=settings_fix:0000000000000000 cca settings fix >/dev/null 2>&1; rc=$?
 runev CCA_GRANT="$SC" cca settings fix >/dev/null 2>&1; rc2=$?
 ok "范围不对的同意不算；带着这次的同意（CCA_GRANT）再跑就改好" '[ $rc -ne 0 ] && [ $rc2 -eq 0 ] && ! grep -q ANTHROPIC_AUTH_TOKEN "$H/.claude/settings.json" && [ "$(ls "$H/.claude" | grep -c "^settings\.json\.cca-backup-")" = 1 ]'
 rm -f "$H/.claude"/settings.json.cca-backup-*
 mkdir -p "$T/dotfiles"; mv "$H/.claude/settings.json" "$T/settings.fix.real"
-python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j.setdefault("env", {})["HTTPS_PROXY"]="http://127.0.0.1:9"; json.dump(j, open(sys.argv[2], "w"))' "$T/settings.fix.real" "$T/dotfiles/settings.json"
+"$TESTBIN" run -f "j=$T/settings.fix.real" 'j.setdefault("env", {})["HTTPS_PROXY"]="http://127.0.0.1:9"; print(json.dumps(j), end="")' > "$T/dotfiles/settings.json"
 ln -s "$T/dotfiles/settings.json" "$H/.claude/settings.json"
 out=$(run CCA_TTY="$(ans y)" cca settings fix 2>&1); rc=$?
 ok "settings.json 是指向别处（dotfiles）的链接：改它指向的文件、链接留着，备份在 ~/.claude 里（不写进链接指向的目录）；只有代理时只去掉代理、不提 cca add api" '[ $rc -eq 0 ] && [ -L "$H/.claude/settings.json" ] && ! grep -q HTTPS_PROXY "$T/dotfiles/settings.json" && ls "$H/.claude" | grep -q "^settings\.json\.cca-backup-" && ! ls "$T/dotfiles" | grep -q cca-backup && printf "%s" "$out" | grep -qF "env.HTTPS_PROXY（代理）" && ! printf "%s" "$out" | grep -qF "cca add api"'
@@ -1073,7 +1054,7 @@ run CCA_TTY="$(ans y)" cca rm tmp2 >/dev/null 2>&1
 run CCA_TTY="$(ans tmp3 https://api.example.com/x "$S1" '' '')" cca add api >/dev/null 2>&1
 run CCA_TTY="$(ans tmp4 https://api.example.com/y "$S2" '' '')" cca add api >/dev/null 2>&1
 ok "（准备）两个临时的第三方 API 账号，key 都在钥匙串里" '[ "$(kc tmp3)" = "$S1" ] && [ "$(kc tmp4)" = "$S2" ]'
-run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j.pop("tmp3")' cca edit >/dev/null 2>&1
+run CCA_TTY="$(ans)" EDITOR="$T/edit.sh" CCA_TEST_EDIT='j.pop("tmp3")' cca edit >/dev/null 2>&1
 ok "在 cca edit 里删掉第三方 API 账号：钥匙串里它的 key 一起删" '[ -z "$(kc tmp3)" ] && [ "$(kc tmp4)" = "$S2" ]'
 edit_table 'j.pop("tmp4")'
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
@@ -1084,7 +1065,7 @@ ok "key 存不进钥匙串（security -i 失败也返回 0，读回来比对才�
 rm -f "$T/keychain_locked"
 : > ssh.log; n0=$(reloads)
 out=$(run CCA_TTY="$(ans relay https://api.example.com/v1 "$S2" '' 4)" cca add api 2>&1); rc=$?
-ok "add api 走节点：分到端口 7902，CCA-2 经 API 切到 US-C，不重载" '[ $rc -eq 0 ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"ports\"].get(\"relay\")==7902 else 1)" "$H/.cca/config.json" && [ "$(sel CCA-2)" = US-C ] && [ "$(reloads)" = "$n0" ]'
+ok "add api 走节点：分到端口 7902，CCA-2 经 API 切到 US-C，不重载" '[ $rc -eq 0 ] && "$TESTBIN" check -f "j=$H/.cca/config.json" "j[\"ports\"].get(\"relay\")==7902" && [ "$(sel CCA-2)" = US-C ] && [ "$(reloads)" = "$n0" ]'
 run CCA_TTY="$(ans)" cca @relay --version >/dev/null 2>&1; rc=$?
 ok "走节点的 API 账号：Claude Code 和接口检测都经 7902；没填模型就不设模型变量" '[ $rc -eq 3 ] && lastenv | grep -q "https_proxy=http://192.0.2.10:7902" && grep -q "CURL via :7902 https://api.example.com/v1" curl.log && ! lastline SETTINGS | grep -q ANTHROPIC_MODEL && [ "$(cat "$T/claude.key")" = "$S2" ]'
 touch "$T/api_down"
@@ -1110,7 +1091,7 @@ ok "cca check：第三方 API 账号检测接口连不连得上（走节点的�
 run CCA_TTY="$(ans edge https://api.example.com/e "$S3" '' 5)" cca add api >/dev/null 2>&1
 run CCA_TTY="$(ans y)" cca rm relay >/dev/null 2>&1
 ok "rm 第三方 API 账号：删掉钥匙串里的 key 和账号目录，槽位回到 REJECT" '[ -z "$(kc relay)" ] && [ "$(sel CCA-2)" = REJECT ] && ! grep -q relay "$H/.cca/accounts.json" && [ -z "$(ls -d "$H"/.cca/accounts/relay-* 2>/dev/null)" ]'
-portof() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"ports\"].get(sys.argv[2], \"-\"))" "$H/.cca/config.json" "$1"; }
+portof() { "$TESTBIN" val -f "j=$H/.cca/config.json" -s "a2=$1" "j[\"ports\"].get(a2, \"-\")"; }
 p0=$(portof edge)
 edit_table 'j["edge2"] = j.pop("edge")'; run cca ls >/dev/null 2>&1
 edit_table 'j["edge3"] = j.pop("edge2")'; run cca ls >/dev/null 2>&1
@@ -1153,7 +1134,7 @@ KF1=sk-ant-api03-FILEtest0123456789abcdMNOP; KF2=sk-test-FILE2222
 nsec=$(wc -l < security.log); : > "$T/env.log"; rm -f "$T/claude.key"
 out=$(run CCA_KEYSTORE=file CCA_TTY="$(ans "$KF1")" cca key alice 2>&1); rc=$?
 KFP="$H/.cca/secrets/cca-ref-$AAID"
-ok "密钥文件：官方账号记的 key 存进 ~/.cca/secrets（目录 700、文件 600，内容是域名和 key），config.json 照样记掩码；不调 security，key 不进命令行" '[ $rc -eq 0 ] && [ "$(stat -f %Lp "$H/.cca/secrets")" = 700 ] && [ "$(stat -f %Lp "$KFP")" = 600 ] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"host\"] == \"reference\" and d[\"key\"] == sys.argv[2] else 1)" "$KFP" "$KF1" && cfgok "c[\"ref_keys\"] == [\"$AAID\"]" && printf "%s" "$out" | grep -q "存进密钥文件" && [ "$(wc -l < security.log)" = "$nsec" ] && ! grep -qF "$KF1" "$T/env.log"'
+ok "密钥文件：官方账号记的 key 存进 ~/.cca/secrets（目录 700、文件 600，内容是域名和 key），config.json 照样记掩码；不调 security，key 不进命令行" '[ $rc -eq 0 ] && [ "$(stat -f %Lp "$H/.cca/secrets")" = 700 ] && [ "$(stat -f %Lp "$KFP")" = 600 ] && "$TESTBIN" check -f "d=$KFP" -s "a2=$KF1" "d[\"host\"] == \"reference\" and d[\"key\"] == a2" && cfgok "c[\"ref_keys\"] == [\"$AAID\"]" && printf "%s" "$out" | grep -q "存进密钥文件" && [ "$(wc -l < security.log)" = "$nsec" ] && ! grep -qF "$KF1" "$T/env.log"'
 v=$(run CCA_KEYSTORE=file cca key alice --show 2>/dev/null); rc=$?
 chmod 000 "$KFP"; out=$(run CCA_KEYSTORE=file cca key alice --show 2>&1); rc2=$?; chmod 600 "$KFP"
 run CCA_KEYSTORE=file CCA_TTY="$(ans y)" cca key alice --forget >/dev/null 2>&1; rc3=$?
@@ -1161,7 +1142,7 @@ ok "密钥文件：--show 读出来；读不了时说明原因、不当成没有
 out=$(run CCA_KEYSTORE=file CCA_TTY="$(ans kf https://api.example.com/anthropic "$KF2" '' '')" cca add api 2>&1); rc=$?
 KFA=$(ls "$H"/.cca/secrets/cca-api-kf-* 2>/dev/null | head -n 1)
 run CCA_KEYSTORE=file CCA_TTY="$(ans)" cca @kf --version >/dev/null 2>&1; rc2=$?
-ok "密钥文件：第三方 API 账号的 key 按接口的域名存，启动时 apiKeyHelper 回调 cca 从文件里取到" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "key 存在密钥文件里" && [ -n "$KFA" ] && [ "$(stat -f %Lp "$KFA")" = 600 ] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"host\"] == \"api.example.com\" else 1)" "$KFA" && [ $rc2 -eq 3 ] && [ "$(cat "$T/claude.key")" = "$KF2" ] && [ "$(wc -l < security.log)" = "$nsec" ] && ! grep -qF "$KF2" "$T/env.log" claude.log'
+ok "密钥文件：第三方 API 账号的 key 按接口的域名存，启动时 apiKeyHelper 回调 cca 从文件里取到" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "key 存在密钥文件里" && [ -n "$KFA" ] && [ "$(stat -f %Lp "$KFA")" = 600 ] && "$TESTBIN" check -f "d=$KFA" "d[\"host\"] == \"api.example.com\"" && [ $rc2 -eq 3 ] && [ "$(cat "$T/claude.key")" = "$KF2" ] && [ "$(wc -l < security.log)" = "$nsec" ] && ! grep -qF "$KF2" "$T/env.log" claude.log'
 run CCA_KEYSTORE=file CCA_TTY="$(ans y)" cca rm kf >/dev/null 2>&1; rc=$?
 ok "密钥文件：删掉第三方 API 账号，它的 key 文件一起删" '[ $rc -eq 0 ] && [ ! -e "$KFA" ] && ! grep -q "\"kf\"" "$H/.cca/accounts.json"'
 
@@ -1186,12 +1167,12 @@ canned alice@example.com 13 41
 canned bob@example.com 98 72 pro '{"seven_day_sonnet": {"utilization": 60, "resets_at": "2099-01-01T00:00:00Z"}}'
 out=$(run cca usage 2>&1); rc=$?
 ok "cca usage：两个官方账号一起查，表里有套餐（原来的 Max 5x 现在就叫 Max）、5 小时和本周用量、分模型额度；注明第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Max +13% 2小时1[0-9]分后 +41% (今天|明天|周.) [0-9:]+" && printf "%s" "$out" | grep -qE "bob@example.com +Pro +98%" && printf "%s" "$out" | grep -q "Sonnet 本周 60%" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && [ "$(printf "%s\n" "$out" | grep -c "@example.com")" = 2 ]'
-maxw() { python3 -c 'import sys, unicodedata; print(max(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l) for l in sys.stdin.read().splitlines()))'; }   # 每行显示宽度的最大值（中文算 2 格）
+maxw() { "$TESTBIN" maxw; }   # 每行显示宽度的最大值（中文算 2 格）
 o50=$(run COLUMNS=50 cca usage 2>/dev/null)
 ok "cca usage 一个账号一行：整行不超过终端的宽度（80 列最宽 78，50 列最宽 48），窄了先收起套餐、重置时间，不折行" '[ "$(printf "%s\n" "$out" | grep -v "^•" | maxw)" -le 78 ] && [ "$(printf "%s\n" "$o50" | maxw)" -le 48 ] && [ "$(printf "%s\n" "$o50" | grep -c "@example.com")" = 2 ] && printf "%s" "$o50" | grep -qE "alice@example.com +13% +41%"'
 ok "cca usage：每个账号经自己的端口、用自己的配置目录无界面查询（--safe-mode），查之前先看出口地区" 'grep -q "^ARGS: -p --safe-mode --no-session-persistence --strict-mcp-config --input-format stream-json --output-format stream-json --verbose$" claude.log && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=alice@example.com https_proxy=http://192.0.2.10:7901" && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=bob@example.com https_proxy=http://192.0.2.10:7902" && grep -q "CURL via :7902 https://claude.ai/cdn-cgi/trace" curl.log'
 out=$(run cca usage --json 2>/dev/null)
-ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a={x[\"account\"]: x for x in d[\"accounts\"]}; sys.exit(0 if a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max\" and a[\"bob@example.com\"][\"source\"]==\"live\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] and \"reset_credits\" not in a[\"alice@example.com\"] else 1)"'
+ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | "$TESTBIN" check -f d=- "a={x[\"account\"]: x for x in d[\"accounts\"]}; a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max\" and a[\"bob@example.com\"][\"source\"]==\"live\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] and \"reset_credits\" not in a[\"alice@example.com\"]"'
 ok "cca usage：查到的存进账号目录的 usage.json（菜单和查不到时用）" '[ -f "$AD/usage.json" ]'
 cp "$AD/usage.json" "$T/alice.usage.keep"
 fable='"model_scoped": [{"display_name": "Fable", "utilization": 6, "resets_at": "2099-01-01T00:00:00Z"}], "weekly_scoped_shares": [{"limit_index": 1, "used_percent_of_weekly": 3, "allowance_percent_of_weekly": 50}]'
@@ -1202,7 +1183,7 @@ out2=$(run cca usage alice --json 2>/dev/null)
 canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}]}"
 out3=$(run cca usage alice --json 2>/dev/null)
 mixed=$(run CCA_USAGE_JOBS=1 cca usage alice bob --json 2>/dev/null)
-ok "cca usage：可以写好几个账号，只查这几个（App 自动刷新只查到期的；CCA_USAGE_JOBS 限制同时查几个）" 'printf "%s" "$mixed" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if len(d[\"accounts\"]) == 2 else 1)"'
+ok "cca usage：可以写好几个账号，只查这几个（App 自动刷新只查到期的；CCA_USAGE_JOBS 限制同时查几个）" 'printf "%s" "$mixed" | "$TESTBIN" check -f d=- "len(d[\"accounts\"]) == 2"'
 canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
 ok "cca usage --json：分模型的每周额度（Fable）带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
 # 有没有 5 小时限制只看接口给没给 five_hour（没有 5 小时限制的套餐不给，limits 里也没有 session 那一项；cca 原样给 null，表格里是 —，App 不画这一行）。
@@ -1219,7 +1200,7 @@ ok "5 小时用得比本周少（limits 里 session 那一项 is_active 是 fals
 ok "没有 5 小时限制的套餐（接口不给 five_hour）：usage --json、_gui state 里是 null（App 不画这一行），表格里是 —，本周照常" 'printf "%s" "$outn" | jok "uacct(\"alice@example.com\")[\"five_hour\"] is None and uacct(\"alice@example.com\")[\"seven_day\"][\"utilization\"] == 41" && printf "%s" "$stn" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"five_hour\"] is None" && printf "%s" "$outt" | grep "alice@example.com" | grep -qE "— .*41%"'
 # 周结算提醒（use_first，只给 App）：本周额度还剩至少 20% 时给出 [重置前 24 小时, 重置) 的区间，App 拿当前时间比；剩得少、
 # 这次查询说明账号现在用不了（端口不通、没登录……）时是 null；终端的表格里不提示
-soon=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10 * 3600)))')
+soon=$("$TESTBIN" time --utc --add 36000 --fmt '%Y-%m-%dT%H:%M:%SZ')
 canned alice@example.com 13 41 max "{\"seven_day\": {\"utilization\": 41, \"resets_at\": \"$soon\"}}"
 outj=$(run cca usage alice --json 2>/dev/null); st=$(gj state); out=$(run COLUMNS=160 cca usage alice 2>&1)
 ok "usage --json / _gui state：本周额度还剩不少时带 use_first（还剩百分之几、重置前 24 小时到重置）；终端的表格里不提示" 'printf "%s" "$outj" | jok "(lambda a: a[\"use_first\"] == {\"left_percent\": 59, \"from_epoch\": a[\"seven_day\"][\"resets_epoch\"] - 86400, \"until_epoch\": a[\"seven_day\"][\"resets_epoch\"]})(uacct(\"alice@example.com\"))" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"use_first\"][\"left_percent\"] == 59" && ! printf "%s" "$out" | grep -q "先用"'
@@ -1246,7 +1227,7 @@ canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
 # Claude Code 记的套餐过时了（登录以后升级了）：查用量时它回报的 subscription_type 是登录时记下的，和账号资料（organizationType）对不上
 canned alice@example.com 13 41 pro
 out=$(run COLUMNS=160 cca usage 2>&1); outj=$(run cca usage --json 2>/dev/null); st=$(gj state); out80=$(run cca usage 2>/dev/null)
-ok "Claude Code 记的套餐和账号资料对不上：表格下面说一句、让重新登录；--json 和 _gui state 的用量里是 outdated_login_plan（对得上的是 null），记进 usage.json" 'printf "%s" "$out" | grep -qF "! alice@example.com：Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）" && [ "$(printf "%s" "$out" | grep -c "里记的套餐还是")" = 1 ] && printf "%s" "$out80" | grep -qF "! 套餐过时（记的是 Pro，现在是 Max）：cca login alice@example.com" && [ "$(printf "%s\n" "$out80" | maxw)" -le 78 ] && printf "%s" "$outj" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] == \"Pro\" and uacct(\"bob@example.com\")[\"outdated_login_plan\"] is None" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"outdated_login_plan\"] == \"Pro\"" && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"login_plan\"] == \"pro\" else 1)" "$AD/usage.json"'
+ok "Claude Code 记的套餐和账号资料对不上：表格下面说一句、让重新登录；--json 和 _gui state 的用量里是 outdated_login_plan（对得上的是 null），记进 usage.json" 'printf "%s" "$out" | grep -qF "! alice@example.com：Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）" && [ "$(printf "%s" "$out" | grep -c "里记的套餐还是")" = 1 ] && printf "%s" "$out80" | grep -qF "! 套餐过时（记的是 Pro，现在是 Max）：cca login alice@example.com" && [ "$(printf "%s\n" "$out80" | maxw)" -le 78 ] && printf "%s" "$outj" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] == \"Pro\" and uacct(\"bob@example.com\")[\"outdated_login_plan\"] is None" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"outdated_login_plan\"] == \"Pro\"" && "$TESTBIN" check -f "j=$AD/usage.json" "j[\"login_plan\"] == \"pro\""'
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
 ok "启动横幅里也说一句（读上次查用量时记下的，不另外查）" 'printf "%s" "$out" | grep -qF "套餐  Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）"'
 cp "$R/listening" "$T/listening.plan"; unlisten 7901
@@ -1300,7 +1281,7 @@ setoa "$AJ" organizationRateLimitTier=default_claude_max_5x planDisplayName=; se
 ok "套餐叫法和官网一样：原来的 Max 20x 现在叫 Ultra，Team 的 5x 档位是 Team Premium；Claude Code 存了官方给的套餐名（planDisplayName）时照它写" 'printf "%s" "$out" | grep -qE "alice@example.com +Ultra +13%" && printf "%s" "$out" | grep -qE "bob@example.com +Team Premium +50%" && printf "%s" "$out2" | grep -qE "alice@example.com +Ultra Plus +13%"'
 run CLAUDECODE=1 cca usage alice >/dev/null 2>&1
 ok "在 Claude Code 里（! 前缀）运行 cca usage：查询的子进程不带 CLAUDECODE" 'lastenv | grep -q "CLAUDECODE=unset"'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.pop(\"oauthAccount\"); json.dump(j, open(p, \"w\"))" "$BJ"
+"$TESTBIN" edit "j=$BJ" "j.pop(\"oauthAccount\")"
 n_usage=$(grep -c "^USAGE: " claude.log)
 out=$(run cca usage 2>&1)
 ok "没登录的账号：不启动查询，提示先登录" 'printf "%s" "$out" | grep -q "还没登录（cca @bob@example.com 登录）" && [ "$(grep -c "^USAGE: " claude.log)" = $((n_usage + 1)) ]'
@@ -1336,7 +1317,7 @@ r4 CCA_TTY="$(ans y)" cca rm solo >/dev/null 2>&1
 # 没配置路由器、只配置了本机的代理（服务器上 cca 内置的代理，可选节点来自参考节点或拷来的）：添加官方账号不先要求配置路由器，
 # 也不说同步路由器（没有路由器要同步，本机的端口池启动时配好）
 cp -p "$H4/.cca/config.json" "$T/h4.config.json"
-python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=["US-A"]; c.setdefault("local", {})["client"]="builtin"; json.dump(c, open(p, "w"), indent=1)' "$H4/.cca/config.json"
+"$TESTBIN" edit --indent 1 "c=$H4/.cca/config.json" 'c["nodes"]=["US-A"]; c.setdefault("local", {})["client"]="builtin"'
 out=$(r4 CCA_TTY="$(ans erin@example.com '' 1)" cca add 2>&1); rc=$?
 ok "没配置路由器、只配置了本机的代理（服务器上）：添加官方账号不先要求配置路由器，也不说同步路由器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已添加 erin@example.com，出口 US-A" && ! printf "%s" "$out" | grep -q "路由器" && grep -q "\"erin@example.com\": \"US-A\"" "$H4/.cca/accounts.json"'
 r4 CCA_TTY="$(ans y)" cca rm erin@example.com >/dev/null 2>&1
@@ -1435,7 +1416,7 @@ echo st-cx3 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'bad-cx#st-cx3')" cca codex login alice 2>&1); rc=$?
 ok "Codex 服务器上登录：换不到 token 时照 codex 的原话说" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录没有成功：.*Token exchange failed: invalid_grant"'
 rm -f "$T/oauth_flow"
-lp=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+lp=$("$TESTBIN" port)
 LPX="https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_x&redirect_uri=http%3A%2F%2Flocalhost%3A$lp%2Fauth%2Fcallback&scope=openid&code_challenge=CC&code_challenge_method=S256&state=st-cxpage&originator=codex_cli_rs"
 : > open.log; rm -f "$T/clipboard"
 CCA_T="$T" "$TESTBIN" browser st-cxpage good-cxpage > "$T/page.txt" 2>&1 & fb=$!
@@ -1451,7 +1432,7 @@ ok "（探测结果按 codex 程序缓存）" '[ "$(grep -c "FEATURES list" code
 # 第三方 API 账号（Codex）：兼容 Responses 接口；key 存钥匙串，经 auth.command 回调 cca 取（不进命令行、环境变量）
 : > "$T/env.log"; rm -f "$T/security.stdin" "$T/codex.key"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/v1/ "$S1" kimi-k2 '')" cca codex add api 2>&1); rc=$?
-ok "codex add api：和 Claude 的第三方 API 账号同名也行；key 存在钥匙串里 Codex 自己的条目" '[ $rc -eq 0 ] && python3 -c "import json,sys; e=json.load(open(sys.argv[1]))[\"kimi\"]; sys.exit(0 if e==dict(base_url=\"https://api.example.com/v1\", model=\"kimi-k2\", node=\"\", id=\"kimi\") else 1)" "$CX" && [ "$(ckc kimi)" = "$S1" ] && [ "$(kc kimi)" = "$S3" ] && grep -q "add-generic-password -U -a api.example.com -s cca-codex-api-kimi-" "$T/security.stdin"'
+ok "codex add api：和 Claude 的第三方 API 账号同名也行；key 存在钥匙串里 Codex 自己的条目" '[ $rc -eq 0 ] && "$TESTBIN" check -f "j=$CX" "e=j[\"kimi\"]; e==dict(base_url=\"https://api.example.com/v1\", model=\"kimi-k2\", node=\"\", id=\"kimi\")" && [ "$(ckc kimi)" = "$S1" ] && [ "$(kc kimi)" = "$S3" ] && grep -q "add-generic-password -U -a api.example.com -s cca-codex-api-kimi-" "$T/security.stdin"'
 out=$(run CCA_TTY="$(ans)" cca codex @kimi --version 2>&1); rc=$?
 ok "Codex 第三方 API 账号启动：-c 定义模型服务（Responses），auth.command 回调 cca 取到钥匙串里的 key；直连（NO_PROXY=*，不让它用系统代理）" '[ $rc -eq 3 ] && clast ARGS | grep -qF "model_provider=\"cca\"" && clast ARGS | grep -qF "model=\"kimi-k2\"" && grep -q "PROVIDER: base_url=https://api.example.com/v1 wire_api=responses" codex.log && [ "$(cat "$T/codex.key")" = "$S1" ] && clast ENV | grep -q "https_proxy=unset" && clast ENV | grep -q "NO_PROXY=\*" && grep -q "CURL api direct https://api.example.com/v1" curl.log'
 ok "Codex 第三方 API 账号：key 不出现在任何命令行、环境变量和日志里" '! grep -qF "$S1" "$T/env.log" codex.log security.log curl.log && ! clast ARGS | grep -q "sk-"'
@@ -1482,7 +1463,7 @@ ccanned alice@example.com 13 41 pro 1; out=$(run COLUMNS=160 cca codex usage 2>&
 ok "cca codex usage：只有一次重置机会时不说“最早”，到期日照样写" 'printf "%s" "$out" | grep -qE "剩余重置 1 次（[0-9]+ 月 [0-9]+ 日过期）"'
 ccanned alice@example.com 13 41 pro 2
 out=$(run cca codex usage --json 2>/dev/null)
-ok "cca codex usage --json：注明 tool=codex，窗口和 Claude 的一样写法；credits、reset_credits（剩余重置次数和明细）是 codex 原样给的" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a=d[\"accounts\"][0]; sys.exit(0 if d[\"tool\"]==\"codex\" and a[\"plan\"]==\"Pro 200\" and a[\"five_hour\"][\"utilization\"]==13 and a[\"seven_day\"][\"utilization\"]==41 and a[\"credits\"][\"balance\"]==\"12.5\" and a[\"reset_credits\"][\"availableCount\"]==2 and len(a[\"reset_credits\"][\"credits\"])==2 and a[\"source\"]==\"live\" else 1)"'
+ok "cca codex usage --json：注明 tool=codex，窗口和 Claude 的一样写法；credits、reset_credits（剩余重置次数和明细）是 codex 原样给的" 'printf "%s" "$out" | "$TESTBIN" check -f d=- "a=d[\"accounts\"][0]; d[\"tool\"]==\"codex\" and a[\"plan\"]==\"Pro 200\" and a[\"five_hour\"][\"utilization\"]==13 and a[\"seven_day\"][\"utilization\"]==41 and a[\"credits\"][\"balance\"]==\"12.5\" and a[\"reset_credits\"][\"availableCount\"]==2 and len(a[\"reset_credits\"][\"credits\"])==2 and a[\"source\"]==\"live\""'
 out=$(run cca usage 2>&1)
 ok "cca usage 只查 Claude 账号，不带 Codex 的" '! printf "%s" "$out" | grep -q "Pro" && printf "%s" "$out" | grep -q "alice@example.com"'
 m=$(run CCA_TTY="$(ans q)" cca codex 2>&1)
@@ -1498,16 +1479,16 @@ ok "codex 查用量卡住：到时间就结束（不会一直等），显示缓�
 # 登录凭证失效（改过密码、在别处退出过）：本地的 auth.json 还在，cca 算的还是已登录，查用量时 codex 才说
 printf 'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.' > "$T/codex_usage/rpc_error"
 out=$(run COLUMNS=200 cca codex usage alice 2>&1); js=$(run cca codex usage alice --json 2>/dev/null); printf '%s' "$js" > "$T/usage_auth.json"
-ok "codex 说 token 刷新不了：原因是 auth（登录已失效，说清楚怎么重新登录），用缓存顶上" 'printf "%s" "$out" | grep -q "登录已失效" && printf "%s" "$out" | grep -q "cca codex login " && printf "%s" "$js" | python3 -c "import json,sys; a=json.load(sys.stdin)[\"accounts\"][0]; sys.exit(0 if a[\"error_code\"]==\"auth\" and a[\"source\"]==\"cache\" and \"revoked\" in a[\"error_detail\"] else 1)"'
+ok "codex 说 token 刷新不了：原因是 auth（登录已失效，说清楚怎么重新登录），用缓存顶上" 'printf "%s" "$out" | grep -q "登录已失效" && printf "%s" "$out" | grep -q "cca codex login " && printf "%s" "$js" | "$TESTBIN" check -f d=- "a=d[\"accounts\"][0]; a[\"error_code\"]==\"auth\" and a[\"source\"]==\"cache\" and \"revoked\" in a[\"error_detail\"]"'
 out=$(runev CCA_GRANT="reset_credit:${CD##*/}" cca codex reset alice --json 2>&1); rc=$?
 ok "重置额度遇到登录失效：说要登录（App 给重新登录的按钮），不说可能用掉了一次" '[ $rc -ne 0 ] && evq "e.get(\"ev\") == \"fail\" and e.get(\"code\") == \"not_logged_in\" and \"可能已经用掉\" not in e.get(\"message\", \"\")"'
 printf 'failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; content-type=application/json; body={}' > "$T/codex_usage/rpc_error"
 js=$(run cca codex usage alice --json 2>/dev/null)
-ok "服务器回 401 也算登录失效" 'printf "%s" "$js" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin)[\"accounts\"][0][\"error_code\"]==\"auth\" else 1)"'
+ok "服务器回 401 也算登录失效" 'printf "%s" "$js" | "$TESTBIN" check -f d=- "d[\"accounts\"][0][\"error_code\"]==\"auth\""'
 printf 'failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 502 Bad Gateway; content-type=text/html; body=x' > "$T/codex_usage/rpc_error"
 js=$(run cca codex usage alice --json 2>/dev/null)
 rm -f "$T/codex_usage/rpc_error"
-ok "别的错不算登录失效（不能吓用户去重新登录）" 'printf "%s" "$js" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin)[\"accounts\"][0][\"error_code\"]==\"error\" else 1)"'
+ok "别的错不算登录失效（不能吓用户去重新登录）" 'printf "%s" "$js" | "$TESTBIN" check -f d=- "d[\"accounts\"][0][\"error_code\"]==\"error\""'
 ccanned alice@example.com 13 41 promax 0; out=$(run COLUMNS=160 cca codex usage alice 2>&1)
 ccanned alice@example.com 13 41 prolite; out2=$(run COLUMNS=160 cca codex usage alice 2>&1)
 ok "套餐叫法和 codex 的一样：promax 是 Pro 500、prolite 是 Pro 100；剩余 0 次也写上，codex 没给重置次数（旧版本）就不写" 'printf "%s" "$out" | grep -qE "alice@example.com +Pro 500 +13%" && printf "%s" "$out" | grep -q "剩余重置 0 次；GPT-5-Pro" && printf "%s" "$out2" | grep -qE "alice@example.com +Pro 100 +13%" && printf "%s" "$out2" | grep -q "GPT-5-Pro 本周 30%" && ! printf "%s" "$out2" | grep -q "剩余重置"'
@@ -1627,7 +1608,7 @@ ok "agy 启动前的出口检测：Google 没有 /cdn-cgi/trace，经 7902 看 w
 ok "agy 启动：用的是 cca 固定的两个装机标识（agy 照用，没有换掉）" 'grep -q "AGY-DEVICE $agy_iid $agy_uuid @ $AG" agy.log && [ "$(cat "$AG/antigravity-cli/installation_id")" = "$agy_iid" ]'
 ok "共享：会话、记忆（brain）、历史、设置、GEMINI.md、技能，--continue 用的 last_conversations.json 都链接到 ~/.gemini；antigravity-cli、config 本身是账号自己的目录" 'alk GEMINI.md && alk antigravity-cli/conversations && alk antigravity-cli/brain && alk antigravity-cli/history.jsonl && alk antigravity-cli/settings.json && alk antigravity-cli/cache/last_conversations.json && alk config/skills && [ -d "$AG/antigravity-cli" ] && [ ! -L "$AG/antigravity-cli" ] && [ ! -L "$AG/config" ] && [ ! -L "$AG/antigravity-cli/cache" ]'
 ok "不共享：登录 token、装机标识、日志各账号一份" '[ ! -L "$AG/antigravity-cli/installation_id" ] && [ ! -L "$AG/antigravity-cli/jetski_state.pbtxt" ] && [ -d "$AG/antigravity-cli/log" ] && [ ! -L "$AG/antigravity-cli/log" ] && [ ! -e "$G/antigravity-cli/log" ]'
-ok "会话里写的共享内容回到 ~/.gemini：会话、历史、技能、--continue 的记录；agy 用临时文件改名保存的 settings.json 并回去再链接上" '[ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && [ -d "$G/config/skills/from-alice" ] && grep -q "conv-alice" "$G/antigravity-cli/cache/last_conversations.json" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j.get(\"lastWriter\") == \"alice\" and j.get(\"theme\") == \"dark\" else 1)" "$G/antigravity-cli/settings.json"'
+ok "会话里写的共享内容回到 ~/.gemini：会话、历史、技能、--continue 的记录；agy 用临时文件改名保存的 settings.json 并回去再链接上" '[ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && [ -d "$G/config/skills/from-alice" ] && grep -q "conv-alice" "$G/antigravity-cli/cache/last_conversations.json" && "$TESTBIN" check -f "j=$G/antigravity-cli/settings.json" "j.get(\"lastWriter\") == \"alice\" and j.get(\"theme\") == \"dark\""'
 ok "agy 第一次运行时建的空 config/mcp_config.json：退出时并回 ~/.gemini、链接上，不当成坏的 JSON 报冲突" '[ -f "$G/config/mcp_config.json" ] && [ ! -s "$G/config/mcp_config.json" ] && alk config/mcp_config.json && ! printf "%s" "$out" | grep -q "有冲突或无法合并" && [ ! -e "$H/.cca/agy/conflicts" ]'
 m=$(run CCA_TTY="$(ans q)" cca agy 2>&1)
 ok "cca agy 菜单：标题是 Antigravity，账号已登录；没有添加第三方 API 账号这一项" 'printf "%s" "$m" | grep -q "选择 Antigravity 账号" && printf "%s" "$m" | grep -qE "1\. alice@example.com +已登录 +US-A" && printf "%s" "$m" | grep -q "a      添加新账号" && ! printf "%s" "$m" | grep -q "第三方 API"'
@@ -1699,7 +1680,7 @@ ok "图形界面里启动还没登录的 agy 账号：要在终端里登录，�
 touch "$T/agy_noemail"
 out=$(run CCA_TTY="$(ans good-ag4)" cca agy @alice --version 2>&1); rc=$?
 rm -f "$T/agy_noemail"
-ok "token 里没有邮箱时（agy 换了格式）：按 agy 登录时说的 Logged in as 认" '[ $rc -eq 3 ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"email\"] == \"alice@example.com\" else 1)" "$AGD/agy-login.json"'
+ok "token 里没有邮箱时（agy 换了格式）：按 agy 登录时说的 Logged in as 认" '[ $rc -eq 3 ] && "$TESTBIN" check -f "j=$AGD/agy-login.json" "j[\"email\"] == \"alice@example.com\""'
 : > open.log
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans good-ag5)" cca agy login alice 2>&1); rc=$?
 ok "agy 服务器上登录：给出 cca agy login-page 那一行（带节点和节点摘要），这里不打开浏览器；授权码贴回这里交给 agy，换 token 经账号的端口" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "  cca agy login-page alice@example.com --node US-A --node-id $FPA '\''https://accounts.google.com/o/oauth2/auth?" && grep -q "AGY-EXCHANGE code=good-ag5 https_proxy=http://192.0.2.10:7902" agy.log && [ ! -s open.log ]'
@@ -1720,7 +1701,7 @@ out=$(run cca help 2>&1)
 ok "cca help 有 Antigravity 一节" 'printf "%s" "$out" | grep -q "cca agy add" && printf "%s" "$out" | grep -q "Antigravity（Google 的 agy 命令行"'
 out=$(run CCA_TTY="$(ans y)" cca agy rm alice 2>&1); rc=$?
 ok "cca agy rm：退出登录、删掉账号目录；~/.gemini 里共享的会话、历史、设置和原来的登录都还在；7902 回到 REJECT；同一个邮箱的 Claude 账号不动" '[ $rc -eq 0 ] && [ ! -e "$AGD" ] && [ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && grep -q master "$G/antigravity-cli/antigravity-oauth-token" && [ "$(sel CCA-2)" = REJECT ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && [ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ]'
-rm -rf "$AGJ" "$H/.cca/agy"; python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop("agy", None); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+rm -rf "$AGJ" "$H/.cca/agy"; "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c.pop("agy", None)'
 run cca ls >/dev/null 2>&1
 ok "（收尾）删掉 agy.json：后面的用例照没用过 agy 写" '[ ! -e "$AGJ" ] && [ "$(cfgv "\"agy\" in c")" = False ]'
 
@@ -1946,7 +1927,7 @@ ok "codex usage --json：同样的新字段（Codex 的重置时间本来就是 
 ccanned dave@example.com 100 41 pro 1; nc=$(grep -c "RPC resetConsume" codex.log)
 out=$(runev cca codex reset dave --json 2>/dev/null); rc=$?; cp "$T/ev.jsonl" "$GF/events_reset_consent.jsonl"
 ok "图形界面：重置额度先记一条 consent（reset_credit，范围是账号目录名，默认不同意，说明里有还剩几次），stdout 什么都没有，不重置" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"reset_credit\" and e[\"grant\"] == \"reset_credit:${DD##*/}\" and e[\"default\"] == \"no\" and \"还剩 1 次\" in e[\"detail\"]" && [ "$(grep -c "RPC resetConsume" codex.log)" = "$nc" ]'
-wb=$(gj state | python3 -c 'import json,sys; d=json.load(sys.stdin); w=next(a for a in d["tools"][1]["accounts"] if a["key"] == "dave@example.com")["usage_weeks"]["weeks"][-1]; print(w["resets"], w["used_percent"])')
+wb=$(gj state | "$TESTBIN" run -f d=- 'w=next(a for a in d["tools"][1]["accounts"] if a["key"] == "dave@example.com")["usage_weeks"]["weeks"][-1]; print(w["resets"], w["used_percent"])')
 out=$(runev CCA_GRANT="reset_credit:${DD##*/}" cca codex reset dave --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$GF/reset.json"
 ok "图形界面：同意之后重置，stdout 是 kind=reset 的文档（结果、说明、重置后的用量）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"reset\" and d[\"tool\"] == \"codex\" and d[\"key\"] == \"dave@example.com\" and d[\"outcome\"] == \"reset\" and \"已重置\" in d[\"message\"] and d[\"usage\"][\"five_hour\"][\"utilization\"] == 0 and d[\"usage\"][\"reset_credits\"][\"availableCount\"] == 0" && [ "$(grep -c "RPC resetConsume" codex.log)" = $((nc + 1)) ]'
 ok "重置之后：每周用量里这一周记一次重置，用到的还是重置前的那么多（清零的不减掉）" 'gj state | jok "(lambda w: w[\"resets\"] == ${wb%% *} + 1 and w[\"used_percent\"] == ${wb#* } and w[\"current\"] is True)(acct(1, \"dave@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
@@ -1959,7 +1940,7 @@ rm -rf "$T/gh" "$T/gh.log"   # 11b 的自动更新从空的假 GitHub 开始
 ok "update --check --json：stdout 只有 JSON（kind=update：最新版本、有没有新的、更新说明、发布页），开发模式下也能查" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"update\" and d[\"cca_version\"] == \"$VER\" and d[\"latest\"] == \"99.0.0\" and d[\"available\"] is True and \"dev_mode\" not in d and d[\"source\"] == \"releases\" and d[\"notes\"].startswith(\"cca 99.0.0\") and d[\"url\"].endswith(\"/releases/tag/v99.0.0\")"'
 # 改别名（cca rename；App 的“改别名…”用它）：只换账号表里的键，账号目录、端口、“上次使用”、路由器的摘要都不变，启动器跟着改名
 edit_table 'j["kimi9"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "id": "kimi9"}'; run cca ls >/dev/null 2>&1 </dev/null
-sb=$(gj state | python3 -c 'import json,sys; print(json.load(sys.stdin)["routing"]["sync"])')
+sb=$(gj state | "$TESTBIN" val -f d=- 'd["routing"]["sync"]')
 out=$(runev cca rename alice@example.com 主号 2>/dev/null); rc=$?
 ok "rename：alice 改名为「主号」：stdout 是新键、在表里的位置不变，端口还是 7901，账号目录没换，启动器改名，路由器的同步状态不变" '[ $rc -eq 0 ] && [ "$out" = "主号(alice@example.com)" ] && tblok "list(t)[0] == \"主号(alice@example.com)\" and \"alice@example.com\" not in t" && cfgok "c[\"ports\"][\"主号(alice@example.com)\"] == 7901 and \"alice@example.com\" not in c[\"ports\"]" && [ "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" = "$AD" ] && [ -d "$L/Claude 主号.app" ] && [ ! -e "$L/Claude alice.app" ] && gj state | jok "d[\"routing\"][\"sync\"] == \"$sb\" and acct(0, \"主号(alice@example.com)\")[\"port\"] == 7901"'
 out=$(runev cca rename 主号 "有 空格" 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/events_rename_fail.jsonl"
@@ -1987,13 +1968,13 @@ run cca router sync >/dev/null 2>&1
 ok "_gui state：每个账号都有 cli（没有会话：不在运行、0 个、since_epoch 为 null）；alice（Max）的档位是 advanced；第三方 API 账号的档位是空的" 'jok "all(a[\"cli\"] == {\"running\": False, \"sessions\": 0, \"since_epoch\": None} for t in d[\"tools\"] for a in t[\"accounts\"]) and acct(0, \"alice@example.com\")[\"plan_tier\"] == \"advanced\" and all(a[\"plan_tier\"] == \"\" for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")" < "$GF/state.json"'
 waitmark() { local i; for i in $(seq 1 100); do [ "$(ls "$1"/cli-*.json 2>/dev/null | wc -l)" -ge "${2:-1}" ] && return 0; sleep 0.1; done; return 1; }   # 等账号目录里出现几份会话登记（默认 1 份）
 marks() { ls "$1"/cli-*.json 2>/dev/null | sed 's/.*cli-\([0-9]*\)\.json$/\1/'; }   # 登记的进程号，一行一个
-pstart() { python3 -I -c 'import os,subprocess,sys,time; s=subprocess.run(["ps","-o","lstart=","-p",sys.argv[1]],capture_output=True,text=True,env=dict(os.environ,LC_ALL="C")).stdout; print(int(time.mktime(time.strptime(" ".join(s.split()),"%a %b %d %H:%M:%S %Y"))))' "$1"; }   # 进程的启动时间戳（和 cca 一样的算法）
-mark() { python3 -I -c 'import json,sys,time; d,t,i,p,s=sys.argv[1:6]; json.dump({"v":1,"tool":t,"id":i,"pid":int(p),"started":int(s),"since":time.time()}, open("%s/cli-%s.json" % (d,p),"w"))' "$@"; }   # mark 账号目录 工具 账号目录名 进程号 启动时间戳：手写一份登记
+pstart() { "$TESTBIN" pstart "$1"; }   # 进程的启动时间戳（和 cca 一样的算法）
+mark() { "$TESTBIN" run 'd,t,i,p,s=argv[0:5]; print(json.dumps({"v":1,"tool":t,"id":i,"pid":int(p),"started":int(s),"since":time.time()}), end="")' "$@" > "$1/cli-$4.json"; }   # mark 账号目录 工具 账号目录名 进程号 启动时间戳：手写一份登记
 touch "$T/hold"; t0=$(date +%s)   # 假 claude / codex 在 hold 存在时一直不退出：会话开着
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SP1=$!
 waitmark "$AD"; mp=$(marks "$AD"); s1=$(snap)
 out=$(gj state); printf '%s' "$out" > "$GF/state_cli.json"
-ok "命令行会话：cca 启动 claude 前在账号目录登记 cli-<cca 的进程号>.json（只给自己读；记着工具、账号目录名、进程号和它的启动时间）" '[ -n "$mp" ] && [ "$(stat -f %Lp "$AD/cli-$mp.json")" = 600 ] && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j[\"v\"] == 1 and j[\"tool\"] == \"claude\" and j[\"id\"] == sys.argv[2] and j[\"pid\"] == int(sys.argv[3]) and j[\"started\"] == int(sys.argv[4]) and j[\"since\"] >= int(sys.argv[5]) - 1 else 1)" "$AD/cli-$mp.json" "${AD##*/}" "$mp" "$(pstart "$mp")" "$t0"'
+ok "命令行会话：cca 启动 claude 前在账号目录登记 cli-<cca 的进程号>.json（只给自己读；记着工具、账号目录名、进程号和它的启动时间）" '[ -n "$mp" ] && [ "$(stat -f %Lp "$AD/cli-$mp.json")" = 600 ] && "$TESTBIN" check -f "j=$AD/cli-$mp.json" -s "a2=${AD##*/}" -s "a3=$mp" -s "a4=$(pstart "$mp")" -s "a5=$t0" "j[\"v\"] == 1 and j[\"tool\"] == \"claude\" and j[\"id\"] == a2 and j[\"pid\"] == int(a3) and j[\"started\"] == int(a4) and j[\"since\"] >= int(a5) - 1"'
 ok "_gui state：会话开着时 alice 的 cli 是在运行、1 个、从登记的时刻算起，别的账号都没有；读 state 不写文件" 'printf "%s" "$out" | jok "(lambda a: a[\"cli\"][\"running\"] is True and a[\"cli\"][\"sessions\"] == 1 and $t0 - 1 <= a[\"cli\"][\"since_epoch\"] <= $t0 + 60 and a[\"app\"][\"running\"] is False)(acct(0, \"alice@example.com\")) and sum(a[\"cli\"][\"sessions\"] for t in d[\"tools\"] for a in t[\"accounts\"]) == 1" && [ "$(snap)" = "$s1" ]'
 kill -HUP "$mp" 2>/dev/null; kill -TERM "$mp" 2>/dev/null; sleep 0.5
 ok "命令行会话：cca 收到 HUP、TERM（关终端、Ctrl-C）时等工具退出才收尾，登记还在" 'kill -0 "$mp" 2>/dev/null && [ -f "$AD/cli-$mp.json" ] && gj state | jok "acct(0, \"alice@example.com\")[\"cli\"][\"running\"] is True"'
@@ -2022,11 +2003,11 @@ ok "_gui state：进程号和启动时间都对得上的登记算在运行（对
 kill "$SL" 2>/dev/null; wait "$SL" 2>/dev/null; rm -f "$AD/cli-$SL.json"
 touch "$T/hold"; run CCA_TTY="$(ans)" cca codex @dave --version >/dev/null 2>&1 & SP4=$!
 waitmark "$DD"; mp4=$(marks "$DD"); out=$(gj state); printf '%s' "$out" > "$GF/state_cli_codex.json"
-ok "命令行会话：Codex 的会话登记在 Codex 的账号目录里，state 里算在 Codex 的 dave 上" '[ -n "$mp4" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"tool\"] == \"codex\" else 1)" "$DD/cli-$mp4.json" && printf "%s" "$out" | jok "acct(1, \"dave@example.com\")[\"cli\"][\"running\"] is True and sum(a[\"cli\"][\"sessions\"] for a in d[\"tools\"][0][\"accounts\"]) == 0"'
+ok "命令行会话：Codex 的会话登记在 Codex 的账号目录里，state 里算在 Codex 的 dave 上" '[ -n "$mp4" ] && "$TESTBIN" check -f "j=$DD/cli-$mp4.json" "j[\"tool\"] == \"codex\"" && printf "%s" "$out" | jok "acct(1, \"dave@example.com\")[\"cli\"][\"running\"] is True and sum(a[\"cli\"][\"sessions\"] for a in d[\"tools\"][0][\"accounts\"]) == 0"'
 rm -f "$T/hold"; wait "$SP4"
 ok "命令行会话：Codex 的会话退出后登记删掉" '[ -z "$(ls "$DD"/cli-*.json 2>/dev/null)" ]'
 # 套餐档位的表：Claude 改 alice 的 oauthAccount（种类;额度档位;官方套餐名;应为 套餐|档位），用量缓存先挪开（它的 subscription_type 会顶替空的种类）
-tier_of() { gj state | python3 -c 'import json,sys; a=next(a for a in json.load(sys.stdin)["tools"][int(sys.argv[1])]["accounts"] if a["key"] == sys.argv[2]); print(a["plan"] + "|" + a["plan_tier"])' "$1" "$2"; }
+tier_of() { gj state | "$TESTBIN" val -f d=- -s "a1=$1" -s "a2=$2" 'a=next(a for a in d["tools"][int(a1)]["accounts"] if a["key"] == a2); a["plan"] + "|" + a["plan_tier"]'; }
 cp "$AJ" "$T/alice.oa.bak"; [ ! -f "$AD/usage.json" ] || mv "$AD/usage.json" "$T/alice.usage.bak"; bad=""
 while IFS=';' read -r ot tr nm want; do
 	setoa "$AJ" "organizationType=$ot" "organizationRateLimitTier=$tr" "planDisplayName=$nm"
@@ -2058,7 +2039,7 @@ cp "$T/alice.oa.bak" "$AJ"; [ ! -f "$T/alice.usage.bak" ] || mv "$T/alice.usage.
 # ChatGPT：dave 的用量缓存里写原始套餐值（原始值;应为 套餐|档位）；最后一行是缓存里没有套餐，用登录信息里的（plus）
 [ ! -f "$DD/usage.json" ] || mv "$DD/usage.json" "$T/dave.usage.bak"; bad=""
 while IFS=';' read -r raw want; do
-	python3 -c 'import json,sys,time; json.dump({"fetchedAtMs": int(time.time() * 1000), "utilization": {"plan": sys.argv[2]} if sys.argv[2] else {}}, open(sys.argv[1], "w"))' "$DD/usage.json" "$raw"
+	"$TESTBIN" run -s "a2=$raw" 'print(json.dumps({"fetchedAtMs": int(time.time() * 1000), "utilization": {"plan": a2} if a2 else {}}), end="")' > "$DD/usage.json"
 	got=$(tier_of 1 dave@example.com); [ "$got" = "$want" ] || bad="$bad [${raw} → ${got}，应为 ${want}]"
 done <<'EOF'
 free;Free|entry
@@ -2090,7 +2071,7 @@ costlog() {   # costlog 家目录 写法…：往会话记录里写折合金额�
 	# dave：最后一个参数（Codex 的 auth.json）：id_token 里补上用户 id（chatgpt_user_id 是 user-dave-0001；真的 id_token 有它）
 	"$TESTBIN" fx costlog "$@"
 }
-costreq() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if sum(r[1] for r in j["acc"]["claude:u-alice-0001"].values()) == int(sys.argv[2]) else 1)' "$H/.cca/cost/local.json" "$1" 2>/dev/null; }   # 统计好的 alice 有这么多次请求
+costreq() { "$TESTBIN" check -f "j=$H/.cca/cost/local.json" -s "a2=$1" 'sum(r[1] for r in j["acc"]["claude:u-alice-0001"].values()) == int(a2)' 2>/dev/null; }   # 统计好的 alice 有这么多次请求
 costlog "$H" init dave "$DD/codex/auth.json"
 out=$(gj state)
 ok "_gui state：还没统计过：账号的 cost 是 null，cost_total 说还没统计；Claude、Codex 有这个功能（features.cost），官方账号 can.cost，第三方 API 账号没有" 'printf "%s" "$out" | jok "d[\"cost_total\"][\"scan\"] == {\"state\": \"never\", \"updated_epoch\": None} and d[\"tools\"][0][\"features\"][\"cost\"] is True and d[\"tools\"][1][\"features\"][\"cost\"] is True and all(a[\"cost\"] is None and a[\"can\"][\"cost\"] == (a[\"kind\"] == \"oauth\") for t in d[\"tools\"] for a in t[\"accounts\"])" && [ ! -e "$H/.cca/cost" ]'
@@ -2110,7 +2091,7 @@ costlog "$H" more
 run CCA_COST= CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 100); do costreq 4 && break; sleep 0.1; done
 ok "命令行会话结束后在后台统计一次（cca _cost-sync，最多 5 分钟一次）：新的请求算进来了" 'costreq 4 && [ -f "$H/.cca/cost/last" ] && gj state | jok "acct(0, \"alice@example.com\")[\"cost\"][\"summary\"][\"requests\"] == 4"'
-python3 -c 'import os,sys,time; t=time.time()-60; os.utime(sys.argv[1], (t, t))' "$H/.cca/cost/last"   # 上次起是 1 分钟以前
+"$TESTBIN" touch-ago "$H/.cca/cost/last" 60   # 上次起是 1 分钟以前
 run CCA_COST= CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
 ok "后台统计最多 5 分钟一次：1 分钟以前起过就不再起" '[ $(( $(date +%s) - $(stat -f %m "$H/.cca/cost/last") )) -ge 50 ]'
 # --- Claude App 里的 Code 会话记下账号（cca cost hook，PROTOCOL 3.5）：共享的 ~/.claude/settings.json 里加一条 SessionStart hook，
@@ -2122,29 +2103,29 @@ ok "cca cost hook：说现在关着、怎么打开" '[ $rc -eq 0 ] && printf "%s
 out=$(runev cca cost hook on 2>/dev/null); rc=$?
 ok "cost hook on（界面 App 这样调：非交互）：先要同意（consent 的 cost_hook，范围为空、默认同意，说了怎么去掉），共享的设置没动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"cost_hook\" and e[\"scope\"] == \"\" and e[\"grant\"] == \"cost_hook\" and e[\"default\"] == \"yes\" and \"cca cost hook off\" in e[\"detail\"]" && cmp -s "$H/.claude/settings.json" "$T/settings.hook.bak"'
 out=$(runev CCA_GRANT=cost_hook cca cost hook on 2>/dev/null); rc=$?
-hookcmd=$(python3 -c 'import json,sys; print([h["command"] for g in json.load(open(sys.argv[1]))["hooks"]["SessionStart"] for h in g["hooks"] if "_session-start --desktop" in h["command"]][0])' "$H/.claude/settings.json" 2>/dev/null)
-ok "同意了再跑：加上了（result 的 cost_hook），原来的设置都还在；hook 只在 Claude App 里的会话（CLAUDE_CODE_ENTRYPOINT 是 claude-desktop）回调 cca；_gui state 的 app_hook 是 on" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"cost_hook\"" && printf "%s" "$hookcmd" | grep -qF "\"\$CLAUDE_CODE_ENTRYPOINT\" = claude-desktop" && printf "%s" "$hookcmd" | grep -qF " _session-start --desktop" && python3 -c "import json,sys; a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2])); sys.exit(0 if {k: v for k, v in a.items() if k != \"hooks\"} == {k: v for k, v in b.items() if k != \"hooks\"} else 1)" "$H/.claude/settings.json" "$T/settings.hook.bak" && gj state | jok "d[\"cost_total\"][\"unattributed\"][\"app_hook\"] == \"on\""'
+hookcmd=$("$TESTBIN" val -f "j=$H/.claude/settings.json" '[h["command"] for g in j["hooks"]["SessionStart"] for h in g["hooks"] if "_session-start --desktop" in h["command"]][0]' 2>/dev/null)
+ok "同意了再跑：加上了（result 的 cost_hook），原来的设置都还在；hook 只在 Claude App 里的会话（CLAUDE_CODE_ENTRYPOINT 是 claude-desktop）回调 cca；_gui state 的 app_hook 是 on" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"cost_hook\"" && printf "%s" "$hookcmd" | grep -qF "\"\$CLAUDE_CODE_ENTRYPOINT\" = claude-desktop" && printf "%s" "$hookcmd" | grep -qF " _session-start --desktop" && "$TESTBIN" check -f "a=$H/.claude/settings.json" -f "b=$T/settings.hook.bak" "{k: v for k, v in a.items() if k != \"hooks\"} == {k: v for k, v in b.items() if k != \"hooks\"}" && gj state | jok "d[\"cost_total\"][\"unattributed\"][\"app_hook\"] == \"on\""'
 printf '{"session_id":"s-desk-1","source":"startup"}' | run CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_ACCOUNT_UUID=u-alice-0001 /bin/sh -c "$hookcmd" > "$T/hook.out" 2>&1; rc1=$?
 rc2=1; [ ! -e "$H/.cca/cost/desktop-sessions.jsonl" ] && rc2=0
 printf '{"session_id":"s-desk-1","source":"startup"}' | run CLAUDE_CODE_ENTRYPOINT=claude-desktop CLAUDE_CODE_ACCOUNT_UUID=u-alice-0001 /bin/sh -c "$hookcmd" >> "$T/hook.out" 2>&1; rc=$?
-ok "hook：命令行里的会话什么都不做；Claude App 里的会话开始时把会话 id 和 App 登录的账号记进 cost/desktop-sessions.jsonl（600），什么都不说、总是成功" '[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc -eq 0 ] && [ ! -s "$T/hook.out" ] && [ "$(stat -f %Lp "$H/.cca/cost/desktop-sessions.jsonl")" = 600 ] && python3 -c "import json,sys; r=[json.loads(l) for l in open(sys.argv[1])]; sys.exit(0 if [(x[\"sid\"], x[\"uuid\"]) for x in r] == [(\"s-desk-1\", \"u-alice-0001\")] else 1)" "$H/.cca/cost/desktop-sessions.jsonl"'
+ok "hook：命令行里的会话什么都不做；Claude App 里的会话开始时把会话 id 和 App 登录的账号记进 cost/desktop-sessions.jsonl（600），什么都不说、总是成功" '[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc -eq 0 ] && [ ! -s "$T/hook.out" ] && [ "$(stat -f %Lp "$H/.cca/cost/desktop-sessions.jsonl")" = 600 ] && "$TESTBIN" check -s "a1=$H/.cca/cost/desktop-sessions.jsonl" "r=[json.loads(l) for l in open(a1)]; [(x[\"sid\"], x[\"uuid\"]) for x in r] == [(\"s-desk-1\", \"u-alice-0001\")]"'
 out=$(runev cca cost hook off 2>/dev/null); rc=$?
-ok "cost hook off：不用同意，去掉了（result 的 cost_hook），共享的设置回到原样；再去一次：本来就没有；_gui state 的 app_hook 是 off" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"cost_hook\"" && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])) == json.load(open(sys.argv[2])) else 1)" "$H/.claude/settings.json" "$T/settings.hook.bak" && run cca cost hook off 2>&1 | grep -qF "本来就没有" && gj state | jok "d[\"cost_total\"][\"unattributed\"][\"app_hook\"] == \"off\""'
+ok "cost hook off：不用同意，去掉了（result 的 cost_hook），共享的设置回到原样；再去一次：本来就没有；_gui state 的 app_hook 是 off" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"cost_hook\"" && "$TESTBIN" check -f "j1=$H/.claude/settings.json" -f "j2=$T/settings.hook.bak" "j1 == j2" && run cca cost hook off 2>&1 | grep -qF "本来就没有" && gj state | jok "d[\"cost_total\"][\"unattributed\"][\"app_hook\"] == \"off\""'
 run CCA_GRANT=cost_hook cca cost hook on >/dev/null 2>&1   # 下面关掉折合金额：统计时顺手去掉它
-python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["cost"]=False; json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c["cost"]=False'
 out=$(runev cca cost sync --json 2>/dev/null); rc=$?; out2=$(gj state)
 ok "config.json 里写着 \"cost\": false：cost sync 不统计（退出码 2，fail 事件 cost_off），_gui state 没有折合金额" '[ $rc -eq 2 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cost_off\"" && printf "%s" "$out2" | jok "d[\"cost_total\"] is None and all(a[\"cost\"] is None and a[\"can\"][\"cost\"] is False for t in d[\"tools\"] for a in t[\"accounts\"])"'
 ok "关掉了折合金额：这次统计顺手去掉了 cca cost hook 加的 hook" '! grep -qF "_session-start --desktop" "$H/.claude/settings.json"'
 out=$(runev CCA_GRANT=cost_hook cca cost hook on 2>/dev/null); rc=$?
 ok "关掉了折合金额：cost hook on 不打开（fail 事件 cost_off），什么都不改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cost_off\"" && ! grep -qF "_session-start --desktop" "$H/.claude/settings.json"'
 # 关掉以后 App 不再跑 cost sync：会话结束时 cca 在后台起的那一次（cca _cost-sync）不统计，只去掉还在的 hook
-python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault("hooks", {}).setdefault("SessionStart", []).append({"hooks": [{"type": "command", "command": sys.argv[2], "timeout": 10}]}); json.dump(j, open(p, "w"), indent=2)' "$H/.claude/settings.json" "$hookcmd"
-python3 -c 'import os,sys,time; t=time.time()-600; os.utime(sys.argv[1], (t, t))' "$H/.cca/cost/last"
+"$TESTBIN" edit -s "a2=$hookcmd" --indent 2 "j=$H/.claude/settings.json" 'j.setdefault("hooks", {}).setdefault("SessionStart", []).append({"hooks": [{"type": "command", "command": a2, "timeout": 10}]})'
+"$TESTBIN" touch-ago "$H/.cca/cost/last" 600
 hk_scan=$(stat -f %m "$H/.cca/cost/scan.json")
 run CCA_COST= CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 100); do grep -qF "_session-start --desktop" "$H/.claude/settings.json" || break; sleep 0.1; done
 ok "关掉了折合金额：会话结束后在后台起的那一次不统计，去掉了还在的 hook（关掉以后 App 不再跑 cost sync）" '! grep -qF "_session-start --desktop" "$H/.claude/settings.json" && [ "$(stat -f %m "$H/.cca/cost/scan.json")" = "$hk_scan" ]'
-python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop("cost"); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c.pop("cost")'
 for i in $(seq 1 50); do [ -f "$H/.cca/cost/worker.json" ] || break; sleep 0.1; done   # 后台的统计跑完了（跑完删掉 worker.json）
 mv "$H/.cca/cost" "$T/cost.dir"; : > "$H/.cca/cost"
 out=$(runev cca cost sync --json 2>/dev/null); rc=$?
@@ -2160,14 +2141,14 @@ sess() {   # sess 答案JSON [驱动的参数…] -- 命令…：带答案管道
 	printf '%s' "$a" > "$T/sess.answers"
 	run CCA_EVENTS="$T/ev.jsonl" CCA_PROMPT=1 "$TESTBIN" gui-session "$T/ev.jsonl" "$T/sess.answers" "$@" </dev/null
 }
-asks() { python3 -I -c 'import json,sys; print(" ".join(e["q"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "ask"))' "$T/ev.jsonl"; }   # 问过的题号，按顺序
-lastres() { python3 -I -c 'import json,sys; print(([e["code"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "result"] or [""])[-1])' "$T/ev.jsonl"; }   # 最后一个 result 事件的 code（App 照它收场）
-evbefore() { python3 -I -c 'import json,sys; ev=[e["ev"] + ":" + str(e.get("code")) for e in map(json.loads, open(sys.argv[1])) if e.get("ev") in ("fail", "result")]; a, b = sys.argv[2:4]; sys.exit(0 if a in ev and b in ev and ev.index(a) < ev.index(b) else 1)' "$T/ev.jsonl" "$1" "$2"; }   # evbefore fail:码 result:码：两条都有、前一条在前（做完了、带着提醒：提醒在结果前面）
+asks() { "$TESTBIN" val -s "a1=$T/ev.jsonl" '" ".join(e["q"] for e in map(json.loads, open(a1)) if e.get("ev") == "ask")'; }   # 问过的题号，按顺序
+lastres() { "$TESTBIN" val -s "a1=$T/ev.jsonl" '([e["code"] for e in map(json.loads, open(a1)) if e.get("ev") == "result"] or [""])[-1]'; }   # 最后一个 result 事件的 code（App 照它收场）
+evbefore() { "$TESTBIN" check -s "a1=$T/ev.jsonl" -s "a=$1" -s "b=$2" 'ev=[e["ev"] + ":" + str(e.get("code")) for e in map(json.loads, open(a1)) if e.get("ev") in ("fail", "result")]; a in ev and b in ev and ev.index(a) < ev.index(b)'; }   # evbefore fail:码 result:码：两条都有、前一条在前（做完了、带着提醒：提醒在结果前面）
 tsum() { shasum < "$H/.cca/accounts.json"; }
 ok "提问会话：hello 说明支持（App 据此决定用不用它）；forms：配置路由器、本机 Clash、账号表能在 App 里填表" 'gj hello | jok "d[\"prompt\"] == 1 and d[\"forms\"] == 1"'
 out=$(run CCA_EVENTS="$T/ev.jsonl" CCA_PROMPT=1 cca add 2>&1 </dev/null); rc=$?
 ok "提问会话：设了 CCA_PROMPT 却没有答案管道：和非交互一样，不提问" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "需要在终端里交互运行"'
-N2=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"][1])' "$H/.cca/config.json")
+N2=$("$TESTBIN" val -f "j=$H/.cca/config.json" 'j["nodes"][1]')
 before=$(tsum)
 out=$(sess '{}' --eof-at add.basic -- cca add 2>&1); rc=$?
 ok "提问会话：中途取消（App 关掉答案管道）：账号表不变，退出码不是 0，原因是 cancelled" '[ $rc -ne 0 ] && [ "$(tsum)" = "$before" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
@@ -2217,21 +2198,21 @@ cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 out=$(sess "{\"onboard.team\":[{\"v\":\"y\"}],\"team.join\":[{\"v\":\"${TL9%???}\"},{\"v\":\"\"}]}" -- cca _onboard 2>&1); rc=$?
 ok "配置向导第 1 步答有、贴的链接不对：带着原因重问（说留空是先不加入）；留空交上来：先不加入，向导照样做完，没有失败事件" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team team.join team.join" ] && evq "e.get(\"q\") == \"team.join\" and e[\"fields\"][0][\"optional\"] is True and \"留空\" in e[\"fields\"][0][\"hint\"]" && evq "e.get(\"seq\") == 3 and e[\"fields\"][0][\"error\"].endswith(\"（先不加入的话留空，点继续）\")" && ! evq "e[\"ev\"] == \"fail\"" && [ "$(lastres)" = onboarded ] && [ "$(onb_teams)" = 0 ] && gj state | jok "cfg.get(\"onboarded\") is True"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}]}' -- env CCA_GUI_OS=26 cca _onboard 2>&1); rc=$?
 ok "配置向导：没配过路由器、探不到局域网里的路由器、能用内置代理 → 上网方式默认内置代理（自动模式：探不到就内置代理）；选项仍是路由器/内置代理/跳过；选跳过：记下 onboarded、不配置" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"options\"][0][\"value\"] == \"router\" and e[\"fields\"][0][\"options\"][-1][\"value\"] == \"skip\" and e[\"fields\"][0][\"default\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}]}' -- env CCA_GUI_OS=15 cca _onboard 2>&1); rc=$?
 ok "配置向导：macOS 26 以下也能用内置代理（内核由 cca 在后台无头运行）→ 探不到路由器时默认也选内置代理" '[ $rc -eq 0 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"default\"] == \"builtin\""'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
 echo "192.168.9.1:9090" > "$T/clash_router"   # 假局域网：192.168.9.1:9090 上有个 Clash 控制口
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- env CCA_GATEWAY=192.168.9.1 cca _onboard 2>&1); rc=$?
 rm -f "$T/clash_router"
 ok "配置向导：自动探到局域网里装了 Clash 的路由器 → 上网方式默认「路由器」、页说明带探到的地址，选路由器后配置表单里地址已预填" '[ "$(asks)" = "onboard.team onboard.net router.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"default\"] == \"router\" and \"192.168.9.1\" in e.get(\"message\", \"\")" && evq "e.get(\"q\") == \"router.basic\" and e[\"fields\"][0][\"value\"] == \"192.168.9.1\""'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- cca _onboard 2>&1); rc=$?
 ok "配置向导：选「路由器」→ 接着走配置路由器表单（router.basic）；在那页取消就不记 onboarded" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net router.basic" ] && gj state | jok "not cfg.get(\"onboarded\")"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
@@ -2241,19 +2222,19 @@ cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config
 ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
 # 没有路由器笔记本：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没有可选节点 → 加账号时粘贴自定义代理（下面）
 cp "$H/.cca/config.json" "$T/cfg.b2.bak"; cp "$H/.cca/accounts.json" "$T/tbl.b2.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.b2.bak"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"   # 端口池清空(Claude+Codex)→ LOCAL_SLOTS=0,core_setup 早返回不下载/不起内核
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
 ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
 # 没有路由器、没有可选节点、不在 Team 里：加账号不要求先配置路由器（以前会接着走配置路由器的表单），选节点那步可以粘贴自定义代理
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None)'
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
 ok "没有路由器、没有可选节点、不在 Team 里：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
 # 三步都问（还没有账号、没配过路由器、不在 Team 里）：各页标题写第几步（共 3 步）
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
 ok "配置向导：还没有账号、没配过路由器、不在 Team 里 → 三步（加入 Team、网络出口、添加账号：第 1～3 步（共 3 步））；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.team\" and e[\"title\"] == \"第 1 步（共 3 步）：加入 Team\"" && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 2 步（共 3 步）：网络出口\"" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"] == \"第 3 步（共 3 步）：添加账号\" and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "c.get(\"onboarded\") is True" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
@@ -2270,14 +2251,14 @@ before=$(tsum)
 out=$(sess '{}' -- cca add 2>&1); rc=$?
 ok "提问会话：添加账号不要求路由器能用（路由器的密钥不在了）：有可选节点就直接填账号，不先配置路由器；取消时什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = add.basic ] && [ "$(evn terminal)" = 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && [ "$(tsum)" = "$before" ]'
 cp "$H/.cca/config.json" "$T/cfg.rk.bak"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["nodes"]=[]'
 out=$(sess '{}' -- cca add 2>&1); rc=$?
 cp "$T/cfg.rk.bak" "$H/.cca/config.json"; mv "$T/rk.bak" "$H/.cca/router_ed25519"
 ok "提问会话：配置过路由器、只是现在用不了，又一个可选节点都没有：先重新配置路由器（说明为什么），取消时什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = router.basic ] && evq "e.get(\"q\") == \"router.basic\" and \"还没有可选的出口节点\" in e[\"message\"]" && [ "$(evn terminal)" = 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && [ "$(tsum)" = "$before" ]'
 # 配置路由器（router.basic / router.password / router.nodes）：地址不通的重问；密码经 askpass 交给 ssh，不进命令行、环境变量、事件文件；
 # 取消时不盖掉原来的配置
 cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"; RPW='rtr-PW-SENTINEL-1 with space'
-cfg_router() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["router"]["port"])' "$H/.cca/config.json"; }
+cfg_router() { "$TESTBIN" val -f "j=$H/.cca/config.json" 'j["router"]["port"]'; }
 printf '%s' "$RPW" > "$T/router_needs_password"
 : > ssh.log; : > env.log
 out=$(sess '{"router.basic":[{"host":"-oProxyCommand=x","user":"root","port":"22"},{"host":"192.0.2.10","user":"bad user","port":"0"},{"host":"192.0.2.10","user":"root","port":"2222"}]}' -- cca router setup 2>&1); rc=$?
@@ -2303,7 +2284,7 @@ cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"
 edit_table 'j["form1"] = {"base_url": "https://api.example.com/anthropic", "model": "m-1", "node": "", "env": {"FOO_LEVEL": 3, "BAR_NAME": "a b"}, "key": "sk-FORM-TABLE-KEY-0123456789", "id": "form1"}'
 : > ssh.log
 out=$(sess '{}' --eof-at edit.form -- cca edit 2>&1); rc=$?; tb=$(tsum)
-fid() { python3 -I -c 'import json,sys; f=[x for e in map(json.loads, open(sys.argv[1])) if e.get("q") == "edit.form" for x in e["fields"] if x["label"] == sys.argv[2] and (not sys.argv[3] or sys.argv[3] in x.get("section", ""))]; print(f[0]["id"])' "$T/ev.jsonl" "$1" "${2:-}"; }
+fid() { "$TESTBIN" val -s "a1=$T/ev.jsonl" -s "a2=$1" -s "a3=${2:-}" 'f=[x for e in map(json.loads, open(a1)) if e.get("q") == "edit.form" for x in e["fields"] if x["label"] == a2 and (not a3 or a3 in x.get("section", ""))]; f[0]["id"]'; }
 U=$(fid 接口地址 form1); M=$(fid "模型（可选）" form1); NO=$(fid 出口 form1); EV=$(fid "环境变量（可选）" form1); AL=$(fid "alice@example.com")
 ok "提问会话：账号表表单：一页里每个账号一行节点菜单，第三方 API 账号有地址、模型、出口、环境变量，保存按钮；不显示 key；取消什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = edit.form ] && evq "e.get(\"q\") == \"edit.form\" and e[\"submit\"] == \"保存\"" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"id\"] == \"$AL\" and f[\"kind\"] == \"choice\" and f[\"style\"] == \"menu\" and f[\"value\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"id\"] == \"$EV\" and f[\"value\"] == \"FOO_LEVEL=3 BAR_NAME=\x27a b\x27\" and \"form1\" in f[\"section\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"id\"] == \"$NO\" and f[\"optional\"] and f[\"skip\"] for f in e[\"fields\"])" && ! grep -qF "sk-FORM-TABLE-KEY" "$T/ev.jsonl" && [ "$tb" = "$(tsum)" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
 out=$(sess '{"edit.form":[{}]}' --keep -- cca edit 2>&1); rc=$?
@@ -2337,7 +2318,7 @@ cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"
 edit_table 'j["图四(gui4@example.com)"] = "US-D"'; run cca router sync >/dev/null 2>&1 </dev/null
 node_rn US-D 192.0.2.4 US-Z9 192.0.2.44; oc_restart
 out=$(sess '{"node.replace":[{"v":""}]}' -- cca router sync 2>&1); rc=$?
-pick=$(python3 -I -c 'import json,sys; print(next(o["value"] for e in map(json.loads, open(sys.argv[1])) if e.get("q") == "node.replace" for o in e["fields"][0]["options"] if o["label"] == "US-B"))' "$T/ev.jsonl")
+pick=$("$TESTBIN" val -s "a1=$T/ev.jsonl" 'next(o["value"] for e in map(json.loads, open(a1)) if e.get("q") == "node.replace" for o in e["fields"][0]["options"] if o["label"] == "US-B")')
 ok "提问会话：节点不见了：选择题，没有默认项，可以先不换（账号表不变）" 'evq "e.get(\"q\") == \"node.replace\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"optional\"] and e[\"fields\"][0][\"skip\"] and not e[\"fields\"][0][\"default\"] and \"US-D\" in e[\"message\"]" && tblok "t.get(\"图四(gui4@example.com)\") == \"US-D\""'
 out=$(sess '{"node.replace":[{"v":"'$pick'"}]}' -- cca router sync 2>&1); rc=$?
 ok "提问会话：节点不见了：选了哪个就换成哪个" 'tblok "t.get(\"图四(gui4@example.com)\") == \"US-B\""'
@@ -2371,7 +2352,7 @@ if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 		script -q "$T/rt.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_HELPER="$HELPERWRAP" PATH="/usr/bin:/bin" TERM=dumb "$HELPER_BIN" remote-host claude alice@example.com alice@example.com -- \
 		/bin/bash -c 'echo SMOKE-READY; while [ ! -e "$CCA_T/rt.end" ]; do IFS= read -r -t 1 l && echo "got:$l"; done; exit 0' >/dev/null 2>&1 &
 	rt_bg=$!
-	rt_id=""; for i in $(seq 1 150); do rt_id=$(run cca remote list --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; s=json.load(sys.stdin)["sessions"]; print(s[0]["id"] if s else "")' 2>/dev/null); [ -n "$rt_id" ] && break; sleep 0.1; done
+	rt_id=""; for i in $(seq 1 150); do rt_id=$(run cca remote list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- 's=d["sessions"]; s[0]["id"] if s else ""' 2>/dev/null); [ -n "$rt_id" ] && break; sleep 0.1; done
 	run "$D/../macos/build/contract-tests" --terminal-smoke "$H/.local/bin/cca" "$rt_id" "$T/rt.stop" SMOKE-READY ping-from-app got:ping-from-app > "$T/rt.out" 2>&1 </dev/null & rt_sm=$!
 	for i in $(seq 1 200); do run cca remote list --json 2>/dev/null </dev/null | jok 'd["sessions"][0]["viewers"] == 1' && break; kill -0 "$rt_sm" 2>/dev/null || break; sleep 0.1; done
 	ok "界面里的终端：App 的伪终端上运行 cca remote attach，接上了：会话多了一处接入（启动它的终端也还在）" 'run cca remote list --json 2>/dev/null </dev/null | jok "len(d[\"sessions\"]) == 1 and d[\"sessions\"][0][\"id\"] == \"$rt_id\" and d[\"sessions\"][0][\"viewers\"] == 1 and d[\"sessions\"][0][\"local_terminal\"] is True"'
@@ -2391,7 +2372,7 @@ fi
 if sect 11; then
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
-ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
+ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | "$TESTBIN" utf8'
 lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名，要写 ${变量}。
 	# 查发出去的 bash：cca、install.sh、release.sh、Team 的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 下的脚本，
 	# 还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
@@ -2424,7 +2405,7 @@ acc["nodes"] = list({n: None for n in acc["nodes"] + ["US-B"]})' &&
 "$TESTBIN" edit own="$R/etc/cca/owners" 'own["2"] = "bbbb1111bbbb1111"'
 edit_table 'j["bob@example.com"] = "US-C"'
 out=$(run CCA_YES=1 cca router sync -y 2>&1)
-ok "多设备共用：同步保留别的设备的账号（carol@2），自己的 bob 排到空槽位 3，不互相覆盖" '[ "$(sel CCA-2)" = US-B ] && [ "$(sel CCA-3)" = US-C ] && grep -q "carol-dev2" "$R/etc/cca/accounts.yaml" && python3 -c "import json,sys; o=json.load(open(sys.argv[1])); sys.exit(0 if o.get(\"2\")==\"bbbb1111bbbb1111\" and o.get(\"3\")==sys.argv[2] else 1)" "$R/etc/cca/owners" "$deva"'
+ok "多设备共用：同步保留别的设备的账号（carol@2），自己的 bob 排到空槽位 3，不互相覆盖" '[ "$(sel CCA-2)" = US-B ] && [ "$(sel CCA-3)" = US-C ] && grep -q "carol-dev2" "$R/etc/cca/accounts.yaml" && "$TESTBIN" check -f "o=$R/etc/cca/owners" -s "a2=$deva" "o.get(\"2\")==\"bbbb1111bbbb1111\" and o.get(\"3\")==a2"'
 # 卸载按 owner：路由器还有别的设备（carol）→ 只撤这台（alice、bob），保留 carol，/etc/cca 不整体删
 out=$(run CCA_YES=1 CCA_TTY="$(ans y)" cca router uninstall 2>&1)
 ok "多设备共用：卸载时路由器还有别的设备，只撤这台的账号、保留别的设备的（carol），不整体拆除" 'grep -q "carol-dev2" "$R/etc/cca/accounts.yaml" && ! grep -q "alice-example-com" "$R/etc/cca/accounts.yaml" && ! grep -q "bob-example-com" "$R/etc/cca/accounts.yaml" && [ -e "$R/etc/cca" ] && printf "%s" "$out" | grep -q "还有别的设备在用"'
@@ -2675,7 +2656,7 @@ lo_make() {   # lo_make 开着|关着：摆出 3.5.x 打开过（关掉过）维
 	mkdir -p "$H/.cca/policy/tmp.Ab12cd" "$H/.cca/presence" "$H/.cca/cost" "$H/.cca/teams"
 	for f in policy.json policy.json.sig nodes.json nodes.json.sig id_ed25519 id_ed25519.pub known_hosts checked log tmp.Ab12cd/nodes.json; do printf 'x\n' > "$H/.cca/policy/$f"; done
 	for f in presence/status.json presence/keys.json presence/keys.lock presence/keys-sync.lock cost/sync.json cost/remote.json teams/adopt.json teams/adopt.lock "presence/$GLCANARY"; do printf '{}\n' > "$H/.cca/$f"; done
-	python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.update({"policy": "example/cca-policy", "policy_declined": True} if sys.argv[2] == "开着" else {"policy_was": "example/cca-policy"}); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json" "$1"
+	"$TESTBIN" edit -s "a2=$1" --indent 2 --unicode "c=$H/.cca/config.json" 'c.update({"policy": "example/cca-policy", "policy_declined": True} if a2 == "开着" else {"policy_was": "example/cca-policy"})'
 }
 lo_gone() { [ ! -e "$H/.cca/policy" ] && for f in presence/status.json presence/keys.json presence/keys.lock presence/keys-sync.lock cost/sync.json cost/remote.json teams/adopt.json teams/adopt.lock; do [ ! -e "$H/.cca/$f" ] || return 1; done && [ -f "$H/.cca/presence/$GLCANARY" ] && cfgok "not ({\"policy\", \"policy_was\", \"policy_declined\"} & set(c))"; }   # 都清掉了（Team 的同步状态还在）
 lo_make 开着; edit_table 'j["alice@example.com"] = "US-C"'   # 以前照映射固定的节点：账号表里照旧
@@ -2690,16 +2671,16 @@ cp -p "$T/lo.config.json" "$H/.cca/config.json"; edit_table 'j["alice@example.co
 GLD="$T/gl"; tm_cert "$GLD"; ssh-keygen -q -t ed25519 -N '' -C root -f "$GLD/root" </dev/null >/dev/null 2>&1
 ssh-keygen -q -t ed25519 -N '' -C evil -f "$GLD/evil" </dev/null >/dev/null 2>&1
 GLROOT="$GLD/root"; GLPUB=$(cut -d' ' -f1,2 "$GLD/root.pub")
-GLPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+GLPORT=$("$TESTBIN" port)
 gl_up() { tm_srv "$GLD" "$GLPUB" "$GLPORT" "$@"; GLPID=$TMPID; }   # gl_up [服务器的别的参数…]：在原来的端口上起阁楼组的服务器（状态文件接着用；限流从头算）
 gl_down() { tm_stop "$GLPID"; GLPID=""; }
 gl_put() {   # gl_put 'JSON' [签名的密钥]：管理员给这台 Mac 发布新的一版配置（序号接着往上加；accounts、aliases、nodes……照 JSON），这台 Mac 还没同步
 	GLSEQ=$((GLSEQ + 1)); tm_spec put "$GLROOT" "$GLPORT" "$GLURL" "$GLPIN" "$GLS" "$GLSEQ" 阁楼组 "$@" >/dev/null
 }
-gl_have() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seq"])' "$H/.cca/teams/$GLTID/doc.json" 2>/dev/null; }   # 这台 Mac 手里的是第几版
+gl_have() { "$TESTBIN" val -f "j=$H/.cca/teams/$GLTID/doc.json" 'j["seq"]' 2>/dev/null; }   # 这台 Mac 手里的是第几版
 gl_up; GLPIN=$(tm_pin "$GLD"); GLURL="https://127.0.0.1:$GLPORT"; GLS=$(printf '6b%.0s' $(seq 1 16)); GLSEQ=1
 GLLINK=$(tm_spec put "$GLROOT" "$GLPORT" "$GLURL" "$GLPIN" "$GLS" 1 阁楼组 '{"accounts": {"claude": {"alice@example.com": "US-C"}}}')
-python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["presence"]=False; json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c["presence"]=False'
 n0=$(reloads)
 out=$(run CCA_TTY="$(ans "$GLLINK")" cca team join --name alice-mbp 2>&1); rc=$?
 GLTID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$')
@@ -2708,7 +2689,7 @@ ok "加入「阁楼组」：马上照它的配置改账号表（alice 的节点�
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-B"}}}'; run cca _team-sync >/dev/null 2>&1   # 后台同步到了新的一版（_team-sync 就是 team_hook 在后台起的那一个）
 n0=$(reloads); out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "后台同步到了新的一版（alice 换了节点）：启动前照它改账号表（说一声）、同步到路由器（只换节点，不重载），照常启动" '[ $rc -eq 3 ] && [ "$(gl_have)" = "$GLSEQ" ] && tblok "t[\"alice@example.com\"] == \"US-B\"" && [ "$(sel CCA-1)" = US-B ] && [ "$(reloads)" = "$n0" ] && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-B（账号表里写的是 US-C，已改回）"'
-out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j["alice@example.com"] = "US-D"' cca edit 2>&1)
+out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.sh" CCA_TEST_EDIT='j["alice@example.com"] = "US-D"' cca edit 2>&1)
 ok "cca edit 把 Team 给的账号改成别的节点：改回 Team 的配置定的节点并说明" 'tblok "t[\"alice@example.com\"] == \"US-B\"" && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-B（账号表里写的是 US-D，已改回）"'
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-D"}}}' "$GLD/evil"; out=$(run cca team sync 2>&1); rc=$?
 gl_put '{"accounts": {"claude": {"Not-An-Email": "US-D", "alice@example.com": "US-D"}}}'; out2=$(run cca team sync 2>&1); rc2=$?
@@ -2718,7 +2699,7 @@ ok "管理员发布的那一版不是 Team 的根密钥签的（像服务器被�
 edit_table 'j["自己(self1@example.com)"] = "US-D"'; rm -f "$T/ev.jsonl"
 out=$(sess '{}' --eof-at edit.form -- cca edit 2>&1)
 ok "账号表表单：Team 的配置固定了节点的账号只有一个选项，说是 Team 的配置固定的；自己的账号照常能选" 'evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"alice@example.com\" and len(f[\"options\"]) == 1 and f[\"options\"][0][\"value\"] == \"US-B\" and \"Team 的配置固定\" in f[\"hint\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"自己（self1@example.com）\" and len(f[\"options\"]) > 1 for f in e[\"fields\"])"'
-FP=$(python3 -I -c 'import json,sys; print([x["id"] for e in map(json.loads, open(sys.argv[1])) if e.get("q") == "edit.form" for x in e["fields"] if x["label"] == "alice@example.com"][0])' "$T/ev.jsonl")
+FP=$("$TESTBIN" val -s "a1=$T/ev.jsonl" '[x["id"] for e in map(json.loads, open(a1)) if e.get("q") == "edit.form" for x in e["fields"] if x["label"] == "alice@example.com"][0]')
 sess '{"edit.form":[{"'$FP'":"US-D"}]}' --keep -- cca edit >/dev/null 2>&1
 ok "账号表表单：Team 的配置固定了节点的账号：答案不算数，账号表不变" 'tblok "t[\"alice@example.com\"] == \"US-B\""'
 edit_table 'j.pop("自己(self1@example.com)")'
@@ -2743,7 +2724,7 @@ ok "删掉 Team 给的账号：记下来，以后不再自动加回来（说怎�
 out=$(run CCA_TTY="$(ans frank@example.com '')" cca add 2>&1); rc=$?
 ok "用 cca add 加回来：出口直接用 Team 定的节点，不让选（别名照 Team 给的补上）；以后照常跟着 Team 的配置" '[ $rc -eq 0 ] && tblok "[v for k, v in t.items() if \"(frank@example.com)\" in k or k == \"frank@example.com\"] == [\"US-B\"]" && printf "%s" "$out" | grep -q "frank@example.com 的出口按 Team 的配置固定为 US-B" && ! printf "%s" "$out" | grep -q "选择节点编号" && cfgok "\"policy_skip\" not in c"'
 run CCA_TTY="$(ans "$R1")" cca key frank@example.com >/dev/null 2>&1; FAID=$(cd "$T/keychain" && ls -d cca-ref-frank-example-com-* 2>/dev/null); FAID=${FAID#cca-ref-}
-out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='[j.pop(k) for k in list(j) if "frank@example.com" in k]' cca edit 2>&1)
+out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.sh" CCA_TEST_EDIT='[j.pop(k) for k in list(j) if "frank@example.com" in k]' cca edit 2>&1)
 ok "cca edit 里删掉官方账号：它记下备查的 API key 一起删（钥匙串的条目和 config.json 里的记录）；删了找不回来，说一声" '[ -n "$FAID" ] && [ ! -e "$T/keychain/cca-ref-$FAID" ] && cfgok "\"$FAID\" not in c.get(\"ref_keys\", []) and \"$FAID\" not in c.get(\"key_hints\", {})" && printf "%s" "$out" | grep -qF "已从钥匙串删掉 $FAID 记下的 API key（sk-ant-…WXYZ）：账号表里已经没有这个账号了"'
 ok "cca edit 里删掉 Team 给的账号：同样记下来，不会马上又照 Team 的配置加回来" '! grep -q frank "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "frank@example.com 在「阁楼组」的配置里：删掉了就不再自动加回来（要加回来：cca add）" && ! printf "%s" "$out" | grep -q "按「阁楼组」的配置添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]"'
 # 别名：先照没写别名的配置加进来的 hank，Team 后来给它起了别名（这台机器上还没有别名：补上）；管理员把 erin 的 Erin 改成 E2（没自己
@@ -2809,7 +2790,7 @@ rm -f "$H/.cca/presence/$GLCANARY"
 # 收尾：这台机器上删掉 erin、hank、自己（Team 还给着的先删掉：记进 policy_skip，不会被收起来），Team 只给 alice（HK-A2，11b2b 接着用）
 for a in erin@example.com hank@example.com own@example.com; do run CCA_TTY="$(ans y)" cca rm "$a" >/dev/null 2>&1; done
 gl_put '{"accounts": {"claude": {"alice@example.com": "HK-A2"}}}'; run cca team sync >/dev/null 2>&1
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy_skip', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c.pop('policy_skip', None)"
 ok "（这一节结束：账号表里没有 Team 加进来的了，没有收起来的）" '! grep -q "erin\|hank\|own@" "$H/.cca/accounts.json" && cfgok "not c.get(\"parked\")"'
 gl_down
 fi
@@ -2828,7 +2809,7 @@ added() {   # added 原来的 现在的：现在的只是在原来的基础上�
 	diff "$1" "$2" | awk '/^</ || /^---/ { bad = 1 } /^>/ && / # cca$/ { n++ } END { if (bad) print "x"; else print n + 0 }'
 }
 one_line() {   # one_line 配置文件 节点 一行写法 [缩进]：把 cca 写成块写法的节点换回 2.8.0-beta.5～7 写的一行（模拟旧版本写的）
-	python3 -c "import re,sys; p, n, f, i = sys.argv[1:5]; s = open(p).read(); t = re.sub(r\"(?m)^%s- name: %s # cca\\n(?:%s  .*\\n)*\" % (i, re.escape(n), i), lambda m: i + \"- \" + f + \" # cca\\n\", s, count=1); assert t != s; open(p, \"w\").write(t)" "$1" "$2" "$3" "${4:-}"
+	"$TESTBIN" text-sub "$1" "(?m)^${4:-}- name: \\Q$2\\E # cca\\n(?:${4:-}  .*\\n)*" "${4:-}- $3 # cca"$'\n'
 }
 fill_tmp() { ls "$R"/tmp/cca.src.* "$R"/tmp/cca.fill.* 2>/dev/null; }   # 参考节点用过的临时文件（应该都删了）
 GLN="$T/gl.nodes.json"   # 管理员放进配置里的节点：策略组 OpenAi 引用的（从他自己的配置里挑的；LAN-ONLY 这类别的节点、规则不带）
@@ -2843,7 +2824,7 @@ cat > "$GLN" <<'J'
 J
 GLACC='"alice@example.com": "HK-A2"'   # 这一节配置里给的账号（最后加上 bea）
 gl_nodes() {   # gl_nodes ['Python 语句']：管理员发布带节点的一版（先照语句改 GLN 里的节点：n 是节点的列表），这台 Mac 还没同步
-	[ -z "${1:-}" ] || python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); n=j["proxies"]; exec(sys.argv[2]); json.dump(j, open(p, "w"))' "$GLN" "$1"
+	[ -z "${1:-}" ] || "$TESTBIN" edit "j=$GLN" "n=j[\"proxies\"]; $1"
 	gl_put "{\"accounts\": {\"claude\": {$GLACC}}, \"nodes\": $(cat "$GLN")}"
 }
 gl_nodes
@@ -2910,7 +2891,7 @@ out2=$(run cca router nodes 2>&1)
 ok "ShellCrash 再同步：配置文件里都有了，不用重启也不用重载；cca router nodes 列得出参考节点，不列自定义节点" '[ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = $((r0 + 1)) ] && printf "%s" "$out2" | grep -qx AI-A && ! printf "%s" "$out2" | grep -q SC-X'
 cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; r0=$(restarts); sc_restart
 ok "ShellCrash 的订阅更新把订阅配置换掉了：启动时钩子在它拼运行配置之前写回去，这次启动就用上" '[ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 5 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$fs")" = AI-A ] && [ ! -e "$R/etc/cca/fill.pending" ] && ! grep -q SCBAD router.log'
-python3 -c "import sys; p=sys.argv[1]; s=open(p).read(); b='  - name: OpenAi\n    type: select\n    proxies:\n      - US-A\n'; assert s.count(b) == 1; open(p, 'w').write(s.replace(b, '  - {name: OpenAi, type: select, proxies: [US-A]}\n'))" "$T/sc_base.fill"
+"$TESTBIN" text-replace "$T/sc_base.fill" --once $'  - name: OpenAi\n    type: select\n    proxies:\n      - US-A\n' $'  - {name: OpenAi, type: select, proxies: [US-A]}\n'
 cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; sc_restart; n0=$(reloads); r0=$(restarts)
 out=$(run cca router sync 2>&1); rc=$?
 ok "订阅配置里 OpenAi 组写成一行的：只写节点、组不动（说明为什么）；同步时不用再重载、重启" 'grep -q "策略组 OpenAi 不是一行一项的写法" "$R/tmp/cca-router.log" && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 2 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A]" && ! grep -q SCBAD router.log && [ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = "$r0" ]'
@@ -2935,17 +2916,7 @@ rm -rf "$T/router.snap2" "$T/core.snap2"; cp -R "$R" "$T/router.snap2"; cp "$H/.
 [ ! -d "$H/.cca/core" ] || cp -Rp "$H/.cca/core" "$T/core.snap2"   # 校验节点要下载内置代理的内核：这一节结束时还原（11b4 测第一次下载）
 CNF="$H/.cca/core/custom-nodes.json"
 ckof() {   # ckof '节点 JSON'：自定义节点的身份摘要 ck（辅助程序的 custom_ck、路由器端 apply.rb 的 fnv(ckey(…)) 是同一个算法，这里另写一份核对）
-	python3 -c '
-import json, sys
-p = json.loads(sys.argv[1])
-s = lambda v: "" if v is None else ("true" if v is True else "false" if v is False else str(v))
-h = lambda v: s(v).strip().lower().rstrip(".")
-sni = p.get("servername")
-if sni is None or sni is False: sni = p.get("sni")
-k = "|".join([s(p.get("type")).strip().lower(), h(p.get("server")), s(p.get("port")).strip(), h(sni)] + [s(p.get(f)) for f in ("username", "password", "uuid")])
-x = 0xcbf29ce484222325
-for b in k.encode(): x = ((x ^ b) * 0x100000001b3) & 0xffffffffffffffff
-print("%016x" % x)' "$1"
+	"$TESTBIN" ckof "$1"
 }
 out=$(run CCA_TTY="$(ans 'socks5://u:p@198.51.100.7:1080' .)" cca node use alice 2>&1); rc=$?
 ok "cca node use：Team 的配置固定了节点的账号不能换（不问链接，什么都不存）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "「阁楼组」的配置固定了 alice@example.com 的出口节点，不能换成自定义代理" && ! printf "%s" "$out" | grep -q "粘贴" && [ ! -e "$CNF" ]'
@@ -2954,9 +2925,9 @@ cs=$(( $(cfgv 'c["ports"]["cu@example.com"]') - 7900 )); cp "$SRC" "$T/src.cu"; 
 out=$(run CCA_TTY="$(ans y)" cca node use cu 'socks5://u%40x:p%3Aw@198.51.100.7:1080#Home%20IP' 2>&1); rc=$?
 ok "cca node use 账号 socks5 链接（配置了路由器、在家）：解析、本机内核校验、存成自定义节点（600），账号改走它；同步时写进 OpenClash 选用的配置文件（行尾带 # cca，不进任何策略组），问过后重启一次（不热加载），账号的端口切到它" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "cu@example.com 改走自定义代理「Home IP」" && printf "%s" "$out" | grep -qF "已把自定义节点写进 OpenClash 的配置文件 ${SRC}：补上自定义节点 Home IP（行尾带 # cca" && printf "%s" "$out" | grep -q "OpenClash 的配置文件里新写了自定义节点，要用上只能重启一次 OpenClash" && printf "%s" "$out" | grep -q "现在重启 OpenClash 吗" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ] && [ "$(stat -f %Lp "$CNF")" = 600 ] && [ "$(added "$T/src.cu" "$SRC")" = 1 ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"Home IP\" } == {\"name\" => \"Home IP\", \"type\" => \"socks5\", \"server\" => \"198.51.100.7\", \"port\" => 1080, \"username\" => \"u@x\", \"password\" => \"p:w\"} && c[\"proxy-groups\"].none? { |x| x[\"proxies\"].to_a.include?(\"Home IP\") }" && tblok "t[\"cu@example.com\"] == \"Home IP\"" && [ "$(sel "CCA-$cs")" = "Home IP" ] && rget "$RC" "px.include?(\"Home IP\")"'
 ok "节点的用户名、密码只经 ssh 的 stdin 交给路由器（不进命令行）；它进了可选节点，记下了节点指纹" '! grep -q "p:w\|p%3Aw\|u@x" ssh.log && grep -q "\"custom\": {\"id\": " "$R/etc/cca/accounts.yaml" && cfgok "\"Home IP\" in c[\"nodes\"] and c[\"node_ids\"].get(\"Home IP\")"'
-ckh=$(python3 -c 'import json,sys; print(next((a.get("ck", "") for a in json.load(open(sys.argv[1]))["accounts"] if a["slot"] == int(sys.argv[2])), ""))' "$R/etc/cca/accounts.yaml" "$cs")
+ckh=$("$TESTBIN" val -f "j=$R/etc/cca/accounts.yaml" -s "a2=$cs" 'next((a.get("ck", "") for a in j["accounts"] if a["slot"] == int(a2)), "")')
 ckw=$(ckof '{"type": "socks5", "server": "198.51.100.7", "port": 1080, "username": "u@x", "password": "p:w"}')   # 期望值在断言外面算：bash 3.2 解析双引号里的 $(… "{\"…\"}") 会把参数拆碎
-ok "用自定义节点的槽位带着节点的身份摘要 ck（连用户名、密码一起算），别的槽位不带" '[ -n "$ckh" ] && [ "$ckh" = "$ckw" ] && python3 -c "import json,sys; sys.exit(0 if all(\"ck\" not in a for a in json.load(open(sys.argv[1]))[\"accounts\"] if a[\"slot\"] != int(sys.argv[2])) else 1)" "$R/etc/cca/accounts.yaml" "$cs"'
+ok "用自定义节点的槽位带着节点的身份摘要 ck（连用户名、密码一起算），别的槽位不带" '[ -n "$ckh" ] && [ "$ckh" = "$ckw" ] && "$TESTBIN" check -f "j=$R/etc/cca/accounts.yaml" -s "a2=$cs" "all(\"ck\" not in a for a in j[\"accounts\"] if a[\"slot\"] != int(a2))"'
 out=$(run cca router status 2>&1); out2=$(run cca router nodes 2>&1); c0=$(grep -c '^CORE' router.log); r0=$(restarts); n0=$(reloads); cp "$SRC" "$T/src.cu2"
 out3=$(run cca router sync 2>&1); rc=$?
 ok "cca router status 说明自定义节点，cca router nodes 列得出它；再同步：配置文件里有了，不再写、不重启也不重载、不再拿内核校验" 'printf "%s\n" "$out" | grep -qx "自定义节点：1 个，OpenClash 的配置文件里都有" && printf "%s" "$out2" | grep -qx "Home IP" && [ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.cu2" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && [ "$(sel "CCA-$cs")" = "Home IP" ]'
@@ -2983,11 +2954,11 @@ ok "多设备：另一台的「Home IP」和这台写进去的是同一个（ck 
 SB='{"name": "Spare B", "type": "http", "server": "198.51.100.20", "port": 8080, "username": "dave", "password": "pw"}'
 s2=$(mdslot 'Spare B' "$(ckof "$SB")" "$SB")
 out=$(run cca router sync -y 2>&1)
-ok "多设备：另一台在用的自定义节点（账号表的 custom 里有、它的槽位的 ck 是它）这台同步时照样带着：写进配置文件，它的槽位走它" '[ "$(sel "CCA-$s2")" = "Spare B" ] && [ "$(sel "CCA-$cs")" = Office ] && rget "$SRC" "c[\"proxies\"].any? { |p| p[\"name\"] == \"Spare B\" && p[\"username\"] == \"dave\" }" && python3 -c "import json,sys; sys.exit(0 if [p[\"name\"] for p in json.load(open(sys.argv[1]))[\"custom\"][\"proxies\"]] == [\"Home IP\", \"Office\", \"Spare B\"] else 1)" "$R/etc/cca/accounts.yaml"'
+ok "多设备：另一台在用的自定义节点（账号表的 custom 里有、它的槽位的 ck 是它）这台同步时照样带着：写进配置文件，它的槽位走它" '[ "$(sel "CCA-$s2")" = "Spare B" ] && [ "$(sel "CCA-$cs")" = Office ] && rget "$SRC" "c[\"proxies\"].any? { |p| p[\"name\"] == \"Spare B\" && p[\"username\"] == \"dave\" }" && "$TESTBIN" check -f "j=$R/etc/cca/accounts.yaml" "[p[\"name\"] for p in j[\"custom\"][\"proxies\"]] == [\"Home IP\", \"Office\", \"Spare B\"]"'
 cp "$T/src.cu" "$SRC"; oc_restart
 ok "订阅更新把配置文件整个换掉了：钩子照账号表把另一台在用的自定义节点也写回去，它的槽位照常（不用等那台再同步）" '[ "$(added "$T/src.cu" "$SRC")" = 3 ] && [ "$(sel "CCA-$s2")" = "Spare B" ] && [ "$(sel "CCA-$cs")" = Office ]'
 # 这台在外面改了「Office」（密码换了，名字没变；直接改 custom-nodes.json）
-ofc_b2() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [q.update(password='b2') for q in j['proxies'] if q['name'] == 'Office']; json.dump(j, open(p, 'w'), ensure_ascii=False)" "$CNF"; }
+ofc_b2() { "$TESTBIN" edit --unicode "j=$CNF" "[q.update(password='b2') for q in j['proxies'] if q['name'] == 'Office']"; }
 ofc_b2; cp "$SRC" "$T/src.md"
 OFC='{"name": "Office", "type": "http", "server": "198.51.100.10", "port": 3128, "username": "a", "password": "b"}'
 s2=$(mdslot Office '' -)
@@ -3002,7 +2973,7 @@ out=$(run cca router sync -y 2>&1)
 ok "只有这台在用：改过的「Office」照新的更新进配置文件（问过后重启一次），账号的端口走它" 'rget "$SRC" "c[\"proxies\"].any? { |p| p[\"name\"] == \"Office\" && p[\"password\"] == \"b2\" }" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(sel "CCA-$cs")" = Office ] && printf "%s" "$out" | grep -q "更新了自定义节点 Office"'
 rm -rf "$R"; cp -R "$T/router.md" "$R"; cp "$T/config.md" "$H/.cca/config.json"; cp "$T/acct.md" "$H/.cca/accounts.json"; cp -p "$T/cnf.md" "$CNF"
 # 用户在 OpenClash 的配置里把 cca 写的「Office」换成了自己的（去掉记号、换了服务器）：同名不同的节点不写，用它的端口断开（不换出口）
-python3 -c "import sys; p=sys.argv[1]; s=open(p).read(); a='  - name: Office # cca\n'; assert s.count(a) == 1; s=s.replace(a, '  - name: Office\n').replace('server: 198.51.100.10', 'server: 192.0.2.77'); open(p, 'w').write(s)" "$SRC"
+"$TESTBIN" text-replace "$SRC" --once $'  - name: Office # cca\n' $'  - name: Office\n' 'server: 198.51.100.10' 'server: 192.0.2.77'
 oc_restart; cp "$SRC" "$T/src.cu3"
 out=$(run cca router sync -y 2>&1); rc=$?; out2=$(run cca router status 2>&1)
 ok "配置文件里有同名、却不是同一个节点（用户自己的）：不写、不改用户的，用它的端口宁可断开（REJECT）；cca router status 说为什么" 'cmp -s "$SRC" "$T/src.cu3" && [ "$(sel "CCA-$cs")" = REJECT ] && grep -q "槽位 $cs 的「Office」和账号要的自定义节点不是同一个" "$R/tmp/cca-router.log" && printf "%s" "$out2" | grep -q "自定义节点「Office」和这里的同名节点不是同一个，没有写"'
@@ -3023,16 +2994,16 @@ STTL=10   # 服务器这么多秒没收到上报就算离线。上报进程 60 �
 gl_upr() { gl_up --ttl "$STTL" --relay-listen 127.0.0.1:0 --web-url https://relay.example.com:18445/; }   # 网页端开着（cca remote pair --web 要它；页面是仓库里的 server/web/）
 gl_upr; touch "$H/.cca/teams/checked"
 PRD="$H/.cca/presence"; ME=alice-mbp   # 这台 Mac 加入阁楼组时起的名字
-python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop("presence", None); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"   # 打开设备统计（11b2 起关着）
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c.pop("presence", None)'   # 打开设备统计（11b2 起关着）
 cp -p "$H/.cca/config.json" "$T/pres.config.json"; cp -p "$H/.cca/accounts.json" "$T/pres.accounts.json"
 cp -p "$AJ" "$T/pres.aj.json"   # 下面 API key 的同步按登录身份（accountUuid）认，用完还原
 dv() { run cca devices alice@example.com --json 2>/dev/null; }   # 问服务器：alice 连着哪些设备
-dstate() { dv > "$T/dv.json"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' "$T/dv.json" 2>/dev/null; }   # 问到的留在 dv.json
+dstate() { dv > "$T/dv.json"; "$TESTBIN" val -f "d=$T/dv.json" '",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"])' 2>/dev/null; }   # 问到的留在 dv.json
 # 等服务器上 alice 的设备变成这样。一秒左右问一次：服务器给每台设备限了流（每秒 0.5 个请求、最多攒 30 个，上报进程的上报和这里的查询
 # 算在一起）。cca 还内嵌着 Python 的时候问一次就要大半秒，后面只歇 0.2 秒正好；换成辅助程序以后问一次不到 0.2 秒，还歇 0.2 秒的话
 # 十几秒就把配额问光了，上报进程报不上去（请求太频繁），状态一直不变
 dwait() { local i; for i in $(seq 1 60); do [ "$(dstate)" = "$1" ] && return 0; sleep 0.8; done; return 1; }
-apid() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$PRD/agent.json" 2>/dev/null; }   # 上报进程的进程号
+apid() { "$TESTBIN" val -f "j=$PRD/agent.json" 'j["pid"]' 2>/dev/null; }   # 上报进程的进程号
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
 out=$(gj state)
 ok "_gui state：Team 给的官方账号 can.devices 为真（账号页有「设备」），第三方 API 账号没有" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"can\"][\"devices\"] is True and not any(a[\"can\"].get(\"devices\") for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
@@ -3069,10 +3040,10 @@ dwait "$ME:none:0"; rc=$?
 for i in $(seq 1 30); do alive "$a2" || break; sleep 0.1; done
 ok "会话都关了：马上报“没在用”（留着上次使用），上报进程自己退出，这台 Mac 上不再有它" '[ $rc -eq 0 ] && ! alive "$a2" && dv | jok "d[\"accounts\"][0][\"devices\"][0][\"last_used_epoch\"] is not None"'
 ok "上报不经账号的出口：直连（钉住证书公钥），不经路由器和本机 Clash" '! grep -q "127.0.0.1:$GLPORT" curl.log 2>/dev/null'
-AK=$(python3 -c 'import json,sys; print(next(k for k, v in json.load(open(sys.argv[1])).items() if isinstance(v, dict)))' "$H/.cca/accounts.json")
+AK=$("$TESTBIN" val -f "j=$H/.cca/accounts.json" 'next(k for k, v in j.items() if isinstance(v, dict))')
 out=$(runev cca devices "$AK" --json); rc=$?
 ok "第三方 API 账号：不统计（说只统计官方账号），fail 事件 devices_off" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"是第三方 API 账号：只统计官方账号\" in e[\"message\"]"'
-python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["presence"]=False; json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c["presence"]=False'
 out=$(runev cca devices alice@example.com --json); rc=$?
 touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS4=$!
 waitmark "$AD"; sleep 1; a3=$(apid)
@@ -3099,25 +3070,25 @@ ok "（准备）管理员邀请 dan-air（也给它 alice），它照文档加�
 dkey() {   # dkey get | junk | put KEY|- 时间：dan-air 取 alice 现在的（打印 JSON；none：没有；bad：认证不过）/ 传一份伪造的 / 传一份
 	"$TESTBIN" spec dkey "$T/dan" "$GLPORT" "$@"   # 照 server/README.md 的格式独立实现的（tests/kit/spec.rs，不用 cca 的代码）
 }
-dkval() { dkey get | python3 -c 'import json,sys; d=sys.stdin.read().strip(); print(json.loads(d)["key"] if d.startswith("{") else d)'; }   # 服务器上 alice 现在的 key（None：删掉了）
+dkval() { dkey get | "$TESTBIN" val -t s=- 'd=s.strip(); json.loads(d)["key"] if d.startswith("{") else d'; }   # 服务器上 alice 现在的 key（None：删掉了）
 dkwait() { local i; for i in $(seq 1 40); do [ "$(dkval)" = "$1" ] && return 0; sleep 0.5; done; return 1; }   # 后台的同步是 background 优先级：最多等 20 秒
 setoa "$AJ" accountUuid=u-alice-0001
 KS1="sk-ant-api03-REGRESSshare$(printf 'a%.0s' $(seq 1 20))"; KS2="sk-ant-api03-REGRESSdan$(printf 'b%.0s' $(seq 1 24))"
 out=$(run CCA_TTY="$(ans "$KS1")" cca key alice 2>&1); rc=$?
-dkwait "$KS1"; rc2=$?; L1=$(dkey get | python3 -c 'import json,sys; print(json.load(sys.stdin)["len"])' 2>/dev/null)
+dkwait "$KS1"; rc2=$?; L1=$(dkey get | "$TESTBIN" val -f d=- 'd["len"]' 2>/dev/null)
 ok "记下 alice 的 API key（Team 给的账号、开着设备统计）：说登录了这个账号的其他设备也能看到，马上在后台加密传给服务器；dan-air 照文档的格式解得开；服务器上没有 key、邮箱、登录身份（600）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录了这个账号的其他设备也能看到" && [ $rc2 -eq 0 ] && [ "$(stat -f %Lp "$GLD/keys.json")" = 600 ] && ! grep -q "REGRESSshare\|example.com\|u-alice" "$GLD/keys.json" && [ "$(stat -f %Lp "$PRD/team.$GLTID.keys.json")" = 600 ] && ! grep -q "REGRESSshare" "$PRD/team.$GLTID.keys.json"'
 out=$(gj state)
 ok "_gui state：alice 记下的 key 会同步（shared），这台 Mac 自己记下的没有来源、有记下的时间；第三方 API 账号不同步" 'printf "%s" "$out" | jok "(lambda k: k[\"shared\"] is True and k[\"saved\"] and k[\"from_device\"] is None and k[\"saved_epoch\"] > d[\"generated_at\"] - 300 and k[\"sync_error\"] is None)(acct(0, \"alice@example.com\")[\"api_key\"]) and not any(a[\"api_key\"][\"shared\"] for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
-dkey put "$KS2" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["key_hints"][sys.argv[2]]["at"] + 0.5)' "$H/.cca/config.json" "$AAID")"; rc=$?   # 比这台 Mac 记下的晚半秒（不用将来的时间：之后在这台 Mac 上删掉，删掉的那一下才是新的）
+dkey put "$KS2" "$("$TESTBIN" val -f "j=$H/.cca/config.json" -s "a2=$AAID" 'j["key_hints"][a2]["at"] + 0.5')"; rc=$?   # 比这台 Mac 记下的晚半秒（不用将来的时间：之后在这台 Mac 上删掉，删掉的那一下才是新的）
 run cca _key-sync force >/dev/null 2>&1
 v=$(run cca key alice --show 2>/dev/null); out=$(gj state); printf "%s" "$out" > "$T/guifx3/state_keys.json"
 ok "dan-air 换了一把（比这台 Mac 记下的新）：同步后这台 Mac 的钥匙串里换成它（--show 给新的），_gui state 说是从 dan-air 同步来的" '[ $rc -eq 0 ] && [ "$v" = "$KS2" ] && [ "$(cat "$T/keychain/cca-ref-$AAID/reference")" = "$KS2" ] && printf "%s" "$out" | jok "(lambda k: k[\"from_device\"] == \"dan-air\" and k[\"saved\"] and k[\"hint\"] == \"sk-ant-…bbbb\")(acct(0, \"alice@example.com\")[\"api_key\"])"'
 dkey junk; run cca _key-sync force >/dev/null 2>&1
 ok "服务器上的被换成认证不过的（伪造的、坏了）：这台 Mac 不认，把自己的传回去" '[ "$(cat "$T/keychain/cca-ref-$AAID/reference")" = "$KS2" ] && [ "$(dkval)" = "$KS2" ]'
 out=$(run CCA_TTY="$(ans y)" cca key alice --forget 2>&1); rc=$?
-dkwait None; rc2=$?; L2=$(dkey get | python3 -c 'import json,sys; print(json.load(sys.stdin)["len"])' 2>/dev/null)
+dkwait None; rc2=$?; L2=$(dkey get | "$TESTBIN" val -f d=- 'd["len"]' 2>/dev/null)
 ok "cca key alice --forget：说登录了这个账号的其他设备上的也会删掉；删掉也同步（dan-air 解开是删除，密文和 key 一样长）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "其他设备上的也会删掉" && [ $rc2 -eq 0 ] && [ ! -e "$T/keychain/cca-ref-$AAID" ] && [ -n "$L1" ] && [ "$L1" = "$L2" ]'
-dkey put "$KS2" "$(python3 -c 'import time; print(time.time())')"
+dkey put "$KS2" "$("$TESTBIN" val 'time.time()')"
 v=$(run cca key alice --show 2>/dev/null); rc=$?
 ok "这台 Mac 上没有、dan-air 又记下了：cca key alice --show 先同步一次再给（App 的「显示」「复制」同样）" '[ $rc -eq 0 ] && [ "$v" = "$KS2" ]'
 # 折合金额经服务器交换：各台设备只写自己的那一份，密文（3.6.6 起密钥整个 Team 共用，只由盐派生，标签是 cca-cost-v2；认证里带着账号摘要和设备指纹）。
@@ -3132,13 +3103,13 @@ v=$(dcost get)
 ok "dan-air 照文档的格式解得开这台 Mac 传的（密钥只由 Team 的盐派生，不用登录 alice）：4 次请求、折合 0.026 美元，按模型的也在，明文补齐到 1024 字节的整数倍" 'printf "%s" "$v" | jok "d == {\"usd\": 0.026, \"requests\": 4, \"name\": \"$ME\", \"models\": [\"claude-new-9\", \"claude-opus-5-5\", \"claude-sonnet-5-5\"]}"'
 v=$(dcost oget)
 ok "认不出是哪个账号的那一份（3.6.8 起）也传了：固定的账号摘要、同一把密钥，dan-air 解得开：1 次请求、折合 0.006 美元，按模型的也在" 'printf "%s" "$v" | jok "d == {\"usd\": 0.006, \"requests\": 1, \"name\": \"$ME\", \"models\": [\"claude-opus-5-5\"]}"'
-dcost put "$(python3 -c 'import time; print(time.time() - 86400)')" 2.5; rc=$?
+dcost put "$("$TESTBIN" val 'time.time() - 86400')" 2.5; rc=$?
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_cost_sync.json"
 ok "dan-air 传了自己的那一份（2.5 美元）：同步后 alice 有两台设备（这台在前），合计 2.526 美元（全部账号 2.579：还有 dave 的 Codex），同步好了" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"me\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", True, False), (\"dan-air\", False, False)] and a[\"summary\"][\"days_usd\"] == 2.526 and a[\"sync\"][\"state\"] == \"ok\" and isinstance(a[\"sync\"][\"checked_epoch\"], float))(acct(0, \"alice@example.com\")[\"cost\"]) and d[\"cost_total\"][\"by_tool\"][\"claude\"][\"days_usd\"] == 2.526 and d[\"cost_total\"][\"days_usd\"] == 2.579"'
 ok "cost_total.me 只算这台设备的那一份：全部账号 2.579 减去 dan-air 的 2.5 是 0.079（alice 0.026，dave 0.053）" 'printf "%s" "$out" | jok "(lambda m: m[\"days_usd\"] == 0.079 and m[\"by_tool\"][\"claude\"][\"days_usd\"] == 0.026 and m[\"by_tool\"][\"codex\"][\"days_usd\"] == 0.053 and len(m[\"days\"]) == 30)(d[\"cost_total\"][\"me\"])"'
 ok "cost_total.devices（设备菜单）：这台设备在前（和 me 一样），dan-air 只用过 alice（2.5 美元，id 和账号里的一样）；各台加起来是顶层的" 'printf "%s" "$out" | jok "(lambda t, a: [(x[\"name\"], x[\"me\"], x[\"days_usd\"]) for x in t[\"devices\"]] == [(\"$ME\", True, 0.079), (\"dan-air\", False, 2.5)] and [x[\"id\"] for x in t[\"devices\"]] == [x[\"id\"] for x in a[\"devices\"]] and t[\"devices\"][1][\"by_tool\"][\"codex\"][\"days_usd\"] == 0 and abs(sum(x[\"days_usd\"] for x in t[\"devices\"]) - t[\"days_usd\"]) < 1e-9)(d[\"cost_total\"], acct(0, \"alice@example.com\")[\"cost\"])"'
 ok "认不出账号的（3.6.8 起）：dan-air 还没传它的那一份（cca 太旧，或者还没同步）：unsynced 里有它，unattributed.cost 只有这台设备的，同步好了" 'printf "%s" "$out" | jok "(lambda u: [x[\"name\"] for x in u[\"unsynced\"]] == [\"dan-air\"] and [(x[\"name\"], x[\"me\"]) for x in u[\"cost\"][\"devices\"]] == [(\"$ME\", True)] and u[\"cost\"][\"summary\"][\"days_usd\"] == 0.006 and u[\"cost\"][\"sync\"][\"state\"] == \"ok\" and u[\"cost\"][\"sync\"][\"hub\"] == \"team\")(d[\"cost_total\"][\"unattributed\"])"'
-dcost oput "$(python3 -c 'import time; print(time.time() - 7200)')" 1.5; rc=$?
+dcost oput "$("$TESTBIN" val 'time.time() - 7200')" 1.5; rc=$?
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_cost_orphan.json"
 ok "dan-air 传了它认不出账号的那一份（1.5 美元）：unattributed.cost 两台设备（这台在前），合计 1.506，按模型合起来；都传了，unsynced 空了；顶层、me 的合计不含它" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "(lambda t, u: [(x[\"name\"], x[\"me\"]) for x in u[\"devices\"]] == [(\"$ME\", True), (\"dan-air\", False)] and u[\"summary\"][\"days_usd\"] == 1.506 and u[\"summary\"][\"requests\"] == 2 and [(m[\"model\"], m[\"days\"][\"requests\"]) for m in u[\"models\"]] == [(\"claude-opus-5-5\", 2)] and [(m[\"model\"], m[\"days\"][\"usd\"]) for m in u[\"devices\"][1][\"models\"]] == [(\"claude-opus-5-5\", 1.5)] and t[\"unattributed\"][\"unsynced\"] == [] and t[\"days_usd\"] == 2.579 and t[\"me\"][\"days_usd\"] == 0.079)(d[\"cost_total\"], d[\"cost_total\"][\"unattributed\"][\"cost\"])"'
 # 远程会话的配对（docs/dev/remote.md；服务器开着中转）：这里只测 cca remote pair / join / peers / allow / unpair 这几条命令怎么问、怎么说，
@@ -3182,11 +3153,7 @@ out2=$(run cca remote peers 2>&1)
 ok "cca remote unpair：配对表、钥匙串里的密钥、服务器上的记录都删掉" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经取消和「dan-air」的配对" && [ ! -e "$T/keychain/cca-remote-$RPID2" ] && ! grep -q "\"$RPID2\"" "$GLD/remote.json" && printf "%s" "$out2" | grep -q "还没有配对过的机器"'
 # 界面 App 里配对（提问会话，PROTOCOL 9.2）：先问，再一页只显示配对码（不用回答），dan-air 输入后 cca 自己收场
 sess '{"consent.remote_pair":[{"v":"y"}],"remote.pair":[null]}' -- cca remote pair > "$T/rp.out" 2>&1 & RPP=$!
-RCODE=""; for i in $(seq 1 150); do RCODE=$(python3 -I -c 'import json,sys
-for l in open(sys.argv[1]):
-    e = json.loads(l) if l.strip() else {}
-    if e.get("q") == "remote.pair":
-        print(e["fields"][0]["value"])' "$T/ev.jsonl" 2>/dev/null); [ -n "$RCODE" ] && break; sleep 0.1; done
+RCODE=""; for i in $(seq 1 150); do RCODE=$("$TESTBIN" run -s "a1=$T/ev.jsonl" '[print(e["fields"][0]["value"]) for e in (json.loads(l) if l.strip() else {} for l in open(a1)) if e.get("q") == "remote.pair"]' 2>/dev/null); [ -n "$RCODE" ] && break; sleep 0.1; done
 dj=$(dpair join "$RCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair.jsonl"
 ok "界面 App 里显示配对码：同意当场问，配对码在一页只显示的字段里（不用回答），对方输入后 result 事件 remote_paired" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(asks)" = "consent.remote_pair remote.pair" ] && printf "%s" "$RCODE" | grep -Eq "^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$" && evq "e.get(\"q\") == \"remote.pair\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"code\", \"code\")]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「dan-air」\" in e[\"message\"]" && ! grep -qF "$RCODE" "$T/rp.out" && [ -e "$T/keychain/cca-remote-${dj%% *}" ]'
@@ -3197,18 +3164,14 @@ gl_down; gl_upr
 ssh-keygen -q -t ed25519 -N '' -C phone -f "$T/phone" >/dev/null 2>&1
 out=$(run CCA_TTY="$(ans y)" cca remote pair --phone 2>&1); rc3=$?
 sess '{"consent.remote_pair":[{"v":"y"}],"remote.pair_web":[null]}' -- cca remote pair --web > "$T/rpw.out" 2>&1 & RPP=$!
-WCODE=""; for i in $(seq 1 150); do WCODE=$(python3 -I -c 'import json,sys
-for l in open(sys.argv[1]):
-    e = json.loads(l) if l.strip() else {}
-    if e.get("q") == "remote.pair_web":
-        print(e["fields"][1]["value"])' "$T/ev.jsonl" 2>/dev/null); [ -n "$WCODE" ] && break; sleep 0.1; done
+WCODE=""; for i in $(seq 1 150); do WCODE=$("$TESTBIN" run -s "a1=$T/ev.jsonl" '[print(e["fields"][1]["value"]) for e in (json.loads(l) if l.strip() else {} for l in open(a1)) if e.get("q") == "remote.pair_web"]' 2>/dev/null); [ -n "$WCODE" ] && break; sleep 0.1; done
 [ -n "$WCODE" ] || kill "$RPP" 2>/dev/null   # 没等到那一页（出毛病了）：别让下面干等到配对码过期
 wj=$(DPAIR_KEY="$T/phone" dpair web "$WCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair_web.jsonl"
 out2=$(run cca remote list --json 2>/dev/null </dev/null); printf '%s' "$out2" > "$T/guifx3/remote_list_web.json"
-ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是手机上打开的地址（kind 是 qr，服务器配置里写的那个）和配对码，都不用回答；不在 Team 的名单里的密钥输入配对码后配好，配对表里记着它是网页端、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以在浏览器里看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"] == \"https://relay.example.com:18445/\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | python3 -I -c "import json, sys; p = [x for x in json.load(sys.stdin)[\"peers\"] if x[\"name\"] == \"phone\"]; sys.exit(0 if len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\" else 1)" && grep -q "\"guests\"" "$GLD/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
+ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是手机上打开的地址（kind 是 qr，服务器配置里写的那个）和配对码，都不用回答；不在 Team 的名单里的密钥输入配对码后配好，配对表里记着它是网页端、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以在浏览器里看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"] == \"https://relay.example.com:18445/\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | "$TESTBIN" check -f d=- "p = [x for x in d[\"peers\"] if x[\"name\"] == \"phone\"]; len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\"" && grep -q "\"guests\"" "$GLD/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
 out=$(runev cca remote unpair "${wj%% *}" 2>&1); rc=$?
-ok "取消和手机的配对：服务器上那个访客跟着删掉（它一个配对都不剩了）" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-remote-${wj%% *}" ] && python3 -I -c "import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get(\"guests\") == {} else 1)" "$GLD/remote.json"'
+ok "取消和手机的配对：服务器上那个访客跟着删掉（它一个配对都不剩了）" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-remote-${wj%% *}" ] && "$TESTBIN" check -f "j=$GLD/remote.json" "j.get(\"guests\") == {}"'
 out=$(runev cca remote unpair "${dj%% *}" 2>&1); rc=$?
 ok "界面 App 取消配对（按配对的编号）：result 事件 remote_updated，钥匙串里的密钥删掉" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"已经取消和「dan-air」的配对\" in e[\"message\"]" && [ ! -e "$T/keychain/cca-remote-${dj%% *}" ]'
 out=$(sess '{"remote.code":[{"v":"0000-0000-0000-0000"}]}' -- cca remote join 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_join.jsonl"
@@ -3237,14 +3200,14 @@ if sect 11b3d; then
 # 先是这台 Mac 当管理员（成员由照 server/README.md 独立实现的那一头 tm_spec 扮演），再是它当成员（管理员由它扮演）
 cp "$H/.cca/accounts.json" "$T/tm-accounts.bak"; cp "$H/.cca/config.json" "$T/tm-config.bak"   # 加入 Team 以后账号表照它的配置改：这一节结束时还原
 out=$(run cca team 2>&1); rc=$?
-TMLS=$(run cca team ls --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["teams"])')
+TMLS=$(run cca team ls --json | "$TESTBIN" val -f d=- 'd["teams"]')
 ok "cca team：还不在任何 Team 里时说怎么加入、怎么建" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还不在任何 Team 里" && printf "%s" "$out" | grep -q "cca team join" && [ "$TMLS" = "[]" ]'
 out=$(run cca team nope 2>&1); rc=$?
 ok "cca team：不认得的子命令说用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca team invite Team"'
 # --- 这台 Mac 当管理员
 out=$(run cca team new 书房组 --device 书房的Mac 2>&1 </dev/null); rc=$?   # stdin 不是终端：不问放进哪些账号
 TMID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$'); TMROOT=$(cut -d' ' -f1,2 "$H/.cca/teams/$TMID/root_ed25519.pub")
-tmacc() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["config"]["accounts"], sort_keys=True))' "$H/.cca/teams/$1/admin.json" 2>/dev/null; }   # 这个 Team 的配置里的账号
+tmacc() { "$TESTBIN" val -f "j=$H/.cca/teams/$1/admin.json" 'json.dumps(j["config"]["accounts"], sort_keys=True)' 2>/dev/null; }   # 这个 Team 的配置里的账号
 ok "cca team new：建好了，说下一步（服务器用这把根公钥运行、再 attach），提醒根密钥只在这台设备上；目录和密钥只给自己读；没有终端时不问、一个账号都不放（说怎么放）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "建好了「书房组」（${TMID:0:8}）：这台设备是它的管理员$" && printf "%s" "$out" | grep -q "往里放账号：cca team map ${TMID:0:8} 工具 邮箱 节点" && [ "$(tmacc "$TMID")" = "{}" ] && printf "%s" "$out" | grep -qF -- "--mode team --team-root '"'"'$TMROOT'"'"'" && printf "%s" "$out" | grep -q "cca team attach ${TMID:0:8}" && printf "%s" "$out" | grep -q "备份不带它" && [ "$(stat -f %Lp "$H/.cca/teams/$TMID")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/root_ed25519")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/admin.json")" = 600 ]'
 out=$(run cca team 2>&1)
 ok "cca team：列出来，还没接上服务器" 'printf "%s" "$out" | grep -q "书房组（${TMID:0:8}）：管理员，没有服务器，还没接上服务器"'
@@ -3332,7 +3295,7 @@ out=$(run cca team node 书房组 install - 2>&1); rc=$?
 TMDOC='{"install_node": "", "nodes": ["JP-B"], "seq": 10}'
 ok "cca team node install -：不再指定（说原来是哪个），再发布一版：那一头的配置不再带它" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "不再指定安装客户端用的节点（原来是「JP-A」）；2 台设备的配置发布了新的一版" && [ "$(tm_spec doc "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "$TMDOC" ] && run cca team node 书房组 ls --json | jok "d[\"install_node\"] == \"\""'
 out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
-TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
+TMDEV=$("$TESTBIN" val -s "a1=$T/ev.jsonl" 'next(e["scope"] for e in map(json.loads, open(a1)) if e.get("ev") == "consent")' 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
 out=$(runev CCA_GRANT="team_revoke:$TMDEV" cca team revoke 书房组 dan-air 2>&1); rc=$?
 out2=$(run cca team devices 书房组 2>&1); rc2=$?
@@ -3345,8 +3308,8 @@ ok "终端里问（默认否）：答不就不退" '[ $rc -ne 0 ] && printf "%s"
 ssh-keygen -q -t ed25519 -N '' -C root -f "$T/tm-root" </dev/null >/dev/null 2>&1
 TMB="$T/team-b"; tm_cert "$TMB"; tm_srv "$TMB" "$(cut -d' ' -f1,2 "$T/tm-root.pub")"; TMBPID=$TMPID; TMBPORT=$(cat "$TMB/port"); TMBPIN=$(tm_pin "$TMB")
 TMS=$(printf '7e%.0s' $(seq 1 16))
-tm_alice() { python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); print(next(v for k, v in t.items() if k == "alice@example.com" or k.endswith("(alice@example.com)")))' "$H/.cca/accounts.json"; }   # alice 现在走的节点
-TMWAS=$(tm_alice); TMNODE=$(python3 -c 'import json,sys; print(next(n for n in json.load(open(sys.argv[1]))["nodes"] if n != sys.argv[2]))' "$H/.cca/config.json" "$TMWAS")   # 可选节点里另一个
+tm_alice() { "$TESTBIN" val -f "t=$H/.cca/accounts.json" 'next(v for k, v in t.items() if k == "alice@example.com" or k.endswith("(alice@example.com)"))'; }   # alice 现在走的节点
+TMWAS=$(tm_alice); TMNODE=$("$TESTBIN" val -f "j=$H/.cca/config.json" -s "a2=$TMWAS" 'next(n for n in j["nodes"] if n != a2)')   # 可选节点里另一个
 TMBLINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 1 客厅组 "$TMNODE" 2>&1)
 out=$(runev CCA_TTY="$(ans "${TMBLINK%???}")" cca team join 2>&1); rc=$?
 ok "cca team join：链接少了一截（校验对不上）：fail 事件 team_link，不联网" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_link\"" && [ "$(ls "$H/.cca/teams" | grep -cE "^[0-9a-f]{32}$")" = 1 ]'
@@ -3369,7 +3332,7 @@ ok "_gui hello 说有 Team（team 是 1）；_gui state 的 config.teams 是这�
 ok "_gui state：alice 是「客厅组」给的（账号的 team 是它的编号），经它的同步服务器同步（hub 是 team）；config.hubs 里有它（kind 是 team，带编号和名字）；别的账号没有 team" 'printf "%s" "$out" | jok "(lambda a: a[\"hub\"] == \"team\" and a[\"team\"] == \"$TMBID\")(next(a for a in d[\"tools\"][0][\"accounts\"] if a[\"email\"] == \"alice@example.com\")) and (\"$TMBID\", \"客厅组\") in [(h.get(\"team\"), h.get(\"team_name\")) for h in d[\"config\"][\"hubs\"] if h[\"kind\"] == \"team\"] and all(\"team\" not in a for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"email\"] != \"alice@example.com\")"'
 # 配置向导（10h 那几条都不在 Team 里）：已经在 Team 里的不问第 1 步。没配路由器、已有账号时只问网络出口（只有这一步：标题不写第几步）
 cp "$H/.cca/config.json" "$T/cfg.onbt.bak"; cp "$H/.cca/accounts.json" "$T/tbl.onbt.bak"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c.pop("onboarded", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}; c.pop("onboarded", None)'
 out=$(sess '{"onboard.net":[{"v":"skip"}]}' -- cca _onboard 2>&1); rc=$?
 cp "$T/cfg.onbt.bak" "$H/.cca/config.json"; cp "$T/tbl.onbt.bak" "$H/.cca/accounts.json"
 ok "配置向导：已经在 Team 里 → 不问加入 Team；没配路由器时只问网络出口（标题不写第几步，页说明说 Team 给的账号配好出口后自动加进来）" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.net ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"网络出口\" and e[\"message\"].startswith(\"加入了 Team\")" && [ "$(lastres)" = onboarded ]'
@@ -3380,7 +3343,7 @@ ok "再拿同一个邀请加入：已经在这个 Team 里了（fail 事件 team
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 2 改过名的组 "$TMNODE" >/dev/null 2>&1
 out=$(run cca team sync 客厅组 2>&1); rc=$?
 ok "cca team sync：同步到新的一版，名字照配置里的改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组：配置已同步" && run cca team 2>&1 | grep -q "改过名的组（${TMBID:0:8}）"'
-tm_akey() { python3 -c 'import json,sys; print(next(k for k in json.load(open(sys.argv[1])) if k == "alice@example.com" or k.endswith("(alice@example.com)")))' "$H/.cca/accounts.json"; }   # alice 现在的键
+tm_akey() { "$TESTBIN" val -f "j=$H/.cca/accounts.json" 'next(k for k in j if k == "alice@example.com" or k.endswith("(alice@example.com)"))'; }   # alice 现在的键
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 3 改过名的组 "$TMNODE" lock >/dev/null 2>&1
 out=$(run cca team sync "${TMBID:0:8}" 2>&1); rc=$?
 ok "管理员锁定了别名：同步到配置以后 alice 的别名换成 Team 给的（说一声）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组.*team-1" && [ "$(tm_akey)" = "team-1(alice@example.com)" ]'
@@ -3422,12 +3385,7 @@ ok = ok and "「机房组」" in e["message"]
 sys.exit(0 if ok else 1)' "$T/ev.jsonl" "$TMCN" "$TMCOWN"
 }
 ok "提问会话：名字之后一页多选（team.accounts，可以都不勾）：列出这台设备上能放的账号（工具、别名、邮箱，注着走哪个节点），自己加的预先勾上（写在 value 里）；都不勾就是一个都不放" '[ "$TMCN" -gt 0 ] && [ -n "$TMCOWN" ] && tmask && [ "$(tmacc "$TMDID")" = "{}" ] && ! printf "%s" "$out" | grep -q "放进了"'
-tmexp() { printf '%s\n' "$TMCAND" | python3 -c 'import json,sys
-want, d = set(map(int, sys.argv[1].split())), {}
-for i, l in enumerate(sys.stdin, 1):
-    c = l.rstrip("\n").split("\t")
-    if i in want: d.setdefault(c[0], {})[c[2]] = c[5]
-print(json.dumps(d, sort_keys=True))' "$1"; }   # 这几个候选（编号）放进去以后，Team 的配置里的账号
+tmexp() { printf '%s\n' "$TMCAND" | "$TESTBIN" run -s "a1=$1" 'want, d = set(map(int, a1.split())), {}; [d.setdefault(c[0], {}).update({c[2]: c[5]}) for i, c in ((i, l.rstrip("\n").split("\t")) for i, l in enumerate(open("/dev/stdin"), 1)) if i in want]; print(json.dumps(d, sort_keys=True))'; }   # 这几个候选（编号）放进去以后，Team 的配置里的账号
 TMC1=$(tmexp 1); TMCO=$(tmexp "$TMCOWN"); TMCON=$(printf '%s\n' $TMCOWN | grep -c .)
 out=$(sess '{"team.new":[{"name":"选账号组"}],"team.accounts":[{"v":"1"}]}' -- cca team new 2>&1); rc=$?
 TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
@@ -3443,15 +3401,15 @@ out=$(run CCA_TTY="$(ans '')" cca team new 终端组 --device 书房的Mac 2>&1)
 TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
 ok "终端里直接回车：放进自己加的那几个（预先选好的）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "放进了 ${TMCON} 个账号" && [ "$(tmacc "$TMXID")" = "$TMCO" ]'
 # 删除时卸不掉服务器（记下的部署是 root@127.0.0.1：假 ssh 一律连不上），App 里答「仍然删掉」：照样删，result 说哪台上的没卸掉、怎么自己卸载
-python3 -I -c 'import json, sys; p = sys.argv[1]; a = json.load(open(p)); a["deploy"] = {"target": "root@127.0.0.1", "ssh_port": "", "dir": "/opt/tm-left"}; open(p, "w").write(json.dumps(a))' "$H/.cca/teams/$TMXID/admin.json"
+"$TESTBIN" edit "a=$H/.cca/teams/$TMXID/admin.json" 'a["deploy"] = {"target": "root@127.0.0.1", "ssh_port": "", "dir": "/opt/tm-left"}'
 : > "$T/ssh.log"
 out=$(sess '{"consent.team_delete":[{"v":"y"}],"team.keep_server":[{"v":"y"}]}' -- cca team leave "${TMXID:0:8}" 2>&1); rc=$?
 ok "App 里删除、服务器连不上（照 cca team deploy 记下的那台）：问要不要仍然删掉，答是就删（result 事件 team_left 说哪台上的没卸掉、在服务器上怎么自己卸载）" '[ $rc -eq 0 ] && [ "$(asks)" = "consent.team_delete team.keep_server" ] && grep -q "^SSH root@127.0.0.1 " "$T/ssh.log" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_left\" and \"root@127.0.0.1 上的同步服务器没卸掉\" in e[\"message\"] and \"--uninstall --dir /opt/tm-left\" in e[\"message\"]" && [ ! -e "$H/.cca/teams/$TMXID" ]'
 TMN=$(ls "$H/.cca/teams" | grep -cE '^[0-9a-f]{32}$')
 out=$(runev cca team new 坏组 --accounts claude:nobody@example.com 2>&1); rc=$?
 ok "cca team new --accounts：写的账号这台设备上没有（不能放的也一样）：什么都不建（fail 事件 team_accounts）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_accounts\"" && printf "%s" "$out" | grep -q "这台设备上没有 claude:nobody@example.com" && [ "$(ls "$H/.cca/teams" | grep -cE "^[0-9a-f]{32}$")" = "$TMN" ]'
-TMDPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); TMDSVC="cca-team-${TMDID:0:8}"; TMDD="$T/hubbox/root/opt/$TMDSVC"
-tmdpin() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pins"])' "$H/.cca/teams/$TMDID/team.json" 2>/dev/null; }   # 这台设备给这个 Team 的服务器钉着的指纹
+TMDPORT=$("$TESTBIN" port); TMDSVC="cca-team-${TMDID:0:8}"; TMDD="$T/hubbox/root/opt/$TMDSVC"
+tmdpin() { "$TESTBIN" val -f "j=$H/.cca/teams/$TMDID/team.json" 'j["pins"]' 2>/dev/null; }   # 这台设备给这个 Team 的服务器钉着的指纹
 : > "$T/ssh.log"
 out=$(runev cca team deploy 机房组 2>&1); rc=$?
 out2=$(runev cca team deploy 机房组 root@hubbox --reset 2>&1); rc2=$?
@@ -3504,15 +3462,15 @@ ok "App 里删除：先问同意（consent.team_delete：说经 SSH 登录哪台
 # 部署时写了私钥（-i：记下的是绝对路径，tests/hub_deploy.py 测记下来）：App 里删除照它登录（App 里没法写 -i）。它登录不了、服务器只认密钥：
 # 不问加公钥那一页（ssh 只试写的那把，这台 Mac 默认的那把加上去也没用），算没卸成，问要不要照样删（原因里说是哪把私钥）
 : > "$T/hub_id"
-python3 -I -c 'import json, sys; p = sys.argv[1]; a = json.load(open(p)); a["deploy"]["identity"] = sys.argv[2]; open(p, "w").write(json.dumps(a))' "$H/.cca/teams/$TMDID/admin.json" "$T/hub_id"
+"$TESTBIN" edit -s "a2=$T/hub_id" "a=$H/.cca/teams/$TMDID/admin.json" 'a["deploy"]["identity"] = a2'
 # 再部署（更新）也照部署时记下的：App 里那一页预填它、说照哪把私钥登录，填的就是它时查登录、部署的 ssh 都带着那把私钥（App 里没法写
 # -i）；终端里写的就是它、没写 -p、-i 时照记下的端口、私钥。部署记录里接着记着它
-tmdident() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["deploy"].get("identity", ""))' "$H/.cca/teams/$TMDID/admin.json" 2>/dev/null; }
-tmdtarget() { python3 -I -c 'import json, sys; p = sys.argv[1]; a = json.load(open(p)); a["deploy"]["target"] = sys.argv[2]; open(p, "w").write(json.dumps(a))' "$H/.cca/teams/$TMDID/admin.json" "$1"; }
+tmdident() { "$TESTBIN" val -f "j=$H/.cca/teams/$TMDID/admin.json" 'j["deploy"].get("identity", "")' 2>/dev/null; }
+tmdtarget() { "$TESTBIN" edit -s "a2=$1" "a=$H/.cca/teams/$TMDID/admin.json" 'a["deploy"]["target"] = a2'; }
 # 记下的目标没写用户（cca team deploy 机房组 hubbox：照 ssh 的配置）：SSH 用户那一栏可以空着，空着交上来的就是记下的那台
 tmdtarget hubbox; : > "$T/ssh.env"
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
-ok "记下的目标没写用户：App 里那一页的 SSH 用户预填空的（这一栏可以空着），空着交上来就是记下的那台：照记下的私钥登录，ssh 的目标不带用户；部署记录照旧" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and [f[\"value\"] for f in e[\"fields\"]] == [\"hubbox\", \"\", \"22\"] and [bool(f.get(\"optional\")) for f in e[\"fields\"]] == [False, True, False]" && [ "$(lastres)" = team_deployed ] && grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -q " hubbox " && ! grep "^ARGV" "$T/ssh.env" | grep -q "@hubbox" && ! grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -qvF -- "-i $T/hub_id -o IdentitiesOnly=yes" && [ "$(tmdident)" = "$T/hub_id" ] && python3 -c "import json,sys; sys.exit(json.load(open(sys.argv[1]))[\"deploy\"][\"target\"] != \"hubbox\")" "$H/.cca/teams/$TMDID/admin.json"'
+ok "记下的目标没写用户：App 里那一页的 SSH 用户预填空的（这一栏可以空着），空着交上来就是记下的那台：照记下的私钥登录，ssh 的目标不带用户；部署记录照旧" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and [f[\"value\"] for f in e[\"fields\"]] == [\"hubbox\", \"\", \"22\"] and [bool(f.get(\"optional\")) for f in e[\"fields\"]] == [False, True, False]" && [ "$(lastres)" = team_deployed ] && grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -q " hubbox " && ! grep "^ARGV" "$T/ssh.env" | grep -q "@hubbox" && ! grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -qvF -- "-i $T/hub_id -o IdentitiesOnly=yes" && [ "$(tmdident)" = "$T/hub_id" ] && "$TESTBIN" run -f "j=$H/.cca/teams/$TMDID/admin.json" "sys.exit(j[\"deploy\"][\"target\"] != \"hubbox\")"'
 tmdtarget root@hubbox; : > "$T/ssh.env"
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
 ok "App 里再部署、部署时写了私钥：那一页预填记下的那台、说照哪把私钥登录；查登录、部署的 ssh 都带着它，部署记录里接着记着" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and [f[\"value\"] for f in e[\"fields\"]] == [\"hubbox\", \"root\", \"22\"] and \"照部署时写的私钥（$T/hub_id）\" in e[\"message\"]" && [ "$(lastres)" = team_deployed ] && [ "$(grep "^ARGV" "$T/ssh.env" | grep -vc " -G ")" -ge 2 ] && ! grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -qvF -- "-i $T/hub_id -o IdentitiesOnly=yes" && [ "$(tmdident)" = "$T/hub_id" ]'
@@ -3536,7 +3494,7 @@ ok "管理员 --keep-server：不碰服务器（说它留着、怎么自己卸�
 TMUP="$H/.cca/update"; TMS3=$(printf '3a%.0s' $(seq 1 16))
 tmu_mt() { stat -f %m "$H/.cca/teams/checked" 2>/dev/null; }   # 上一次同步配置的时候（钩子做了就会变）
 tmu_back() { touch -t "$(date -v-30M +%Y%m%d%H%M.%S)" "$H/.cca/teams/checked"; }   # 半个小时前刚做过：平时这时不再做
-tmu_seq() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seq"])' "$H/.cca/teams/$TMBID/doc.json" 2>/dev/null; }   # 这台设备手里客厅组的配置是第几版
+tmu_seq() { "$TESTBIN" val -f "j=$H/.cca/teams/$TMBID/doc.json" 'j["seq"]' 2>/dev/null; }   # 这台设备手里客厅组的配置是第几版
 tmu_seq_is() { local i; for i in $(seq 1 300); do [ "$(tmu_seq)" = "$1" ] && return 0; sleep 0.1; done; return 1; }   # 等后台同步到这一版（名字先写进 team.json、再写 doc.json）
 mv "$TMUP/cca.prev.version" "$T/tmu.prev" 2>/dev/null   # 更新留下的上一个版本下面自己摆（前面退回过的话本来就没有），最后放回原样
 TMB3LINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS3" 1 客厅组 "$TMNODE" 2>&1)
@@ -3572,13 +3530,13 @@ if sect 11b4; then
 CD="$T/core"; CN="$H/.cca/core"
 creloads() { grep -c '^RELOAD$' "$CD/core.log" 2>/dev/null || echo 0; }
 csel() { cat "$CD/sel/$1" 2>/dev/null || echo -; }
-cnames() { python3 -c 'import json,sys; print(",".join(p["name"] for p in json.load(open(sys.argv[1]))["proxies"]))' "$1"; }
-ccfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$CN/config.yaml" "$1"; }   # 内置代理的配置（c）满足条件
+cnames() { "$TESTBIN" val -f "j=$1" '",".join(p["name"] for p in j["proxies"])'; }
+ccfg() { "$TESTBIN" check -f "c=$CN/config.yaml" -- "$1"; }   # 内置代理的配置（c）满足条件
 core_stop() { [ -f "$CD/up" ] && kill "$(cat "$CD/pid")" 2>/dev/null; local i; for i in $(seq 1 30); do [ -f "$CD/up" ] || return 0; sleep 0.1; done; }
 nodes_wait() { local i; for i in $(seq 1 80); do [ -f "$CN/nodes.json" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && return 0; sleep 0.1; done; return 1; }
 cp "$H/.cca/config.json" "$T/config.core"; cp "$H/.cca/accounts.json" "$T/accounts.core"
 run cca local off >/dev/null 2>&1
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('local', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"   # 连 local 一起清掉（上一句 cca local off 记的 core_off）：模拟全新机器，在家照样拷节点
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c.pop('local', None)"   # 连 local 一起清掉（上一句 cca local off 记的 core_off）：模拟全新机器，在家照样拷节点
 rm -f "$CN"/mihomo-v*   # 11b3d 实测 Team 的节点时已经下过内核：这一节从没下过内核的机器开始（同意之后第一次下载、校验）
 edit_table 'j["alice@example.com"] = "US-A"'
 mkdir -p "$GA/Contents/MacOS"
@@ -3592,11 +3550,11 @@ out=$(run cca local off 2>&1)
 ok "还没配置本机客户端时 cca local off：关掉内置代理的准备（记下 core_off），拷来的节点删掉" 'printf "%s" "$out" | grep -q "已关掉内置代理的准备" && cfgok "c[\"local\"] == {\"core_off\": \"1\"}" && [ ! -e "$CN/nodes.json" ]'
 : > ssh.log; run cca @alice --version >/dev/null 2>&1; sleep 1
 ok "关掉了：在家不再拷节点定义" '! grep -q "sh -s defs" ssh.log && [ ! -e "$CN/nodes.json" ]'
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"; run cca _core-nodes >/dev/null 2>&1
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['local'] = {}"; run cca _core-nodes >/dev/null 2>&1
 # 经 dialer-proxy 连的节点：它用到的节点（不是可选节点的 HOP-A）也拷；指向策略组的不要（内置代理里没有那个组，带上它整份配置都加载不了）
 cp "$RC" "$T/rc.core"; cp "$H/.cca/config.json" "$T/config.core2"
 ruby -e 'f = ARGV[0]; s = File.read(f); s.sub!(/^proxies:\n( *)- /) { i = $1; "proxies:\n" + ["{name: US-E, type: ss, server: 192.0.2.6, port: 8388, cipher: aes-128-gcm, password: x, dialer-proxy: HOP-A}", "{name: US-F, type: ss, server: 192.0.2.7, port: 8388, cipher: aes-128-gcm, password: x, dialer-proxy: \"🚀 节点选择\"}", "{name: HOP-A, type: ss, server: 192.0.2.8, port: 8388, cipher: aes-128-gcm, password: x}"].map { |x| "#{i}- #{x}\n" }.join + "#{i}- " } or abort; File.write(f, s)' "$RC"   # 照它第一项的缩进插在最前面
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['nodes'] += ['US-E', 'US-F']; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['nodes'] += ['US-E', 'US-F']"
 run cca _core-nodes >/dev/null 2>&1
 ok "拷节点定义：可选节点经 dialer-proxy 用到的 HOP-A 也拷；dialer-proxy 指向策略组的 US-F 不要" '[ "$(cnames "$CN/nodes.json")" = US-E,HOP-A,US-A,US-B,US-C,US-D,HK-A2 ]'
 cp "$T/rc.core" "$RC"; cp "$T/config.core2" "$H/.cca/config.json"; run cca _core-nodes >/dev/null 2>&1
@@ -3605,7 +3563,7 @@ cp "$T/rc.core" "$RC"; cp "$T/config.core2" "$H/.cca/config.json"; run cca _core
 ruby -e 'f = ARGV[0]; s = File.read(f); s.sub!(/^proxies:\n( *)- /) { i = $1; "proxies:\n" + ["{name: \"🇺🇸 美国 \\\"A\\\" \\\\ 反斜杠\", type: ss, server: 192.0.2.31, port: 8388, cipher: aes-128-gcm, password: \"p\\\"a\\\\ss\\tx\\u0001y\\nz\", udp: true, tfo: false, plugin: ~, ratio: 1.5, big: 12345678901234567890, alpn: [h2, \"http/1.1\"], ws-opts: {path: /ws, headers: {Host: example.com}}, e1: {}, e2: [], 1: one}", "&A1 {name: N-A1, type: ss, server: 192.0.2.32, port: 8388, cipher: aes-128-gcm, password: x, smux: {enabled: true, protocol: h2mux}}", "{<<: *A1, name: N-A2, server: 192.0.2.33}"].map { |x| "#{i}- #{x}\n" }.join + "#{i}- " } or abort; File.write(f, s)' "$RC"
 rr defs > "$T/defs.out" 2>&1
 ruby -E UTF-8 -ryaml -rjson -e 'c = begin YAML.load(File.read(ARGV[0]), aliases: true) rescue ArgumentError; YAML.load_file(ARGV[0]) end; print JSON.generate({"proxies" => c["proxies"].select { |p| p.is_a?(Hash) }})' "$RC" > "$T/defs.want"
-ok "路由器端 defs 自己写 JSON（最后一行是结束标记）：和 ruby 读出来再 JSON.generate 的一样（引号、反斜杠、控制字符、emoji、大整数、小数、null、空的 {} []、不是字符串的键、锚点和合并）" 'python3 -c "import json,sys; g=open(sys.argv[1],encoding=\"utf-8\").read(); e=\"\n# cca-defs-end\n\"; w=json.load(open(sys.argv[2],encoding=\"utf-8\")); p=json.loads(g[:-len(e)])[\"proxies\"] if g.endswith(e) else None; sys.exit(0 if p == w[\"proxies\"] and p[0][\"password\"] == \"p\\\"a\\\\ss\\tx\\x01y\\nz\" and p[0][\"big\"] == 12345678901234567890 and p[2][\"smux\"] == {\"enabled\": True, \"protocol\": \"h2mux\"} and p[2][\"server\"] == \"192.0.2.33\" else 1)" "$T/defs.out" "$T/defs.want"'
+ok "路由器端 defs 自己写 JSON（最后一行是结束标记）：和 ruby 读出来再 JSON.generate 的一样（引号、反斜杠、控制字符、emoji、大整数、小数、null、空的 {} []、不是字符串的键、锚点和合并）" '"$TESTBIN" check -t "g=$T/defs.out" -f "w=$T/defs.want" "e=\"\n# cca-defs-end\n\"; p=json.loads(g[:-len(e)])[\"proxies\"] if g.endswith(e) else None; p == w[\"proxies\"] and p[0][\"password\"] == \"p\\\"a\\\\ss\\tx\\x01y\\nz\" and p[0][\"big\"] == 12345678901234567890 and p[2][\"smux\"] == {\"enabled\": True, \"protocol\": \"h2mux\"} and p[2][\"server\"] == \"192.0.2.33\""'
 cp "$T/rc.core" "$RC"
 # 这台机器上没有 ruby（Linux 服务器默认没装）：照样拷（本机的 ruby 换成一调用就记一笔、失败的假的；路由器那边照常用真的）
 mkdir -p "$T/noruby"; printf '#!/bin/sh\necho "LOCAL RUBY $*" >> "$CCA_T/noruby.log"\nexit 127\n' > "$T/noruby/ruby"; chmod +x "$T/noruby/ruby"
@@ -3643,7 +3601,7 @@ printf 'nameserver 198.18.0.2\nnameserver 127.0.0.1\n' > "$T/resolv.conf"
 out=$(run cca @alice --version 2>&1); rc=$?
 ok "系统的 DNS 是 TUN 自己的地址（走虚拟网卡）、本机的：改用物理网卡从 DHCP 拿到的 DNS 解析节点的域名，重新加载一次" '[ $rc -eq 3 ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "c[\"interface-name\"] == \"en0\" and c[\"dns\"][\"nameserver\"] == [\"192.0.2.53\"] and c[\"dns\"][\"default-nameserver\"] == [\"192.0.2.53\"]" && printf "%s" "$out" | grep -q "节点的域名经 192.0.2.53 解析"'
 printf 'nameserver 192.0.2.53\n' > "$T/resolv.conf"
-cfgset() { python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); exec(sys.argv[2]); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json" "$1"; }
+cfgset() { "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "$1"; }
 cfgset 'c["core_bind"] = False'
 run cca @alice --version >/dev/null 2>&1
 ok "config.json 的 core_bind: false：开着 TUN 也不绑定" 'ccfg "\"interface-name\" not in c and \"dns\" not in c"'
@@ -3675,7 +3633,7 @@ edit_table 'j["alice@example.com"] = "US-C"'
 run cca @alice --version >/dev/null 2>&1
 ok "换节点：经控制接口切到 US-C，不重新加载；配置里 CCA-1 的第一个成员也换成 US-C（内核重启后照样选它）" '[ "$(csel CCA-1)" = US-C ] && [ "$(creloads)" = "$n0" ] && ccfg "c[\"proxy-groups\"][0][\"proxies\"][0] == \"US-C\""'
 cp "$CN/nodes.json" "$T/nodes.core.complete"
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies']=[x for x in j['proxies'] if x['name']!='US-D']; json.dump(j, open(p,'w'))" "$CN/nodes.json"
+"$TESTBIN" edit "j=$CN/nodes.json" "j['proxies']=[x for x in j['proxies'] if x['name']!='US-D']"
 edit_table 'j["alice@example.com"] = "US-D"'
 out=$(run cca @alice --version 2>&1); rc=$?
 ok "账号的节点内置代理里没有定义：重新加载（组里 REJECT 排第一），不启动，说明怎么补" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理里没有节点「US-D」的定义" && [ "$(csel CCA-1)" = REJECT ] && [ "$(creloads)" = $((n0 + 1)) ]'
@@ -3717,7 +3675,7 @@ mv "$GA.off" "$GA"
 run cca @alice --version >/dev/null 2>&1
 ok "装回界面 App：再下载内核、起内核，照常启动" '[ -x "$CN/mihomo-v1.19.33" ] && [ -f "$CD/up" ] && [ "$(csel CCA-1)" = US-A ]'
 # 终端里（交互）在外面、还没配置本机客户端：照 cca local setup 的流程问（用内置代理吗）
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['local'] = {}"
 out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
 ok "终端里在外面、还没配置本机客户端：照 cca local setup 问（用内置代理吗），答 y 照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "用内置代理吗" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(csel CCA-1)" = US-A ]'
 # 关掉、在家重新配置
@@ -3736,25 +3694,25 @@ out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
 ok "cca local setup：用内置代理（问一句），在家先从路由器拷节点定义，然后让内核就绪" 'printf "%s" "$out" | grep -q "用内置代理吗" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ -f "$CD/up" ]'
 # 自定义节点：分享链接 / Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json（600），名字加进可选节点（配置了路由器的同步时也写进路由器，见 11b2c）
 cp "$H/.cca/config.json" "$T/cfg.cn.bak"
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('router',None); json.dump(c,open(p,'w'),indent=2,ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c.pop('router',None)"
 out=$(sess '{"add.basic":[{"email":"cn@example.com","alias":""}]}' --eof-at add.node -- cca add 2>&1); rc=$?
 ok "加账号选节点：没有路由器、能用内置代理时，末尾多一项「自定义代理…」（选它可粘贴分享链接 / Clash 节点）" '[ "$(asks)" = "add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and any(\"自定义代理\" in o[\"label\"] for o in e[\"fields\"][0][\"options\"])"'
-VMLINK=$(python3 -c "import base64,json;print('vmess://'+base64.b64encode(json.dumps({'ps':'My Node','add':'198.51.100.9','port':'443','id':'uu','aid':'0','net':'ws','host':'h.example.com','path':'/p','tls':'tls','scy':'auto'}).encode()).decode())")
+VMLINK=vmess://$("$TESTBIN" run "print(json.dumps({'ps':'My Node','add':'198.51.100.9','port':'443','id':'uu','aid':'0','net':'ws','host':'h.example.com','path':'/p','tls':'tls','scy':'auto'}), end='')" | "$TESTBIN" b64)
 out=$(run cca node add "$VMLINK" 2>&1); rc=$?
-ok "cca node add 分享链接：解析 vmess、内核 -t 校验、存进 custom-nodes.json（600），名字加进可选节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加好了自定义节点「My Node」" && [ "$(stat -f %Lp "$CN/custom-nodes.json")" = 600 ] && python3 -c "import json,sys; p=json.load(open(sys.argv[1]))[\"proxies\"][0]; sys.exit(0 if p[\"name\"]==\"My Node\" and p[\"server\"]==\"198.51.100.9\" and p[\"type\"]==\"vmess\" and p[\"network\"]==\"ws\" else 1)" "$CN/custom-nodes.json" && cfgok "\"My Node\" in c[\"nodes\"]"'
+ok "cca node add 分享链接：解析 vmess、内核 -t 校验、存进 custom-nodes.json（600），名字加进可选节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加好了自定义节点「My Node」" && [ "$(stat -f %Lp "$CN/custom-nodes.json")" = 600 ] && "$TESTBIN" check -f "j=$CN/custom-nodes.json" "p=j[\"proxies\"][0]; p[\"name\"]==\"My Node\" and p[\"server\"]==\"198.51.100.9\" and p[\"type\"]==\"vmess\" and p[\"network\"]==\"ws\"" && cfgok "\"My Node\" in c[\"nodes\"]"'
 ok "cca node ls：列出自定义节点（名字、类型、服务器:端口）" 'run cca node ls 2>&1 | grep -q "My Node（vmess 198.51.100.9:443）"'
 out=$(run cca node add "这不是节点配置" 2>&1); rc=$?
-ok "cca node add 认不出的内容：报错、不存（custom-nodes.json 还是只有一个）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "认不出" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if len(j[\"proxies\"])==1 else 1)" "$CN/custom-nodes.json"'
+ok "cca node add 认不出的内容：报错、不存（custom-nodes.json 还是只有一个）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "认不出" && "$TESTBIN" check -f "j=$CN/custom-nodes.json" "len(j[\"proxies\"])==1"'
 echo "203.0.113.77" > "$T/core/reject_text"
 out=$(run cca node add "vless://u@203.0.113.77:443?security=tls#Bad" 2>&1); rc=$?
 rm -f "$T/core/reject_text"
-ok "cca node add 内核 -t 校验没过：报错、不存" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "校验没通过" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if len(j[\"proxies\"])==1 else 1)" "$CN/custom-nodes.json"'
-python3 -c "import json,sys; p=sys.argv[1]; t=json.load(open(p)); t[\"甲(z@example.com)\"]=\"My Node\"; json.dump(t,open(p,'w'),ensure_ascii=False)" "$H/.cca/accounts.json"
+ok "cca node add 内核 -t 校验没过：报错、不存" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "校验没通过" && "$TESTBIN" check -f "j=$CN/custom-nodes.json" "len(j[\"proxies\"])==1"'
+"$TESTBIN" edit --unicode "t=$H/.cca/accounts.json" "t[\"甲(z@example.com)\"]=\"My Node\""
 out=$(run cca node rm "My Node" 2>&1); rc=$?
 ok "cca node rm：还有账号在用时不删（说哪个账号在用）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "还有账号在用" && cfgok "\"My Node\" in c[\"nodes\"]"'
-python3 -c "import json,sys; p=sys.argv[1]; t=json.load(open(p)); t.pop(\"甲(z@example.com)\",None); json.dump(t,open(p,'w'),ensure_ascii=False)" "$H/.cca/accounts.json"
+"$TESTBIN" edit --unicode "t=$H/.cca/accounts.json" "t.pop(\"甲(z@example.com)\",None)"
 out=$(run cca node rm "My Node" 2>&1); rc=$?
-ok "cca node rm：从 custom-nodes.json 和可选节点里去掉" '[ $rc -eq 0 ] && ! cfgok "\"My Node\" in c[\"nodes\"]" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if not j[\"proxies\"] else 1)" "$CN/custom-nodes.json"'
+ok "cca node rm：从 custom-nodes.json 和可选节点里去掉" '[ $rc -eq 0 ] && ! cfgok "\"My Node\" in c[\"nodes\"]" && "$TESTBIN" check -f "j=$CN/custom-nodes.json" "not j[\"proxies\"]"'
 cp "$T/cfg.cn.bak" "$H/.cca/config.json"; touch "$T/away"; : > ssh.log
 out=$(run cca node add "$VMLINK" 2>&1); rc=$?
 ok "配置了路由器的机器也能加自定义节点（同步时写进路由器的配置文件，见 11b2c）；在外面时不碰路由器，说回家后下次启动时同步" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加好了自定义节点「My Node」" && printf "%s" "$out" | grep -q "回到家里的网络后，下次启动 cca 时会自动同步" && ! grep -q "^SSH " ssh.log'
@@ -3764,7 +3722,7 @@ run cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 50); do [ -x "$CN/mihomo-v1.19.33" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && break; sleep 0.1; done
 ok "已经用内置代理、内核文件不在（比如 cca 升级换了内核版本）：在家启动后在后台先下好（在外面直连 GitHub 可能很慢）" '[ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo" gh.log'
 # 配置本机出口的表单（local.builtin）：GUI 里问一句用不用内置代理
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); (c.get('local') or {}).pop('client', None); json.dump(c, open(p, 'w'), ensure_ascii=False)" "$H/.cca/config.json"   # 前面已把 local.client 设成 builtin；清掉它，cmd_local_setup 才会问 local.builtin
+"$TESTBIN" edit --unicode "c=$H/.cca/config.json" "(c.get('local') or {}).pop('client', None)"   # 前面已把 local.client 设成 builtin；清掉它，cmd_local_setup 才会问 local.builtin
 : > env.log
 out=$(sess '{"local.builtin":[{"v":"y"}]}' -- cca local setup 2>&1); rc=$?
 ok "提问会话：配置本机出口：GUI 问用不用内置代理，答是就配好（有结果事件）" '[ $rc -eq 0 ] && [ "$(asks)" = local.builtin ] && evq "e.get(\"q\") == \"local.builtin\" and e[\"fields\"][0][\"kind\"] == \"confirm\"" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_ready\"" && [ -f "$CD/up" ]'
@@ -3783,14 +3741,14 @@ CD="$T/core"; CN="$H/.cca/core"; CU="$T/core_udp"; UR="$H/udp-root"; UF="$H/.cca
 ru() { run CCA_UDP_SETTLE=0 "$@"; }
 uup() { local i; for i in $(seq 1 60); do [ -f "$CU/up" ] && return 0; sleep 0.1; done; return 1; }
 udown() { local i; for i in $(seq 1 60); do [ -f "$CU/up" ] || return 0; sleep 0.1; done; return 1; }
-ucfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$UR/cca-udp/config.yaml" "$1"; }   # 装着的 TUN 配置（c）满足条件
+ucfg() { "$TESTBIN" check -f "c=$UR/cca-udp/config.yaml" -- "$1"; }   # 装着的 TUN 配置（c）满足条件
 admins() { local n; n=$(grep -c '^OSA-ADMIN' "$T/osascript.log" 2>/dev/null); echo "${n:-0}"; }   # 弹过几次授权框
 utmp() { sed -n 's/^S=//p' "$T/osascript.log" | tail -n 1 | tr -d "'"; }   # 最近一次管理员脚本拷文件的临时目录
 ustate() { gj state | jok "d[\"config\"][\"local\"][\"udp\"] == $1"; }
 core_stop() { [ -f "$CD/up" ] && kill "$(cat "$CD/pid")" 2>/dev/null; local i; for i in $(seq 1 30); do [ -f "$CD/up" ] || return 0; sleep 0.1; done; }
 cp "$H/.cca/config.json" "$T/config.udp"; cp "$H/.cca/accounts.json" "$T/accounts.udp"
 edit_table 'j["alice@example.com"] = "US-A"'
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['local'] = {}"
 mkdir -p "$CN"; chmod 700 "$CN"
 "$TESTBIN" edit -f c="$H/.cca/config.json" --or-empty j="$CN/nodes.json" 'nodes = c["nodes"]
 px = {"US-A": {"type": "vless", "server": "192.0.2.21", "port": 443, "uuid": "udp-secret-a", "udp": True, "tls": True},
@@ -3802,7 +3760,7 @@ chmod 600 "$CN/nodes.json"
 : > "$T/osascript.log"; : > "$T/launchctl.log"; : > env.log
 out=$(ru cca local udp on US-A 2>&1 </dev/null); rc=$?
 ok "cca local udp on：还没用内置代理时不装（只给内置代理用），不弹授权框" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "只给内置代理用" && [ "$(admins)" = 0 ] && [ ! -e "$UR" ]'
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {'client': 'builtin'}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['local'] = {'client': 'builtin'}"
 out=$(ru cca local udp 2>&1 </dev/null)
 ok "cca local udp：没开时说这台 Mac 的 UDP 直连、怎么打开；STUN 没测到也照实说" 'printf "%s" "$out" | grep -q "没开：这台 Mac 的 UDP" && printf "%s" "$out" | grep -q "cca local udp on \[节点\]" && printf "%s" "$out" | grep -q "STUN 没测到"'
 ok "_gui state：config.local.udp 是没开、没装" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": False, \"running\": False, \"other_vpn\": None, \"paused\": False}"'
@@ -3816,7 +3774,7 @@ echo 198.51.100.21 > "$T/stun_ip"
 : > gh.log
 out=$(ru CCA_TTY="$(ans 1)" cca local udp on 2>&1); rc=$?
 ok "cca local udp on（终端里现选，只列转发 UDP 的节点）：弹一次授权框装上系统服务，打开开关，root 的内核起来，说 STUN 看到的出口" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "1. US-A" && ! printf "%s" "$out" | grep -q "US-B" && printf "%s" "$out" | grep -q "现在经节点 US-A 出去" && printf "%s" "$out" | grep -q "从 198.51.100.21" && [ "$(admins)" = 1 ] && uup && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && [ -f "$UF" ] && [ "$(stat -f %Lp "$H/.cca/udp")" = 700 ] && grep -q "^GH mihomo" gh.log'
-ok "装到 root 那边的：内核（和内置代理的同一份）、配置（600，只有这个节点，只把 UDP 交给它）、启动脚本（755）、info.json（644，没有密钥）、日志；launchd 配置照开关文件起停" '[ -x "$UR/cca-udp/mihomo" ] && cmp -s "$UR/cca-udp/mihomo" "$CN/mihomo-v1.19.33" && [ "$(stat -f %Lp "$UR/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/config.yaml")" = 600 ] && [ "$(stat -f %Lp "$UR/cca-udp/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/info.json")" = 644 ] && [ -f "$UR/cca-udp.log" ] && ucfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\"] and c[\"rules\"][0] == \"NETWORK,TCP,DIRECT\" and c[\"rules\"][-2:] == [\"NETWORK,UDP,US-A\", \"MATCH,DIRECT\"] and c[\"tun\"][\"enable\"] and \"external-controller\" not in c" && ! grep -q udp-secret "$UR/cca-udp/info.json" "$UR/local.cca.udp.plist" && python3 -c "import plistlib,sys; p=plistlib.load(open(sys.argv[1],\"rb\")); sys.exit(0 if p[\"KeepAlive\"] == {\"PathState\": {sys.argv[2]: True}} and p[\"ProgramArguments\"] == [sys.argv[3] + \"/cca-udp\"] else 1)" "$UR/local.cca.udp.plist" "$UF" "$UR/cca-udp"'
+ok "装到 root 那边的：内核（和内置代理的同一份）、配置（600，只有这个节点，只把 UDP 交给它）、启动脚本（755）、info.json（644，没有密钥）、日志；launchd 配置照开关文件起停" '[ -x "$UR/cca-udp/mihomo" ] && cmp -s "$UR/cca-udp/mihomo" "$CN/mihomo-v1.19.33" && [ "$(stat -f %Lp "$UR/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/config.yaml")" = 600 ] && [ "$(stat -f %Lp "$UR/cca-udp/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/info.json")" = 644 ] && [ -f "$UR/cca-udp.log" ] && ucfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\"] and c[\"rules\"][0] == \"NETWORK,TCP,DIRECT\" and c[\"rules\"][-2:] == [\"NETWORK,UDP,US-A\", \"MATCH,DIRECT\"] and c[\"tun\"][\"enable\"] and \"external-controller\" not in c" && ! grep -q udp-secret "$UR/cca-udp/info.json" "$UR/local.cca.udp.plist" && "$TESTBIN" plist-json "$UR/local.cca.udp.plist" | "$TESTBIN" check -f p=- -s "a2=$UF" -s "a3=$UR/cca-udp" "p[\"KeepAlive\"] == {\"PathState\": {a2: True}} and p[\"ProgramArguments\"] == [a3 + \"/cca-udp\"]"'
 ok "节点密钥不进命令行和日志（管理员脚本是 osascript 的参数，launchctl、env 的命令行）；临时目录用完删掉" '! grep -q udp-secret "$T/osascript.log" "$T/launchctl.log" env.log && tmpd=$(utmp) && [ -n "$tmpd" ] && [ ! -e "$tmpd" ] && grep -q "^SUMS=.*mihomo:[0-9a-f]\{64\} config.yaml:[0-9a-f]\{64\}" "$T/osascript.log"'
 ok "launchd：bootstrap 装上，开关文件在就起 cca-udp" 'grep -q "^LAUNCHCTL bootstrap system $UR/local.cca.udp.plist$" "$T/launchctl.log" && grep -q "^START local.cca.udp$" "$T/launchctl.log"'
 ok "_gui state：config.local.udp 是开着、装好了、在运行" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None, \"paused\": False}"'
@@ -3849,7 +3807,7 @@ ok "cca local udp off：删掉开关文件，root 的内核自己停下（等到
 ok "_gui state：关掉以后是 off（装着、没在运行）" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": True, \"running\": False, \"other_vpn\": None, \"paused\": False}"'
 out=$(ru cca local udp on 2>&1 </dev/null); rc=$?
 ok "cca local udp on 不写节点：用装着的那个（不弹授权框），又起来了" '[ $rc -eq 0 ] && uup && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && [ "$(admins)" = 1 ]'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(server='192.0.2.31') for x in j['proxies'] if x['name'] == 'US-A']; json.dump(j, open(p, 'w'))" "$CN/nodes.json"
+"$TESTBIN" edit "j=$CN/nodes.json" "[x.update(server='192.0.2.31') for x in j['proxies'] if x['name'] == 'US-A']"
 ok "节点定义变了：_gui state 说装着的配置旧了（还在运行）" 'ustate "{\"node\": \"US-A\", \"state\": \"stale\", \"installed\": True, \"running\": True, \"other_vpn\": None, \"paused\": False}"'
 mkdir -p "$GA/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$GA/Contents/Info.plist"
@@ -3921,7 +3879,7 @@ ri() { run PATH="$NP" TMPDIR="$TI" "$@"; }
 toff() { mv "$T/bin/$1" "$T/$1.off"; }   # 模拟没装这个命令（假的安装脚本装上时链接到 $T/<命令>.off）
 tback() { rm -f "$H/.local/bin/$1"; mv "$T/$1.off" "$T/bin/$1"; }
 ileft() { ls "$TI" | grep -c '^cca-cli\.'; }   # 留下的临时目录（应该都删了）
-icfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$ID/last_config.json" "$1"; }   # 临时内核收到的配置（c）
+icfg() { "$TESTBIN" check -f "c=$ID/last_config.json" -- "$1"; }   # 临时内核收到的配置（c）
 istopped() { [ ! -f "$ID/up" ] && ! kill -0 "$(cat "$ID/pid")" 2>/dev/null && [ ! -e "$(cat "$ID/home")" ]; }   # 临时内核停了，它的目录（有节点密钥）删了
 ipol() {   # ipol 节点：这台设备在一个 Team 里，它的配置写着 install_node（不写节点：不在任何 Team 里）
 	rm -rf "$H/.cca/teams"; [ -z "${1:-}" ] || tm_fake 书房组 "{\"install_node\": \"$1\"}" >/dev/null
@@ -3947,7 +3905,7 @@ fi
 tback codex
 # 直连拿不到安装脚本：经内置代理的节点（节点定义：路由器上拷来的 US-A～D、HK-A2）
 mkdir -p "$CN"; chmod 700 "$CN"
-python3 -c 'import json,sys,time; json.dump({"version": 1, "saved_at": time.time(), "nodes": [], "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (51 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-A", "US-B", "US-C", "US-D", "HK-A2"])]}, open(sys.argv[1], "w"))' "$CN/nodes.json"
+"$TESTBIN" run 'print(json.dumps({"version": 1, "saved_at": time.time(), "nodes": [], "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (51 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-A", "US-B", "US-C", "US-D", "HK-A2"])]}), end="")' > "$CN/nodes.json"
 chmod 600 "$CN/nodes.json"
 toff agy; touch "$T/install_direct_down"; : > "$IL"; : > gh.log
 out=$(ri cca agy install-cli 2>&1); rc=$?
@@ -3961,7 +3919,7 @@ ok "开着 TUN（去公网的路由走 utun9）：临时内核和内置代理一
 rm -f "$T/tun" "$H/.local/bin/agy"
 # Team 的配置指定安装用的节点（install_node）：路由器上改过名的（cca 记下的 node_renames）按现在的名字
 ipol US-OLD
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['node_renames'] = {'US-OLD': 'US-B'}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+"$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['node_renames'] = {'US-OLD': 'US-B'}"
 : > "$IL"
 out=$(ri CCA_TTY="$(ans y)" cca agy install-cli 2>&1); rc=$?
 ok "Team 的配置指定了安装节点（写的是 US-OLD：路由器上改了名，按现在的名字 US-B）：直连拿不到时问过（默认是）再经它的临时代理装上" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本。经内置代理的节点 US-B 安装 agy 吗？" && grep -qx "INSTALL-GET agy via US-B" "$IL" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && istopped && [ "$(ileft)" = 0 ]'
@@ -4023,11 +3981,11 @@ if sect 11b6; then
 SH="$T/homes"; mkdir -p "$SH/Applications/cca.app/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$SH/Applications/cca.app/Contents/Info.plist"
 rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" CCA_REMOTE_LOGIN=1 CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
-scfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$SH/.cca/config.json" "$1"; }   # 服务器那边的 config.json（c）
+scfg() { "$TESTBIN" check -f "c=$SH/.cca/config.json" -- "$1"; }   # 服务器那边的 config.json（c）
 # Team「云上组」：配置给 sam（走 US-S），指定安装节点 US-I，带着三个节点（US-X 没人用）
 SVT="$T/srv6"; tm_cert "$SVT"; ssh-keygen -q -t ed25519 -N '' -C root -f "$SVT/root" </dev/null >/dev/null 2>&1
 tm_srv "$SVT" "$(cut -d' ' -f1,2 "$SVT/root.pub")"; SVTPID=$TMPID; SVTPORT=$(cat "$SVT/port"); SVTPIN=$(tm_pin "$SVT")
-SVTDOC=$(python3 -c 'import json; print(json.dumps({"accounts": {"claude": {"sam@example.com": "US-S"}}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-I", "nodes": {"group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (81 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-I", "US-S", "US-X"])]}}))')
+SVTDOC=$("$TESTBIN" val 'json.dumps({"accounts": {"claude": {"sam@example.com": "US-S"}}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-I", "nodes": {"group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (81 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-I", "US-S", "US-X"])]}})')
 toff claude; echo HK > "$T/direct_loc"; : > "$IL"; : > curl.log
 out=$(rs CCA_TTY="$(ans n)" CCA_POLICY_REPO=example/cca-policy "$H/.cca/bin/cca" install 2>&1); rc=$?
 ok "服务器上直连的出口在受限地区：不问路由器，先问有没有 Team 的邀请链接；带着 CCA_POLICY_REPO（3.6.0 以前打开维护者的共享）：只说一声去掉了、改用 Team，不生成 deploy key；没有邀请链接、也没粘贴自己的代理：不装 Claude Code、不加账号，说明之后再运行 cca install" '[ $rc -eq 0 ] && grep -q "^CURL direct https://claude.ai/cdn-cgi/trace" curl.log && printf "%s" "$out" | grep -q "正在检测这台机器能不能直连 claude.ai" && printf "%s" "$out" | grep -q "直连 claude.ai 的出口在香港，不能用：这台机器不用配置路由器，改用 cca 内置的代理" && printf "%s" "$out" | grep -q "维护者的映射 3.6.0 起去掉了（CCA_POLICY_REPO 不再起作用）：向 Team 的管理员要一个邀请链接，装好后运行 cca team join 加入" && printf "%s" "$out" | grep -q "有没有 Team 的邀请链接？ \[y/N\]" && printf "%s" "$out" | grep -q "再运行 cca install 接着配置" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号|policy\.sh" && scfg "not c.get(\"policy\") and not c.get(\"nodes\") and not c.get(\"router\")" && [ ! -e "$SH/.cca/policy" ]'
@@ -4230,7 +4188,7 @@ for a in "gina-example-com-$(printf %s gina@example.com | shasum | cut -c1-6)" o
 done
 ag_pre=$(readlink "$H/.local/bin/aga" 2>/dev/null)
 # 邮箱助手配置过：应用专用密码在钥匙串里
-python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mail"]={"user": "inbox@example.com"}; json.dump(c, open(p, "w"))' "$H/.cca/config.json"
+"$TESTBIN" edit "c=$H/.cca/config.json" 'c["mail"]={"user": "inbox@example.com"}'
 mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail/inbox@example.com"
 # 远程会话配对过一台机器（docs/dev/remote.md）：配对表在 ~/.cca/remote，密钥在钥匙串里。配对记在某个 Team 的服务器上（hub 是它的编号；
 # 这台设备已经不在那个 Team 里：只在这台机器上取消，不联网）。RSO 是 3.6.0 以前在维护者的服务器上配的（没有 hub）：不算配对了，密钥也删掉
