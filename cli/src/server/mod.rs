@@ -42,6 +42,7 @@
 
 pub mod acme;
 pub mod cli;
+pub mod disk;
 pub mod front;
 pub mod handler;
 pub mod http;

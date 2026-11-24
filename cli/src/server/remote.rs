@@ -26,6 +26,7 @@ mod replay;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 mod tests;
 
+use super::disk;
 use super::limits::Limits;
 use super::omap::OMap;
 use super::wire::{self, Blob, Num};
@@ -35,8 +36,6 @@ use crate::py::json::{self, Fmt};
 use crate::py::obj::{Dict, V};
 use crate::py::{base64, Fail, R};
 use std::collections::HashMap;
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
@@ -339,16 +338,13 @@ fn load_doc(path: &Path, keys: &[&str], say: &mut dyn FnMut(String)) -> Option<D
     }
 }
 
-/// 存状态文件（Py:416-421）：写到 `路径.进程号.tmp`（新建的是 600），再换过去
+/// 存状态文件（Py:416-421）：写到 `路径.进程号.tmp`（新建的是 600），再换过去。和 Python 不一样的：换过去之前 fsync，
+/// 没存成时不留下临时文件（见 `disk`）
 fn save_doc(path: &Path, data: &V) -> R<()> {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(format!(".{}.tmp", std::process::id()));
     let text = json::dumps(data, COMPACT);
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-    f.write_all(text.as_bytes())?;
-    drop(f);
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    disk::replace(Path::new(&tmp), path, text.as_bytes()).map_err(|(_, e)| e.into())
 }
 
 impl Remote {

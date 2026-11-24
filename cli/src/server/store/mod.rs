@@ -15,7 +15,7 @@
 //! - 写法是 `save_doc` 的（Py:416-421：写到 `路径.进程号.tmp`，权限 600，再换过去），存的时机也照 Python：哪个 op 在哪一步
 //!   存哪个文件，这里就在哪一步存（没改动的文件不重写）
 //!
-//! 和 Python 不一样的一处：Python 只在启动时筛邀请、用掉的令牌、名单（`team_setup`），别的项（心跳、会话、API key 的密文）读进来
+//! 和 Python 不一样的两处。存的时候换过去之前 fsync、没存成不留下临时文件（`disk`）。再就是：Python 只在启动时筛邀请、用掉的令牌、名单（`team_setup`），别的项（心跳、会话、API key 的密文）读进来
 //! 是什么就是什么，手改坏了的要到用到它的请求才出错（以后每个这样的请求都出错）。这里读的时候都取成有类型的值：样子不对的
 //! 那一项当它没有，一项里多出来的键不留。Python 自己写的文件里没有这样的项，所以它写的文件读进来再写出去一个字节都不变。
 //!
@@ -29,6 +29,7 @@ pub mod sync;
 pub mod team;
 pub mod view;
 
+use super::disk::{self, Step};
 use super::limits::Limits;
 use super::omap::OMap;
 use super::sshsig;
@@ -39,9 +40,8 @@ use crate::py::json::{self, Fmt};
 use crate::py::obj::{Dict, List, V};
 use crate::py::{fs as pyfs, hash, path, rand, Fail, R};
 use std::collections::HashMap;
-use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// 启动时定下来的（命令行给的那几项，Py:2152-2158、2214）
 #[derive(Clone, Debug)]
@@ -336,20 +336,16 @@ fn os_fail(e: &io::Error, what: String) -> Fail {
     Fail::Os(io::Error::new(e.kind(), format!("{}: {what}", crate::py::fail::os_error_text(e))))
 }
 
-/// `save_doc`（Py:416-421）：写到 `路径.进程号.tmp`（新建的话权限 600），再换过去；不 fsync
+/// `save_doc`（Py:416-421）：写到 `路径.进程号.tmp`（新建的话权限 600），再换过去。和 Python 不一样的：换过去之前 fsync，
+/// 没存成时不留下临时文件（见 `disk`）
 fn save_doc(path: &str, data: &V) -> R<()> {
     let tmp = format!("{path}.{}.tmp", std::process::id());
     let quoted = crate::py::obj::repr_str;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-        .map_err(|e| os_fail(&e, quoted(&tmp)))?;
-    f.write_all(text_of(data).as_bytes())?;
-    drop(f);
-    std::fs::rename(&tmp, path).map_err(|e| os_fail(&e, format!("{} -> {}", quoted(&tmp), quoted(path))))
+    disk::replace(Path::new(&tmp), Path::new(path), text_of(data).as_bytes()).map_err(|(step, e)| match step {
+        Step::Open => os_fail(&e, quoted(&tmp)),
+        Step::Write => e.into(),
+        Step::Rename => os_fail(&e, format!("{} -> {}", quoted(&tmp), quoted(path))),
+    })
 }
 
 /// 数字是不是真的（Python 的 `if x`）：0、0.0 是假
