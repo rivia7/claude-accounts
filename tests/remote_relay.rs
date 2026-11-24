@@ -15,7 +15,6 @@ use kit::fleet::{self, Device, WAIT};
 use kit::fsx::{self, wait_for};
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Style, Value};
-use kit::proc::Cmd;
 use kit::relay::{self, connect, ctl, dial, frame, read_all, read_ctl, read_exact, read_line, recv, sendall};
 use kit::relay::{Base, Popen, Reader, RelayOpts, RelayServer, SpecPeer};
 use kit::relay::{EXIT, F_ANNOUNCE, F_BYE, F_JOIN, F_PING, F_PONG, HELLO, INPUT, OUTPUT, RESIZE};
@@ -178,19 +177,27 @@ fn shows(t: &mut Term, needle: &str, limit: Duration) -> bool {
     }
 }
 
-/// 进程 pid 的父进程（`ps -o ppid= -p pid`）；问不到是 0
+/// 进程 pid 的父进程；问不到是 0。Linux 上读 /proc/<pid>/stat（busybox 的 ps 不认 `-o ppid= -p`）：
+/// "pid (comm) state ppid …"，comm 里可以有空格和括号，从最后一个 ) 往后数
+#[cfg(target_os = "linux")]
 fn parent_of(pid: i32) -> i32 {
-    let mut ps = Cmd::new("/bin/ps");
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return 0 };
+    stat.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().nth(1)).and_then(|ppid| ppid.parse().ok()).unwrap_or(0)
+}
+
+/// 进程 pid 的父进程（`ps -o ppid= -p pid`）；问不到是 0
+#[cfg(not(target_os = "linux"))]
+fn parent_of(pid: i32) -> i32 {
+    let mut ps = kit::proc::Cmd::new("/bin/ps");
     ps.args(["-o", "ppid=", "-p", &pid.to_string()]).timeout(secs(30));
     ps.output().map(|out| out.out().trim().parse().unwrap_or(0)).unwrap_or(0)
 }
 
 /// `os.kill(pid, 9)`
 fn kill9(pid: i32) {
-    let mut kill = Cmd::new("/bin/kill");
-    kill.args(["-9", &pid.to_string()]).timeout(secs(30));
-    let out = kill.output().unwrap_or_else(|e| panic!("{e}"));
-    assert!(out.status.success(), "kill -9 {pid}：{}", out.err());
+    // SAFETY: kill 只是发信号；pid 是这条用例刚问到的那个转接进程
+    let rc = unsafe { libc::kill(pid, libc::SIGKILL) };
+    assert!(rc == 0, "kill -9 {pid}：{}", std::io::Error::last_os_error());
 }
 
 /// 路径照字面放进 pgrep 的正则里：只转义 ERE 里有别的意思的那几个字符（regex::escape 连 - # & ~ 也转义，
