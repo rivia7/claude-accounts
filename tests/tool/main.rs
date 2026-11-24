@@ -14,6 +14,7 @@ mod linux;
 mod mail;
 mod spec;
 mod util;
+mod web_demo;
 
 /// 一个子命令：收下子命令后面的参数，返回退出码
 pub type Run = fn(&[String]) -> i32;
@@ -34,6 +35,7 @@ const TABLES: &[&[(&str, Run)]] = &[
     mail::CMDS,
     spec::CMDS,
     util::CMDS,
+    web_demo::CMDS,
 ];
 
 fn main() {

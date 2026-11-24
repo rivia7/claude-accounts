@@ -25,6 +25,7 @@ mod shared_state;
 mod team;
 mod team_relay;
 mod usage_view;
+mod web_relay;
 
 fn main() {
     kit::harness::main(
@@ -53,6 +54,7 @@ fn main() {
             remote_relay::MODULE,
             team_relay::MODULE,
             acme::MODULE,
+            web_relay::MODULE,
             isolation_chrome_native::MODULE,
         ],
     );

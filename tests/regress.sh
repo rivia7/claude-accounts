@@ -4302,7 +4302,7 @@ ok "远程会话经服务器中转：配对（服务器见不到配对码和密�
 ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'suite_ok team_relay'
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_ok acme'
 # 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
-ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'python3 "$D/web_relay.py" 2>/dev/null'
+ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'suite_ok web_relay'
 # suite 里平时跑的模块上面都得有一行：新加了模块（tests/suite.rs）却没在这里加一条的话，它在后台跑了、没过也没人知道
 ok "suite 的每个模块上面都有一行（tests/suite.rs 里加了模块，这一节也要加一条 suite_ok）" '[ -s "$UNITD/results.tsv" ] && [ "$(cut -f1 "$UNITD/results.tsv" | sort | tr "\n" " ")" = "$(printf "%s\n" $SUITE_SEEN | sort | tr "\n" " ")" ]'
 
