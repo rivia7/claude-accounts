@@ -48,11 +48,6 @@ impl<'a> Cur<'a> {
         Some(u32::from_be_bytes(self.take(4)?.try_into().ok()?))
     }
 
-    /// 8 个字节的整数（高位在前）
-    pub fn u64(&mut self) -> Option<u64> {
-        Some(u64::from_be_bytes(self.take(8)?.try_into().ok()?))
-    }
-
     /// 还没取的
     pub fn rest(&self) -> &'a [u8] {
         self.0
@@ -369,20 +364,11 @@ pub fn parse_sync(j: &Dict, limit: usize) -> Option<SyncIn> {
     Some(SyncIn { put: blobs, get: wanted, have: tags })
 }
 
-/// 设备的名字：1～64 个字符，没有控制字符，前后没有空白（Py:309-311）
-pub fn name_ok(name: &V) -> bool {
-    name.as_str().is_some_and(name_text_ok)
-}
-
-/// `name_ok`，已经知道是字符串时
+/// 设备的名字：1～64 个字符，没有控制字符，前后没有空白（Python 的 `name_ok`，Py:309-311；不是字符串的在取值时就筛掉了）。
+/// 设备在 Team 里的编号（`dev_ok`，Py:314-316）就是字符串合 `dev_re()`，各处直接比
 pub fn name_text_ok(name: &str) -> bool {
     let n = text::len(name);
     0 < n && n <= 64 && text::strip(name) == name && !name_bad().found(name)
-}
-
-/// 设备在 Team 里的编号（Py:314-316）
-pub fn dev_ok(dev: &V) -> bool {
-    dev.as_str().is_some_and(|d| dev_re().matches(d))
 }
 
 /// 配置的序号：从 1 起，比 SEQ_MAX 小（Py:319-321）
@@ -461,7 +447,7 @@ pub fn parse_team_docs(docs: &V) -> Option<OMap<DocIn>> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 mod tests {
-    use super::super::{MAX_COST_BLOB, MAX_KEY_BLOB};
+    use super::super::{MAX_COST_BLOB, MAX_KEY_BLOB, MAX_TEAM_BATCH, MAX_TEAM_DOC, MAX_TEAM_SIG};
     use super::*;
     use crate::dict;
     use crate::py::json::{self, Fmt};
@@ -484,15 +470,15 @@ mod tests {
     #[test]
     fn cursor_takes_what_is_there_and_never_panics() {
         let mut c = Cur::new(&[1, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4, 9, 8]);
-        assert_eq!((c.u8(), c.u16(), c.u32(), c.u64()), (Some(1), Some(2), Some(3), Some(4)));
+        assert_eq!((c.u8(), c.u16(), c.u32(), c.take(8)), (Some(1), Some(2), Some(3), Some(&[0u8, 0, 0, 0, 0, 0, 0, 4][..])));
         assert_eq!((c.rest(), c.is_empty()), (&[9u8, 8][..], false));
         // 不够：什么都不取，游标不动
-        assert_eq!((c.u32(), c.u64(), c.take(3), c.take(usize::MAX), c.rest()), (None, None, None, None, &[9u8, 8][..]));
+        assert_eq!((c.u32(), c.take(3), c.take(usize::MAX), c.rest()), (None, None, None, &[9u8, 8][..]));
         assert_eq!((c.take(0), c.u16(), c.is_empty()), (Some(&[] as &[u8]), Some(0x0908), true));
         assert_eq!((c.u8(), c.u16(), c.take(1), c.take(0), c.rest()), (None, None, None, Some(&[] as &[u8]), &[] as &[u8]));
         // 高位在前
         let mut c = Cur::new(&[0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        assert_eq!((c.u16(), c.u32(), c.u64()), (Some(0x1234), Some(0x5678_9abc), Some(0xdef0_1122_3344_5566)));
+        assert_eq!((c.u16(), c.u32(), c.rest().len()), (Some(0x1234), Some(0x5678_9abc), 8));
         assert!(Cur::new(&[]).is_empty() && Cur::new(&[]).u8().is_none());
     }
 
@@ -585,8 +571,9 @@ mod tests {
                 "is_time" => is_time(&x).into(),
                 "is_count" => is_count(&x).into(),
                 "seq_ok" => seq_ok(&x).into(),
-                "name_ok" => name_ok(&x).into(),
-                "dev_ok" => dev_ok(&x).into(),
+                // Python 的 name_ok、dev_ok：先看是不是字符串（这里各处取值时用 `.str()` 筛），再是这两样
+                "name_ok" => x.as_str().is_some_and(name_text_ok).into(),
+                "dev_ok" => x.as_str().is_some_and(|d| dev_re().matches(d)).into(),
                 "pair" => pair(&x).map(pair_v).into(),
                 "parse_units" => parse_units(&x)
                     .map(|units| {
@@ -694,5 +681,81 @@ mod tests {
         let twice =
             dict! { dev(1) => dict! { "pub" => key(1), "name" => "a" }, dev(2) => dict! { "pub" => key(1), "name" => "b" } };
         assert!(parse_enroll(&V::Dict(twice)).is_none());
+    }
+
+    /// 原来 tests/presence.py 的 test_flow 里直接调 Python 的 parse_enroll、parse_team_docs 的那两段（黑盒的那一份里没有），
+    /// 一项不差：这些都不收，样子对的那一份原样收下
+    #[test]
+    fn enroll_and_docs_cases_of_the_old_python_test() {
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f";
+        let (da, db) = ("0a".repeat(8), "0b".repeat(8));
+        for bad in [
+            "{}".to_string(),
+            format!(r#"{{"xyz":{{"pub":"{key}","name":"x"}}}}"#), // 编号不是 16 个十六进制字符
+            format!(r#"{{"{da}":{{"pub":"ssh-rsa AAAA","name":"x"}}}}"#), // 不是 ed25519 的公钥
+            format!(r#"{{"{da}":"x"}}"#),
+            format!(r#"["{da}"]"#),
+            format!(r#"{{"{da}":{{"pub":"{key}","name":" x"}}}}"#), // 名字前面有空格
+            format!(r#"{{"{da}":{{"pub":"{key}","name":"x"}},"{db}":{{"pub":"{key}","name":"y"}}}}"#), // 一把公钥两个编号
+        ] {
+            assert!(parse_enroll(&json::loads(&bad).unwrap()).is_none(), "{bad}");
+        }
+        let good = parse_enroll(&json::loads(&format!(r#"{{"{da}":{{"pub":"{key}","name":"x"}}}}"#)).unwrap()).unwrap();
+        assert_eq!((good.len(), good.get(&da).map(|e| (e.key.as_str(), e.name.as_str()))), (1, Some((key, "x"))));
+
+        let tag = format!("{}=", "A".repeat(43));
+        let ct = |c: &str| format!(r#"{{"n":"{}","c":"{c}","t":"{tag}"}}"#, "A".repeat(24));
+        let doc = |seq: &str, ct: &str, sig: &str, more: &str| format!(r#"{{"seq":{seq},"ct":{ct},"sig":"{sig}"{more}}}"#);
+        let d1 = doc("1", &ct("QUJD"), "QUJD", "");
+        let one = |d: &str| format!(r#"{{"{db}":{d}}}"#);
+        let many: Vec<String> = (0..=MAX_TEAM_BATCH).map(|i| format!(r#""{i:016x}":{d1}"#)).collect();
+        for bad in [
+            "{}".to_string(),
+            one(&doc("0", &ct("QUJD"), "QUJD", "")),    // 序号从 1 起
+            one(&doc("true", &ct("QUJD"), "QUJD", "")), // 布尔值不是序号
+            one(&doc("1", &ct("QUJD"), "", "")),
+            one(&doc("1", &ct("QUJD"), "!!!!", "")),              // 不是 base64
+            one(&doc("1", &ct("QUJD"), "QUJD", r#","extra":1"#)), // 多了一项
+            format!(r#"{{"x":{d1}}}"#),
+            one(&doc("1", r#"{"n":"x"}"#, "QUJD", "")),
+            one(&doc("1", &ct(&"A".repeat(MAX_TEAM_DOC + 4)), "QUJD", "")),
+            one(&doc("1", &ct("QUJD"), &"A".repeat(MAX_TEAM_SIG + 4), "")),
+            format!("{{{}}}", many.join(",")), // 一次 65 台
+        ] {
+            let shown: String = bad.chars().take(120).collect();
+            assert!(parse_team_docs(&json::loads(&bad).unwrap()).is_none(), "{shown}");
+        }
+        let kept = parse_team_docs(&json::loads(&one(&d1)).unwrap()).unwrap();
+        let e = kept.get(&db).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!((e.seq, text(&e.ct.to_v()), e.sig.as_str()), (1, text(&json::loads(&ct("QUJD")).unwrap()), "QUJD"));
+    }
+
+    /// cca 传上来的密文，服务器收这个形状（原来 tests/presence.py 的 test_keyshare_crypto、tests/cost_view.py 的 test_seal_open
+    /// 里直接调 Python 的 parse_blob 的那几句）：密文是客户端自己的那几个函数封的——API key 的（最长的 key 也在上限以内）、
+    /// 折合金额的（明文补齐到 COST_PAD 的整数倍）
+    #[test]
+    fn blobs_the_client_seals_are_accepted() {
+        use crate::cmd::cost::{COST_LABEL, COST_PAD};
+        use crate::cmd::keyshare::{blob_ad, blob_seal, keyshare_seal, team_keys};
+        let keys = team_keys(&"5a".repeat(32), "cca-keyshare-v1").unwrap();
+        let aid = "ab".repeat(16);
+        let same = |b: &Dict, limit: usize| {
+            parse_blob(&V::Dict(b.clone()), limit).map(|p| text(&p.to_v())) == Some(text(&V::Dict(b.clone())))
+        };
+        let short = keyshare_seal(&keys, &aid, Some(&format!("sk-ant-api03-{}", "x".repeat(60))), &V::Int(1_700_000_000)).unwrap();
+        assert!(same(&short, MAX_KEY_BLOB), "{short:?}");
+        let longest = keyshare_seal(&keys, &aid, Some(&"k".repeat(4096)), &V::Int(1_700_000_000)).unwrap();
+        assert!(same(&longest, MAX_KEY_BLOB) && longest.str("c").unwrap().len() <= MAX_KEY_BLOB, "最长的 key 在服务器收的长度以内");
+        assert!(same(&keyshare_seal(&keys, &aid, None, &V::Int(1_700_000_000)).unwrap(), MAX_KEY_BLOB), "删掉的记号也是");
+        // 折合金额的：密文的长度是 COST_PAD 的整数倍，最大到上限为止
+        let cost_keys = team_keys(&"5a".repeat(32), COST_LABEL).unwrap();
+        let ad = blob_ad(&[COST_LABEL, &aid, "SHA256:x"]).unwrap();
+        let sealed = |blocks: usize| blob_seal(&cost_keys, &ad, &vec![0u8; blocks * COST_PAD]);
+        let b = sealed(2);
+        assert_eq!((b.str("n").unwrap().len(), b.str("t").unwrap().len()), (24, 44));
+        assert!(same(&b, MAX_COST_BLOB) && same(&sealed(1), MAX_COST_BLOB));
+        let (fits, over) = (MAX_COST_BLOB / 4 * 3 / COST_PAD, MAX_COST_BLOB / 4 * 3 / COST_PAD + 1);
+        assert!(same(&sealed(fits), MAX_COST_BLOB) && !same(&sealed(over), MAX_COST_BLOB), "{fits} 块放得下，再多一块不收");
     }
 }

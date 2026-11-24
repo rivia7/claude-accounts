@@ -13,7 +13,7 @@
 //!
 //! 请求来了不碰文件系统：路径只拿来在内存里的表里查名字，`..`、编码过的路径都走不出去。
 
-use super::handler::Outcome;
+use super::handler::{error, Outcome};
 use super::http::Request;
 use super::limits::Slots;
 use super::omap::OMap;
@@ -21,7 +21,7 @@ use super::wire::{app_title_re, title_re, web_name_re, web_url_re};
 use super::{WEB_FILE, WEB_TYPES, WS_CONN, WS_CONN_IP};
 use crate::py::fs::open_error_text;
 use crate::py::json::{self, Fmt};
-use crate::py::obj::{Dict, V};
+use crate::py::obj::V;
 use crate::py::re::{Match, Re};
 use crate::py::{gzip, hash, text, uni, Fail, R};
 use std::io::{self, Read};
@@ -194,7 +194,8 @@ impl Web {
         self.slots.lock().unwrap_or_else(PoisonError::into_inner).free(ip);
     }
 
-    /// 现在开着几条（Python 的 `web.conns`）
+    /// 现在开着几条（Python 的 `web.conns`；测试看名额还了没有）
+    #[cfg(test)]
     pub fn conns(&self) -> usize {
         self.slots.lock().unwrap_or_else(PoisonError::into_inner).used()
     }
@@ -203,13 +204,6 @@ impl Web {
     pub(super) fn new_slots() -> Mutex<Slots> {
         Mutex::new(Slots::new(WS_CONN, WS_CONN_IP))
     }
-}
-
-/// JSON 的错误回复 `{"error": what}`（Python 的 `self.send(code, {'error': what})`）
-pub(super) fn error(code: u16, what: &str) -> Outcome {
-    let body = Dict::new();
-    body.set("error", V::str(what));
-    Outcome::Json(code, V::Dict(body))
 }
 
 /// 这个名字给不给、给的话 Content-Type 是什么（Py:1636-1639）：名字合 `web_name_re`，后缀（`os.path.splitext` 的那段）在
@@ -438,7 +432,7 @@ mod tests {
     use super::*;
     use crate::py::base64::b64decode;
     use crate::py::fs::TempDir;
-    use crate::py::obj::List;
+    use crate::py::obj::{Dict, List};
     use crate::re;
     use crate::server::http::Method;
     use std::path::PathBuf;

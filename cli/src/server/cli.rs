@@ -365,8 +365,6 @@ struct Probe<'a> {
     env: &'a dyn Fn(&str) -> Option<String>,
     /// 有没有 /data 这个目录
     has_data: bool,
-    /// --web-url 写成浏览器自己说的那个样子（`web::web_origin`）
-    origin: &'a dyn Fn(&str) -> Option<String>,
 }
 
 /// `地址:端口`：照 Python 的拆法（`rpartition(':')`、主机去掉方括号、没写主机是 0.0.0.0、端口是 `int()` 认的数）
@@ -401,46 +399,23 @@ fn plan(g: &Given, probe: &Probe) -> Result<Plan, String> {
         (false, Some(cert), Some(key)) => Some((PathBuf::from(cert), PathBuf::from(key))),
         (false, _, _) => return Err("要给 --cert 和 --key（在托管平台、反向代理后面运行时用 --behind-proxy）".into()),
     };
-    let web_url = match pick("--web-url", env("CCA_WEB_URL")) {
-        None => None,
-        // 浏览器自己说的那个样子：主机小写、默认的端口不写
-        Some(given) => match (probe.origin)(&given) {
-            Some(origin) => Some(format!("{origin}/")),
-            None => {
-                return Err(
-                    "--web-url 要写成 https://域名[:端口]/（手机上打开的就是它；本机试的时候可以是 http://localhost:端口/）".into(),
-                )
-            }
-        },
-    };
+    // 网页端的那几条（Py:2187-2203）：查法和说的话在 web.rs（`web_args`，和 Python 的命令行逐条对过）
     let relay_listen = pick("--relay-listen", None);
-    if web_url.is_some() && relay_listen.is_none() {
-        return Err("网页端是经中转接入会话的：--web-url 要和 --relay-listen 一起给".into());
-    }
-    // 本机试：http://localhost（浏览器把它当成安全的来源）
-    let web_local = web_url.as_deref().is_some_and(|url| url.starts_with("http://"));
     let web_listen = pick("--web-listen", env("CCA_WEB_LISTEN"));
     let (web_cert, web_key) = (pick("--web-cert", env("CCA_WEB_CERT")), pick("--web-key", env("CCA_WEB_KEY")));
-    let mut web_pair = None;
-    if web_listen.is_some() || web_cert.is_some() || web_key.is_some() {
-        if proxied {
-            return Err("--behind-proxy 时 HTTPS 由平台做：网页端就在同一个端口上，不用 --web-listen".into());
-        }
-        let (Some(_), Some(at)) = (&web_url, &web_listen) else {
-            return Err("--web-listen 要和 --web-url 一起给".into());
-        };
-        if web_local {
-            let host = text::strip_chars(text::rpartition(at, ":").0, "[]");
-            if web_cert.is_some() || web_key.is_some() || !matches!(host, "127.0.0.1" | "localhost" | "::1") {
-                return Err("--web-url 是 http://localhost 时（本机试）：--web-listen 只能听本机的地址，不用证书".into());
-            }
-        } else {
-            match (web_cert, web_key) {
-                (Some(cert), Some(key)) => web_pair = Some((PathBuf::from(cert), PathBuf::from(key))),
-                _ => return Err("--web-listen 要带浏览器信得过的证书：--web-cert、--web-key".into()),
-            }
-        }
-    }
+    let (web_url, web_local) = web::web_args(
+        pick("--web-url", env("CCA_WEB_URL")).as_deref(),
+        relay_listen.as_deref(),
+        web_listen.as_deref(),
+        web_cert.as_deref(),
+        web_key.as_deref(),
+        proxied,
+    )?;
+    // 另开的端口用的证书：本机试（http://localhost）时没有，只说 HTTP
+    let web_pair = match (web_local, web_cert, web_key) {
+        (false, Some(cert), Some(key)) => Some((PathBuf::from(cert), PathBuf::from(key))),
+        _ => None,
+    };
     // 根公钥：整行（后面的备注不要）或者只写后面那一段
     let given = pick("--team-root", env("CCA_TEAM_ROOT")).unwrap_or_default();
     let mut fields = text::split_ws(&given);
@@ -675,11 +650,8 @@ pub fn cmd_team_server(args: &[String]) -> R<()> {
         }
         Err(Stop::Usage(why)) => return usage(&why),
     };
-    let probe = Probe {
-        env: &|name| std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()),
-        has_data: path::isdir("/data"),
-        origin: &web::web_origin,
-    };
+    let probe =
+        Probe { env: &|name| std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()), has_data: path::isdir("/data") };
     match plan(&given, &probe) {
         Ok(plan) => run(&plan),
         Err(why) => usage(&why),
@@ -711,15 +683,10 @@ mod tests {
         parse(&args(list)).unwrap_or_else(|stop| panic!("{list:?}: {stop:?}"))
     }
 
-    /// 查参数。环境变量是给的；web_origin 用一个够测试用的替身（web.rs 的还没移植好时这里也测得了）：https://…、
-    /// http://localhost… 的认，写成小写、去掉结尾的 `/`
+    /// 查参数。环境变量、有没有 /data 是给的
     fn planned(list: &[&str], env: &[(&str, &str)], has_data: bool) -> Result<Plan, String> {
         let env = |name: &str| env.iter().find(|(n, _)| *n == name).map(|(_, v)| v.to_string());
-        let origin = |url: &str| {
-            let bare = url.strip_suffix('/').unwrap_or(url);
-            (bare.starts_with("https://") || bare.starts_with("http://localhost")).then(|| bare.to_lowercase())
-        };
-        plan(&given(list), &Probe { env: &env, has_data, origin: &origin })
+        plan(&given(list), &Probe { env: &env, has_data })
     }
 
     /// 两段参数接起来

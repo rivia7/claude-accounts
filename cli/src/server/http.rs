@@ -16,11 +16,12 @@
 //! do_POST 是先按 IP 限流（429）、看 Content-Length（411、413），然后才读正文（Py:1903-1913）：所以这里读头（`read_head`）和
 //! 读正文（`Reader::read`）是分开的两步，中间那几步在 `handler::admit`。
 
+use super::ws::WsConn;
 use crate::py::json::{self, Fmt};
 use crate::py::obj::{repr_str, V};
 use crate::py::{num, text, time};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::Arc;
@@ -74,19 +75,22 @@ pub fn is_timeout(e: &io::Error) -> bool {
     matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
 }
 
-/// 记着期限的套接字：每次读写最多等 per_op，整条连接到 deadline 为止（一个字节一个字节慢慢发也占不住，Py:2099-2108）
+/// 记着期限的套接字：每次读写最多等 per_op，整条连接到 deadline 为止（一个字节一个字节慢慢发也占不住，Py:2099-2108）。
+/// 成了 WebSocket 以后（`WsConn::nonblocking`）不再管期限：套接字是不阻塞的，读写原样交给它，等多久由 WebSocket 的泵自己算
 pub struct DeadlineStream {
     sock: TcpStream,
     deadline: Option<Instant>,
     per_op: Duration,
+    /// 套接字改成不阻塞的了：读写不设超时，WouldBlock 原样交回去
+    raw: bool,
 }
 
 impl DeadlineStream {
     pub fn new(sock: TcpStream, deadline: Option<Instant>, per_op: Duration) -> DeadlineStream {
-        DeadlineStream { sock, deadline, per_op }
+        DeadlineStream { sock, deadline, per_op, raw: false }
     }
 
-    /// 一次读写最多等多久（握手完了从 5 秒换成 15 秒；成了 WebSocket 以后是它自己的）
+    /// 一次读写最多等多久（握手完了从 5 秒换成 15 秒）
     pub fn set_per_op(&mut self, per_op: Duration) {
         self.per_op = per_op;
     }
@@ -94,10 +98,6 @@ impl DeadlineStream {
     /// 不再有整条连接的期限（成了 WebSocket：要开很久，Py:2053-2057）
     pub fn clear_deadline(&mut self) {
         self.deadline = None;
-    }
-
-    pub fn sock(&self) -> &TcpStream {
-        &self.sock
     }
 
     /// 这一次读写最多等多久；已经到期是 Err
@@ -116,6 +116,9 @@ impl DeadlineStream {
 
 impl Read for DeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.raw {
+            return self.sock.read(buf);
+        }
         loop {
             // 设不上不算错（macOS 上对方已经把连接重置了的套接字设不了，是 EINVAL）：照旧去读，读到的才是真的原因
             let _ = self.sock.set_read_timeout(Some(self.wait()?));
@@ -131,6 +134,9 @@ impl Read for DeadlineStream {
 
 impl Write for DeadlineStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.raw {
+            return self.sock.write(buf);
+        }
         loop {
             let _ = self.sock.set_write_timeout(Some(self.wait()?));
             match self.sock.write(buf) {
@@ -179,14 +185,6 @@ impl Conn {
         }
     }
 
-    /// TLS 里已经解出来、还没读走的字节有没有。这些字节不会再让套接字“可读”：等套接字之前要先看它（网页端的 WebSocket 那一头用）
-    pub fn pending(&mut self) -> bool {
-        match self {
-            Conn::Plain(_) => false,
-            Conn::Tls(t) => matches!(t.conn.reader().fill_buf(), Ok(chunk) if !chunk.is_empty()),
-        }
-    }
-
     /// 说完了：TLS 的先说一声 close_notify，再关掉写的那一半（Python 的 shutdown_request 是 SHUT_WR 然后关）。出错不管：对方可能已经走了
     pub fn finish(mut self) {
         if let Conn::Tls(t) = &mut self {
@@ -197,9 +195,40 @@ impl Conn {
     }
 }
 
-impl AsRawFd for Conn {
-    fn as_raw_fd(&self) -> RawFd {
-        self.stream().sock.as_raw_fd()
+/// 成了 WebSocket 以后泵要的那几样（ws.rs）：底下的套接字改成不阻塞的，等由泵用 poll 做
+impl WsConn for DeadlineStream {
+    fn fd(&self) -> RawFd {
+        self.sock.as_raw_fd()
+    }
+
+    fn nonblocking(&mut self) -> io::Result<()> {
+        self.sock.set_nonblocking(true)?;
+        self.raw = true;
+        Ok(())
+    }
+}
+
+impl WsConn for Conn {
+    fn fd(&self) -> RawFd {
+        self.stream().fd()
+    }
+
+    fn pending(&mut self) -> io::Result<usize> {
+        match self {
+            Conn::Plain(s) => s.pending(),
+            Conn::Tls(t) => t.pending(),
+        }
+    }
+
+    fn wants_write(&self) -> bool {
+        match self {
+            Conn::Plain(s) => s.wants_write(),
+            Conn::Tls(t) => t.wants_write(),
+        }
+    }
+
+    fn nonblocking(&mut self) -> io::Result<()> {
+        self.stream_mut().nonblocking()
     }
 }
 
@@ -606,14 +635,6 @@ pub fn raw_reply(code: u16, headers: &[(String, String)], body: &[u8], v09: bool
     out
 }
 
-/// 升级成 WebSocket 的那一句（Py:1873-1874：是原样写出去的，不带 Server、Date）
-pub fn switching(accept: &str) -> Vec<u8> {
-    format!(
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-    )
-    .into_bytes()
-}
-
 /// `send_error(code, message, explain)`：一小段 HTML。version 是这时候认出来的版本（HTTP/0.9：只有正文；请求行太长时是空的），
 /// command 是方法（HEAD 的不带正文）
 fn error_reply(code: u16, message: Option<&str>, explain: Option<&str>, version: &str, command: &str, now: f64) -> Vec<u8> {
@@ -793,10 +814,6 @@ mod tests {
             "HTTP/1.0 304 Not Modified\r\nServer: cca-presence/1 \r\nDate: Thu, 01 Jan 1970 00:00:00 GMT\r\nETag: \"x\"\r\n\r\n"
         );
         assert!(text(raw_reply(599, &[], b"", false, 0.0)).starts_with("HTTP/1.0 599 \r\n"), "不认识的状态码：说明是空的");
-        assert_eq!(
-            text(switching("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")),
-            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
-        );
         for code in [200u16, 304, 400, 403, 404, 409, 411, 413, 429, 507] {
             assert!(!reason(code).is_empty(), "{code}");
         }

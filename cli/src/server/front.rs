@@ -10,8 +10,9 @@
 //! - 一条连接只处理一个请求（HTTP/1.0），回完就关
 //! - 读写时等过了头：不回、不说话（Python 的 TimeoutError）。别的读写的错（对方把连接重置了……）在日志里说一句
 //!   `cca-presence: 处理请求出错：…`（Py:2095-2096）
-//! - 升级成 WebSocket 的（`Outcome::Upgrade`）：回 101，处理请求的名额现在就还、不再受 15 秒的期限管（Py:2053-2057），
-//!   连接交给 WebSocket 的泵；不管怎么结束，网页端的那个名额都要还（`Web::free`）
+//! - 升级成 WebSocket 的（`Outcome::Upgrade`）：回 101（`ws::switching`），处理请求的名额现在就还、不再受 15 秒的期限管
+//!   （Py:2053-2057），连接交给 WebSocket 的泵（`ws::pump`：这个线程接着搬，中转那一头经 `relay::Handle::adopt` 交给中转的
+//!   线程）；不管怎么结束，网页端的那个名额都要还（`Web::free`）
 //!
 //! 和 Python 不一样的：回复是一次写出去的（Python 是头和正文各写一次）；连接到了期限就不再处理（Python 把连接断掉以后，读到一半
 //! 的请求还会被当成一个请求处理一下，回不出去，日志里多一句 Broken pipe）；TLS 的连接关之前说一声 close_notify（Python 不说）。
@@ -22,7 +23,7 @@ use super::limits::Slots;
 use super::store::say;
 use super::tls::CertCtx;
 use super::web::Web;
-use super::{relay, Ctx, CONN_DEADLINE, HANDSHAKE_TIMEOUT, WS_STALL};
+use super::{ws, Ctx, CONN_DEADLINE, HANDSHAKE_TIMEOUT};
 use crate::py::fail::os_error_text;
 use crate::py::time;
 use rustls::ServerConfig;
@@ -51,8 +52,8 @@ struct Timing {
     handshake: Duration,
     /// 握手以后一次读写最多等多久（Handler.timeout，Py:1803）
     request: Duration,
-    /// 成了 WebSocket 以后一次读写最多等多久（WS_STALL）
-    stall: Duration,
+    /// 成了 WebSocket 以后：读一次、写一帧最多等多久（WS_STALL），两头都没动静多久就断开（WS_IDLE）
+    ws: ws::Times,
 }
 
 fn secs(n: i64) -> Duration {
@@ -61,7 +62,7 @@ fn secs(n: i64) -> Duration {
 
 impl Timing {
     fn python() -> Timing {
-        Timing { deadline: secs(CONN_DEADLINE), handshake: secs(HANDSHAKE_TIMEOUT), request: secs(15), stall: secs(WS_STALL) }
+        Timing { deadline: secs(CONN_DEADLINE), handshake: secs(HANDSHAKE_TIMEOUT), request: secs(15), ws: ws::Times::REAL }
     }
 }
 
@@ -214,27 +215,24 @@ impl Front {
     /// （`long_lived`，Py:2053-2057；WebSocket 有自己的上限：`Web::take`）；然后交给 WebSocket 的泵
     fn upgraded(&self, mut reader: Reader<Conn>, slot: Slot<'_>, accept: &str, ip: &str) {
         let _ws = WsSlot { web: self.ctx.web.as_ref(), ip };
-        if send(reader.io(), &http::switching(accept)).is_err() {
+        if send(reader.io(), &ws::switching(accept)).is_err() {
             return;
         }
         drop(slot);
         // 读请求头时可能多读了几个字节进缓冲（浏览器等到回了 101 才发帧，一般没有）：取出来一起交过去
         let (mut conn, early) = reader.into_parts();
         conn.stream_mut().clear_deadline();
-        conn.stream_mut().set_per_op(self.timing.stall);
-        pump(conn, early, self.ctx.relay.as_deref(), ip);
+        // 浏览器那一头和中转之间来回搬（Py:1883）：字节流的一头交给中转的线程，之后和数据端口上接进来的连接一样对待。
+        // 没有中转（开了网页端就一定有，启动时查过）时那一头直接关掉：泵马上知道中转那头没了，发个关闭帧就完
+        let relay = self.ctx.relay.as_deref();
+        let adopt = |sock| {
+            if let Some(relay) = relay {
+                relay.adopt(sock, ip.to_string());
+            }
+        };
+        ws::pump(&mut conn, &early, adopt, self.timing.ws);
+        conn.finish();
     }
-}
-
-/// 【占位】WebSocket 的泵：浏览器那一头（conn，握手后面紧跟着的字节在 early 里）和中转（`relay::Handle::adopt` 收下的
-/// socketpair 的一头）之间来回搬（Python 的 `ws_pump`，Py:1754-1796）。
-// TODO(整合)：ws.rs 的泵写好以后在这里调它（比如 `ws::pump(conn, &early, relay, ip)`），删掉这个函数。它要的东西 `http::Conn`
-// 都有：Read、Write（TLS 的要 flush）、`as_raw_fd()`（给 poll 用）、`pending()`（TLS 里已经解出来还没读走的字节：这些不会
-// 再让套接字可读，poll 之前要先看）、`stream_mut().set_per_op()`（一次读写最多等多久；进来时已经是 WS_STALL、没有整条连接的期限）。
-// 现在是回了 101 就关：开着网页端要等 web.rs（`Web::open`）移植好，那之前到不了这里
-fn pump(conn: Conn, early: Vec<u8>, relay: Option<&relay::Handle>, ip: &str) {
-    let _ = (early, relay, ip);
-    conn.finish();
 }
 
 #[cfg(test)]

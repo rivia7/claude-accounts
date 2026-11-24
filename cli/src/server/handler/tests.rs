@@ -5,10 +5,12 @@
 
 use super::*;
 use crate::py::fs::TempDir;
+use crate::py::hash;
 use crate::py::json::Fmt;
 use crate::server::limits::{Guards, Limits};
 use crate::server::store::tests::said;
 use crate::server::store::{Store, StoreCfg};
+use crate::server::web::Web;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use std::cell::Cell;
 use std::net::Ipv4Addr;
@@ -149,8 +151,7 @@ impl Bench {
     pub fn enroll(&self, who: &Signer, dev: &str, name: &str) {
         let more = format!(r#","devices":{{"{dev}":{{"pub":"{}","name":"{name}"}}}}"#, who.line);
         let got = self.send("team_enroll", &self.root, &more);
-        // 开着中转、Remote::keep_only 还没移植时：Store 那一半做了，告诉中转的那一半出错（不回就断开）
-        assert!(got.0 == 200 || (got.0 == 0 && self.ctx.remote.is_some()), "{got:?}");
+        assert_eq!(got.0, 200, "{got:?}");
     }
 
     /// 管理员看到的那一台设备的 seen_age（没来过是 null）
@@ -678,15 +679,20 @@ fn relay_ops_go_to_the_relay() {
         assert_eq!(on.run(&forged), denied(), "{op}");
     }
     assert!(said().is_empty());
-    // 签名对了：交给 remote::handle_op。它还没移植时给的是“未完成”，照处理请求出错的规矩：日志里说一句，不回就断开
-    let (code, text) = on.send("relay_list", &a, "");
-    match code {
-        0 => {
-            let lines = said();
-            assert!(matches!(&lines[..], [line] if line.starts_with("cca-presence: 处理请求出错：")), "{lines:?}");
-        }
-        _ => assert_ne!(code, 404, "{text}"),
-    }
+    // 签名对了：交给 remote::handle_op（各个 op 自己的事在 remote 的测试里）
+    let rid = format!(r#","rid":"{}""#, "5".repeat(32));
+    assert_eq!(on.send("pair_open", &a, &rid), (200, r#"{"v":1,"ok":true,"ttl":600}"#.into()));
+    assert_eq!(on.send("pair_open", &a, &rid), (409, r#"{"error":"taken"}"#.into()));
+    assert_eq!(on.send("pair_get", &a, ""), bad(), "op 自己的检查也是它做");
+    assert_eq!(on.send("pair_close", &a, &format!(r#","rid":"{}""#, "6".repeat(32))), (404, r#"{"error":"no_pairing"}"#.into()));
+    // 没开网页端：开不了给网页端的配对（设备照这个说服务器没开网页端）
+    assert_eq!(
+        on.send("pair_open", &a, &format!(r#","rid":"{}","web":true"#, "7".repeat(32))),
+        (404, r#"{"error":"no_web"}"#.into())
+    );
+    // 设备的请求记“刚来过”，访客的不记：这里没有访客，名单里的设备发中转的请求也算来过
+    assert!(matches!(on.seen_age(&a), V::Int(0)), "{:?}", on.seen_age(&a));
+    assert!(said().is_empty());
 }
 
 /// 名单变了（登记、移除、退出）要告诉中转：它那边不在名单里的设备的配对、会话跟着清掉
@@ -696,13 +702,21 @@ fn team_changes_reach_the_relay() {
     let a = Signer::new(1);
     let more = format!(r#","devices":{{"{}":{{"pub":"{}","name":"a"}}}}"#, dev(1), a.line);
     let (code, text) = b.send("team_enroll", &b.root, &more);
-    // Store 那一半一定做了；中转那一半（Remote::keep_only）还没移植时出错：日志里说一句，不回就断开
     assert_eq!(lock(&b.ctx.store).machines(), 1);
     let lines = said();
-    match code {
-        0 => assert!(matches!(&lines[..], [line] if line.starts_with("cca-presence: 处理请求出错：")), "{lines:?}"),
-        _ => assert!(code == 200 && lines.is_empty(), "{code} {text} {lines:?}"),
-    }
+    assert!(code == 200 && lines.is_empty(), "{code} {text} {lines:?}");
+    // 两台设备配了对；其中一台被移除：这个配对跟着没了（Py:2027-2028 的 keep_only）
+    let other = Signer::new(2);
+    let more = format!(r#","devices":{{"{}":{{"pub":"{}","name":"b"}}}}"#, dev(2), other.line);
+    assert_eq!(b.send("team_enroll", &b.root, &more).0, 200);
+    let sh = b.ctx.remote.as_ref().unwrap();
+    lock(&sh.m).test_edge(&"e".repeat(32), &a.fp, &other.fp, NOW);
+    assert_eq!(lock(&sh.m).edges(), 1);
+    assert_eq!(b.send("team_members", &b.root, "").0, 200);
+    assert_eq!(lock(&sh.m).edges(), 1, "没改名单的 op 不动配对");
+    assert_eq!(b.send("team_revoke", &b.root, &format!(r#","dev":"{}""#, dev(2))).0, 200);
+    assert_eq!(lock(&sh.m).edges(), 0, "被移除的设备的配对清掉了");
+    said();
     // 没改名单的 op 不去问中转
     assert_eq!(b.send("team_members", &b.root, "").0, 200);
     assert_eq!(b.send("team_get", &a, "").0, 200);
@@ -744,12 +758,10 @@ fn deep_json_fits_a_connection_thread() {
     assert_eq!(done, (200, bad(), 200));
 }
 
-/// 网页端的文件和 WebSocket 的握手（Py:1832-1870）。`Web::open` 还没移植时开不了网页端：这一条先不测
+/// 网页端的文件和 WebSocket 的握手（Py:1832-1870）经 GET 走到 web.rs、ws.rs（它们自己和 Python 逐字节对的那一份在各自的测试里）
 #[test]
 fn pages_and_websocket_checks() {
-    let Ok(web) = Web::open("https://team.example.com/", None, None) else {
-        return;
-    };
+    let web = Web::open("https://team.example.com/", None, None).unwrap();
     let mut b = Bench::with(true);
     let origin = web.origin.clone();
     let index_etag = web.files.get("index.html").unwrap().etag.clone();

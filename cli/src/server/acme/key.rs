@@ -78,7 +78,8 @@ fn wrap_sec1(sec1: &[u8]) -> Vec<u8> {
 
 /// 一把 P-256 的私钥
 pub struct Key {
-    /// 文件在哪
+    /// 文件在哪（只有测试看：拿它拼旁边的路径）
+    #[cfg(test)]
     pub path: String,
     /// 公钥的那个点：04 X Y，65 个字节
     point: Vec<u8>,
@@ -111,7 +112,14 @@ impl Key {
         if point.len() != 65 || point.first() != Some(&4) {
             return Err(wrong());
         }
-        Ok(Key { path: path.to_string(), point, jws, asn1, rng })
+        Ok(Key {
+            #[cfg(test)]
+            path: path.to_string(),
+            point,
+            jws,
+            asn1,
+            rng,
+        })
     }
 
     fn x(&self) -> &[u8] {

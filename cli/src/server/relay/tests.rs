@@ -14,7 +14,7 @@ use std::net::{Shutdown, SocketAddr};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const CN: &str = "0123456789abcdef";
+pub(in crate::server) const CN: &str = "0123456789abcdef";
 const BLOB: &str = r#"{"n":"AAAAAAAAAAAAAAAAAAAAAA==","c":"AAAA","t":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}"#;
 const SLOW: &[u8] = b"CCA-RELAY/1 ERR slow\n";
 
@@ -22,7 +22,7 @@ fn fp(i: u32) -> String {
     format!("SHA256:{i:043}")
 }
 
-fn hex(n: u32) -> String {
+pub(in crate::server) fn hex(n: u32) -> String {
     format!("{n:032x}")
 }
 
@@ -36,7 +36,7 @@ fn name_of(_: &str) -> Option<String> {
 
 /// 客户端连数据端口时说的那一行，和服务器该回的那一行：照抄客户端的 `relay_line`（cli/src/cmd/remote/crypto.rs，那个模块不对外），
 /// 不用这边的 `mac`、`ok_line`——两边各算各的，下面拿客户端那边固定的对照数据把两边都核对一遍
-pub(super) fn relay_line(role: &str, ident: &str, key: &[u8], cn: &str) -> (String, String) {
+pub(in crate::server) fn relay_line(role: &str, ident: &str, key: &[u8], cn: &str) -> (String, String) {
     let mac = |lead: &str| {
         let sum = hash::hmac_sha256(key, format!("{lead}{ident}{cn}").as_bytes());
         base64::urlsafe_b64encode(&sum).trim_end_matches('=').to_string()
@@ -55,7 +55,7 @@ pub(super) fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
 }
 
 /// 读到换行为止（带着换行）
-pub(super) fn read_line(s: &mut impl Read) -> Vec<u8> {
+pub(in crate::server) fn read_line(s: &mut impl Read) -> Vec<u8> {
     let mut line = Vec::new();
     let mut b = [0u8; 1];
     while line.last() != Some(&b'\n') {
@@ -65,14 +65,14 @@ pub(super) fn read_line(s: &mut impl Read) -> Vec<u8> {
     line
 }
 
-pub(super) fn read_n(s: &mut impl Read, n: usize) -> Vec<u8> {
+pub(in crate::server) fn read_n(s: &mut impl Read, n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
     s.read_exact(&mut buf).unwrap();
     buf
 }
 
 /// 对面关了：读到头（被重置也算）。还有别的字节不算
-fn closed(s: &mut impl Read) -> bool {
+pub(in crate::server) fn closed(s: &mut impl Read) -> bool {
     let mut b = [0u8; 1];
     match s.read(&mut b) {
         Ok(n) => n == 0,
@@ -87,7 +87,7 @@ pub(super) fn read_ctl(s: &mut impl Read) -> (u8, Vec<u8>) {
 }
 
 /// 有规律的一大块字节（哪里错了位一比就知道）
-fn pattern(n: usize, seed: u32) -> Vec<u8> {
+pub(in crate::server) fn pattern(n: usize, seed: u32) -> Vec<u8> {
     let mut x = seed.wrapping_mul(2654435761).wrapping_add(1);
     (0..n)
         .map(|_| {
@@ -98,12 +98,12 @@ fn pattern(n: usize, seed: u32) -> Vec<u8> {
 }
 
 /// 一个临时目录里的 Remote 和跑着的中转
-pub(super) struct Net {
+pub(in crate::server) struct Net {
     _dir: TempDir,
     /// remote.json 在哪
     pub(super) path: String,
-    pub(super) sh: Arc<Shared>,
-    handle: Arc<Handle>,
+    pub(in crate::server) sh: Arc<Shared>,
+    pub(in crate::server) handle: Arc<Handle>,
     addr: SocketAddr,
     knobs: Knobs,
 }
@@ -118,6 +118,11 @@ impl Drop for Net {
 impl Net {
     fn new() -> Net {
         Net::with(Limits::DEFAULT, |_| {})
+    }
+
+    /// 开着网页端的（front 的测试把整个服务器接在一起时用）：web 是网页端的地址
+    pub(in crate::server) fn with_web(web: &str) -> Net {
+        Net::open(Limits::DEFAULT, 18444, Some(web.to_string()), |_| {})
     }
 
     fn with(lim: Limits, tune: impl FnOnce(&mut Knobs)) -> Net {
@@ -147,7 +152,7 @@ impl Net {
     }
 
     /// 中转现在管着几条连接（它每一轮记一次：刚连上、刚关掉的要等一下才看得到）
-    pub(super) fn conns(&self) -> usize {
+    pub(in crate::server) fn conns(&self) -> usize {
         self.handle.probe.lock().unwrap().conns
     }
 
@@ -162,7 +167,7 @@ impl Net {
     }
 
     /// 设备 a、b 配对：配对编号
-    fn pair(&self, a: u32, b: u32, n: u32) -> String {
+    pub(in crate::server) fn pair(&self, a: u32, b: u32, n: u32) -> String {
         let (rid, pid) = (hex(1000 + n), hex(n));
         assert_eq!(self.op("pair_open", a, dict! { "rid" => &rid }).0, 200);
         assert_eq!(self.op("pair_put", b, dict! { "rid" => &rid, "m" => blob() }).0, 200);
@@ -183,7 +188,7 @@ impl Net {
         self.ticket("relay_host", dev, dict! { "sid" => sid, "pids" => pids })
     }
 
-    fn view_ticket(&self, dev: u32, sid: &str, pid: &str) -> (String, Vec<u8>) {
+    pub(in crate::server) fn view_ticket(&self, dev: u32, sid: &str, pid: &str) -> (String, Vec<u8>) {
         self.ticket("relay_attach", dev, dict! { "sid" => sid, "pid" => pid })
     }
 
@@ -213,7 +218,7 @@ impl Net {
     }
 
     /// 宿主开（或者接回）一个会话的控制连接：连接和那张票据的密钥
-    fn host(&self, dev: u32, sid: &str, pids: &[&str]) -> (TcpStream, Vec<u8>) {
+    pub(in crate::server) fn host(&self, dev: u32, sid: &str, pids: &[&str]) -> (TcpStream, Vec<u8>) {
         let (tid, key) = self.host_ticket(dev, sid, pids);
         let (mut s, ok) = self.enter("host", &tid, &key);
         assert_eq!(read_line(&mut s), ok);
@@ -221,7 +226,7 @@ impl Net {
     }
 
     /// 宿主的控制连接上收到 JOIN，拿着令牌另连一条：那一条连接（OK 已经读过）
-    fn join(&self, host: &mut TcpStream, key: &[u8], pid: &str) -> TcpStream {
+    pub(in crate::server) fn join(&self, host: &mut TcpStream, key: &[u8], pid: &str) -> TcpStream {
         let (kind, payload) = read_ctl(host);
         assert_eq!(kind, F_JOIN);
         let text = String::from_utf8(payload).unwrap();

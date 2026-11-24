@@ -282,4 +282,37 @@ mod tests {
             assert!(!ssh_verify(&key, "cca-presence", b"data", raw));
         }
     }
+
+    /// 原来 tests/presence.py 的 VerifyTest 的那张表（四种内容各验一遍：对的验得过；内容、命名空间、公钥不对的验不过；签名里
+    /// 改一位——S 里、R 里、公钥里各一处——验不过；不成样子的签名验不过）。那边的签名是当场拿 ssh-keygen 签的；真的 ssh-keygen
+    /// 签的在上面的对照数据里，这里的是测试自己照 SSHSIG 的格式签的（handler 的测试里那把 `Signer`），内容换着来
+    #[test]
+    fn the_matrix_of_the_old_python_test() {
+        use crate::server::handler::tests::Signer;
+        let (k, o) = (Signer::new(11), Signer::new(12));
+        let (key, other) = (key_blob(&k.line).unwrap(), key_blob(&o.line).unwrap());
+        let noise: Vec<u8> = (0..1000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        for msg in [&b""[..], b"x", &noise, br#"{"v": 1, "op": "report"}"#] {
+            let sig = k.armored(msg, "cca-presence").into_bytes();
+            assert!(ssh_verify(&key, "cca-presence", msg, &sig));
+            assert!(!ssh_verify(&key, "cca-presence", &[msg, b"!"].concat(), &sig), "内容改了");
+            assert!(!ssh_verify(&key, "cca-devices", msg, &sig), "命名空间不对");
+            assert!(!ssh_verify(&other, "cca-presence", msg, &sig), "不是这把密钥签的");
+            let text = String::from_utf8(sig).unwrap();
+            let lines: Vec<&str> = text.trim().lines().collect();
+            let blob = base64::b64decode(&lines[1..lines.len() - 1].concat(), true).unwrap();
+            for i in [blob.len() - 1, blob.len() - 40, 30] {
+                let mut bad = blob.clone();
+                bad[i] ^= 1;
+                let armored = format!("{}\n{}\n{}", lines[0], base64::b64encode(&bad), lines[lines.len() - 1]);
+                assert!(!ssh_verify(&key, "cca-presence", msg, armored.as_bytes()), "第 {i} 个字节改了一位");
+            }
+        }
+        let sig = k.armored(b"m", "cca-presence");
+        assert!(ssh_verify(&key, "cca-presence", b"m", sig.as_bytes()));
+        let cut = format!("{}\n-----END SSH SIGNATURE-----\n", &sig[..sig.len() - 40]);
+        for junk in [String::new(), "garbage".to_string(), sig.replace("BEGIN", "BEGIM"), cut] {
+            assert!(!ssh_verify(&key, "cca-presence", b"m", junk.as_bytes()), "{junk:?}");
+        }
+    }
 }

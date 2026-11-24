@@ -12,7 +12,7 @@
 //! - 启动的路上不加东西：这里没有一上来就算的全局量，用到时才算。
 //!
 //! Python 那一份是规矩：行为、回的内容、日志里的每句话都照它。注释里的「Py:行号」指 server/cca-presence.py，
-//! 「Acme:行号」指 server/cca-acme.py。分几个阶段移植：还没移植到的地方先回一句「未完成」（`unfinished`）。
+//! 「Acme:行号」指 server/cca-acme.py。
 //!
 //! 各个文件：
 //! - `limits`：各种上限（测试可以换小的）、限流的令牌桶、用过的 nonce、同时处理几个连接
@@ -37,8 +37,6 @@
     clippy::todo,
     clippy::unimplemented
 )]
-// 骨架阶段：接口先定下来，后面几个阶段才一处处接上，这之前大半没人调。全部接上以后去掉这一行
-#![allow(dead_code)]
 
 pub mod acme;
 pub mod cli;
@@ -58,7 +56,6 @@ pub mod ws;
 pub mod x509;
 
 use crate::cmd::Cmd;
-use crate::py::{Fail, R};
 use std::sync::{Arc, Mutex};
 
 // ---- Python 那一份开头的常量：先后、注释照它（Py:67-110）。几个测试要换小的上限在 limits::Limits 里 ----
@@ -205,11 +202,6 @@ pub const CMDS: &[Cmd] = &[Cmd::all("team-server", cli::cmd_team_server), Cmd::a
 /// 那些都要读 HOME 下 cca 的文件，服务器上跑它的那个用户没有、也不该有）。只是比两次名字
 pub fn standalone(name: &str) -> Option<&'static Cmd> {
     CMDS.iter().find(|c| c.name == name)
-}
-
-/// 还没移植到的地方先回这个错：说清楚是哪一块（各阶段填上以后就没人用它了）
-pub(crate) fn unfinished<T>(what: &str) -> R<T> {
-    Err(Fail::Die(format!("cca-core: {what}：未完成（Rust 版还在移植）")))
 }
 
 #[cfg(test)]

@@ -222,8 +222,9 @@ pub(super) enum Role {
     View,
 }
 
+#[cfg(test)]
 impl Role {
-    /// 开场白里的写法
+    /// 开场白里的写法（对照 Python 的记录时用）
     pub(super) fn name(self) -> &'static str {
         match self {
             Role::Host => "host",

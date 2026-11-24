@@ -15,9 +15,9 @@
 //!   `WS_IDLE` 里两头都没动静、读写出错、一次读或者一次写（整个写完）`WS_STALL` 还没完也停。停了给浏览器发一个关闭帧
 //!   （发不出去不管），再关掉中转那一头
 
-use super::handler::Outcome;
+use super::handler::{error, Outcome};
 use super::http::Request;
-use super::web::{error, Web};
+use super::web::Web;
 use super::wire::{ws_key_re, ws_ticket_re};
 use super::{WS_FRAME, WS_GUID, WS_IDLE, WS_STALL};
 use crate::py::base64::b64encode;

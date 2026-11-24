@@ -11,6 +11,7 @@ use crate::server::handler::tests::{signed, Bench, Signer};
 use crate::server::limits::{Guards, Limits};
 use crate::server::store::tests::said;
 use crate::server::store::{Store, StoreCfg};
+use crate::server::web::Web;
 use crate::server::x509::testkit::{new_key, pem, self_signed};
 use crate::server::x509::San;
 use crate::server::{tls, MAX_CONN, MAX_CONN_IP};
@@ -19,7 +20,12 @@ use std::os::fd::AsRawFd;
 
 fn timing(deadline: u64, handshake: u64, request: u64) -> Timing {
     let ms = Duration::from_millis;
-    Timing { deadline: ms(deadline), handshake: ms(handshake), request: ms(request), stall: ms(request) }
+    Timing {
+        deadline: ms(deadline),
+        handshake: ms(handshake),
+        request: ms(request),
+        ws: ws::Times { stall: ms(request), idle: ms(request) },
+    }
 }
 
 fn front(tls: Tls, proxied: bool, ctx: Arc<Ctx>, timing: Timing) -> Arc<Front> {
@@ -395,4 +401,160 @@ fn io_errors_are_logged_once() {
         });
         assert!(serve_one(closed).is_empty());
     }
+}
+
+/// 浏览器发的一帧（加了掩码的）
+fn ws_frame(op: u8, data: &[u8]) -> Vec<u8> {
+    const KEY: [u8; 4] = [0x37, 0xfa, 0x21, 0x3d];
+    let mut out = vec![0x80 | op];
+    match data.len() {
+        n if n < 126 => out.push(0x80 | n as u8),
+        n if n < 65536 => {
+            out.push(0x80 | 126);
+            out.extend((n as u16).to_be_bytes());
+        }
+        n => {
+            out.push(0x80 | 127);
+            out.extend((n as u64).to_be_bytes());
+        }
+    }
+    out.extend(KEY);
+    out.extend(data.iter().zip(KEY.iter().cycle()).map(|(d, k)| d ^ k));
+    out
+}
+
+/// 读服务器发的一帧（不加掩码的）：操作码和内容
+fn ws_read(c: &mut impl Read) -> (u8, Vec<u8>) {
+    use crate::server::relay::tests::read_n;
+    let head = read_n(c, 2);
+    assert_eq!(head[1] & 0x80, 0, "服务器发的帧不加掩码");
+    let n = match head[1] & 0x7f {
+        126 => u16::from_be_bytes(read_n(c, 2).try_into().unwrap()) as usize,
+        127 => u64::from_be_bytes(read_n(c, 8).try_into().unwrap()) as usize,
+        n => n as usize,
+    };
+    (head[0] & 0x0f, read_n(c, n))
+}
+
+/// 一帧一帧读二进制帧，凑够 n 个字节
+fn ws_bytes(c: &mut impl Read, n: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    while out.len() < n {
+        let (op, data) = ws_read(c);
+        assert_eq!(op, 2, "{:?}", String::from_utf8_lossy(&data));
+        out.extend(data);
+    }
+    out
+}
+
+/// 整个服务器接在一起（接连接的、处理请求的、网页端、WebSocket、中转的线程、中转记着的那一份）：浏览器在这个端口上取页面、
+/// 升级成 WebSocket、说开场白，和宿主为它另连的那一条对接，两个方向收发；哪一头走了另一头都跟着关，占着的名额（处理请求的、
+/// WebSocket 的、中转管着的连接）都还回来
+#[test]
+fn a_browser_attaches_through_the_websocket() {
+    use crate::server::relay::tests::{closed, hex, pattern, read_n, relay_line, Net, CN};
+    const ORIGIN: &str = "https://relay.example.com:18446";
+    let net = Net::with_web(&format!("{ORIGIN}/"));
+    let dir = TempDir::new().unwrap();
+    let root = std::path::Path::new(&dir.path);
+    std::fs::write(root.join("index.html"), "<title>cca</title>\n").unwrap();
+    let web = Web::open(&format!("{ORIGIN}/"), Some(root), None).unwrap();
+    let cfg = StoreCfg {
+        path: root.join("state.json"),
+        ttl: 150.0,
+        idle: 600.0,
+        retain: 30.0 * 86400.0,
+        keys_path: None,
+        cost_path: None,
+        cost_keep: 100.0 * 86400.0,
+    };
+    let store = Store::open(&cfg, &Signer::new(200).line, Limits::DEFAULT, 0.0).unwrap();
+    let ctx = Arc::new(Ctx {
+        store: Mutex::new(store),
+        remote: Some(Arc::clone(&net.sh)),
+        relay: Some(Arc::clone(&net.handle)),
+        web: Some(web),
+        guards: Mutex::new(Guards::new()),
+        sig_ok: true,
+    });
+    let f = front(Tls::Plain, false, Arc::clone(&ctx), Timing::python());
+    let addr = listen(&f);
+    let web = ctx.web.as_ref().unwrap();
+    // 页面和 /v1/health 都在这个端口上
+    let page = text(&talk(addr, b"GET / HTTP/1.1\r\nHost: relay.example.com:18446\r\n\r\n", false));
+    assert!(page.starts_with("HTTP/1.0 200 OK\r\n") && page.ends_with("<title>cca</title>\n"), "{page}");
+    let up = health(addr);
+    assert!(up.contains(&format!(r#""web":"{ORIGIN}/""#)) && up.contains(r#""relay":{"port":18444}"#), "{up}");
+
+    let pid = net.pair(1, 2, 1);
+    let sid = hex(50);
+    let (mut host, key) = net.host(1, &sid, &[&pid]);
+    let upgrade = |tid: &str| {
+        let mut c = connect(addr);
+        let head = format!(
+            "GET /v1/relay/ws?t={tid} HTTP/1.1\r\nHost: relay.example.com:18446\r\nUpgrade: websocket\r\n\
+             Connection: keep-alive, Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Origin: {ORIGIN}\r\n\r\n"
+        );
+        c.write_all(head.as_bytes()).unwrap();
+        c
+    };
+    let switched = ws::switching("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    // 没有这张票据：403，不占名额
+    let refused = text(&read_all(&mut upgrade(&hex(7))));
+    assert!(refused.starts_with("HTTP/1.0 403 ") && refused.ends_with(r#"{"error":"ticket"}"#), "{refused}");
+    assert_eq!(web.conns(), 0);
+    let (vt, vkey) = net.view_ticket(2, &sid, &pid);
+    let mut c = upgrade(&vt);
+    assert_eq!(read_n(&mut c, switched.len()), switched);
+    wait("处理请求的名额还了，WebSocket 的占着", || used(&f) == 0 && web.conns() == 1);
+    // 同一张票据开不了第二条
+    let again = text(&read_all(&mut upgrade(&vt)));
+    assert!(again.starts_with("HTTP/1.0 403 ") && again.ends_with(r#"{"error":"ticket"}"#), "{again}");
+    // 开场白走 WebSocket 的帧（拆成两帧）；宿主的控制连接上收到 JOIN，另连一条，两头都收到 OK
+    let (line, ok) = relay_line("view", &vt, &vkey, CN);
+    let (first, rest) = line.as_bytes().split_at(20);
+    c.write_all(&ws_frame(2, first)).unwrap();
+    c.write_all(&ws_frame(2, rest)).unwrap();
+    let mut join = net.join(&mut host, &key, &pid);
+    assert_eq!(ws_bytes(&mut c, ok.len()), ok.as_bytes());
+    // 两个方向各 300 KB：一个字节不差
+    let (up, down) = (pattern(300_000, 1), pattern(300_000, 2));
+    let frames: Vec<u8> = up.chunks(70_000).flat_map(|part| ws_frame(2, part)).collect();
+    let mut w = c.try_clone().unwrap();
+    let writer = thread::spawn(move || w.write_all(&frames).unwrap());
+    assert!(read_n(&mut join, up.len()) == up);
+    writer.join().unwrap();
+    join.write_all(&down).unwrap();
+    assert!(ws_bytes(&mut c, down.len()) == down);
+    c.write_all(&ws_frame(9, b"hi")).unwrap();
+    assert_eq!(ws_read(&mut c), (10, b"hi".to_vec()), "ping 回 pong");
+    // 宿主那一条关了：浏览器收到关闭帧，连接关掉；名额都还了（中转只剩宿主的控制连接）
+    drop(join);
+    assert_eq!(ws_read(&mut c), (8, vec![]));
+    assert_eq!(read_all(&mut c), b"");
+    wait("名额都还了", || web.conns() == 0 && used(&f) == 0 && net.conns() == 1);
+
+    // 再接一次，这回浏览器不打招呼就走了：宿主为它连的那一条也关掉
+    let (vt, vkey) = net.view_ticket(2, &sid, &pid);
+    let mut c = upgrade(&vt);
+    assert_eq!(read_n(&mut c, switched.len()), switched);
+    let (line, ok) = relay_line("view", &vt, &vkey, CN);
+    c.write_all(&ws_frame(2, line.as_bytes())).unwrap();
+    let mut join = net.join(&mut host, &key, &pid);
+    assert_eq!(ws_bytes(&mut c, ok.len()), ok.as_bytes());
+    drop(c);
+    assert!(closed(&mut join));
+    wait("名额都还了", || web.conns() == 0 && used(&f) == 0 && net.conns() == 1);
+
+    // 开场白不对：中转回的那一行原样到浏览器，然后是关闭帧
+    let (vt, _) = net.view_ticket(2, &sid, &pid);
+    let mut c = upgrade(&vt);
+    assert_eq!(read_n(&mut c, switched.len()), switched);
+    c.write_all(&ws_frame(2, b"hello\n")).unwrap();
+    assert_eq!(ws_bytes(&mut c, 20), b"CCA-RELAY/1 ERR bad\n");
+    assert_eq!(ws_read(&mut c), (8, vec![]));
+    assert_eq!(read_all(&mut c), b"");
+    wait("名额都还了", || web.conns() == 0 && used(&f) == 0 && net.conns() == 1);
+    drop(host);
 }

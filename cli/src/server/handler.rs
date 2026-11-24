@@ -17,7 +17,8 @@
 //! 7. 记下这台设备刚来过，然后才是各个 op 自己的事：Team 的和 report、keys、ledger、view 在 `Store::op`，中转的在
 //!    `remote::handle_op`
 //!
-//! GET（Py:1817-1888）：/v1/health；开着网页端时 /v1/relay/ws（升级成 WebSocket）和页面的文件；别的 404 not_found。
+//! GET（Py:1817-1888）：/v1/health；开着网页端时 /v1/relay/ws（升级成 WebSocket：握手的检查在 `ws::websocket`）和页面的文件
+//! （`Web::file`、`Web::reply`）；别的 404 not_found。
 //!
 //! 存不了这一类的错（`Store::op`、`remote::handle_op` 给的 Err）：Python 里是没人接的异常，在日志里说一句
 //! `cca-presence: 处理请求出错：…`、不回就断开（Py:2095-2096）。这里也是（`Outcome::Close`）。
@@ -29,12 +30,11 @@
 
 use super::http::{Method, Request};
 use super::store::{say, Invite};
-use super::web::{Web, WebFile};
-use super::{remote, sshsig, wire, Ctx};
-use super::{API, MAX_BODY, MAX_SIG, MAX_SYNC_BODY, NS_REPORT, RELAY_OPS, SYNC_OPS, TEAM_ADMIN_OPS, TEAM_OPS, TS_WINDOW, WS_GUID};
+use super::{remote, sshsig, wire, ws, Ctx};
+use super::{API, MAX_BODY, MAX_SIG, MAX_SYNC_BODY, NS_REPORT, RELAY_OPS, SYNC_OPS, TEAM_ADMIN_OPS, TEAM_OPS, TS_WINDOW};
 use crate::dict;
 use crate::py::obj::V;
-use crate::py::{base64, hash, ipaddr, json, text, time, uni, Fail, R};
+use crate::py::{base64, ipaddr, json, text, time, uni, Fail, R};
 use std::net::IpAddr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -56,7 +56,8 @@ pub(super) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn error(code: u16, what: &str) -> Outcome {
+/// JSON 的错误回复 `{"error": what}`（Python 的 `self.send(code, {'error': what})`）
+pub(super) fn error(code: u16, what: &str) -> Outcome {
     Outcome::Json(code, V::Dict(dict! { "error" => what }))
 }
 
@@ -64,15 +65,6 @@ fn error(code: u16, what: &str) -> Outcome {
 fn failed(e: &Fail) -> Outcome {
     say(format!("cca-presence: 处理请求出错：{e}"));
     Outcome::Close
-}
-
-/// 一个读好了的请求（正文已经在 req.body 里）怎么回。连接上的请求是分两步走的（`admit`、读正文、`answer`：见 front.rs），
-/// 这里是把两步连起来：正文比 Content-Length 说的长时只看前面那么多
-pub fn handle(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request) -> Outcome {
-    match admit(ctx, peer, proxied, req) {
-        Ok(n) => answer(ctx, peer, proxied, req, n),
-        Err(out) => out,
-    }
 }
 
 /// 读正文之前的那几步（Py:1903-1912）：过了是正文有多少个字节（GET 没有这几步，是 0），没过是要回的
@@ -175,6 +167,8 @@ fn content_length(value: &str) -> Length {
 
 // ---- GET ----
 
+/// GET（Py:1817-1830）。网页端的两样——页面的文件（`Web::file`、`Web::reply`）和 WebSocket 的握手（`ws::websocket`）——
+/// 怎么查、怎么回在 web.rs、ws.rs；这里只管分给谁，和它们要的两样共用的东西：按 IP 限流的那个桶、中转记着的票据
 fn get(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f64) -> Outcome {
     let (path, _, query) = text::partition(&req.target, "?");
     if path == "/v1/health" {
@@ -186,82 +180,20 @@ fn get(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f6
         return Outcome::Json(200, health);
     }
     if let Some(web) = &ctx.web {
+        // 用到时才算是哪个 IP、才扣它的配额（Py:1834、1863-1864：都在别的检查后面）
+        let ip = || client_ip(peer, proxied, req);
+        let bucket = |ip: &str| lock(&ctx.guards).ip.take(ip, mono);
         if path == "/v1/relay/ws" {
-            return websocket(ctx, web, query, peer, proxied, req, now, mono);
+            let ip = ip();
+            // 开了网页端就一定开着中转（启动时查过）；万一没有，哪张票据都不认
+            let claim = |tid: &str| ctx.remote.as_ref().is_some_and(|sh| lock(&sh.m).ws_claim(tid, now));
+            return ws::websocket(req, query, web, &ip, || bucket(&ip), claim);
         }
-        // 'index.html' if path == '/' else path[1:]
-        let mut rest = path.chars();
-        rest.next();
-        if let Some(f) = web.files.get(if path == "/" { "index.html" } else { rest.as_str() }) {
-            return page(ctx, web, f, peer, proxied, req, mono);
+        if let Some(f) = web.file(path) {
+            return web.reply(f, req, || bucket(&ip()));
         }
     }
     error(404, "not_found")
-}
-
-/// 网页端的一个文件。每次都问一下变了没有（no-cache + ETag）：页面更新了手机上马上就是新的（Py:1832-1851）
-fn page(ctx: &Ctx, web: &Web, f: &WebFile, peer: IpAddr, proxied: bool, req: &Request, mono: f64) -> Outcome {
-    if !lock(&ctx.guards).ip.take(&client_ip(peer, proxied, req), mono) {
-        return error(429, "rate");
-    }
-    let same = req.header("If-None-Match") == Some(f.etag.as_str());
-    let gz = f.gz.as_deref().filter(|gz| !gz.is_empty() && req.header("Accept-Encoding").unwrap_or_default().contains("gzip"));
-    let mut headers: Vec<(String, String)> = Vec::new();
-    let mut add = |name: &str, value: &str| headers.push((name.to_string(), value.to_string()));
-    let body = match (same, gz) {
-        (true, _) => &[][..],
-        (false, Some(gz)) => gz,
-        (false, None) => &f.raw[..],
-    };
-    if !same {
-        add("Content-Type", f.ctype);
-        add("Content-Length", &body.len().to_string());
-        if gz.is_some() {
-            add("Content-Encoding", "gzip");
-        }
-    }
-    add("ETag", &f.etag);
-    add("Cache-Control", "no-cache");
-    add("Vary", "Accept-Encoding");
-    for (name, value) in &web.headers {
-        add(name, value);
-    }
-    Outcome::Raw { code: if same { 304 } else { 200 }, headers, body: body.to_vec() }
-}
-
-/// GET /v1/relay/ws?t=<票据的编号>：网页端进数据端口的路。只认自己那一页发起的（Origin）、手里有一张没用过的接入票据的
-/// （没有凭证的人开不了、占不了名额）；进得了中转靠的还是开场白里证明有票据的密钥（Py:1853-1870）
-#[allow(clippy::too_many_arguments)]
-fn websocket(ctx: &Ctx, web: &Web, query: &str, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f64) -> Outcome {
-    let h = |name: &str| req.header(name);
-    let key = h("Sec-WebSocket-Key").unwrap_or_default();
-    if h("Upgrade").unwrap_or_default().to_lowercase() != "websocket"
-        || !h("Connection").unwrap_or_default().to_lowercase().contains("upgrade")
-        || h("Sec-WebSocket-Version") != Some("13")
-        || !wire::ws_key_re().matches(key)
-    {
-        return error(400, "bad");
-    }
-    if h("Origin").is_some_and(|origin| origin != web.origin) {
-        return error(403, "denied");
-    }
-    let ip = client_ip(peer, proxied, req);
-    if !lock(&ctx.guards).ip.take(&ip, mono) {
-        return error(429, "rate");
-    }
-    let ticket = wire::ws_ticket_re().match_(query).map(|t| t.g(1).to_string());
-    let claimed = match (&ticket, &ctx.remote) {
-        (Some(tid), Some(sh)) => lock(&sh.m).ws_claim(tid, now),
-        _ => false,
-    };
-    if !claimed {
-        return error(403, "ticket");
-    }
-    if !web.take(&ip) {
-        return error(429, "busy");
-    }
-    let accept = base64::b64encode(&hash::sha1(format!("{key}{WS_GUID}")));
-    Outcome::Upgrade { accept, ip }
 }
 
 // ---- POST ----

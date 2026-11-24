@@ -92,7 +92,8 @@ impl Buckets {
         true
     }
 
-    /// 记着几个键
+    /// 记着几个键（测试看清没清掉旧的）
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.b.len()
     }
@@ -124,7 +125,8 @@ impl Nonces {
         true
     }
 
-    /// 记着几个
+    /// 记着几个（测试看清没清掉旧的）
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.seen.len()
     }
@@ -189,7 +191,8 @@ impl Slots {
         self.used = self.used.saturating_sub(1);
     }
 
-    /// 占着几个
+    /// 占着几个（测试看名额还了没有）
+    #[cfg(test)]
     pub fn used(&self) -> usize {
         self.used
     }
