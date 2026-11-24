@@ -467,7 +467,8 @@
         }
       },
       {
-        "model": "claude-haiku-4-5",
+        "model": "claude-haiku-5-6",
+        "priced_as": "claude-haiku-5-5",
         "weeks": {
           "usd": 181.35,
           "requests": 825,
@@ -810,7 +811,8 @@
           }
         },
         {
-          "model": "claude-haiku-4-5",
+          "model": "claude-haiku-5-6",
+          "priced_as": "claude-haiku-5-5",
           "weeks": {
             "usd": 181.35,
             "requests": 825,
@@ -1147,7 +1149,8 @@
             }
           },
           {
-            "model": "claude-haiku-4-5",
+            "model": "claude-haiku-5-6",
+            "priced_as": "claude-haiku-5-5",
             "weeks": {
               "usd": 181.35,
               "requests": 825,
@@ -4371,7 +4374,8 @@
                     }
                   },
                   {
-                    "model": "claude-haiku-4-5",
+                    "model": "claude-haiku-5-6",
+                    "priced_as": "claude-haiku-5-5",
                     "weeks": {
                       "usd": 181.35,
                       "requests": 825,
@@ -4740,7 +4744,8 @@
                 }
               },
               {
-                "model": "claude-haiku-4-5",
+                "model": "claude-haiku-5-6",
+                "priced_as": "claude-haiku-5-5",
                 "weeks": {
                   "usd": 181.35,
                   "requests": 825,

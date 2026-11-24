@@ -398,9 +398,9 @@ extension Texts {
         return m.isEmpty ? "没写模型名" : m
     }
 
-    /// 金额那一栏：都没有公开价格的写「没有公开价格」
-    static func costModelMoney(_ x: CostModelRange, currency: String) -> String {
-        x.allUnpriced ? "没有公开价格" : money(x.usd, currency: currency)
+    /// 金额那一栏：都没有公开价格的写「没有公开价格」；按同系列的标价估算的新模型（cca 给的 priced_as）前面加「≈」
+    static func costModelMoney(_ x: CostModelRange, currency: String, estimated: Bool = false) -> String {
+        x.allUnpriced ? "没有公开价格" : (estimated ? "≈ " : "") + money(x.usd, currency: currency)
     }
 
     /// 请求数那一栏：「8,804 次」
@@ -411,15 +411,26 @@ extension Texts {
     /// 读屏：「$790，8,804 次请求」「没有公开价格，316 次请求」；有一部分没算钱时补一句
     static func costModelValue(_ r: CostModelRow, granularity g: CostGranularity, currency: String) -> String {
         let x = r.range(g)
-        var s = costModelMoney(x, currency: currency) + "，" + grouped(x.requests) + " 次请求"
+        var s = costModelMoney(x, currency: currency, estimated: r.pricedAs != nil) + "，" + grouped(x.requests) + " 次请求"
         if !x.allUnpriced, x.unpricedRequests > 0 { s += "，其中 \(grouped(x.unpricedRequests)) 次没有公开价格、没算钱" }
+        if !x.allUnpriced, let base = r.pricedAs { s += "，按 \(base) 的价格估算" }
         return s
     }
 
     /// 悬停提示：读屏那一句；没按模型记下的那一行再说为什么
     static func costModelHelp(_ r: CostModelRow, granularity g: CostGranularity, currency: String) -> String {
         let value = costModelValue(r, granularity: g, currency: currency)
-        return r.model == nil ? value + "\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开" : value
+        if r.model == nil { return value + "\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开" }
+        if r.pricedAs != nil { return value + "\ncca 的价格表里还没有这个新模型：先按同系列的价格估算，cca 收录了它的价格以后自动重算" }
+        return value
+    }
+
+    /// 按模型那一块下面：有按同系列的标价估算的新模型（cca 给的 priced_as）时说一句（这一段里没有用量、都没算钱的不算）
+    static func costEstimated(_ rows: [CostModelRow], granularity g: CostGranularity) -> String? {
+        let est = rows.filter { $0.pricedAs != nil && $0.model != nil && !$0.range(g).isEmpty && !$0.range(g).allUnpriced }
+        guard let first = est.first, let model = first.model, let base = first.pricedAs else { return nil }
+        if est.count == 1 { return "检测到新模型 \(model)：cca 的价格表里还没有它，按 \(base) 的价格估算（≈）" }
+        return "检测到新模型 " + est.compactMap(\.model).joined(separator: "、") + "：cca 的价格表里还没有，按同系列的价格估算（≈）"
     }
 
     /// 这台设备的 Claude App 里有 Code 会话认不出账号（`why` 里有 claude_app），又没开 `cca cost hook`（`app_hook` 是 off；旧版 cca

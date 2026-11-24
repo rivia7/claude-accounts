@@ -23,8 +23,8 @@
 //! costlog 家目录 写法…           往共享的会话记录里写折合金额要读的那几份（10g 的 costlog）。先建 家目录/.claude/projects/-cost，
 //!                                然后照写法（可以给几个，次序不论，总是 init → more → dave）：
 //!                                init：s-cost-1.jsonl（session-owner 是 u-alice-0001 / org-1；一句 2 天前的提问 SECRET-PROMPT-TEXT；
-//!                                      回复 mc1：2 天前 claude-opus-5-5 进 1000 出 100；mc2：1 天前 claude-sonnet-5-5[1m] 进 2000 出 1000，
-//!                                      同一条写了两行；mc3：1 小时前 claude-new-9 进 10 出 10）、s-cost-0.jsonl（没有 session-owner，
+//!                                      回复 mc1：2 天前 claude-opus-5-5 进 1000 出 100；mc2：1 天前 claude-sonnet-5-6[1m] 进 2000 出 1000
+//!                                      （价格表里还没有的新版本：按 claude-sonnet-5-5 估算），同一条写了两行；mc3：1 小时前 claude-new-9 进 10 出 10）、s-cost-0.jsonl（没有 session-owner，
 //!                                      回复 mc4：3 小时前 claude-opus-5-5 进 1000 出 100）、
 //!                                      家目录/.codex/sessions/2026/11/12/rollout-cost.jsonl（session_meta：th-cost / user-dave-0001 / openai，
 //!                                      turn_context：gpt-6-astra，两条一样的 token_count：进 10000（缓存 8000）出 500）；都是整个重写
@@ -571,7 +571,7 @@ fn costlog(a: &[String], _out: &mut String) -> R<i32> {
             "timestamp" => iso(now - 2.0 * DAY),
             "message" => obj! { "role" => "user", "content" => "SECRET-PROMPT-TEXT" },
         };
-        let twice = reply(now - DAY, "mc2", "claude-sonnet-5-5[1m]", 2000, 1000, "s-cost-1");
+        let twice = reply(now - DAY, "mc2", "claude-sonnet-5-6[1m]", 2000, 1000, "s-cost-1");
         fake::write_text(
             &fake::join(&[&d, "s-cost-1.jsonl"]),
             &[
@@ -1013,9 +1013,9 @@ mod tests {
             "\n",
             r#"{"type":"assistant","timestamp":"2026-11-22T06:00:00.000Z","requestId":"req_mc1","sessionId":"s-cost-1","message":{"id":"mc1","model":"claude-opus-5-5","role":"assistant","usage":{"input_tokens":1000,"output_tokens":100}}}"#,
             "\n",
-            r#"{"type":"assistant","timestamp":"2026-11-23T06:00:00.000Z","requestId":"req_mc2","sessionId":"s-cost-1","message":{"id":"mc2","model":"claude-sonnet-5-5[1m]","role":"assistant","usage":{"input_tokens":2000,"output_tokens":1000}}}"#,
+            r#"{"type":"assistant","timestamp":"2026-11-23T06:00:00.000Z","requestId":"req_mc2","sessionId":"s-cost-1","message":{"id":"mc2","model":"claude-sonnet-5-6[1m]","role":"assistant","usage":{"input_tokens":2000,"output_tokens":1000}}}"#,
             "\n",
-            r#"{"type":"assistant","timestamp":"2026-11-23T06:00:00.000Z","requestId":"req_mc2","sessionId":"s-cost-1","message":{"id":"mc2","model":"claude-sonnet-5-5[1m]","role":"assistant","usage":{"input_tokens":2000,"output_tokens":1000}}}"#,
+            r#"{"type":"assistant","timestamp":"2026-11-23T06:00:00.000Z","requestId":"req_mc2","sessionId":"s-cost-1","message":{"id":"mc2","model":"claude-sonnet-5-6[1m]","role":"assistant","usage":{"input_tokens":2000,"output_tokens":1000}}}"#,
             "\n",
             r#"{"type":"assistant","timestamp":"2026-11-24T05:00:00.000Z","requestId":"req_mc3","sessionId":"s-cost-1","message":{"id":"mc3","model":"claude-new-9","role":"assistant","usage":{"input_tokens":10,"output_tokens":10}}}"#,
             "\n",

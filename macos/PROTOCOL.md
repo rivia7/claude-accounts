@@ -366,7 +366,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     （`weeks[]`）加起来，`days`：30 天（`days[]`）加起来，各有 `usd`、`requests`、`unpriced_requests`（没有标价的模型也列：`usd` 是 0、
     `unpriced_requests` 是它的请求数），账号的另有 `tokens`（同上）。各项加起来就是 `summary` 的 `weeks_usd`、`days_usd`、`requests`、
     `unpriced_requests`（四舍五入的差别以外）。按 `weeks.usd`、`weeks.requests` 从多到少，再按 `days.usd`、模型名排，`null` 那一项总在最后；
-    两段里都没有请求、没有金额的不列，没有记录时为 `[]`。
+    两段里都没有请求、没有金额的不列，没有记录时为 `[]`。`priced_as`（3.6.14 起，只在有名字的模型上，没有这一项时照它自己的标价、或者
+    没有公开价格）：cca 的价格表里还没有的新版本（Claude 的 `claude-<系列>-<版本>`：opus、sonnet、haiku、fable、mythos；OpenAI 的
+    `gpt-<版本>-<档>`：astra、sol、terra、luna、codex）按同一系列里不比它新、最新的那个的标价估算，这里是那个模型的名字：金额是估算的，
+    App 在金额前面写「≈」、列表下面说检测到了哪个新模型。认不出系列的（`codex-auto-review` 这类）照旧没有公开价格；别的设备上的 cca
+    太旧时它那一份照旧算作没有标价（`unpriced_requests`）。cca 收录了它的价格以后（新版本）从头重算，这一项就没了。
   - `sync`：设备间同步的状态。`hub`：经哪台服务器同步（和账号的 `hub` 一样：`team`；`local_only`、`off` 时是 null。
     App 不认识的值当 null：3.6.0 以前的 cca 还会给 `maintainer`；旧版 cca 没有这个字段，也当 null）。`state`：`ok`（同步过，
     `checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|

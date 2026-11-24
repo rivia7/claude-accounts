@@ -164,6 +164,10 @@ private func modelInvariants(_ n: String, _ raw: Any?, _ rows: [CostModelRow]?, 
         guard tokens, let o = t as? [String: Any] else { return false }
         return ["input", "output", "cache_read", "cache_write"].allSatisfy { wholeCount(o[$0]) }
     })
+    check("\(n) priced_as（3.6.14 起）没有，或者是模型名（只在有名字的模型上）", list.allSatisfy { r in
+        guard let p = r["priced_as"] else { return true }
+        return (p as? String).map { !$0.isEmpty } == true && r["model"] is String
+    })
     check("\(n) 没有公开价格的请求不多于请求数", rows.allSatisfy {
         $0.weeks.unpricedRequests <= $0.weeks.requests && $0.days.unpricedRequests <= $0.days.requests
     })

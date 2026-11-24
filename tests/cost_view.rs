@@ -26,6 +26,7 @@ pub const MODULE: Module = Module {
     tests: &[
         // Scan：读会话记录、统计、发布
         case!(scan_and_increments),
+        case!(new_model_versions),
         case!(run_and_publish),
         case!(rebuild_keeps_history),
         case!(session_start),
@@ -673,6 +674,34 @@ impl Scan {
             write(self.dev().cdir(key).join(".claude.json"), &who, None);
         }
     }
+}
+
+/// 价格表里还没有的新版本（claude-opus-5-6）：按同系列最新的（claude-opus-5-5）估算，算进金额、不记成没有标价的（um）；
+/// 认不出系列的（claude-new-9）照旧只计请求数
+fn new_model_versions(t: &mut Ctx) {
+    let mut fx = Scan::new(t);
+    let t0 = fx.t0;
+    write(fx.dev().cca.join("accounts.json"), &obj! { "bob(bob@example.com)" => "US-A" }, None); // 有官方账号才统计
+    let s9 = [
+        owner(U1, "s9"),
+        reply(t0, "n1", "s9", "claude-opus-5-6", &[]),
+        reply(t0 + 60, "n2", "s9", OPUS, &[]),
+        reply(t0 + 120, "n3", "s9", "claude-new-9", &[]),
+    ];
+    fsx::write(fx.proj.join("s9.jsonl"), jl(&s9));
+    fx.scan();
+    assert_eq!(
+        fx.total(Some(&claude(U1))),
+        [12000, 3, 3000, 300, 0, 0, 1],
+        "新版本和 opus 5.5 一样各 6000；认不出系列的只计请求数"
+    );
+    assert_eq!(iter_of(&fx.j["um"][claude(U1).as_str()]), [Value::from("claude-new-9")], "估算的不算没有标价");
+    let model = |m: &str| -> Vec<i64> {
+        let hm = &fx.j["hm"][claude(U1).as_str()];
+        (0..7).map(|i| hm.obj().values().filter_map(|ms| ms.get(m)).map(|r| r[i].i64()).sum()).collect()
+    };
+    assert_eq!(model("claude-opus-5-6"), [6000, 1, 1000, 100, 0, 0, 0], "按模型分的：新版本那一项有金额、不算没有标价");
+    assert_eq!(model("claude-new-9"), [0, 1, 1000, 100, 0, 0, 1]);
 }
 
 /// 账号目录（`cdir(key).parent`）
@@ -2128,7 +2157,7 @@ fn models(t: &mut Ctx) {
     let hm = obj! {
         at(2026, 11, 3, 10) => obj! { "claude-opus-5-5" => row(7.0, 2, 0), "claude-unknown-1" => row(0.0, 1, 1) },
         at(2026, 11, 10, 10) => obj! { "claude-opus-5-5" => row1(3.0) },
-        at(2026, 11, 13, 9) => obj! { "claude-opus-5-5" => row1(4.0), "claude-haiku-4-5" => row1(1.0) },
+        at(2026, 11, 13, 9) => obj! { "claude-opus-5-5" => row1(4.0), "claude-haiku-5-6" => row1(1.0) },
     };
     put(&mut fx.local, "hm", obj! { claude(U1) => hm });
     put(fx.entry("SHA256:bob"), "hm", obj! { at(2026, 11, 12, 10) => obj! { "claude-opus-5-5" => row1(2.0) } });
@@ -2137,7 +2166,7 @@ fn models(t: &mut Ctx) {
     let mut cv = fx.view();
     let a = cv.account("claude", "alice(alice@example.com)", Value::Null, Given::Team);
     let (opus, haiku, unknown) =
-        (list!["claude-opus-5-5", 16.0, 5, 0], list!["claude-haiku-4-5", 1.0, 1, 0], list!["claude-unknown-1", 0.0, 1, 1]);
+        (list!["claude-opus-5-5", 16.0, 5, 0], list!["claude-haiku-5-6", 1.0, 1, 0], list!["claude-unknown-1", 0.0, 1, 1]);
     assert_eq!(
         by_model(&a["models"], "weeks"),
         list![&opus, &haiku, &unknown, list![Value::Null, 3.0, 3, 0]],
@@ -2161,7 +2190,7 @@ fn models(t: &mut Ctx) {
         by_model(mine, "weeks"),
         list![
             list!["claude-opus-5-5", 14.0, 4, 0],
-            list!["claude-haiku-4-5", 1.0, 1, 0],
+            list!["claude-haiku-5-6", 1.0, 1, 0],
             list!["claude-unknown-1", 0.0, 1, 1],
             list![Value::Null, 1.0, 1, 0],
         ]
@@ -2185,7 +2214,7 @@ fn models(t: &mut Ctx) {
         by_model(&t["me"]["models"], "days"),
         list![
             list!["claude-opus-5-5", 14.0, 4, 0],
-            list!["claude-haiku-4-5", 1.0, 1, 0],
+            list!["claude-haiku-5-6", 1.0, 1, 0],
             list!["claude-unknown-1", 0.0, 1, 1],
             list![Value::Null, 4.0, 1, 0],
         ]
@@ -2196,6 +2225,14 @@ fn models(t: &mut Ctx) {
         list![list!["claude-opus-5-5", 2.0, 1, 0], list![Value::Null, 1.0, 1, 0]]
     );
     assert!(!t["models"][0]["weeks"].obj().contains_key("tokens"));
+    // 价格表里还没有的新版本（claude-haiku-5-6）：那一行带 priced_as（按哪个模型的标价估算的）；有自己的标价的、没有公开价格的、
+    // 没有按模型记下的没有这一项
+    let priced =
+        |ms: &Value| -> Vec<Value> { ms.list().iter().map(|m| m.get("priced_as").cloned().unwrap_or(Value::Null)).collect() };
+    let want = [Value::Null, Value::from("claude-haiku-5-5"), Value::Null, Value::Null];
+    assert_eq!(priced(&a["models"]), want, "账号的");
+    assert_eq!(priced(mine), want, "设备的");
+    assert_eq!(priced(&t["models"]), want, "cost_total 的");
 }
 
 /// 认不出是哪个账号的（unattributed.cost）：这台设备的，和别的设备经各个 Team 的服务器传来的（remote.json 的 orphan）。同一台机器

@@ -58,8 +58,9 @@ pub static COST_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "
 pub const COST_PRICES_DATE: &str = "2026-11-24";
 /// 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算（COST_PRICES_DATE + "/第几版"；2026-11-13/2：按会话开始的
 /// 记录认账号、记下诊断；2026-11-24/1：补上 GPT-6.2 的标价，以前记成没有标价的请求按新价重算；2026-11-24/2：会话开始的记录比
-/// session-owner 新时按记录认（换了账号续接），认 Claude App 的记录）
-pub const COST_BUILD: &str = "2026-11-24/2";
+/// session-owner 新时按记录认（换了账号续接），认 Claude App 的记录；2026-11-24/3：价格表里还没有的新版本按同系列的标价估算
+/// （priced_by），以前记成没有标价的请求重算）。price_tables_pinned_to_build 守着：价格表、估算的规则变了它就不过
+pub const COST_BUILD: &str = "2026-11-24/3";
 /// 后台统计最多隔这么久起一次
 pub const COST_EVERY: f64 = 300.0;
 /// 和别的设备同步最多隔这么久一次（cca cost sync --now 不等）
@@ -183,6 +184,61 @@ const OPENAI_ULTRA: &[(&str, f64, f64)] =
 /// 2027-03-01 00:00 太平洋时间（PST）：GPT-6.2 的 Ultrafast 从这时起是 6 倍
 const ULTRA_PROMO_END: f64 = 1803888000.0;
 
+/// 价格表还没收录的新版本（新模型出来了、cca 还没发新版）：按同一系列里不比它新、最新的那个的标价估算，不至于漏算（PROTOCOL 2.2
+/// 的 models[].priced_as 说按的是哪一个）。系列按名字认：Claude 的 claude-<系列>-<主版本>[-<小版本>]，OpenAI 的
+/// gpt-<主版本>[.<小版本>]-<档>。认不出系列的（claude-new-9、codex-auto-review 这类）、比价格表里同系列的都旧的照旧没有公开价格
+/// （只数 token）。改了这几项要改 COST_BUILD
+const CLAUDE_FAMILIES: &[&str] = &["opus", "sonnet", "haiku", "fable", "mythos"];
+const OPENAI_FAMILIES: &[&str] = &["astra", "sol", "terra", "luna", "codex"];
+const CLAUDE_NAME: &str = r"^claude-([a-z]+)-([0-9]{1,3})(?:-([0-9]{1,3}))?$";
+const OPENAI_NAME: &str = r"^gpt-([0-9]{1,3})(?:\.([0-9]{1,3}))?-([a-z]+)$";
+
+/// 系列和版本：(系列, (主版本, 小版本))，认不出的是 None
+type Family<'a> = Option<(&'a str, (u32, u32))>;
+
+fn family_version(major: Option<&str>, minor: Option<&str>) -> Option<(u32, u32)> {
+    Some((major?.parse().ok()?, minor.map_or(Some(0), |m| m.parse().ok())?))
+}
+
+fn claude_family(m: &str) -> Family<'_> {
+    let c = re!(CLAUDE_NAME).fullmatch(m)?;
+    let fam = c.group(1).filter(|f| CLAUDE_FAMILIES.contains(f))?;
+    Some((fam, family_version(c.group(2), c.group(3))?))
+}
+
+fn openai_family(m: &str) -> Family<'_> {
+    let c = re!(OPENAI_NAME).fullmatch(m)?;
+    let fam = c.group(3).filter(|f| OPENAI_FAMILIES.contains(f))?;
+    Some((fam, family_version(c.group(1), c.group(2))?))
+}
+
+/// 按价格表里哪个模型的标价算：有它自己的就是它（第二项 false）；新版本按同系列里不比它新、最新的那个估算（true）；都没有是 None。
+/// 平常的模型第一步就找到了，只有价格表里没有的才去认系列
+fn priced_by(
+    model: &str,
+    names: impl Iterator<Item = &'static str> + Clone,
+    family: for<'a> fn(&'a str) -> Family<'a>,
+) -> Option<(&'static str, bool)> {
+    if let Some(n) = names.clone().find(|n| *n == model) {
+        return Some((n, false));
+    }
+    let (fam, ver) = family(model)?;
+    names.filter_map(|n| family(n).filter(|(f, v)| *f == fam && *v <= ver).map(|(_, v)| (v, n))).max().map(|(_, n)| (n, true))
+}
+
+fn claude_priced_by(model: &str) -> Option<(&'static str, bool)> {
+    priced_by(model, CLAUDE_PRICES.iter().map(|(n, _)| *n), claude_family)
+}
+
+fn openai_priced_by(model: &str) -> Option<(&'static str, bool)> {
+    priced_by(model, OPENAI_PRICES.iter().map(|(n, _, _)| *n), openai_family)
+}
+
+/// PROTOCOL 2.2 的 models[].priced_as：价格表里还没有、按同系列别的模型的标价估算的，是那个模型；别的（有自己的标价、没有公开价格）是 None
+pub fn priced_as(model: &str) -> Option<&'static str> {
+    claude_priced_by(model).or_else(|| openai_priced_by(model)).filter(|(_, estimated)| *estimated).map(|(n, _)| n)
+}
+
 /// 会话记录里的模型名 → 价格表里的写法：小写，去掉 [1m] 这类后缀和末尾的日期
 pub fn cost_model(m: Option<&V>) -> String {
     let Some(m) = m.and_then(|m| m.as_str()) else { return String::new() };
@@ -205,7 +261,8 @@ fn tokens(u: &Dict, k: &str) -> i64 {
 }
 
 /// 一条 Claude 回复的用量（message.usage）：(折合多少百万分之一美元：没有公开价格的模型是 None, (输入, 输出, 缓存读, 缓存写))。
-/// 金额照原来的先后用小数算（原来整数的标价乘出来是整数，这里的小数在 2^53 以内一样精确）
+/// 金额照原来的先后用小数算（原来整数的标价乘出来是整数，这里的小数在 2^53 以内一样精确）。价格表里还没有的新版本照估算它的那个
+/// 模型的一套算（长上下文、快速模式、只在美国推理都是那个模型的）
 pub fn cost_claude(model: &str, u: &Dict) -> (Option<f64>, [i64; 4]) {
     let (inp, out, cr) = (tokens(u, "input_tokens"), tokens(u, "output_tokens"), tokens(u, "cache_read_input_tokens"));
     let cc = u.dict("cache_creation").unwrap_or_default();
@@ -214,8 +271,9 @@ pub fn cost_claude(model: &str, u: &Dict) -> (Option<f64>, [i64; 4]) {
         w5 = tokens(u, "cache_creation_input_tokens");
     }
     let tok = [inp, out, cr, w5 + w1];
-    let Some((_, mut p)) = CLAUDE_PRICES.iter().find(|(name, _)| *name == model).copied() else { return (None, tok) };
-    if let Some((_, over, long)) = CLAUDE_LONG.iter().find(|(name, _, _)| *name == model) {
+    let Some((key, _)) = claude_priced_by(model) else { return (None, tok) };
+    let mut p = CLAUDE_PRICES.iter().find(|(name, _)| *name == key).map(|(_, p)| *p).expect("priced_by 给的是价格表里的名字");
+    if let Some((_, over, long)) = CLAUDE_LONG.iter().find(|(name, _, _)| *name == key) {
         if inp + cr + w5 + w1 > *over {
             p = *long;
         }
@@ -223,7 +281,7 @@ pub fn cost_claude(model: &str, u: &Dict) -> (Option<f64>, [i64; 4]) {
     let [mut pin, mut p5, mut p1, mut pr, mut pout] = p;
     let speed = u.get("speed");
     if speed.as_ref().and_then(|s| s.as_str()) == Some("fast") {
-        if let Some((_, fin, fout)) = CLAUDE_FAST.iter().find(|(name, _, _)| *name == model) {
+        if let Some((_, fin, fout)) = CLAUDE_FAST.iter().find(|(name, _, _)| *name == key) {
             let k = fin / pin;
             (pin, p5, p1, pr, pout) = (*fin, p5 * k, p1 * k, pr * k, *fout);
         }
@@ -231,7 +289,7 @@ pub fn cost_claude(model: &str, u: &Dict) -> (Option<f64>, [i64; 4]) {
     // 美元 / 百万 token × token 数 = 百万分之一美元
     let mut micro = inp as f64 * pin + w5 as f64 * p5 + w1 as f64 * p1 + cr as f64 * pr + out as f64 * pout;
     let geo = u.get("inference_geo");
-    if geo.as_ref().and_then(|g| g.as_str()) == Some("us") && !CLAUDE_NO_GEO.contains(&model) {
+    if geo.as_ref().and_then(|g| g.as_str()) == Some("us") && !CLAUDE_NO_GEO.contains(&key) {
         micro *= 1.1;
     }
     let searches = cost_int(u.dict("server_tool_use").and_then(|s| s.get("web_search_requests")));
@@ -239,7 +297,7 @@ pub fn cost_claude(model: &str, u: &Dict) -> (Option<f64>, [i64; 4]) {
 }
 
 /// 一次 Codex 请求（token_count 的 last_token_usage：input_tokens 含缓存读、缓存写，output_tokens 含推理）：同 cost_claude。
-/// ts 是请求的时间（有的标价按时间分段：OPENAI_ULTRA）
+/// ts 是请求的时间（有的标价按时间分段：OPENAI_ULTRA）。价格表里还没有的新版本同 cost_claude
 pub fn cost_codex(model: &str, tier: Option<&str>, ts: f64, u: &Dict) -> (Option<f64>, [i64; 4]) {
     let (inp, cached, write, out) = (
         tokens(u, "input_tokens"),
@@ -251,7 +309,8 @@ pub fn cost_codex(model: &str, tier: Option<&str>, ts: f64, u: &Dict) -> (Option
     let write = write.min(inp - cached);
     let plain = inp - cached - write;
     let tok = [plain, out, cached, write];
-    let Some((_, base, long)) = OPENAI_PRICES.iter().find(|(name, _, _)| *name == model) else { return (None, tok) };
+    let Some((key, _)) = openai_priced_by(model) else { return (None, tok) };
+    let (_, base, long) = OPENAI_PRICES.iter().find(|(name, _, _)| *name == key).expect("priced_by 给的是价格表里的名字");
     let (pin, pc, pw, pout) = match long {
         Some(long) if inp > OPENAI_LONG => *long,
         _ => *base,
@@ -259,7 +318,7 @@ pub fn cost_codex(model: &str, tier: Option<&str>, ts: f64, u: &Dict) -> (Option
     let k = if tier == Some("ultrafast") {
         OPENAI_ULTRA
             .iter()
-            .find(|(name, _, _)| *name == model)
+            .find(|(name, _, _)| *name == key)
             .map_or(2.0, |(_, before, after)| if ts < ULTRA_PROMO_END { *before } else { *after })
     } else {
         OPENAI_TIERS.iter().find(|(name, _)| Some(*name) == tier).map_or(1.0, |(_, k)| *k)
@@ -3088,8 +3147,8 @@ fn add_models(into: &mut Models, m: &Models) {
 }
 
 /// PROTOCOL 2.2 的 models[]：每个模型（没有按模型记下的那一部分 model 是 null）在列出的周期（weeks）、按天的那 30 天（days）里
-/// 折成多少美元、几次请求、其中没有标价的几次；tokens 只给整个账号的。按列出的周期的金额、请求数从多到少，再按 30 天的金额、
-/// 模型名排，没有按模型记下的在最后；两段里都没有请求、没有金额的不列
+/// 折成多少美元、几次请求、其中没有标价的几次；tokens 只给整个账号的；价格表里还没有、按同系列的标价估算的带 priced_as。
+/// 按列出的周期的金额、请求数从多到少，再按 30 天的金额、模型名排，没有按模型记下的在最后；两段里都没有请求、没有金额的不列
 fn models_view(ms: &Models, tokens: bool) -> Vec<V> {
     let mut rows: Vec<(&Option<String>, &[Counts; 2])> =
         ms.iter().filter(|(_, c)| c.iter().any(|c| c[1] != 0 || c[0] != 0)).collect();
@@ -3114,7 +3173,11 @@ fn models_view(ms: &Models, tokens: bool) -> Vec<V> {
     rows.into_iter()
         .map(|(m, c)| {
             let model = m.as_deref().map_or(V::None, V::from);
-            V::Dict(dict! { "model" => model, "weeks" => range(&c[0]), "days" => range(&c[1]) })
+            let row = dict! { "model" => model, "weeks" => range(&c[0]), "days" => range(&c[1]) };
+            if let Some(base) = m.as_deref().and_then(priced_as) {
+                row.set("priced_as", base);
+            }
+            V::Dict(row)
         })
         .collect()
 }
@@ -3827,6 +3890,74 @@ mod tests {
     }
 
     #[test]
+    fn new_versions_priced_by_family() {
+        // 价格表里还没有的新版本：按同系列里不比它新、最新的那个估算；认不出系列的、比同系列的都旧的照旧没有公开价格
+        for (m, want) in [
+            ("claude-opus-5-5", Some(("claude-opus-5-5", false))),
+            ("claude-opus-5-6", Some(("claude-opus-5-5", true))),
+            ("claude-opus-6", Some(("claude-opus-5-5", true))),
+            ("claude-opus-5-2", Some(("claude-opus-5", true))),
+            ("claude-opus-5-05", Some(("claude-opus-5-5", true))),
+            ("claude-sonnet-6-1", Some(("claude-sonnet-5-5", true))),
+            ("claude-haiku-6", Some(("claude-haiku-5-5", true))),
+            ("claude-fable-5-3", Some(("claude-fable-5-2", true))),
+            ("claude-mythos-6", Some(("claude-mythos-5-2", true))),
+            ("claude-opus-3", None),
+            ("claude-new-9", None),
+            ("claude-unknown-1", None),
+            ("claude-opus-5-5-preview", None),
+            ("claude-opus", None),
+            ("gpt-6.3-sol", None),
+        ] {
+            assert_eq!(claude_priced_by(m), want, "{m}");
+        }
+        for (m, want) in [
+            ("gpt-6.2-sol", Some(("gpt-6.2-sol", false))),
+            ("gpt-6.3-sol", Some(("gpt-6.2-sol", true))),
+            ("gpt-7-astra", Some(("gpt-6.2-astra", true))),
+            ("gpt-6.2-luna", Some(("gpt-6-luna", true))),
+            ("gpt-6.2-terra", Some(("gpt-6.1-terra", true))),
+            ("gpt-5.4-codex", Some(("gpt-5.3-codex", true))),
+            ("gpt-5-codex", None),
+            ("codex-auto-review", None),
+            ("gpt-6.2-nova", None),
+            ("gpt-6.2.1-sol", None),
+            ("claude-opus-5-6", None),
+        ] {
+            assert_eq!(openai_priced_by(m), want, "{m}");
+        }
+        assert_eq!(priced_as("claude-opus-5-6"), Some("claude-opus-5-5"));
+        assert_eq!(priced_as("gpt-6.3-sol"), Some("gpt-6.2-sol"));
+        assert_eq!(priced_as("claude-opus-5-5"), None, "有自己的标价：不是估算的");
+        assert_eq!(priced_as("codex-auto-review"), None, "没有可估的");
+        assert_eq!(priced_as(""), None);
+        // 估算的照那个模型的一套算：快速模式、只在美国推理、长上下文、Ultrafast
+        let u = d(r#"{"input_tokens": 1000, "output_tokens": 100, "speed": "fast", "inference_geo": "us"}"#);
+        assert_eq!(cost_claude("claude-opus-5-6", &u), cost_claude("claude-opus-5-5", &u));
+        let long = d(r#"{"input_tokens": 120000, "output_tokens": 100}"#);
+        assert_eq!(cost_claude("claude-haiku-5-6", &long), cost_claude("claude-haiku-5-5", &long));
+        let cu = d(r#"{"input_tokens": 300000, "cached_input_tokens": 1000, "output_tokens": 100}"#);
+        for tier in [None, Some("ultrafast"), Some("flex")] {
+            assert_eq!(cost_codex("gpt-6.3-sol", tier, 0.0, &cu), cost_codex("gpt-6.2-sol", tier, 0.0, &cu), "{tier:?}");
+        }
+        assert_eq!(cost_codex("codex-auto-review", None, 0.0, &cu).0, None);
+    }
+
+    #[test]
+    fn price_tables_pinned_to_build() {
+        // 价格表、估算的规则变了要同时改 COST_BUILD（和这里记的摘要）：不然各台设备不从头重算，以前的用量还按旧价、旧规则
+        let tables = format!(
+            "{CLAUDE_PRICES:?}{CLAUDE_LONG:?}{CLAUDE_FAST:?}{CLAUDE_NO_GEO:?}{CLAUDE_WEB_SEARCH:?}{OPENAI_PRICES:?}{OPENAI_LONG:?}\
+             {OPENAI_TIERS:?}{OPENAI_ULTRA:?}{ULTRA_PROMO_END:?}{CLAUDE_FAMILIES:?}{OPENAI_FAMILIES:?}{CLAUDE_NAME:?}{OPENAI_NAME:?}"
+        );
+        assert_eq!(
+            (COST_BUILD, &sha256_hex(tables.as_bytes())[..16]),
+            ("2026-11-24/3", "bafda80d22537243"),
+            "价格表变了：改 COST_BUILD，再把这里的两项换成新的"
+        );
+    }
+
+    #[test]
     fn model_names_like_python_test() {
         // 会话记录里的模型名 → 价格表里的写法
         let long = "m".repeat(100);
@@ -3900,6 +4031,7 @@ mod tests {
             "输入（含缓存）超过 10 万 token：长上下文的标价",
         );
         assert_eq!(f("claude-unknown-9", &u), (None, [1000, 100, 10000, 2500]), "没有公开价格的：只数 token");
+        assert_eq!(f("claude-opus-5-6", &u), f("claude-opus-5-5", &u), "价格表里还没有的新版本：按同系列最新的估算");
         for junk in ["true", "-5", "1.5", r#""100""#, "10000000000000", "null"] {
             assert_eq!(
                 f("claude-opus-5-5", &format!(r#"{{"input_tokens": {junk}, "output_tokens": 1}}"#)).1,

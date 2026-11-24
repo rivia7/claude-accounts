@@ -222,7 +222,7 @@ struct CostGranularityPicker: View {
 
 /// 按模型分开的金额（cca 给的 `models[]`，3.6.8 起；旧版 cca 没有，不显示）：账号页「折合金额」、折合金额页合计那一块里。
 /// 一个模型一行：名字、一根细条（这一行的金额占这几行加起来的多少；中性色，和折合金额的柱子一样）、金额（都没有公开价格的写
-/// 「没有公开价格」）、请求数。按周看是列出的周期（近 12 周）的，按天看是 30 天的；没有按模型记下的那一部分在最后、灰字。
+/// 「没有公开价格」，cca 的价格表里还没有、按同系列估算的新模型前面加「≈」，列表下面说一句）、请求数。按周看是列出的周期（近 12 周）的，按天看是 30 天的；没有按模型记下的那一部分在最后、灰字。
 /// 数字都是 cca 给的，App 只挑那一段、排版（rows 是 CostChart.modelRows 挑好、排好的）
 struct CostModelList: View {
     let rows: [CostModelRow]
@@ -247,7 +247,7 @@ struct CostModelList: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             CostShareBar(fraction: CostChart.modelShare(r, of: rows, granularity: granularity))
                                 .frame(width: 80)
-                            Text(Texts.costModelMoney(x, currency: currency))
+                            Text(Texts.costModelMoney(x, currency: currency, estimated: r.pricedAs != nil))
                                 .foregroundStyle(x.allUnpriced || r.model == nil ? .secondary : .primary)
                                 .frame(width: 96, alignment: .trailing)
                             Text(Texts.costModelRequests(x))
@@ -262,6 +262,9 @@ struct CostModelList: View {
                     }
                 }
                 .font(.callout.monospacedDigit())
+                if let note = Texts.costEstimated(rows, granularity: granularity) {
+                    Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

@@ -217,17 +217,21 @@ struct CostModelRow: Decodable, Sendable, Equatable, Identifiable {
     var model: String?
     var weeks: CostModelRange
     var days: CostModelRange
+    /// cca 的价格表里还没有、按同系列别的模型的标价估算的新模型：按的是哪一个（3.6.14 起）。nil：照它自己的标价，或者没有公开价格
+    var pricedAs: String?
 
     var id: String { model.map { "m:" + $0 } ?? "rest" }
 
     enum CodingKeys: String, CodingKey {
         case model, weeks, days
+        case pricedAs = "priced_as"
     }
 
-    init(model: String?, weeks: CostModelRange = CostModelRange(), days: CostModelRange = CostModelRange()) {
+    init(model: String?, weeks: CostModelRange = CostModelRange(), days: CostModelRange = CostModelRange(), pricedAs: String? = nil) {
         self.model = model
         self.weeks = weeks
         self.days = days
+        self.pricedAs = pricedAs
     }
 
     /// `model` 要么是字符串（模型名），要么是 null（没有按模型记下的）；缺了、别的类型：这一项不要
@@ -242,6 +246,7 @@ struct CostModelRow: Decodable, Sendable, Equatable, Identifiable {
         }
         weeks = c.lossy(CostModelRange.self, .weeks) ?? CostModelRange()
         days = c.lossy(CostModelRange.self, .days) ?? CostModelRange()
+        pricedAs = model == nil ? nil : c.string(.pricedAs).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// 按周看是列出的周期的那一段，按天看是 30 天的

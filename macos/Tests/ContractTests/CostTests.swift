@@ -116,13 +116,17 @@ func costFixtureTests() {
         // 按模型（3.6.8 起）
         let bm = bob?.models ?? []
         check("bob：按模型（列出的周期的金额从多到少，没有公开价格的只计请求数，old-mini 传来的没按模型记下，在最后）",
-              bm.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-research-preview", nil]
+              bm.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-6", "claude-research-preview", nil]
               && bm.first?.weeks.usd == 4950.91 && bm.first?.weeks.requests == 22528 && bm.first?.days.usd == 2949.1
               && bm.first?.weeks.tokens == CostTokens(input: 1401104, output: 11320203, cacheRead: 2015063698, cacheWrite: 50904069)
               && bm.count == 5 && bm[3].weeks.allUnpriced && bm[3].days.requests == 1 && bm[4].weeks.usd == 772.26 && bm[4].days.isEmpty,
               bm.map(\.id).joined(separator: ","))
+        check("bob：价格表里还没有的新模型（claude-haiku-5-6）带 priced_as，别的没有", bm.map(\.pricedAs) == [nil, nil, "claude-haiku-5-5", nil, nil]
+              && bob?.me?.models?.first { $0.model == "claude-haiku-5-6" }?.pricedAs == "claude-haiku-5-5"
+              && Texts.costEstimated(bm, granularity: .week) == "检测到新模型 claude-haiku-5-6：cca 的价格表里还没有它，按 claude-haiku-5-5 的价格估算（≈）",
+              "\(bm.map(\.pricedAs))")
         check("bob：各台设备按模型的（没有 tokens；old-mini 是旧版 cca，只有没按模型记下的）",
-              bob?.me?.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-research-preview"]
+              bob?.me?.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-6", "claude-research-preview"]
               && bob?.device(aliceMini)?.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5"]
               && bob?.devices.last?.models?.map(\.model) == [nil]
               && bob?.devices.allSatisfy { $0.models?.allSatisfy { $0.weeks.tokens == nil && $0.days.tokens == nil } == true } == true)
@@ -135,7 +139,7 @@ func costFixtureTests() {
         check("frank（Codex）：按模型（没有公开价格的 codex-auto-review 也列）", s.tool(.codex)?.accounts.first?.cost?.models?.map(\.model)
               == ["gpt-6.2-astra", "gpt-6.1-sol", "codex-auto-review"])
         check("cost_total：按模型（所有账号加起来，本机、各台设备的也有）", t.all.models?.map(\.model) == ["claude-opus-5-5", "gpt-6.2-astra",
-              "claude-sonnet-5-5", "gpt-6.1-sol", "claude-haiku-4-5", "codex-auto-review", "claude-research-preview", nil]
+              "claude-sonnet-5-5", "gpt-6.1-sol", "claude-haiku-5-6", "codex-auto-review", "claude-research-preview", nil]
               && t.all.models?.first?.weeks.usd == 8073.69 && t.me?.models?.count == 7 && t.devices.first?.part.models == t.me?.models
               && t.device(aliceMini)?.part.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5"])
         // 认不出账号（3.6.8 起，所有设备的）
@@ -530,6 +534,28 @@ func costUnitTests() {
           == "$22.30，316 次请求，其中 4 次没有公开价格、没算钱\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开"
           && Texts.costModelHelp(opus, granularity: .week, currency: "USD") == Texts.costModelValue(opus, granularity: .week, currency: "USD"),
           "\(Texts.costModelValue(restRow, granularity: .week, currency: "USD")) / \(Texts.costModelRequests(opus.weeks))")
+    // 3.6.14 起：cca 的价格表里还没有的新模型按同系列的标价估算（priced_as）
+    let newer = CostModelRow(model: "claude-opus-5-6", weeks: CostModelRange(usd: 12.5, requests: 30), pricedAs: "claude-opus-5-5")
+    let newer2 = CostModelRow(model: "gpt-6.3-sol", weeks: CostModelRange(usd: 3, requests: 3), days: CostModelRange(usd: 1, requests: 1),
+                              pricedAs: "gpt-6.2-sol")
+    check("价格表里还没有的新模型：金额前面加 ≈，读屏、悬停说按哪个模型的价格估算；列表下面说检测到了哪个新模型",
+          Texts.costModelMoney(newer.weeks, currency: "USD", estimated: true) == "≈ $12.50"
+          && Texts.costModelMoney(unpricedRow.weeks, currency: "USD", estimated: true) == "没有公开价格"
+          && Texts.costModelValue(newer, granularity: .week, currency: "USD") == "≈ $12.50，30 次请求，按 claude-opus-5-5 的价格估算"
+          && Texts.costModelHelp(newer, granularity: .week, currency: "USD").hasSuffix("cca 收录了它的价格以后自动重算")
+          && Texts.costEstimated([opus, newer], granularity: .week) == "检测到新模型 claude-opus-5-6：cca 的价格表里还没有它，按 claude-opus-5-5 的价格估算（≈）"
+          && Texts.costEstimated([opus, newer, newer2], granularity: .week) == "检测到新模型 claude-opus-5-6、gpt-6.3-sol：cca 的价格表里还没有，按同系列的价格估算（≈）"
+          && Texts.costEstimated([opus, newer, newer2], granularity: .day) == "检测到新模型 gpt-6.3-sol：cca 的价格表里还没有它，按 gpt-6.2-sol 的价格估算（≈）"
+          && Texts.costEstimated([opus, restRow], granularity: .week) == nil,
+          Texts.costModelValue(newer, granularity: .week, currency: "USD"))
+    let pricedRows = try? JSONDecoder().decode([CostModelRow].self, from: Data(#"""
+        [{"model": "claude-opus-5-6", "weeks": {"usd": 1, "requests": 1, "unpriced_requests": 0}, "days": {}, "priced_as": "claude-opus-5-5"},
+         {"model": "claude-opus-5-5", "weeks": {"usd": 1, "requests": 1, "unpriced_requests": 0}, "days": {}},
+         {"model": "x", "weeks": {}, "days": {}, "priced_as": 3}, {"model": "y", "weeks": {}, "days": {}, "priced_as": ""},
+         {"model": null, "weeks": {}, "days": {}, "priced_as": "z"}]
+        """#.utf8))
+    check("priced_as：模型名；没有、空的、类型不对、没按模型记下的那一项都当没有",
+          pricedRows?.map(\.pricedAs) == ["claude-opus-5-5", nil, nil, nil, nil], "\(String(describing: pricedRows?.map(\.pricedAs)))")
     let mrows = [CostModelRow(model: "a", weeks: CostModelRange(usd: 9, requests: 9), days: CostModelRange(usd: 1, requests: 1)),
                  CostModelRow(model: "b", weeks: CostModelRange(usd: 5, requests: 5), days: CostModelRange(usd: 4, requests: 4)),
                  CostModelRow(model: "d", weeks: CostModelRange(usd: 2, requests: 2)),
