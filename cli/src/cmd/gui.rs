@@ -892,7 +892,7 @@ pub fn cmd_gui_live(args: &[String]) -> R<()> {
 mod tests {
     use super::*;
 
-    /// tests/presence.py 的 test_keyshare 里看 gui_api_key 的那几处：_gui state 的 api_key 照 config.json 里
+    /// tests/presence.rs 的 keyshare 里看 gui_api_key 的那几处：_gui state 的 api_key 照 config.json 里
     /// 记下的说（存了没有、掩码、什么时候记下的、从哪台设备同步来的），会同步的账号带上最近一次没同步成的原因
     #[test]
     fn api_key_like_python_test() {

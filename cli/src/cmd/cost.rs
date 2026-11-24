@@ -3737,7 +3737,7 @@ impl CostView {
 }
 
 /// 只给测试用（`_cost-periods <现在> [额度窗口的 JSON]`）：打印 cost_days、cost_weeks 切出来的时段。这两个函数靠本地时区、
-/// 夏令时，tests/cost_view.py 拿固定的“现在”在几个时区下看
+/// 夏令时，tests/cost_view.rs 拿固定的“现在”在几个时区下看
 pub fn cmd_cost_periods(args: &[String]) -> R<()> {
     arity("cmd_cost_periods", args, 1, 2)?;
     let now = text::to_float(&args[0]).ok_or_else(|| Fail::Value("现在要是一个数".into()))?;
@@ -3758,7 +3758,7 @@ pub fn cmd_cost_periods(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 只给测试用（`_cost-view <现在> <要看什么的 JSON>`；tests/cost_view.py、tests/presence.py）：照 cost/ 里现在的文件给出 CostView 的结果。
+/// 只给测试用（`_cost-view <现在> <要看什么的 JSON>`；tests/cost_view.rs、tests/presence.rs）：照 cost/ 里现在的文件给出 CostView 的结果。
 /// CostView 靠“现在”和本地时区切时段，_gui state 里的“现在”定不住：测试拿固定的时刻、固定的时区（TZ）核对。要看什么：
 /// {"config": config.json 里它看的那几项（cost、presence、device_id）, "team": 用得了的同步服务器——一个 Team 的编号，或者几个编号的
 ///  列表（照列表的先后），写 "load" 是这台设备现在用得了的那几台（hubs()），没有是一台都用不了,
@@ -3828,7 +3828,7 @@ mod tests {
 
     #[test]
     fn model_names_like_python_test() {
-        // tests/cost_view.py 的 Prices.test_model_names：会话记录里的模型名 → 价格表里的写法
+        // 原来 tests/cost_view.py 的 Prices.test_model_names：会话记录里的模型名 → 价格表里的写法
         let long = "m".repeat(100);
         for (raw, want) in [
             (V::from("claude-opus-5-5[1m]"), "claude-opus-5-5"),
@@ -3848,7 +3848,7 @@ mod tests {
 
     #[test]
     fn claude_prices_like_python_test() {
-        // tests/cost_view.py 的 Prices.test_claude
+        // 原来 tests/cost_view.py 的 Prices.test_claude
         let f = |model: &str, u: &str| cost_claude(model, &d(u));
         let with = |more: &str| {
             format!(
@@ -3911,7 +3911,7 @@ mod tests {
 
     #[test]
     fn codex_prices_like_python_test() {
-        // tests/cost_view.py 的 Prices.test_codex
+        // 原来 tests/cost_view.py 的 Prices.test_codex
         let now = 1795500000.0; // 2026-11-24：GPT-6.2 的 Ultrafast 还在促销
         let f = |model: &str, tier: Option<&str>, u: &str| cost_codex(model, tier, now, &d(u));
         let u = r#"{"input_tokens": 10000, "cached_input_tokens": 8000, "cache_write_input_tokens": 0, "output_tokens": 500, "reasoning_output_tokens": 300}"#;
@@ -3957,7 +3957,7 @@ mod tests {
 
     #[test]
     fn bin_by_midpoint_like_python_test() {
-        // tests/cost_view.py 的 Periods.test_bin_by_midpoint：跨过边界的小时按中点算；时段以外的不算
+        // 原来 tests/cost_view.py 的 Periods.test_bin_by_midpoint：跨过边界的小时按中点算；时段以外的不算
         let period = |s: i64, e: i64, tag: &str| Period { start: V::Int(s), end: V::Int(e), tag: tag.to_string() };
         let periods = [period(1000 * 3600, 1000 * 3600 + 5400, "x"), period(1000 * 3600 + 5400, 1003 * 3600, "y")];
         let h: Hours = [(1000, 1), (1001, 2), (1002, 4), (999, 8), (1003, 16)]
@@ -3969,7 +3969,7 @@ mod tests {
 
     #[test]
     fn content_like_python_test() {
-        // tests/cost_view.py 的 Scan.test_run_and_publish 里看 cost_content 的那几处：这台设备上这个账号的小时数据——
+        // tests/cost_view.rs 的 run_and_publish 里看 cost_content 的那几处：这台设备上这个账号的小时数据——
         // 这个工具的、登录的邮箱是它的身份加起来，工具分开（local.json 是那个用例统计出来的样子）
         let local = d(r#"{"v": 1, "build": "2026-11-13/1",
             "who": {"claude:aaaaaaaa-0000-4000-8000-000000000001": "alice@example.com", "claude:aaaaaaaa-0000-4000-8000-000000000002": "bob@example.com",
@@ -4035,7 +4035,7 @@ mod tests {
 
     #[test]
     fn lock_waits_then_gives_up() {
-        // tests/cost_view.py 的 Scan.test_sync_command 的最后一段（那里把 COST_WAIT 换成 0.2 秒）：另一个统计拿着 cost.lock 一直没结束，
+        // tests/cost_view.rs 的 sync_command 的最后一段（那里把 COST_WAIT 换成 0.2 秒）：另一个统计拿着 cost.lock 一直没结束，
         // 等够了时间是 CostBusy（cca cost sync 说一句、退出码 1，见下面的 sync_failures_exit_1）；它放了锁就拿得到
         let dir = crate::py::fs::TempDir::new().unwrap();
         let p = path::join(&dir.path, "cost.lock");

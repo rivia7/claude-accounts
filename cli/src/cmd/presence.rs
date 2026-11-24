@@ -1312,7 +1312,7 @@ mod tests {
         }
     }
 
-    /// tests/presence.py 的 test_identity：指纹和 `ssh-keygen -l -E sha256` 给的一样（这把公钥是编的，期望值是 ssh-keygen 算的）
+    /// tests/presence.rs 的 identity：指纹和 `ssh-keygen -l -E sha256` 给的一样（这把公钥是编的，期望值是 ssh-keygen 算的）
     #[test]
     fn ssh_fp_like_ssh_keygen() {
         assert_eq!(
@@ -1331,7 +1331,7 @@ mod tests {
         assert_ne!(a, presence_aid("11111111111111111111111111111111", "claude", "alice@example.com").unwrap(), "换了盐就认不出");
     }
 
-    /// tests/presence.py 的 test_agent_backoff 里的几个数：报不出去按退避再试（10、20 秒……最多 2 分钟），服务器不认这台 Mac 时 10 分钟
+    /// tests/presence.rs 的 agent_backoff 里的几个数：报不出去按退避再试（10、20 秒……最多 2 分钟），服务器不认这台 Mac 时 10 分钟
     #[test]
     fn retry_backs_off() {
         assert_eq!((1..=7).map(|n| retry_after(0, n)).collect::<Vec<_>>(), [10.0, 20.0, 40.0, 80.0, 120.0, 120.0, 120.0]);
@@ -1345,7 +1345,7 @@ mod tests {
         assert_eq!(KEYSHARE_EVERY, 600.0, "上报进程里记下的 API key 两次同步至少隔 10 分钟");
     }
 
-    /// tests/presence.py 的 test_scan_app_cpu：桌面 App 看进程树的 CPU——开了很久的第一次见到先当作刚好闲置满 10 分钟，隔 30 秒以上的两次
+    /// 原来 tests/presence.py 的 test_scan_app_cpu：桌面 App 看进程树的 CPU——开了很久的第一次见到先当作刚好闲置满 10 分钟，隔 30 秒以上的两次
     /// 采样之间用掉不少 CPU（含子进程）才算有动静；别的资料目录不算
     #[test]
     fn scan_app_cpu_like_python_test() {
@@ -1375,7 +1375,7 @@ mod tests {
         assert!(presence_scan(&salt, &targets, &other, &mut AppSamples::new(), now, 1.0).unwrap().0.is_empty(), "别的资料目录不算");
     }
 
-    /// tests/presence.py 的 test_past_time：过去的某个时刻怎么写（今天的写几点，昨天、一周内、再早的各有写法；本地时间）
+    /// 原来 tests/presence.py 的 test_past_time：过去的某个时刻怎么写（今天的写几点，昨天、一周内、再早的各有写法；本地时间）
     #[test]
     fn past_time_like_python_test() {
         use crate::py::time::mktime;
@@ -1388,7 +1388,7 @@ mod tests {
         assert_eq!(when(mktime(2025, 10, 20, 9, 5, 0, -1), now), "2025 年 10 月 20 日");
     }
 
-    /// tests/presence.py 的 test_scan_cli_idle_from_tty：命令行会话的闲置时间 = 现在 - 它终端的最后一次输入 / 输出（真的开一个伪终端）
+    /// tests/presence.rs 的 scan_cli_idle_from_tty：命令行会话的闲置时间 = 现在 - 它终端的最后一次输入 / 输出（真的开一个伪终端）
     #[test]
     fn scan_cli_idle_from_tty() {
         let dir = fs::TempDir::new().unwrap();

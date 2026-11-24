@@ -3,8 +3,8 @@
 //! - `replays_the_python_store`：tests/vectors/server_store.json 是 Python 的 Store 照一串请求、给定的时间走一遍的结果
 //!   （每一步回的内容、往 stderr 说的话、变了的状态文件的内容）；这里照样走一遍，逐字节对。开头的文件是手写的 Python 的格式：
 //!   整数和小数的时间、中文的名字、不认识的键。
-//! - 其余几条照 tests/presence.py 里直接调 Python 的 Store 的那几段写（test_store、test_keys 和 test_cost 的后半、
-//!   test_cost_leftovers：CCA_TEST_SERVER=rust 时那几段跳过，这里补上）。上限换小的用 `Limits`，时间自己给。
+//! - 其余几条照原来 tests/presence.py 里直接调 Python 的 Store 的那几段写（test_store、test_keys 和 test_cost 的后半、
+//!   test_cost_leftovers：黑盒的那一份 tests/presence.rs 里没有这几段，在这里）。上限换小的用 `Limits`，时间自己给。
 
 use super::*;
 use crate::py::base64;
@@ -266,7 +266,7 @@ fn python_written_files_round_trip() {
     assert!(checked > 40, "{checked}");
 }
 
-/// 邀请过期、用掉、很久以后不记了；满了；改名字；手改坏了的状态文件（tests/presence.py 的 test_store 前半）
+/// 邀请过期、用掉、很久以后不记了；满了；改名字；手改坏了的状态文件（原来 tests/presence.py 的 test_store 前半）
 #[test]
 fn invites_members_and_a_broken_state_file() {
     let d = Dir::new();
@@ -540,7 +540,7 @@ fn taken_names_get_a_suffix() {
     assert_eq!(again.dict("names").unwrap().str(&dev(2)).unwrap().to_string(), "mac-2");
 }
 
-/// 存满了（MAX_KEYS 个账号）：新的账号不收，已有的照常换（tests/presence.py 的 test_keys 后半）
+/// 存满了（MAX_KEYS 个账号）：新的账号不收，已有的照常换（原来 tests/presence.py 的 test_keys 后半）
 #[test]
 fn key_cap() {
     let d = Dir::new();
@@ -558,7 +558,7 @@ fn key_cap() {
     assert_eq!(d.mode("keys.json"), 0o600);
 }
 
-/// 折合金额的各个上限、回的密文的上限、很久没再传的清掉、换了密钥旧的那把传的跟着删掉（tests/presence.py 的 test_cost 后半）
+/// 折合金额的各个上限、回的密文的上限、很久没再传的清掉、换了密钥旧的那把传的跟着删掉（原来 tests/presence.py 的 test_cost 后半）
 #[test]
 fn cost_caps() {
     let d = Dir::new();
@@ -623,7 +623,7 @@ fn cost_caps() {
 }
 
 /// 以前的版本移除设备时留下的：照旧的根公钥接着用（重启、更新）时清掉——不在名单里的设备传的折合金额删掉，记下的 API key 的密文
-/// 留着、不再记着是它传的；名单里的照旧；没什么要清的不重写（tests/presence.py 的 test_cost_leftovers）
+/// 留着、不再记着是它传的；名单里的照旧；没什么要清的不重写（原来 tests/presence.py 的 test_cost_leftovers）
 #[test]
 fn leftovers_of_removed_devices_are_cleaned_at_start() {
     let d = Dir::new();

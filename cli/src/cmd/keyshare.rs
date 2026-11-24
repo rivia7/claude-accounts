@@ -690,7 +690,7 @@ mod tests {
         }
     }
 
-    /// tests/presence.py 的 test_keyshare_crypto 里只能在进程内看的那几处：邮箱不分大小写；换了身份、盐、工具的密钥解不开；形状不对的
+    /// tests/presence.rs 的 keyshare_crypto 里只能在进程内看的那几处：邮箱不分大小写；换了身份、盐、工具的密钥解不开；形状不对的
     /// 密文、认证过但内容不对的明文都不认（服务器不收形状不对的，经它送不到客户端手里）；删除和 key 一样长
     #[test]
     fn open_refuses_junk_like_python_test() {

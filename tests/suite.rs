@@ -3,6 +3,7 @@
 
 mod acme;
 mod client_updates;
+mod cost_view;
 mod device_identity;
 mod isolation_apps;
 mod isolation_browser;
@@ -15,6 +16,7 @@ mod isolation_settings;
 mod kit_selftest;
 mod local_udp;
 mod mail_view;
+mod presence;
 mod remote_host;
 mod router_merge;
 mod shared_state;
@@ -37,7 +39,9 @@ fn main() {
             isolation_runtime::MODULE,
             isolation_apps::MODULE,
             client_updates::MODULE,
+            presence::MODULE,
             usage_view::MODULE,
+            cost_view::MODULE,
             mail_view::MODULE,
             remote_host::MODULE,
             acme::MODULE,

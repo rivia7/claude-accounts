@@ -725,7 +725,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 
 ## 测试
 
-- `tests/presence.py` 的 `TeamServerTest`（回归的 unit 一节跑整份）：真的服务器进程、真的 `ssh-keygen` 签名，客户端是照文档独立实现的
+- `tests/presence.rs` 里 Team 的服务器那几条（`flow`、`records_lost`、`cli`、`behind_proxy`；回归的 unit 一节收整个模块的结果）：真的服务器进程、真的 `ssh-keygen` 签名，客户端是照文档独立实现的
   `tests/spec_wire.py`；签请求的辅助函数在 `SignedCalls` 里。
   - `test_flow`：`/v1/health`；管理员的 op 只认根密钥（设备的密钥、冒用根公钥指纹的别的密钥、改过的请求）；根密钥登记、加入不了；登记、
     邀请（令牌和那串随机数不落在服务器上）、加入（没有这个邀请 / 签名不对一样的 403，用过了、同一个编号再发前一个作废、直接登记了邀请作废）；
@@ -832,7 +832,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     不带 `accept-new`，`--askpass` 只问一次密码、密码不在命令行和服务器上；只认公钥、主机密钥变了、解析不了、什么都没说各是哪个原因码）、
     `test_ssh_and_cert`（ssh 连不上、登录不了；服务器上的证书没了重新生成时照新的重新接上）、`test_undeploy`（删除 Team 时卸载：记下了装到哪、`-i` 记成绝对路径（相对的、`~/` 的）；
     目录里装的是别的 Team 的 `taken`、没装的 `install`，都不动；`--check` 什么都不动；卸好了 stdout 是目录、同一台上别的 Team 照旧）。
-- 服务端的托管预设、`--behind-proxy` 在 `tests/presence.py` 的 `TeamServerTest.test_cli`、`test_behind_proxy`；不写指纹的服务器（托管平台上的）
+- 服务端的托管预设、`--behind-proxy` 在 `tests/presence.rs` 的 `cli`、`behind_proxy`；不写指纹的服务器（托管平台上的）
   照证书机构验在 `tests/team.py` 的 `test_ca_mode`。
 - 回归 11b3d 的部署（`hubbox`：`cca-test hub-box` 建的假服务器（`tests/kit/hubbox.rs`），假 ssh 认得 `hubbox`、`*@hubbox`，交给它的 `enter`；`$T/hubbox/ssh_denied` 时
   登录不了，`$T/hubbox/password` 在时不认密钥、只认这个密码；`nohub` 是解析不了的主机名）：`--script`（带着版本、两段程序和网页端的文件原样、
