@@ -382,10 +382,10 @@ ok "服务器上登录：给出在 Mac 上运行的一行（账号写邮箱、�
 ok "服务器上登录：贴的不是 code#state、state 对不上都不转（重新问），对的转给本机的回调；换 token 经账号的端口，登录好了" 'printf "%s" "$out" | grep -q "认不出验证码" && printf "%s" "$out" | grep -q "state 对不上" && [ "$(grep -c "^OAUTH-EXCHANGE" claude.log)" = 1 ] && grep -q "OAUTH-EXCHANGE code=good-1 https_proxy=http://192.0.2.10:7901" claude.log && grep -q "LOGIN alice@example.com @ $AD/claude" claude.log && printf "%s" "$out" | grep -q "已重新登录"'
 echo st-remote2 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans '')" cca login 副号 2>&1); rc=$?
-ok "服务器上登录：有别名的账号带上别名（Mac 上还没有它时照这个别名加上）；直接回车取消，本机等着回调的 claude 跟着停掉" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "  cca login-page bob@example.com --alias '\''副号'\'' --node US-B --node-id $FPB '\''https://claude.com/" && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_oauth.py"'
+ok "服务器上登录：有别名的账号带上别名（Mac 上还没有它时照这个别名加上）；直接回车取消，本机等着回调的 claude 跟着停掉" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "  cca login-page bob@example.com --alias '\''副号'\'' --node US-B --node-id $FPB '\''https://claude.com/" && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_oauth"'
 echo st-remote3 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'bad-3#st-remote3')" cca login alice 2>&1); rc=$?
-ok "服务器上登录：验证码换不到 token（过期、用过了）：照 claude 的原话说，没登录上" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录没有成功：Login failed: Request failed with status code 400" && gone "$T/fake_oauth.py"'
+ok "服务器上登录：验证码换不到 token（过期、用过了）：照 claude 的原话说，没登录上" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录没有成功：Login failed: Request failed with status code 400" && gone "$T/fake_oauth"'
 echo st-remote4 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'http://localhost:1/callback?code=good-4&state=st-remote4')" cca login alice 2>&1); rc=$?
 ok "服务器上登录：也认浏览器地址栏里跳回 localhost 的整个网址（转给这次的端口，不照贴的）" '[ $rc -eq 0 ] && grep -q "OAUTH-EXCHANGE code=good-4" claude.log && grep -q "LOGIN alice@example.com" claude.log'
@@ -1396,7 +1396,7 @@ CP=$UP; ps -o command= -p "$UP" | grep -q 'cca usage' || CP=$(pgrep -P "$UP" | h
 kids=$(for j in $(pgrep -P "$CP"); do pgrep -P "$j"; done); t0=$(date +%s)
 kill -TERM "${CP:-$UP}"; wait "$UP"; rc=$?
 for i in $(seq 1 30); do left=""; for k in $kids; do kill -0 "$k" 2>/dev/null && left="$left $k"; done; [ -z "$left" ] && break; sleep 0.1; done; t1=$(date +%s)
-pkill -f "$T/fake_usage.py"
+pkill -f "$T/fake_usage"
 ok "查询途中按 Ctrl-C、关掉终端：后台的查询连同它起的进程马上停掉（不等 60 秒的超时），退出码 130" '[ "$rc" = 130 ] && [ -n "$kids" ] && [ -z "$left" ] && [ $((t1 - t0)) -lt 5 ]'
 rm -f "$T/usage/hang"; mkdir -p "$T/loc"; printf CN > "$T/loc/7901"; n_usage=$(grep -c "^USAGE: " claude.log)
 out=$(run cca usage alice 2>&1)
@@ -1560,7 +1560,7 @@ out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'good-cx#st-wrong' 'good-cx#st-cx1')
 ok "Codex 服务器上登录：经 app-server 拿登录网址，给出 cca codex login-page 那一行；验证码转给 codex 本机的回调，换 token 经账号的端口" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "  cca codex login-page alice@example.com --node US-B --node-id $FPB '\''https://auth.openai.com/oauth/authorize?" && printf "%s" "$out" | grep -q "state 对不上" && grep -q "OAUTH-EXCHANGE code=good-cx https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^OAUTH-EXCHANGE" codex.log)" = 1 ] && grep -q "LOGIN alice@example.com @ $CH" codex.log && ! grep -q auth.openai.com open.log'
 echo st-cx2 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans '')" cca codex login alice 2>&1); rc=$?
-ok "Codex 服务器上登录：取消时 login-flow 和 app-server 都停掉（不留下占着回调端口的登录）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_codex_server.py" && gone "login-flow $T/"'
+ok "Codex 服务器上登录：取消时 login-flow 和 app-server 都停掉（不留下占着回调端口的登录）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_codex_server" && gone "login-flow $T/"'
 echo st-cx3 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'bad-cx#st-cx3')" cca codex login alice 2>&1); rc=$?
 ok "Codex 服务器上登录：换不到 token 时照 codex 的原话说" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录没有成功：.*Token exchange failed: invalid_grant"'
@@ -1791,13 +1791,13 @@ ok "agy 账号没登录：不起 agy（它会等 60 秒的登录），说还没�
 touch "$T/agy_usage_auth"; t0=$(date +%s)
 out=$(run COLUMNS=160 cca agy usage 2>&1); rc=$?; t1=$(date +%s)   # 160 列：备注那一行放得下整句（窄的终端里照别的表格一样截短）
 rm -f "$T/agy_usage_auth"
-ok "agy 要重新登录（打出登录网址、等着授权）：马上停掉它，说登录已失效，网址不给出来；用上次的额度" '[ $((t1 - t0)) -lt 20 ] && [ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录已失效（比如改过密码）：cca agy login alice@example.com 重新登录" && ! printf "%s" "$out" | grep -q "accounts.google.com" && gone "fake_agy.py --gemini_dir=.* -p /usage"'
+ok "agy 要重新登录（打出登录网址、等着授权）：马上停掉它，说登录已失效，网址不给出来；用上次的额度" '[ $((t1 - t0)) -lt 20 ] && [ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录已失效（比如改过密码）：cca agy login alice@example.com 重新登录" && ! printf "%s" "$out" | grep -q "accounts.google.com" && gone "fake_agy fake-agy --gemini_dir=.* -p /usage"'
 touch "$T/agy_usage_old"; out=$(run cca agy usage --json 2>/dev/null); rm -f "$T/agy_usage_old"
 ok "打印模式还不认 /usage 的旧版 agy（当成一句话回答）：说这个版本查不了、升级后再试" 'printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"unsupported\" and d[\"accounts\"][0][\"error\"] == \"这个版本的 Antigravity 查不了用量（agy update 升级后再试）\" and d[\"accounts\"][0][\"source\"] == \"cache\""'
 touch "$T/agy_usage_hang"; t0=$(date +%s)
 out=$(run CCA_USAGE_TIMEOUT=2 cca agy usage --json 2>/dev/null); t1=$(date +%s)
 rm -f "$T/agy_usage_hang"
-ok "agy 一直不回：到点（CCA_USAGE_TIMEOUT）连同它起的进程一起停掉，说查询超时" '[ $((t1 - t0)) -lt 15 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"timeout\"" && gone "fake_agy.py --gemini_dir=.* -p /usage"'
+ok "agy 一直不回：到点（CCA_USAGE_TIMEOUT）连同它起的进程一起停掉，说查询超时" '[ $((t1 - t0)) -lt 15 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"timeout\"" && gone "fake_agy fake-agy --gemini_dir=.* -p /usage"'
 edit_table 'j["kimi"] = {"base_url": "https://api.example.com/v1"}' "$AGJ"
 n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
 out=$(run cca agy @alice --version 2>&1 </dev/null); rc=$?
@@ -1828,7 +1828,7 @@ out=$(run CCA_TTY="$(ans 'https://antigravity.google/oauth-callback?code=good-x&
 ok "cca agy login：贴回的整个网址 state 对不上时不交给 agy、重问；授权码换不到 token 时照 agy 的原话说、再问；用对的邮箱重新登录，装机标识不变" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "state 对不上" && printf "%s" "$out" | grep -q "invalid_grant" && grep -q "AGY-EXCHANGE code=bad-ag " agy.log && ! grep -q "code=good-x" agy.log && printf "%s" "$out" | grep -q "alice@example.com 已重新登录" && grep -q "AGY-LOGIN alice@example.com @ $AG" agy.log && [ "$(cat "$AG/antigravity-cli/installation_id")" = "$agy_iid" ]'
 rm -f "$AG/antigravity-cli/antigravity-oauth-token"
 out=$(run CCA_TTY="$(ans '')" cca agy @alice --version 2>&1); rc=$?
-ok "agy 登录：直接回车取消，不启动，agy 不留在后台" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_agy.py"'
+ok "agy 登录：直接回车取消，不启动，agy 不留在后台" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_agy"'
 out=$(runev cca agy @alice --version 2>&1); rc=$?
 ok "图形界面里启动还没登录的 agy 账号：要在终端里登录，交接的命令带 agy" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"login\" and e[\"argv\"][:2] == [\"agy\", \"login\"] and e[\"display\"].startswith(\"cca agy login \")"'
 touch "$T/agy_noemail"

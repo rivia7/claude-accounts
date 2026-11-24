@@ -350,7 +350,7 @@ for a in "$@"; do
 	case "$a" in http*) url="$a";; esac; prev="$a"
 done
 printf '%s\n' "$*" >> "$CCA_T/curl.argv"   # 每次的命令行（查凭证从不出现在命令行里：Team 的邀请链接）
-# 假的内置代理内核的控制接口（socket 名是 cca-core-*.sock）：状态在 $CCA_T/core（假 mihomo 起来时建 up；core_load 读配置，
+# 假的内置代理内核的控制接口（socket 名是 cca-core-*.sock）：状态在 $CCA_T/core（假 mihomo 起来时建 up；cca-test core-load 读配置，
 # 写 listening、groups/、sel/，控制接口的 socket 记在 sock）；PUT /configs 只认主目录（home）里的配置文件
 if [ -n "$sock" ]; then
 	case "$sock" in */cca-core-*.sock)
@@ -362,7 +362,7 @@ if [ -n "$sock" ]; then
 			"PUT /configs?force=true")
 				p=$(printf '%s' "$data" | sed -n 's/^{"path":"\(.*\)"}$/\1/p')
 				case "$p" in "$(cat "$CD/home")"/*) ;; *) reply 400 '{"message":"path is not subpath of home directory"}'; exit 0 ;; esac
-				if err=$("$CCA_T/core_load" "$p" 2>&1); then echo RELOAD >> "$CD/core.log"; reply 204 ""
+				if err=$("$CCA_T/cca-test" core-load "$p" 2>&1); then echo RELOAD >> "$CD/core.log"; reply 204 ""
 				else echo "RELOAD failed: $err" >> "$CD/core.log"; reply 400 "{\"message\":\"$err\"}"; fi ;;
 			"GET /proxies/"*)
 				g="${path#/proxies/}"
@@ -406,18 +406,7 @@ case "$url" in
 		# 测试版是 pre-release；更新说明取 v<版本>/notes（没有就是“cca 版本”）；gh_api_down 模拟连不上、被限流
 		echo "GH releases" >> "$CCA_T/gh.log"
 		[ ! -f "$CCA_T/gh_api_down" ] || exit 22
-		python3 - "$CCA_T/gh" > "${out:-/dev/stdout}" <<'PY'
-import json, os, sys
-g = sys.argv[1]
-rel = []
-for d in sorted(os.listdir(g)) if os.path.isdir(g) else []:
-    if d.startswith('v') and os.path.isfile(os.path.join(g, d, 'cca')):
-        n = os.path.join(g, d, 'notes')
-        rel.append({'tag_name': d, 'name': d, 'draft': False, 'prerelease': '-beta.' in d,
-                    'body': open(n, encoding='utf-8').read() if os.path.exists(n) else 'cca %s' % d[1:],
-                    'html_url': 'https://github.com/rivia7/claude-accounts/releases/tag/' + d, 'published_at': '2026-11-01T08:00:00Z'})
-json.dump(rel, sys.stdout, ensure_ascii=False)
-PY
+		"$CCA_T/cca-test" gh-releases "$CCA_T/gh" > "${out:-/dev/stdout}"
 		exit 0 ;;
 	https://github.com/*|https://*.githubusercontent.com/*|https://api.github.com/*) echo "GH unexpected $url" >> "$CCA_T/gh.log"; exit 22 ;;
 	https://claude.ai/install.sh|https://chatgpt.com/codex/install.sh|https://antigravity.google/cli/install.sh)
@@ -590,7 +579,7 @@ echo "KILLALL $*" >> "$CCA_T/killall.log"
 if [ -f "$CCA_T/dock_readd" ]; then   # 第二行写着 keep 时每次都加回去
 	{ IFS= read -r a; IFS= read -r keep; } < "$CCA_T/dock_readd"
 	[ "$keep" = keep ] || rm -f "$CCA_T/dock_readd"
-	python3 -I "$CCA_T/dockpl.py" "$CCA_T/dock/dock.plist" add "$a"
+	"$CCA_T/cca-test" dockpl "$CCA_T/dock/dock.plist" add "$a"
 fi
 exit 0
 S
@@ -600,43 +589,8 @@ echo "LSAPPINFO $*" >> "$CCA_T/lsappinfo.log"
 [ ! -f "$CCA_T/lsappinfo.txt" ] || cat "$CCA_T/lsappinfo.txt"
 exit 0
 S
-# 程序坞的设置（测试里是 plist 文件，cca 直接读写它）：set 最近使用的 [固定的] [show-recents]（JSON 里写 App 名，A:nobid 是不带 bundle id 的图标），
-# get 列出最近使用的，add App 加一个
-cat > "$T/dockpl.py" <<'S'
-import json, os, plistlib, sys
-dom, cmd = sys.argv[1], sys.argv[2]
-R = os.path.dirname(dom)
-def load():
-    try:
-        with open(dom, 'rb') as f:
-            return plistlib.load(f)
-    except OSError:
-        return {}
-def save(d):
-    with open(dom + '.tmp', 'wb') as f:
-        plistlib.dump(d, f)
-    os.replace(dom + '.tmp', dom)
-def tile(name, label, bid=True):
-    app = os.path.join(R, name + '.app')
-    d = {'file-data': {'_CFURLString': 'file://' + app + '/', '_CFURLStringType': 15}, 'file-label': label}
-    if bid:
-        with open(os.path.join(app, 'Contents', 'Info.plist'), 'rb') as f:
-            d['bundle-identifier'] = plistlib.load(f)['CFBundleIdentifier']
-    return {'tile-data': d, 'tile-type': 'file-tile'}
-def tiles(spec):
-    return [tile(s.split(':')[0], s, ':nobid' not in s) for s in json.loads(spec)]
-if cmd == 'set':
-    d = {'recent-apps': tiles(sys.argv[3]), 'persistent-apps': tiles(sys.argv[4]) if len(sys.argv) > 4 else []}
-    if len(sys.argv) > 5:
-        d['show-recents'] = sys.argv[5] == 'true'
-    save(d)
-elif cmd == 'get':
-    print(' '.join(t['tile-data']['file-label'] for t in load().get('recent-apps', [])))
-elif cmd == 'add':
-    d = load()
-    d.setdefault('recent-apps', []).append(tile(sys.argv[3], sys.argv[3] + '-back'))
-    save(d)
-S
+# 程序坞的设置（测试里是 plist 文件，cca 直接读写它）：cca-test dockpl dock.plist set 最近使用的 [固定的] [show-recents]（JSON 里写 App 名，
+# A:nobid 是不带 bundle id 的图标），get 列出最近使用的，add App 加一个
 # defaults：真的不看 HOME（经系统的设置进程读写这个用户真的 ~/Library/Preferences），cca gui remove、cca restore 里的
 # defaults delete local.cca.app 会把这台 Mac 上真的 cca App 的设置删掉。换成只记一笔的（$T/defaults.log），读什么都说没有
 cat > "$T/bin/defaults" <<'S'
@@ -751,7 +705,7 @@ case "${1:-}" in
 		fi
 		rm -f "$L/$label.pid" "$L/$label.watch" ;;
 	bootstrap)
-		IFS=$'\t' read -r label flag prog < <(python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); print("\t".join([p["Label"], list(p["KeepAlive"]["PathState"])[0], p["ProgramArguments"][0]]))' "$3") || exit 5
+		IFS=$'\t' read -r label flag prog < <("$CCA_T/cca-test" plist get "$3" Label KeepAlive.PathState.@0 ProgramArguments.0) || exit 5
 		[ ! -f "$L/$label.plist" ] || { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }
 		cp "$3" "$L/$label.plist"
 		(
@@ -837,39 +791,8 @@ cat > "$T/bin/scutil" <<'S'
 [ "${1:-}" = --proxy ] || exit 1
 if [ -f "$CCA_T/scutil.txt" ]; then cat "$CCA_T/scutil.txt"; else printf '<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n  ProxyAutoConfigEnable : 0\n  SOCKSEnable : 0\n}\n'; fi
 S
-# 假的 get_usage：按账号目录里登录的邮箱回 $CCA_T/usage/<邮箱>.json（没有这个文件就当没有订阅用量）；
-# usage/unsupported：回"不支持"；usage/hang：卡住不回
-cat > "$T/fake_usage.py" <<'S'
-import json, os, sys, time
-t, cd = os.environ['CCA_T'], os.environ.get('CLAUDE_CONFIG_DIR', '')
-try:
-    j = json.load(open(os.path.join(cd, '.claude.json')))
-except Exception:
-    j = {}
-email = (j.get('oauthAccount') or {}).get('emailAddress') or ''
-with open(os.path.join(t, 'claude.log'), 'a') as f:
-    f.write('USAGE: email=%s https_proxy=%s cwd=%s\n' % (email or '-', os.environ.get('https_proxy', 'unset'), os.getcwd()))
-print(json.dumps({'type': 'system', 'subtype': 'init'}), flush=True)
-for line in sys.stdin:
-    try:
-        m = json.loads(line)
-    except ValueError:
-        continue
-    if m.get('type') != 'control_request':
-        continue
-    rid, sub = m.get('request_id'), (m.get('request') or {}).get('subtype')
-    if os.path.exists(os.path.join(t, 'usage', 'hang')):
-        time.sleep(60)
-    p = os.path.join(t, 'usage', email + '.json')
-    if os.path.exists(os.path.join(t, 'usage', 'unsupported')) or sub != 'get_usage':
-        r = {'subtype': 'error', 'request_id': rid, 'error': 'Unsupported control request subtype: %s' % sub}
-    elif email and os.path.exists(p):
-        r = {'subtype': 'success', 'request_id': rid, 'response': dict(json.load(open(p)), session={}, behaviors=None)}
-    else:
-        r = {'subtype': 'success', 'request_id': rid, 'response': {'session': {}, 'subscription_type': None,
-             'rate_limits_available': False, 'rate_limits': None, 'behaviors': None}}
-    print(json.dumps({'type': 'control_response', 'response': r}), flush=True)
-S
+# 假的 get_usage（cca-test fake-usage，用 exec -a 起：回归按 $CCA_T/fake_usage 找进程）：按账号目录里登录的邮箱回 $CCA_T/usage/<邮箱>.json
+# （没有这个文件就当没有订阅用量）；usage/unsupported：回"不支持"；usage/hang：卡住不回
 cat > "$T/bin/claude" <<'S'
 #!/bin/bash
 LOG="$CCA_T/claude.log"
@@ -881,38 +804,19 @@ echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset}
 prev=""; settings=""; session=0
 for a in "$@"; do [ "$prev" = --settings ] && settings="$a"; [ "$a" = -p ] && session=1; prev="$a"; done
 if [ -n "$settings" ]; then
-	python3 - "$settings" "$CCA_T" "$session" >> "$LOG" <<'PY'
-import json, os, subprocess, sys, uuid
-s, t, session = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3] == '1'
-print('SETTINGS: env=%s' % json.dumps(s.get('env'), sort_keys=True))
-if s.get('apiKeyHelper'):
-    r = subprocess.run(['/bin/sh', '-c', s['apiKeyHelper']], stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    open(t + '/claude.key', 'w').write(r.stdout)
-    print('HELPER: rc=%d' % r.returncode)
-for m in ((s.get('hooks') or {}).get('SessionStart') or []) if session else []:
-    for h in m.get('hooks') or []:
-        sid = str(uuid.uuid4())
-        ev = json.dumps({'session_id': sid, 'transcript_path': '/w/%s.jsonl' % sid, 'cwd': os.getcwd(), 'hook_event_name': 'SessionStart', 'source': 'startup'})
-        r = subprocess.run(['/bin/sh', '-c', h['command']], input=ev, capture_output=True, text=True, timeout=h.get('timeout', 60))
-        print('HOOK: SessionStart rc=%d stdout=%d stderr=%d sid=%s' % (r.returncode, len(r.stdout), len(r.stderr), sid))
-PY
+	"$CCA_T/cca-test" claude-settings "$settings" "$CCA_T" "$session" >> "$LOG"
 fi
-case " $* " in *" --input-format stream-json "*) exec python3 "$CCA_T/fake_usage.py" ;; esac
+case " $* " in *" --input-format stream-json "*) exec -a "$CCA_T/fake_usage" "$CCA_T/cca-test" fake-usage ;; esac
 P="$CLAUDE_CONFIG_DIR/.claude.json"
 if [ "$1" = auth ]; then
 	case "$2" in
 		login)
-			python3 - "$P" >> "$LOG" <<'PY'
-import json, os, sys
-p = sys.argv[1]
-j = json.load(open(p)) if os.path.exists(p) else {}
-print('LOGIN-DEVICE %s:%s @ %s' % (j.get('userID', ''), j.get('machineID', ''), os.path.dirname(p)))
-PY
+			"$CCA_T/cca-test" claude-login-device "$P" >> "$LOG"
 			email=""; prev=""; for a in "$@"; do [ "$prev" = --email ] && email="$a"; prev="$a"; done
 			if [ -f "$CCA_T/login_as" ]; then email=$(cat "$CCA_T/login_as"); rm -f "$CCA_T/login_as"; fi   # 一次性：模拟登错号
 			[ -n "$email" ] || email="someone@example.com"
 			# $CCA_T/oauth_flow（内容是这次的 state）：像真的 Claude Code 一样在本机开回调、经 BROWSER 打开登录页，等浏览器跳回来再换 token
-			[ -f "$CCA_T/oauth_flow" ] && exec python3 "$CCA_T/fake_oauth.py" "$P" "$email"
+			[ -f "$CCA_T/oauth_flow" ] && exec -a "$CCA_T/fake_oauth" "$CCA_T/cca-test" fake-oauth "$P" "$email"
 			# $CCA_T/mail_send 在时（邮箱助手）：像在登录页上点了用邮箱登录——跑它（往假 Gmail 里放一封登录邮件），等 cca 在账号的
 			# 浏览器里打开邮件里的链接（open.log 里出现 $CCA_T/mail_login 里的链接），最多 20 秒，才算登录好
 			if [ -x "$CCA_T/mail_send" ]; then
@@ -924,38 +828,21 @@ PY
 				done
 				echo "MAIL-LOGIN opened" >> "$LOG"
 			fi
-			python3 -c 'import json,os,sys; p=sys.argv[1]; j=json.load(open(p)) if os.path.exists(p) else {}; j["oauthAccount"]={"emailAddress":sys.argv[2]}; json.dump(j,open(p,"w"),indent=2)' "$P" "$email"
+			"$CCA_T/cca-test" claude-login "$P" "$email"
 			echo "LOGIN $email @ $CLAUDE_CONFIG_DIR" >> "$LOG" ;;
 		logout)
-			[ -f "$P" ] && python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.pop("oauthAccount",None); json.dump(j,open(p,"w"),indent=2)' "$P"
+			[ -f "$P" ] && "$CCA_T/cca-test" claude-logout "$P"
 			echo "LOGOUT $CLAUDE_CONFIG_DIR" >> "$LOG" ;;
 		status)
-			python3 -c 'import json,os,sys; p=sys.argv[1]; j=json.load(open(p)) if os.path.exists(p) else {}; e=(j.get("oauthAccount") or {}).get("emailAddress"); print(json.dumps({"loggedIn": bool(e), "email": e}))' "$P" ;;
+			"$CCA_T/cca-test" claude-status "$P" ;;
 	esac
 	exit 0
 fi
 while [ -e "$CCA_T/hold" ]; do sleep 0.1; done   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
-python3 - "$CLAUDE_CONFIG_DIR" "$CCA_ACCOUNT" <<'PY'
-import json, os, sys, time
-cd, acct = sys.argv[1], sys.argv[2]
-tag = acct.split('@')[0]
-p = os.path.join(cd, '.claude.json')
-j = json.load(open(p)) if os.path.exists(p) else {}
-j.setdefault('projects', {})['/p-from-' + tag] = {'hasTrustDialogAccepted': True}
-j.setdefault('mcpServers', {})['mcp-' + tag] = {'command': 'echo'}
-json.dump(j, open(p, 'w'), indent=2)
-s = os.path.join(cd, 'settings.json')
-cur = json.load(open(s)) if os.path.exists(s) else {}
-cur['lastWriter'] = tag
-json.dump(cur, open(s + '.tmp', 'w')); os.replace(s + '.tmp', s)
-os.makedirs(os.path.join(cd, 'output-styles'), exist_ok=True)
-open(os.path.join(cd, 'output-styles', tag + '.md'), 'w').write('style ' + tag)
-open(os.path.join(cd, 'history.jsonl'), 'a').write(json.dumps({'display': 'hi from ' + tag}) + '\n')
-open(os.path.join(cd, 'projects', '-p1', 'memory', tag + '.md'), 'w').write('memory from ' + tag)
-PY
+"$CCA_T/cca-test" claude-session "$CLAUDE_CONFIG_DIR" "$CCA_ACCOUNT"
 exit 3
 S
-# 假的 codex：记下参数和环境；features list / --help / --version 给 cca 探测参数；app-server 交给 fake_codex_server.py
+# 假的 codex：记下参数和环境；features list / --help / --version 给 cca 探测参数；app-server 交给 cca-test fake-codex-server
 # （登录、查用量）；logout 删掉 auth.json；login 是 cca 退回 codex login 时的登录（直接写 auth.json）；其余当作一次会话：
 # 像真的 codex 那样写 CODEX_HOME 里的文件和会话库，退出码 3。codex_noflags：这个版本不认识 cca 要关的两个开关
 cat > "$T/bin/codex" <<'S'
@@ -985,73 +872,23 @@ case "$sub" in
 				echo "daemon_auto_start                        stable             true"
 				[ -f "$CCA_T/codex_noflags" ] || printf '%s\n' "respect_system_proxy                     under development  false" "system_proxy_fallback                    stable             true" ;;
 			disable)   # 像真的 codex：顺着链接写回原文件（临时文件 + 改名，放在原文件旁边）
-				python3 - "$CODEX_HOME/config.toml" "${args[$((i + 2))]}" <<'PY'
-import os, re, sys
-p = os.path.realpath(sys.argv[1]); s = open(p).read() if os.path.exists(p) else ''
-key = sys.argv[2]
-lines, result, inside, found = s.splitlines(), [], False, False
-for line in lines:
-    if line.strip().startswith('['):
-        inside = line.strip() == '[features]'
-        result.append(line)
-        if inside:
-            found = True
-            result.append('%s = false' % key)
-    elif not (inside and re.match(r'^\s*' + re.escape(key) + r'\s*=', line)):
-        result.append(line)
-if not found:
-    result.extend(['', '[features]', '%s = false' % key])
-s = '\n'.join(result) + '\n'
-open(p + '.tmp', 'w').write(s); os.replace(p + '.tmp', p)
-PY
+				"$CCA_T/cca-test" codex-features "$CODEX_HOME/config.toml" "${args[$((i + 2))]}"
 				;;
 		esac
 		exit 0 ;;
-	app-server) exec python3 "$CCA_T/fake_codex_server.py" ;;
+	app-server) exec -a "$CCA_T/fake_codex_server" "$CCA_T/cca-test" fake-codex-server ;;
 	logout) echo "LOGOUT $CODEX_HOME" >> "$LOG"; rm -f "$CODEX_HOME/auth.json"; exit 0 ;;
-	login) echo "LOGIN-CLI $CODEX_HOME" >> "$LOG"; python3 "$CCA_T/fake_codex_server.py" --write-auth; exit 0 ;;
+	login) echo "LOGIN-CLI $CODEX_HOME" >> "$LOG"; "$CCA_T/cca-test" fake-codex-server --write-auth; exit 0 ;;
 esac
 # 第三方 API 账号：像 codex 一样执行 -c model_providers.cca={…} 里 auth 的 command + args 取 key（写进 codex.key，不进日志）
 prov=""; prev=""
 for a in "$@"; do [ "$prev" = -c ] && case "$a" in model_providers.cca=*) prov="${a#model_providers.cca=}" ;; esac; prev="$a"; done
 if [ -n "$prov" ]; then
-	python3 - "$prov" "$CCA_T" >> "$LOG" <<'PY'
-import json, re, subprocess, sys
-s, t = sys.argv[1], sys.argv[2]
-cmd = json.loads(re.search(r'command = ("(?:[^"\\]|\\.)*")', s).group(1))
-args = json.loads('[' + re.search(r'args = \[(.*?)\]', s).group(1) + ']')
-print('PROVIDER: base_url=%s wire_api=%s' % (json.loads(re.search(r'base_url = ("(?:[^"\\]|\\.)*")', s).group(1)), re.search(r'wire_api = "(\w+)"', s).group(1)))
-r = subprocess.run([cmd] + args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-open(t + '/codex.key', 'w').write(r.stdout)
-print('AUTHCMD: rc=%d' % r.returncode)
-PY
+	"$CCA_T/cca-test" codex-provider "$prov" "$CCA_T" >> "$LOG"
 fi
 # 当作一次会话
 while [ -e "$CCA_T/hold" ]; do sleep 0.1; done   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
-python3 - "$CODEX_HOME" "${CODEX_SQLITE_HOME:-$CODEX_HOME}" "${CCA_ACCOUNT:-x}" <<'PY'
-import json, os, sqlite3, sys, time, uuid
-home, dbhome, acct = sys.argv[1:4]
-tag = acct.split('(')[-1].split('@')[0].strip(')')
-def atomic(p, text):   # 像 codex 改 config.toml：顺着链接，在原文件旁边写临时文件再改名
-    p = os.path.realpath(p); open(p + '.tmp', 'w').write(text); os.replace(p + '.tmp', p)
-cfg = os.path.join(home, 'config.toml')
-atomic(cfg, (open(cfg).read() if os.path.exists(cfg) else '') + '# touched by %s\n' % tag)
-open(os.path.join(home, 'history.jsonl'), 'a').write(json.dumps({'text': 'hi from ' + tag}) + '\n')
-idx = os.path.join(home, 'session_index.jsonl')   # 像 codex delete：整个重写再改名（不顺着链接，会把链接换成普通文件）
-lines = open(idx).read().splitlines() if os.path.exists(idx) else []
-open(idx + '.tmp', 'w').write('\n'.join(lines + [json.dumps({'id': tag, 'thread_name': 'from ' + tag})]) + '\n'); os.replace(idx + '.tmp', idx)
-tid = str(uuid.uuid4())
-d = os.path.join(home, 'sessions', '2026', '11', '03'); os.makedirs(d, exist_ok=True)
-rollout = os.path.join(d, 'rollout-%s.jsonl' % tid); open(rollout, 'w').write('{}\n')
-for n, v in (('installation_id', str(uuid.uuid4())), ('models_cache.json', '{}')):
-    if not os.path.exists(os.path.join(home, n)):
-        open(os.path.join(home, n), 'w').write(v)
-os.makedirs(os.path.join(home, 'worktrees', tag), exist_ok=True)
-os.makedirs(os.path.join(home, 'skills', 'from-' + tag), exist_ok=True)
-con = sqlite3.connect(os.path.join(dbhome, 'state_5.sqlite'))
-con.execute('CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, title TEXT)')
-con.execute('INSERT INTO threads VALUES (?, ?, ?)', (tid, rollout, tag)); con.commit(); con.close()
-PY
+"$CCA_T/cca-test" codex-session "$CODEX_HOME" "${CODEX_SQLITE_HOME:-$CODEX_HOME}" "${CCA_ACCOUNT:-x}"
 exit 3
 S
 # 假的 agy（照 1.5.16 的行为）：--gemini_dir=目录 换数据目录（写在子命令前面）。acp --login 在 antigravity-cli/log/acp-login-*.log 里
@@ -1071,387 +908,22 @@ cat > "$T/bin/agy" <<'S'
 LOG="$CCA_T/agy.log"
 echo "ARGS: $*" >> "$LOG"
 echo "ENV: SSH_CONNECTION=${SSH_CONNECTION-unset} https_proxy=${https_proxy-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} NO_PROXY=${NO_PROXY-unset} no_proxy=${no_proxy-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} CCA_PROXY=${CCA_PROXY-unset} GEMINI_API_KEY=${GEMINI_API_KEY-unset} GOOGLE_API_KEY=${GOOGLE_API_KEY-unset} GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT-unset} ANTIGRAVITY_GEMINI_DIR=${ANTIGRAVITY_GEMINI_DIR-unset} AGY_ACCOUNT=${AGY_ACCOUNT-unset} AGY_CA_CERT=${AGY_CA_CERT-unset} AGY_CLI_THEME=${AGY_CLI_THEME-unset} ALL_PROXY=${ALL_PROXY-unset} BROWSER=${BROWSER-unset} CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR-unset} AGY_CLI_FORCE_FILE_TOKEN_STORAGE=${AGY_CLI_FORCE_FILE_TOKEN_STORAGE-unset} AGY_CLI_DISABLE_AUTO_UPDATE=${AGY_CLI_DISABLE_AUTO_UPDATE-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
-exec python3 "$CCA_T/fake_agy.py" "$@"
+exec -a "$CCA_T/fake_agy" "$CCA_T/cca-test" fake-agy "$@"   # 回归按 $CCA_T/fake_agy 找进程
 S
-cat > "$T/fake_agy.py" <<'S'
-import json, os, re, sys, time, uuid, urllib.parse as up
-t = os.environ['CCA_T']
-def log(s):
-    open(os.path.join(t, 'agy.log'), 'a').write(s + '\n')
-def mark(name):
-    p = os.path.join(t, name)
-    return (open(p).read().strip() or True) if os.path.exists(p) else None
-args = sys.argv[1:]
-g, gd = os.path.join(os.path.expanduser('~'), '.gemini'), False
-while args and (args[0].startswith('--gemini_dir') or args[0].startswith('--gemini-dir')):
-    a, gd = args.pop(0), True
-    if '=' in a:
-        g = a.split('=', 1)[1]
-    elif args:
-        g = args.pop(0)
-cli = os.path.join(g, 'antigravity-cli')
-os.makedirs(os.path.join(cli, 'log'), exist_ok=True)
-if args[:1] == ['--version'] and not gd:   # cca 启动时总带 --gemini_dir：带着它的 --version 当作一次会话（像假 codex）
-    print('1.5.5')
-    sys.exit(0)
-if args[:2] == ['acp', '--login']:
-    with open(os.path.join(cli, 'log', 'acp-login-%s-%d.log' % (time.strftime('%Y%m%d_%H%M%S'), os.getpid())), 'w') as f:
-        f.write('I1124 11:01:12.000000 1 main.go:1] agy 1.5.16\n')
-        if os.environ.get('AGY_CLI_FORCE_FILE_TOKEN_STORAGE', '').strip().lower() in ('1', 'true') and not mark('agy_noswitch'):
-            f.write('I1124 11:01:12.000001 1 composite_token_storage.go:207] Using file-based token storage because AGY_CLI_FORCE_FILE_TOKEN_STORAGE is set\n')
-        elif os.environ.get('SSH_CONNECTION') and not mark('agy_keychain'):
-            f.write('I1124 11:01:12.000001 1 composite_token_storage.go:125] Using file-based token storage because SSH session detected\n')
-    state = mark('agy_state')
-    state = state if isinstance(state, str) else 'st-agy'
-    q = [('access_type', 'offline'), ('client_id', '000000000000-test.apps.googleusercontent.com'), ('code_challenge', 'chal-test'),
-         ('code_challenge_method', 'S256'), ('prompt', 'consent'), ('redirect_uri', 'https://antigravity.google/oauth-callback'),
-         ('response_type', 'code'), ('scope', 'openid email profile'), ('state', state)]
-    print('Open this link in a browser to log in with Google:\n\n' + 'https://accounts.google.com/o/oauth2/auth?' + up.urlencode(q) + '\n', flush=True)
-    while True:
-        sys.stdout.write('Then paste the authorization code, or the full URL of the page you land on, and press Enter: ')
-        sys.stdout.flush()
-        line = sys.stdin.readline()
-        if not line:
-            print('\nlogin cancelled', flush=True)
-            sys.exit(1)
-        code = line.strip()
-        if code.startswith('http'):
-            qq = dict(up.parse_qsl(up.urlsplit(code).query))
-            if qq.get('state') != state:
-                print('Error: state mismatch', flush=True)
-                sys.exit(1)
-            code = qq.get('code', '')
-        log('AGY-EXCHANGE code=%s https_proxy=%s HTTPS_PROXY=%s' % (code, os.environ.get('https_proxy', 'unset'), os.environ.get('HTTPS_PROXY', 'unset')))
-        if code.startswith('good'):
-            break
-        print('Error: failed to exchange the authorization code: invalid_grant', flush=True)
-    m = re.search(r'([^()\s]+@[^()\s]+)', os.environ.get('CCA_ACCOUNT', ''))
-    email = m.group(1).rstrip(')') if m else 'someone@example.com'
-    alt = os.path.join(t, 'agy_login_as')
-    if os.path.exists(alt):
-        email = open(alt).read().strip()
-        os.remove(alt)
-    tok = {'access_token': 'ya29.test', 'token_type': 'Bearer', 'refresh_token': '1//test', 'expiry': '2026-11-12T12:00:00Z'}
-    if not mark('agy_noemail'):
-        tok['id_token_email'] = email
-    tier = mark('agy_tier')
-    tok['user_tier'] = tier if isinstance(tier, str) else 'g1-pro-tier'
-    p = os.path.join(cli, 'antigravity-oauth-token')
-    fd = os.open(p + '.tmp', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.write(fd, json.dumps(tok).encode())
-    os.close(fd)
-    os.replace(p + '.tmp', p)
-    log('AGY-LOGIN %s @ %s' % (email, g))
-    print('Logged in as %s.' % email, flush=True)
-    sys.exit(0)
-def answer(status, error='', command=None, response='', cid=''):
-    j = {'conversation_id': cid, 'status': status, 'response': response, 'error': error, 'duration_seconds': 0.4, 'num_turns': 0,
-         'usage': {'input_tokens': 0, 'output_tokens': 0, 'thinking_tokens': 0, 'cache_read_tokens': 0, 'total_tokens': 0}}
-    if command:
-        j['command'] = command
-    j['finished_reason'] = 'error' if status == 'ERROR' else 'stop'
-    print(json.dumps(j, separators=(',', ':')), flush=True)
-if args[:2] == ['-p', '/usage']:
-    try:
-        os.close(os.open('/dev/tty', os.O_RDWR))
-        tty = 'yes'
-    except OSError:
-        tty = 'no'
-    log('AGY-USAGE tty=%s auto_update=%s cwd=%s @ %s' % (tty, os.environ.get('AGY_CLI_DISABLE_AUTO_UPDATE', 'unset'), os.getcwd(), g))
-    tokp = os.path.join(cli, 'antigravity-oauth-token')
-    while mark('agy_usage_hang'):
-        time.sleep(0.1)
-    if not os.path.exists(tokp) or mark('agy_usage_auth'):
-        sys.stderr.write('Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?access_type=offline&state=st-usage\n\n'
-                         'Waiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n')
-        sys.stderr.flush()
-        time.sleep(60)
-        sys.stderr.write('Error: authentication timed out.\nerror: authentication failed or timed out\n')
-        answer('ERROR', 'authentication failed or timed out')
-        sys.exit(1)
-    if mark('agy_usage_old'):
-        answer('SUCCESS', response='I cannot look up your quota from here.', cid=str(uuid.uuid4()))
-        sys.exit(0)
-    bad = mark('agy_usage_error')
-    if bad:
-        answer('ERROR', bad if isinstance(bad, str) else 'quota service unavailable')
-        sys.exit(1)
-    email = json.load(open(tokp)).get('id_token_email', '')
-    log('AGY-USAGE-AS %s https_proxy=%s' % (email, os.environ.get('https_proxy', 'unset')))
-    p = os.path.join(t, 'agy_usage', email + '.json')
-    def at(hours):
-        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + hours * 3600))
-    data = json.load(open(p)) if os.path.exists(p) else {'description': 'Quota for Antigravity models', 'groups': [
-        {'name': 'Gemini Pro', 'buckets': [
-            {'id': 'gemini-pro-5h', 'name': 'Five Hour Limit Remaining', 'window': '5h', 'remaining_fraction': 0.87, 'reset_time': at(2.5)},
-            {'id': 'gemini-pro-week', 'name': 'Weekly Limit Remaining', 'window': 'weekly', 'remaining_fraction': 0.25, 'reset_time': at(80)}]},
-        {'name': 'Claude', 'description': 'Claude and GPT-OSS models', 'buckets': [
-            {'id': 'claude-5h', 'name': 'Five Hour Limit Remaining', 'window': '5h', 'remaining_fraction': 0.05, 'reset_time': at(1.2)}]},
-        {'name': 'Gemini Flash', 'buckets': [{'id': 'flash', 'name': 'Gemini Flash', 'disabled': True}]}]}
-    answer('SUCCESS', command={'name': 'usage', 'data': data}, cid=str(uuid.uuid4()))
-    sys.exit(0)
-while os.path.exists(os.path.join(t, 'hold')):   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
-    time.sleep(0.1)
-tag = os.environ.get('CCA_ACCOUNT', 'x').split('(')[-1].split('@')[0].strip(')')
-iid = os.path.join(cli, 'installation_id')
-if not os.path.exists(iid) or len(open(iid).read()) != 36:
-    open(iid, 'w').write(str(uuid.uuid4()))
-js = os.path.join(cli, 'jetski_state.pbtxt')
-m = re.search(r'(?m)^installation_uuid:\s*"([^"]*)"', open(js).read()) if os.path.exists(js) else None
-log('AGY-DEVICE %s %s @ %s' % (open(iid).read(), m.group(1) if m else '-', g))
-conv = os.path.join(cli, 'conversations')
-os.makedirs(conv, exist_ok=True)
-open(os.path.join(conv, 'from-%s.pb' % tag), 'w').write('conversation ' + tag)
-open(os.path.join(cli, 'history.jsonl'), 'a').write(json.dumps({'display': 'hi from ' + tag}) + '\n')
-sp = os.path.join(cli, 'settings.json')   # 像 agy 保存设置：在原路径旁边写临时文件再改名（会把链接换成普通文件）
-cur = json.load(open(sp)) if os.path.exists(sp) else {}
-cur['lastWriter'] = tag
-open(sp + '.tmp', 'w').write(json.dumps(cur))
-os.replace(sp + '.tmp', sp)
-lc = os.path.join(cli, 'cache', 'last_conversations.json')
-os.makedirs(os.path.dirname(lc), exist_ok=True)
-j = json.load(open(lc)) if os.path.exists(lc) else {}
-j[os.getcwd()] = 'conv-' + tag
-open(lc, 'w').write(json.dumps(j))
-os.makedirs(os.path.join(g, 'config', 'skills', 'from-' + tag), exist_ok=True)
-mcp = os.path.join(g, 'config', 'mcp_config.json')   # 像真的 agy（1.5.x）：config/ 里没有就建一个 0 字节的 mcp_config.json
-if not os.path.lexists(mcp):
-    open(mcp, 'w').close()
-sys.exit(3)
-S
-# 假 claude 的 auth login 在 $CCA_T/oauth_flow 存在时（内容是这次的 state）照真的 Claude Code 2.1.322 走：本机 127.0.0.1 随机端口开回调
-# （redirect_uri 写 localhost），打印手动登录的网址和“Paste code here”，经 $BROWSER 打开自动的那个登录网址；回调的 state 不对回 400、
-# 整个登录失败，对的回 302 到成功页，再“换 token”：code 以 good 开头算成功（写 oauthAccount），否则失败。换 token 时的代理记进 claude.log
-cat > "$T/fake_oauth.py" <<'S'
-import http.server, json, os, socketserver, subprocess, sys, threading, urllib.parse as up
-P, email = sys.argv[1], sys.argv[2]
-t = os.environ['CCA_T']
-state = open(os.path.join(t, 'oauth_flow')).read().strip() or 'st-claude'
-def log(s):
-    open(os.path.join(t, 'claude.log'), 'a').write(s + '\n')
-got, done = {}, threading.Event()
-class H(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
-    def do_GET(self):
-        u = up.urlsplit(self.path)
-        q = dict(up.parse_qsl(u.query))
-        if u.path != '/callback':
-            self.send_response(404); self.end_headers(); return
-        if q.get('state') != state:
-            self.send_response(400); self.end_headers(); self.wfile.write(b'Invalid state parameter')
-            got['err'] = 'Invalid state parameter'; done.set(); return
-        self.send_response(302); self.send_header('Location', 'https://platform.claude.com/oauth/code/success?app=claude-code'); self.end_headers()
-        got['code'] = q.get('code', ''); done.set()
-srv = socketserver.TCPServer(('127.0.0.1', 0), H)
-port = srv.server_address[1]
-threading.Thread(target=srv.serve_forever, daemon=True).start()
-def url(redirect):
-    return 'https://claude.com/cai/oauth/authorize?' + up.urlencode({'code': 'true', 'client_id': 'c', 'response_type': 'code', 'redirect_uri': redirect,
-        'scope': 'user:inference', 'code_challenge': 'CC', 'code_challenge_method': 'S256', 'state': state, 'login_hint': email})
-print('Opening browser to sign in…')
-print("If the browser didn't open, visit: " + url('https://platform.claude.com/oauth/code/callback'))
-sys.stdout.write('Paste code here if prompted > '); sys.stdout.flush()
-log('OAUTH-START port=%d' % port)
-if os.environ.get('BROWSER'):
-    subprocess.run([os.environ['BROWSER'], url('http://localhost:%d/callback' % port)], stdin=subprocess.DEVNULL)
-if not done.wait(60):
-    print('Login failed: timed out'); sys.exit(1)
-if 'err' in got:
-    print('Login failed: ' + got['err']); sys.exit(1)
-log('OAUTH-EXCHANGE code=%s https_proxy=%s' % (got['code'], os.environ.get('https_proxy', 'unset')))
-if not got['code'].startswith('good'):
-    print('Login failed: Request failed with status code 400'); sys.exit(1)
-j = json.load(open(P)) if os.path.exists(P) else {}
-j['oauthAccount'] = {'emailAddress': email}
-json.dump(j, open(P, 'w'), indent=2)
-log('LOGIN %s @ %s' % (email, os.path.dirname(P)))
-print('Login successful.')
-S
+# 假 claude 的 auth login 在 $CCA_T/oauth_flow 存在时（内容是这次的 state）照真的 Claude Code 2.1.322 走（cca-test fake-oauth，用 exec -a 起：
+# 回归按 $CCA_T/fake_oauth 找进程）：本机 127.0.0.1 随机端口开回调（redirect_uri 写 localhost），打印手动登录的网址和“Paste code here”，
+# 经 $BROWSER 打开自动的那个登录网址；回调的 state 不对回 400、整个登录失败，对的回 302 到成功页，再“换 token”：code 以 good 开头算成功
+# （写 oauthAccount），否则失败。换 token 时的代理记进 claude.log
 
-# 扮演 Mac 上账号的 Chrome（cca login-page 的用例）：fake_browser.py state code。等 open.log 里出现这个 state 的登录网址
+# 扮演 Mac 上账号的 Chrome（cca login-page 的用例）：cca-test browser state code。等 open.log 里出现这个 state 的登录网址
 #（cca 在账号的浏览器里打开了它），再像登录完的浏览器一样跳回网址里 redirect_uri 的回调：先来个 favicon、一个 state 不对的
 #（都不该算数），再带着 code 跳回来。打印每次的 HTTP 状态和最后那一页
-cat > "$T/fake_browser.py" <<'S'
-import os, re, sys, time, urllib.error as ue, urllib.parse as up, urllib.request as ur
-t, state, code = os.environ['CCA_T'], sys.argv[1], sys.argv[2]
-for _ in range(400):
-    p = os.path.join(t, 'open.log')
-    m = re.search(r'\[(https://[^\]]*state=%s[^\]]*)\]' % re.escape(state), open(p).read()) if os.path.exists(p) else None
-    if m:
-        break
-    time.sleep(0.05)
-else:
-    print('never opened'); sys.exit(1)
-r = up.urlsplit(dict(up.parse_qsl(up.urlsplit(m.group(1)).query))['redirect_uri'])
-op = ur.build_opener(ur.ProxyHandler({}))
-def get(u):
-    try:
-        r = op.open(u, timeout=10)
-        return r.status, r.read().decode('utf-8', 'replace')
-    except ue.HTTPError as e:
-        return e.code, ''
-    except OSError as e:
-        return 0, str(e)
-base = 'http://localhost:%d' % r.port
-print('favicon %d' % get(base + '/favicon.ico')[0])
-print('wrong %d' % get(base + r.path + '?code=x&state=wrong')[0])
-st, page = get(base + r.path + '?code=%s&state=%s' % (code, state))
-print('callback %d' % st)
-print(page)
-S
 
-# 假的 codex app-server（JSON-RPC，一行一个 JSON）：initialize；account/login/start 回登录网址，等 cca 在账号的浏览器里
-# 打开它（出现在 open.log 里）就当用户登录完了，写 auth.json（假的 id_token，邮箱默认取 CCA_ACCOUNT 里的，
-# 一次性的 codex_login_as 模拟登错号）；account/rateLimits/read 按登录的邮箱回 codex_usage/<邮箱>.json。
+# 假的 codex app-server（cca-test fake-codex-server，用 exec -a 起：回归按 $CCA_T/fake_codex_server 找进程；JSON-RPC，一行一个 JSON）：
+# initialize；account/login/start 回登录网址，等 cca 在账号的浏览器里打开它（出现在 open.log 里）就当用户登录完了，写 auth.json
+# （假的 id_token，邮箱默认取 CCA_ACCOUNT 里的，一次性的 codex_login_as 模拟登错号；oauth_flow 在时照真的 codex 开本机回调）；
+# account/rateLimits/read 按登录的邮箱回 codex_usage/<邮箱>.json，account/rateLimitResetCredit/consume 用掉一次重置机会。
 # codex_rpc_off：不支持 app-server；codex_usage/unsupported、hang：不支持查用量、卡住；rpc_error：里面的话当出错说明回
-cat > "$T/fake_codex_server.py" <<'S'
-import base64, json, os, re, sys, time
-t, home = os.environ['CCA_T'], os.environ.get('CODEX_HOME', '')
-def log(s):
-    open(os.path.join(t, 'codex.log'), 'a').write(s + '\n')
-def b64(d):
-    return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
-def email_now():
-    try:
-        tok = json.load(open(os.path.join(home, 'auth.json')))['tokens']['id_token'].split('.')[1]
-        return json.loads(base64.urlsafe_b64decode(tok + '=' * (-len(tok) % 4)))['email']
-    except Exception:
-        return ''
-def write_auth():
-    device = os.path.join(home, 'installation_id')
-    log('LOGIN-DEVICE %s @ %s' % (open(device).read().strip() if os.path.exists(device) else '', home))
-    p = os.path.join(t, 'codex_login_as')
-    if os.path.exists(p):
-        email = open(p).read().strip(); os.remove(p)
-    else:
-        a = os.environ.get('CCA_ACCOUNT', '')
-        m = re.search(r'\(([^()]+@[^()]+)\)$', a)
-        email = m.group(1) if m else (a if '@' in a else 'someone@example.com')
-    claims = {'email': email, 'https://api.openai.com/auth': {'chatgpt_plan_type': 'plus', 'chatgpt_account_id': 'ws-' + email}}
-    auth = {'auth_mode': 'chatgpt', 'OPENAI_API_KEY': None, 'last_refresh': '2026-11-03T00:00:00Z',
-            'tokens': {'id_token': '%s.%s.sig' % (b64({'alg': 'none'}), b64(claims)), 'access_token': 'at-SECRET', 'refresh_token': 'rt-SECRET', 'account_id': 'ws-' + email}}
-    json.dump(auth, open(os.path.join(home, 'auth.json'), 'w'))
-    log('LOGIN %s @ %s' % (email, home))
-if '--write-auth' in sys.argv:
-    write_auth(); sys.exit(0)
-log('APPSERVER: CODEX_HOME=%s https_proxy=%s NO_PROXY=%s' % (home, os.environ.get('https_proxy', 'unset'), os.environ.get('NO_PROXY', 'unset')))
-if os.path.exists(os.path.join(t, 'codex_rpc_off')):
-    sys.stderr.write("error: unrecognized subcommand 'app-server'\n"); sys.exit(2)
-import threading
-SEND = threading.Lock()
-def send(m):
-    with SEND:
-        print(json.dumps(m), flush=True)
-def start_oauth(rid):
-    """$CCA_T/oauth_flow 存在时（内容是这次的 state）照真的 codex 0.167 走：本机 127.0.0.1 随机端口开回调（redirect_uri 写 localhost），
-    回登录网址；回调的 state 不对回 400（State mismatch）、接着等，对的就“换 token”（code 以 good 开头算成功，写 auth.json），
-    换完才回答浏览器，再发 account/login/completed。换 token 时的代理记进 codex.log"""
-    import http.server, socketserver, urllib.parse as up
-    state = open(os.path.join(t, 'oauth_flow')).read().strip() or 'st-codex'
-    class H(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-        def do_GET(self):
-            u = up.urlsplit(self.path)
-            q = dict(up.parse_qsl(u.query))
-            if u.path != '/auth/callback':
-                self.send_response(404); self.end_headers(); return
-            if q.get('state') != state:
-                self.send_response(400); self.end_headers(); self.wfile.write(b'State mismatch'); return
-            code = q.get('code', '')
-            log('OAUTH-EXCHANGE code=%s https_proxy=%s' % (code, os.environ.get('https_proxy', 'unset')))
-            ok = code.startswith('good')
-            if ok:
-                write_auth()
-            self.send_response(200); self.send_header('Content-Type', 'text/html'); self.end_headers()
-            self.wfile.write(b'<p>Signed in</p>' if ok else b'<p>Sign-in failed</p>')
-            send({'method': 'account/login/completed', 'params': {'loginId': 'L1', 'success': ok, 'error': None if ok else 'Token exchange failed: invalid_grant'}})
-    srv = socketserver.TCPServer(('127.0.0.1', 0), H)
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    log('OAUTH-START port=%d' % port)
-    q = up.urlencode({'response_type': 'code', 'client_id': 'app_x', 'redirect_uri': 'http://localhost:%d/auth/callback' % port, 'scope': 'openid profile email offline_access',
-                      'code_challenge': 'CC', 'code_challenge_method': 'S256', 'state': state, 'originator': 'codex_cli_rs'})
-    send({'id': rid, 'result': {'type': 'chatgpt', 'loginId': 'L1', 'authUrl': 'https://auth.openai.com/oauth/authorize?' + q}})
-for line in sys.stdin:
-    try:
-        m = json.loads(line)
-    except ValueError:
-        continue
-    meth, rid = m.get('method'), m.get('id')
-    if meth == 'initialize':
-        log('RPC initialize client=%s' % m['params']['clientInfo']['name']); send({'id': rid, 'result': {'userAgent': 'x'}})
-    elif meth == 'initialized':
-        pass
-    elif meth == 'account/login/start' and os.path.exists(os.path.join(t, 'oauth_flow')):
-        start_oauth(rid)
-    elif meth == 'account/login/cancel':
-        log('RPC loginCancel'); send({'id': rid, 'result': {}})
-    elif meth == 'account/login/start':
-        url = 'https://auth.openai.com/oauth/authorize?client_id=app_x&state=s%d' % os.getpid()
-        send({'id': rid, 'result': {'type': 'chatgpt', 'loginId': 'L1', 'authUrl': url}})
-        for _ in range(100):   # 等 cca 在账号的浏览器里打开登录页
-            if os.path.exists(os.path.join(t, 'open.log')) and url in open(os.path.join(t, 'open.log')).read():
-                break
-            time.sleep(0.1)
-        else:
-            send({'method': 'account/login/completed', 'params': {'loginId': 'L1', 'success': False, 'error': 'browser never opened'}}); continue
-        write_auth()
-        send({'method': 'account/login/completed', 'params': {'loginId': 'L1', 'success': True, 'error': None}})
-    elif meth == 'account/rateLimits/read':
-        u = os.path.join(t, 'codex_usage')
-        log('RPC rateLimits email=%s https_proxy=%s' % (email_now() or '-', os.environ.get('https_proxy', 'unset')))
-        if os.path.exists(os.path.join(u, 'hang')):
-            time.sleep(60)
-        if os.path.exists(os.path.join(u, 'unsupported')):
-            send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found: account/rateLimits/read'}}); continue
-        if os.path.exists(os.path.join(u, 'rpc_error')):   # 这句话原样当 app-server 的出错说明（登录凭证失效之类）
-            send({'id': rid, 'error': {'code': -32603, 'message': open(os.path.join(u, 'rpc_error')).read()}}); continue
-        p = os.path.join(u, email_now() + '.json')
-        if not email_now():
-            send({'id': rid, 'error': {'code': -32600, 'message': 'codex account authentication required'}})
-        elif os.path.exists(p):
-            send({'id': rid, 'result': json.load(open(p))})
-        else:
-            send({'id': rid, 'result': {'rateLimits': {'limitId': 'codex', 'primary': None, 'secondary': None, 'planType': 'free'}}})
-    elif meth == 'account/rateLimitResetCredit/consume':
-        # 用掉一次重置机会：按 codex_usage/<邮箱>.json 里的用量和重置机会办——没有（或指定的那一次不在了）是 noCredit，
-        # 用量都是 0 是 nothingToReset，否则把 5 小时、每周清零、去掉用掉的那一次（写回文件，之后查用量就是新的）；
-        # codex_usage/reset_outcome 里写着结果时照它回，reset_unsupported 模拟旧版本的 codex
-        u, prm = os.path.join(t, 'codex_usage'), m.get('params') or {}
-        key = prm.get('idempotencyKey') or ''
-        log('RPC resetConsume email=%s https_proxy=%s credit=%s key=%s' % (email_now() or '-', os.environ.get('https_proxy', 'unset'),
-            prm.get('creditId') or '-', 'uuid' if re.match(r'^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$', key) else 'bad:' + key))
-        if os.path.exists(os.path.join(u, 'reset_unsupported')):
-            send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found: account/rateLimitResetCredit/consume'}}); continue
-        if not email_now():
-            send({'id': rid, 'error': {'code': -32600, 'message': 'codex account authentication required for rate limit reset credits'}}); continue
-        p = os.path.join(u, email_now() + '.json')
-        j = json.load(open(p)) if os.path.exists(p) else {'rateLimits': {}}
-        rc = j.get('rateLimitResetCredits') or {'availableCount': 0, 'credits': []}
-        avail = [c for c in rc.get('credits') or [] if c.get('status') == 'available']
-        cid = prm.get('creditId') or (avail[0]['id'] if avail else None)
-        wins = [w for w in (j['rateLimits'].get('primary'), j['rateLimits'].get('secondary')) if isinstance(w, dict)]
-        if os.path.exists(os.path.join(u, 'reset_outcome')):
-            outcome = open(os.path.join(u, 'reset_outcome')).read().strip()
-        elif rc.get('availableCount', 0) <= 0 or (prm.get('creditId') and not any(c['id'] == cid for c in avail)):
-            outcome = 'noCredit'
-        elif not any(w.get('usedPercent') for w in wins):
-            outcome = 'nothingToReset'
-        else:
-            outcome = 'reset'
-            for w in wins:
-                w['usedPercent'] = 0
-            rc['availableCount'] -= 1
-            rc['credits'] = [c for c in rc.get('credits') or [] if c.get('id') != cid]
-            j['rateLimitResetCredits'] = rc
-            j.setdefault('rateLimitsByLimitId', {})['codex'] = j['rateLimits']
-            json.dump(j, open(p, 'w'))
-        send({'id': rid, 'result': {'outcome': outcome}})
-    elif rid is not None:
-        send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found'}})
-S
 # 假的 ChatGPT App（Codex 桌面版），同样提供可核验的程序身份和文件。
 mkdir -p "$T/ChatGPT.app/Contents/Resources" "$T/ChatGPT.app/Contents/MacOS"
 plutil -create xml1 "$T/ChatGPT.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string app "$T/ChatGPT.app/Contents/Info.plist" &&
@@ -1470,30 +942,13 @@ echo "skill" > "$X/skills/s1/SKILL.md"
 echo "allow" > "$X/rules/default.rules"
 echo '{"tokens":{"id_token":"master"}}' > "$X/auth.json"; echo master-install > "$X/installation_id"
 echo '{}' > "$X/.codex-global-state.json"
-# 假的 STUN 服务器（只在 127.0.0.1 上，泄露检测那一节才开）：回答 Binding 请求，说对方的公网 IP 是 $T/stun_ip 里写的（IPv4），
-# 端口写进 $T/stun.port；每次回答记在 $T/stun.log
-cat > "$T/fake_stun.py" <<'S'
-import os, socket, struct, sys
-T = sys.argv[1]
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.bind(('127.0.0.1', 0))
-with open(os.path.join(T, 'stun.port.tmp'), 'w') as f:
-    f.write(str(s.getsockname()[1]))
-os.replace(os.path.join(T, 'stun.port.tmp'), os.path.join(T, 'stun.port'))
-while True:
-    d, a = s.recvfrom(2048)
-    if len(d) < 20 or d[:2] != b'\x00\x01':
-        continue
-    try:
-        ip = open(os.path.join(T, 'stun_ip')).read().strip()
-    except OSError:
-        continue
-    with open(os.path.join(T, 'stun.log'), 'a') as f:
-        f.write('STUN %s\n' % ip)
-    x = bytes(p ^ q for p, q in zip(socket.inet_aton(ip), d[4:8]))
-    attr = struct.pack('!HHBBH', 0x0020, 8, 0, 1, a[1] ^ 0x2112) + x
-    s.sendto(struct.pack('!HH', 0x0101, len(attr)) + d[4:20] + attr, a)
-S
+# 假的 STUN 服务器（cca-test stun 沙箱，只在 127.0.0.1 上，泄露检测那一节才开）：回答 Binding 请求，说对方的公网 IP 是 $T/stun_ip
+# 里写的（IPv4），端口写进 $T/stun.port；每次回答记在 $T/stun.log。
+# regress.sh 里还有几行直接用 python3 跑 fake_browser.py、fake_stun.py、dockpl.py：先留一个只把参数转给 cca-test 的壳（进程号不变，
+# 回归照样 wait、kill 它），那几行改成直接调 "$TESTBIN" 以后删掉
+for s in fake_browser:browser fake_stun:stun dockpl:dockpl; do
+	printf 'import os, sys\nt = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cca-test")\nos.execv(t, [t, "%s"] + sys.argv[1:])\n' "${s#*:}" > "$T/${s%%:*}.py"
+done
 cat > "$T/edit.py" <<'S'
 #!/usr/bin/env python3
 # 假的编辑器（cca edit 用）：按环境变量 CCA_TEST_EDIT 里的一句 Python 改账号表（表在变量 j 里）
@@ -1504,7 +959,7 @@ json.dump(j, open(p, 'w'), indent=2, ensure_ascii=False)
 S
 # --- 内置代理：假的 mihomo 内核，打包成官方 Release 的文件名（假 curl 从 $T/mihomo/ 给），SHA256 写进 $T/mihomo/sha256
 # （regress.sh 的 mkver 把测试版 cca 里写死的校验值换成它）。状态在 $T/core：起来后建 up、记下主目录 home 和 pid，
-# core_load 照配置写 listening、groups/、sel/；收到 SIGTERM 时清掉 up 和 listening 再退出。core/start_fail 时起不来
+# cca-test core-load 照配置写 listening、groups/、sel/；收到 SIGTERM 时清掉 up 和 listening 再退出。core/start_fail 时起不来
 mkdir -p "$T/core/groups" "$T/core/sel" "$T/mihomo"
 cat > "$T/mihomo/mihomo" <<'S'
 #!/bin/bash
@@ -1517,12 +972,12 @@ grep -q '"tun"' "$f" 2>/dev/null && CD="$CCA_T/core_udp"   # 本机 UDP 走节�
 grep -q '"cca-test-1"' "$f" 2>/dev/null && CD="$CCA_T/core_test"   # 实测 Team 节点的临时内核（入站叫 cca-test-N）：状态另放
 mkdir -p "$CD/groups" "$CD/sel"
 if [ -n "$test" ]; then   # -t 只校验配置、不起内核（cca node add 用它校验自定义节点；core/reject_text 命中就不过）
-	if FAKE_CORE_DIR="$CD" "$CCA_T/core_load" "$f" >/dev/null 2>&1; then echo "configuration file $f test is successful"; exit 0; fi
+	if FAKE_CORE_DIR="$CD" "$CCA_T/cca-test" core-load "$f" >/dev/null 2>&1; then echo "configuration file $f test is successful"; exit 0; fi
 	echo "level=error msg=\"configuration file test failed\"" >&2; exit 1
 fi
 mkdir -p "$CD/groups" "$CD/sel"
 [ -f "$CD/start_fail" ] && { echo 'level=fatal msg="Parse config error: fake"' >&2; exit 1; }
-FAKE_CORE_DIR="$CD" "$CCA_T/core_load" "$f" || exit 1
+FAKE_CORE_DIR="$CD" "$CCA_T/cca-test" core-load "$f" || exit 1
 printf '%s' "$d" > "$CD/home"; echo $$ > "$CD/pid"; echo START >> "$CD/core.log"
 trap 'rm -f "$CD/up"; : > "$CD/listening"; echo STOP >> "$CD/core.log"; exit 0' TERM INT
 touch "$CD/up"
@@ -1532,45 +987,9 @@ chmod 755 "$T/mihomo/mihomo"
 gzip -c "$T/mihomo/mihomo" > "$T/mihomo/mihomo-darwin-arm64-v1.19.33.gz"
 cp "$T/mihomo/mihomo-darwin-arm64-v1.19.33.gz" "$T/mihomo/mihomo-darwin-amd64-compatible-v1.19.33.gz"
 shasum -a 256 "$T/mihomo/mihomo-darwin-arm64-v1.19.33.gz" | cut -d' ' -f1 > "$T/mihomo/sha256"
-cat > "$T/core_load" <<'S'
-#!/usr/bin/env python3
-# 假内核读配置（cca 生成的内置代理配置是 JSON 写的）：组成员、dialer-proxy、入站指向的都要有，入站只能在 127.0.0.1 上；
+# 假内核读配置（cca-test core-load，cca 生成的内置代理配置是 JSON 写的）：组成员、dialer-proxy、入站指向的都要有，入站只能在 127.0.0.1 上；
 # core/reject_text 里的文字出现在配置里就不收（模拟内核不认某个节点）。收下的：listening、groups/、sel/（选组里第一个，
 # 像 store-selected: false），控制接口的 socket 记在 sock，配置留一份 last_config.json
-import glob, json, os, sys
-cd = os.environ.get('FAKE_CORE_DIR') or os.path.join(os.environ['CCA_T'], 'core')   # 假 mihomo 起辅助安装的临时内核时是 core_install
-text = open(sys.argv[1], encoding='utf-8').read()
-rj = os.path.join(cd, 'reject_text')
-if os.path.exists(rj) and open(rj).read().strip() and open(rj).read().strip() in text:
-    sys.exit('proxy 1: unsupport proxy type')
-c = json.loads(text)
-gs = c.get('proxy-groups') or []
-known = {p['name'] for p in c.get('proxies') or []} | {g['name'] for g in gs} | {'REJECT', 'DIRECT'}
-for p in c.get('proxies') or []:
-    if p.get('dialer-proxy') and p['dialer-proxy'] not in known:
-        sys.exit('proxy %s: dialer-proxy %s not found' % (p['name'], p['dialer-proxy']))
-for g in gs:
-    for m in g['proxies']:
-        if m not in known:
-            sys.exit('proxy group %s: %s not found' % (g['name'], m))
-for l in c.get('listeners') or []:
-    if l.get('proxy') not in known or l.get('listen') != '127.0.0.1':
-        sys.exit('listener %s: bad' % l.get('name'))
-open(os.path.join(cd, 'listening'), 'w').write(''.join('%d\n' % l['port'] for l in c.get('listeners') or []))
-if os.path.basename(cd) == 'core_test':   # 实测 Team 节点的临时内核：listeners/<端口> 是「入站名\t节点」（假 curl 照它回出口）
-    os.makedirs(os.path.join(cd, 'listeners'), exist_ok=True)
-    for f in glob.glob(os.path.join(cd, 'listeners', '*')):
-        os.remove(f)
-    for l in c.get('listeners') or []:
-        open(os.path.join(cd, 'listeners', str(l['port'])), 'w').write('%s\t%s\n' % (l['name'], l['proxy']))
-for f in glob.glob(os.path.join(cd, 'groups', '*')) + glob.glob(os.path.join(cd, 'sel', '*')):
-    os.remove(f)
-for g in gs:
-    open(os.path.join(cd, 'groups', g['name']), 'w').write(''.join(m + '\n' for m in g['proxies']))
-    open(os.path.join(cd, 'sel', g['name']), 'w').write(g['proxies'][0])
-open(os.path.join(cd, 'sock'), 'w').write(c.get('external-controller-unix', ''))
-open(os.path.join(cd, 'last_config.json'), 'w').write(text)
-S
 # --- 辅助安装：假的官方安装脚本（假 curl 给出去时把 @T@ 换成沙箱、@N@ 换成命令名）。照真的那样装进 ~/.local/bin（链接到
 # 沙箱里挪开的假命令 @T@/<命令>.off）；在空环境里运行（拿不到 CCA_T），记下运行它的 shell 和环境（install.log 的 INSTALL-RUN）。
 # 它自己下载时：有代理就要连得上辅助安装的临时内核，直连时 install_dl_down 模拟下载不到；install_fail 模拟安装失败，
@@ -1595,5 +1014,5 @@ mkdir -p "$HOME/.local/bin" && ln -sf "$T/$n.off" "$HOME/.local/bin/$n" || exit 
 echo "INSTALL-DONE $n via=$via" >> "$T/install.log"
 echo "Installation complete (fake $n)"
 S
-chmod +x "$T"/bin/* "$T"/rbin/* "$T/edit.py" "$T/core_load"
+chmod +x "$T"/bin/* "$T"/rbin/* "$T/edit.py"
 echo "sandbox ready: $T"
