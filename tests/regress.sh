@@ -10,7 +10,7 @@ STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）�
 TMPIDS=""   # Team 的测试服务器（tm_srv 起的，11b2 起的几节用；各节自己停）
 MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
 HC=""    # 辅助程序的缓存目录（10g 测“解出来”的那几个用例才建；在这个用户的临时目录里）
-trap '[ -z "$HC" ] || rm -rf "$HC"; type tm_stop_all >/dev/null 2>&1 && tm_stop_all; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T" "$T.trap"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
+trap '[ -z "$HC" ] || rm -rf "$HC"; type tm_stop_all >/dev/null 2>&1 && tm_stop_all; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; type unit_stop >/dev/null 2>&1 && unit_stop; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T" "$T.trap" "$T.unit"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
 [ -n "${FROM:-}${ONLY:-}" ] || bash "$D/setup.sh" "$T" >/dev/null || exit 1   # 分节续跑时跳过建沙箱：快照恢复会填好 $T
 cd "$T" || exit 1
 # 辅助程序（cli/ 的 Rust 程序）：仓库里的 cca 用 cli/target/release 里编出来的那一份，这里先编（没改过就是零点几秒；--locked --offline：
@@ -39,11 +39,44 @@ fi
 [ -x "$TESTBIN" ] || { echo "测试用的小工具不在：$TESTBIN" >&2; exit 1; }
 [ -x "$SUITEBIN" ] || { echo "各份测试合成的那个程序（suite）不在：${SUITEBIN:-cargo 没说编在哪}" >&2; exit 1; }
 ln -sf "$TESTBIN" "$T/cca-test"
-suite_run() {   # suite_run 模块：只跑 suite 里的这一个模块（tests/<模块>.rs），它说的留在 $T/suite-<模块>.log；out 是最后几行（DEBUG_OUT 时附在失败的用例后面）
-	CCA_HELPER="$HELPER_BIN" CCA_TEST_BIN="$TESTBIN" CCA_REPO="$(dirname "$CCA")" "$SUITEBIN" --module "$1" > "$T/suite-$1.log" 2>&1; local rc=$?
-	out=$(tail -n 40 "$T/suite-$1.log")
-	return $rc
+# unit 一节的那些（suite 的各个模块、辅助程序和 tests/ 自己的单元测试）和主流程互不相干，一样样等要好几分钟：这里就放到后台跑起来
+# （suite 的几个模块同时跑，跑完了接着 cargo test——一路里先后跑，免得编译的时候把掐着时间的用例拖慢），主流程照常往下走，
+# unit 一节（在最后）只等它跑完、一样一行结果。结果和输出放在沙箱旁边的 $T.unit（分节续跑恢复快照时不会被换掉，快照里也不带它；
+# KEEP=1 时留着）。这一次不跑 unit 一节（SKIP 里有它、ONLY 里没有它）就不起
+UNITD="$T.unit"; UNIT_PID=""; SUITE_SEEN=""
+unit_wanted() {
+	case " ${SKIP:-} " in *" unit "*) return 1 ;; esac
+	[ -z "${ONLY:-}" ] && return 0
+	case " $ONLY " in *" unit "*) return 0 ;; esac
+	return 1
 }
+unit_start() {
+	rm -rf "$UNITD"; mkdir -p "$UNITD/logs"
+	(
+		CCA_HELPER="$HELPER_BIN" CCA_TEST_BIN="$TESTBIN" CCA_REPO="$(dirname "$CCA")" "$SUITEBIN" --setsid --results "$UNITD/results.tsv" --logs "$UNITD/logs" > "$UNITD/suite.log" 2>&1
+		cd "$(dirname "$CCA")/cli" || exit 1
+		cargo test --locked --offline > "$UNITD/cargo-test.log" 2>&1; echo $? > "$UNITD/cargo-test.rc"
+		cargo fmt --all --check > "$UNITD/cargo-fmt.log" 2>&1; echo $? > "$UNITD/cargo-fmt.rc"
+		cargo test --profile kit -p cca-tests --lib --bins --locked --offline > "$UNITD/cargo-test-kit.log" 2>&1; echo $? > "$UNITD/cargo-test-kit.rc"
+	) &
+	UNIT_PID=$!
+}
+unit_wait() { [ -z "$UNIT_PID" ] || wait "$UNIT_PID" 2>/dev/null; UNIT_PID=""; }   # 等后台那一路跑完
+unit_stop() {   # 退出时还没跑完（被打断、前面就退出了）：停掉那一路和它正在跑的那一样（suite 收到 TERM 会把各个模块起的进程都停掉）
+	local kids
+	[ -n "$UNIT_PID" ] || return 0
+	kids=$(pgrep -P "$UNIT_PID" 2>/dev/null | tr '\n' ' ')
+	kill "$UNIT_PID" 2>/dev/null; [ -z "$kids" ] || kill $kids 2>/dev/null
+	wait "$UNIT_PID" 2>/dev/null   # 收掉它：不然 bash 退出时自己说一句 Terminated
+	UNIT_PID=""
+}
+suite_ok() {   # suite_ok 模块：后台那一趟里 suite 的这个模块（tests/<模块>.rs）过了没有；out 是它的记录的最后几行（DEBUG_OUT 时附在失败的用例后面）
+	SUITE_SEEN="$SUITE_SEEN $1"
+	out=$(tail -n 40 "$UNITD/logs/$1.log" 2>/dev/null || tail -n 40 "$UNITD/suite.log" 2>/dev/null)
+	[ "$(awk -F'\t' -v m="$1" '$1 == m { print $2 }' "$UNITD/results.tsv" 2>/dev/null)" = pass ]
+}
+cargo_ok() { out=$(tail -n 40 "$UNITD/$1.log" 2>/dev/null); [ "$(cat "$UNITD/$1.rc" 2>/dev/null)" = 0 ]; }   # cargo_ok 哪一样：后台那一路里的这条 cargo 命令过了没有
+unit_wanted && unit_start
 # 求值器不认识的写法（cca-test 的退出码 2）都记进这个文件，结尾有一条用例查它是空的：不然 ! cfgok '…' 这种取反的断言会悄悄通过。
 # 放在沙箱外面（分节续跑恢复快照时不会被换掉）
 export CCA_TEST_TRAP="$T.trap"; : > "$CCA_TEST_TRAP"
@@ -285,44 +318,6 @@ _ckpt_restore() {   # 恢复某节开始时的沙箱和变量；计数（pass/fa
 }
 _BASE=" $(compgen -v 2>/dev/null | tr '\n' ' ')"   # 分节续跑的变量基线：前置阶段已有的变量名（建快照时只存这之后各节新设的）
 _BASEF=" $(compgen -A function 2>/dev/null | tr '\n' ' ')"   # 函数基线：前置阶段已有的函数（ok/run/sect…；只存各节新定义的）
-if sect unit; then
-# 辅助程序内部的检查（原来这一节里各份 Python 测试直接调内嵌 Python 的函数查的那些：解析、规则、价格表、时段、客户端更新的每一步……）
-# 都在 cargo test 里；下面各份 Python 测试把辅助程序当黑盒跑（tests/helper_bin.py），或者切出 cca 里的 bash 函数来测
-ok "辅助程序（cli/）自己的单元测试：cargo test" '( cd "$D/../cli" && cargo test --locked --offline ) > "$T/cargo-test.log" 2>&1'
-# 代码照仓库根的 rustfmt.toml 排过（cli/ 和 tests/ 两个包都是；工具链是固定的，排出来哪台机器都一样）：没排过的改动一合进来，以后谁顺手 cargo fmt 就是一大片不相干的改动。
-# 生成的数据表标着 #[rustfmt::skip]，不参与
-ok "Rust 代码（cli/ 和 tests/）排过版：cargo fmt --all --check（没过就在 cli/ 里运行 cargo fmt --all）" '( cd "$D/../cli" && cargo fmt --all --check ) > "$T/cargo-fmt.log" 2>&1'
-# tests/ 那个包自己的检查：支持库 kit 和小工具 cca-test 的单元测试（断言的求值器对着从 CPython 取来的对照数据、属性列表、假命令的角色……），
-# 和底座的自测（suite 的 kit_selftest 模块：起进程不漏描述符和环境、伪终端和控制终端、运行器的超时、收尾、漏登记的用例）
-ok "测试工具自己的单元测试（tests/ 的支持库 kit 和小工具 cca-test）：cargo test --profile kit -p cca-tests --lib --bins" '( cd "$D/../cli" && cargo test --profile kit -p cca-tests --lib --bins --locked --offline ) > "$T/cargo-test-kit.log" 2>&1'
-ok "测试的底座自测（kit_selftest）：起的子进程只带写明的环境和文件描述符、新会话和控制终端、伪终端，运行器的时限、收尾、跳过、结果文件" 'suite_run kit_selftest'
-ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'suite_run device_identity'
-ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'suite_run shared_state'
-ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'suite_run isolation_browser'
-ok "泄露检测：失败结果不误报通过，区分宿主探针与浏览器" 'suite_run isolation_leaks'
-ok "本机 UDP 走节点：TUN 配置只把 UDP 交给节点，状态、选节点、要装到 root 那边的文件和摘要" 'suite_run local_udp'
-ok "多设备共用路由器：只有这台设备时账号表逐字节不变，合并时保留别的设备的槽位、共用账号不重复、本机端口写回并集槽位" 'suite_run router_merge'
-ok "配置隔离：完整 TOML、项目配置与启动参数检查" 'suite_run isolation_settings'
-ok "凭证隔离：固定钥匙串目录，屏蔽继承凭证描述符" 'suite_run isolation_credentials'
-ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'suite_run isolation_network'
-ok "运行记录：进程复用、代理漂移与目录链接检查" 'suite_run isolation_runtime'
-ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'suite_run isolation_apps'
-ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'suite_run client_updates'
-ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
-ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
-ok "Team：辅助程序建 Team、接上服务器、邀请、加入、同步配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'python3 "$D/team.py" 2>/dev/null'
-ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
-ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'suite_run usage_view'
-ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
-ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'suite_run mail_view'
-ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'python3 "$D/remote_host.py" 2>/dev/null'
-ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
-ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
-ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_run acme'
-# 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
-ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'python3 "$D/web_relay.py" 2>/dev/null'
-
-fi
 if sect 1; then
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -4637,6 +4632,49 @@ ok "uninstall --no-backup：不留备份，照样删掉 ~/.cca；~/.local/bin �
 # 11b 起各节（run 不带 TMPDIR）把装着的那一份的辅助程序解在了这个用户真的临时目录里：以前由上面那次还原删掉，现在缓存目录换成了
 # 单独的一个，这里照旧删掉这一份（只这个版本的，名字是它的 SHA-256）
 [ -z "$hs" ] || rm -f "$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
+fi
+if sect unit; then
+# 和上面各节互不相干的那些测试。Rust 的（辅助程序和 tests/ 自己的单元测试、suite 的各个模块）开头就放到后台跑了（见前面的 unit_start），
+# 这里等它跑完、一样一行结果；还没移成 Rust 的那几份 Python 测试在这里一个个跑
+unit_wait
+# 辅助程序内部的检查（原来这一节里各份 Python 测试直接调内嵌 Python 的函数查的那些：解析、规则、价格表、时段、客户端更新的每一步……）
+# 都在 cargo test 里；下面各份 Python 测试把辅助程序当黑盒跑（tests/helper_bin.py），或者切出 cca 里的 bash 函数来测
+ok "辅助程序（cli/）自己的单元测试：cargo test" 'cargo_ok cargo-test'
+# 代码照仓库根的 rustfmt.toml 排过（cli/ 和 tests/ 两个包都是；工具链是固定的，排出来哪台机器都一样）：没排过的改动一合进来，以后谁顺手 cargo fmt 就是一大片不相干的改动。
+# 生成的数据表标着 #[rustfmt::skip]，不参与
+ok "Rust 代码（cli/ 和 tests/）排过版：cargo fmt --all --check（没过就在 cli/ 里运行 cargo fmt --all）" 'cargo_ok cargo-fmt'
+# tests/ 那个包自己的检查：支持库 kit 和小工具 cca-test 的单元测试（断言的求值器对着从 CPython 取来的对照数据、属性列表、假命令的角色……），
+# 和底座的自测（suite 的 kit_selftest 模块：起进程不漏描述符和环境、伪终端和控制终端、运行器的超时、收尾、漏登记的用例）
+ok "测试工具自己的单元测试（tests/ 的支持库 kit 和小工具 cca-test）：cargo test --profile kit -p cca-tests --lib --bins" 'cargo_ok cargo-test-kit'
+ok "测试的底座自测（kit_selftest）：起的子进程只带写明的环境和文件描述符、新会话和控制终端、伪终端，运行器的时限、收尾、跳过、结果文件" 'suite_ok kit_selftest'
+ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'suite_ok device_identity'
+ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'suite_ok shared_state'
+ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'suite_ok isolation_browser'
+ok "泄露检测：失败结果不误报通过，区分宿主探针与浏览器" 'suite_ok isolation_leaks'
+ok "本机 UDP 走节点：TUN 配置只把 UDP 交给节点，状态、选节点、要装到 root 那边的文件和摘要" 'suite_ok local_udp'
+ok "多设备共用路由器：只有这台设备时账号表逐字节不变，合并时保留别的设备的槽位、共用账号不重复、本机端口写回并集槽位" 'suite_ok router_merge'
+ok "配置隔离：完整 TOML、项目配置与启动参数检查" 'suite_ok isolation_settings'
+ok "凭证隔离：固定钥匙串目录，屏蔽继承凭证描述符" 'suite_ok isolation_credentials'
+ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'suite_ok isolation_network'
+ok "运行记录：进程复用、代理漂移与目录链接检查" 'suite_ok isolation_runtime'
+ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'suite_ok isolation_apps'
+ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'suite_ok client_updates'
+ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
+ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
+ok "Team：辅助程序建 Team、接上服务器、邀请、加入、同步配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'python3 "$D/team.py" 2>/dev/null'
+ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
+ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'suite_ok usage_view'
+ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
+ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'suite_ok mail_view'
+ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'python3 "$D/remote_host.py" 2>/dev/null'
+ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
+ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
+ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_ok acme'
+# 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
+ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'python3 "$D/web_relay.py" 2>/dev/null'
+# suite 里平时跑的模块上面都得有一行：新加了模块（tests/suite.rs）却没在这里加一条的话，它在后台跑了、没过也没人知道
+ok "suite 的每个模块上面都有一行（tests/suite.rs 里加了模块，这一节也要加一条 suite_ok）" '[ -s "$UNITD/results.tsv" ] && [ "$(cut -f1 "$UNITD/results.tsv" | sort | tr "\n" " ")" = "$(printf "%s\n" $SUITE_SEEN | sort | tr "\n" " ")" ]'
+
 fi
 ok "断言里没有求值器不认识的写法（cca-test 的退出码 2；不认识的都记在沙箱旁边的 .trap 文件里：取反的断言遇到它会悄悄通过）" '[ ! -s "$CCA_TEST_TRAP" ]'
 [ ! -s "$CCA_TEST_TRAP" ] || sed 's/^/      | /' "$CCA_TEST_TRAP"
