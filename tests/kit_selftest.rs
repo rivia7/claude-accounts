@@ -932,18 +932,20 @@ fn runner_selects_modules_and_tests(t: &mut Ctx) {
     assert_eq!((ran.code, ran.noted.as_str()), (0, "off: ran\n"), "{}\n{}", ran.out, ran.err);
     assert_eq!(ran.results, "fx_pass\tpass\t1\t0\t0\tT\nfx_fail\tpass\t1\t0\t0\tT\nfx_off\tpass\t1\t0\t0\tT\n");
     assert_eq!(ran.log("fx_fail"), "ok first_ok T\n");
-    // 什么都没选中：不算错（cargo test 把同一串参数交给每个测试程序）
-    let ran = fixtures(t, &["没有这样的用例"], &[]);
-    assert_eq!((ran.code, ran.out.as_str(), ran.results.as_str()), (0, "suite：没有选中的用例\n", ""), "{}", ran.err);
-    // 写错了的：退出码 2，说清楚
+    // 选中的用例全跳过了：没有失败的，模块是 pass、退出码 0，通过数那一栏是 0（回归、linux.sh 把关时看这一栏，通过数是 0 的不放行）
+    let ran = fixtures(t, &["fx_pass::skipped", "fx_pass::needs_missing"], &[]);
+    assert_eq!((ran.code, ran.results.as_str()), (0, "fx_pass\tpass\t0\t0\t2\tT\n"), "{}\n{}", ran.out, ran.err);
+    // 写错了的：退出码 2，说清楚。什么都没选中也在里面（点名跑一个不存在的用例，不能看着像是过了），结果文件不建
     for (args, why) in [
-        (&["--module", "fx_nope"][..], "suite：没有叫 fx_nope 的模块"),
+        (&["没有这样的用例"][..], "suite：没有选中的用例"),
+        (&["--module", "fx_pass", "没有这样的用例"], "suite：没有选中的用例"),
+        (&["--module", "fx_nope"], "suite：没有叫 fx_nope 的模块"),
         (&["--bogus"], "suite：不认识 --bogus"),
         (&["--jobs", "0"], "suite：--jobs 要一个不小于 1 的数"),
     ] {
         let ran = fixtures(t, args, &[]);
         assert!(
-            ran.code == 2 && ran.err.starts_with(why) && ran.out.is_empty(),
+            ran.code == 2 && ran.err.starts_with(why) && ran.out.is_empty() && !ran.dir.join("results").exists(),
             "{args:?}：{} {:?} {:?}",
             ran.code,
             ran.out,

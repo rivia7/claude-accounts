@@ -124,7 +124,7 @@ fn login(d: &str, p: &str, args: &[String]) -> R<i32> {
         Some(i) => arg(args, i + 1)?.to_string(),
         None => "someone@example.com".to_string(),
     };
-    let state = py_strip(&read_text(&join(&[d, "oauth_state"]))?).to_string();
+    let state = py::strip(&read_text(&join(&[d, "oauth_state"]))?).to_string();
     let got = Arc::new((Mutex::new(Got::default()), Condvar::new()));
     let (g, want) = (Arc::clone(&got), state.clone());
     let port = serve(move |req| {

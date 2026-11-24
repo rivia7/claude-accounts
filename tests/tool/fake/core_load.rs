@@ -15,7 +15,7 @@ pub fn run(a: &[String]) -> R<i32> {
     let rj = join(&[&cd, "reject_text"]);
     if exists(&rj) {
         let r = read_text(&rj)?;
-        let r = py_strip(&r);
+        let r = py::strip(&r);
         if !r.is_empty() && text.contains(r) {
             return fail("proxy 1: unsupport proxy type");
         }

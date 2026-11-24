@@ -36,7 +36,7 @@ fn log(d: &str, s: &str) -> R<()> {
 }
 
 /// base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
-fn b64(v: &Value) -> String {
+pub(super) fn b64(v: &Value) -> String {
     kit::crypto::b64url_nopad(dumps(v).as_bytes())
 }
 
@@ -204,7 +204,7 @@ pub fn run(a: &[String]) -> R<i32> {
 
 /// account/login/start：开本机的回调、回登录网址；换 token、写 auth.json、发 account/login/completed 都在回调里
 fn start_login(d: &str, home: &str, rid: Value) -> R<()> {
-    let state = py_strip(&read_text(&join(&[d, "oauth_state"]))?).to_string();
+    let state = py::strip(&read_text(&join(&[d, "oauth_state"]))?).to_string();
     let (dd, hh, want) = (d.to_string(), home.to_string(), state.clone());
     let port = serve(move |req| {
         let Ok(u) = urlsplit(&req.path) else { return };

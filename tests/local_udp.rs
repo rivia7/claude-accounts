@@ -11,7 +11,7 @@
 use kit::harness::{Ctx, Module, Need};
 use kit::json::{self, Style, Value};
 use kit::sandbox::{self, ran, shell_vars, Sandbox};
-use kit::{case, crypto, fsx, list, obj, plist};
+use kit::{case, crypto, fsx, list, obj, plist, py};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -213,7 +213,7 @@ impl Fx {
         let (out, err, code) =
             self.run_cmd(&["leak-verdict", &path.display().to_string(), "local|US-A", "203.0.113.10", "US", "detail"], &[]);
         assert_eq!((code, err.as_str()), (0, ""));
-        let warnings: Vec<&str> = sandbox::splitlines(&out)
+        let warnings: Vec<&str> = py::splitlines(&out)
             .into_iter()
             .filter(|row| row.starts_with("W\twebrtc\t"))
             .map(|row| row.splitn(3, '\t').nth(2).unwrap())
@@ -340,10 +340,7 @@ fn config_only_udp_goes_to_node(t: &mut Ctx) {
     assert!(rules[2].str().contains("PROCESS-NAME-REGEX"), "{}", rules[2]);
     assert_eq!(rules[rules.len().saturating_sub(2)..], [Value::from("NETWORK,UDP,US-A"), Value::from("MATCH,DIRECT")]);
     let tun = &c["tun"];
-    assert!(
-        sandbox::truthy(&tun["enable"]) && sandbox::truthy(&tun["auto-route"]) && sandbox::truthy(&tun["auto-detect-interface"]),
-        "{tun}"
-    );
+    assert!(py::truthy(&tun["enable"]) && py::truthy(&tun["auto-route"]) && py::truthy(&tun["auto-detect-interface"]), "{tun}");
     assert_eq!(tun["dns-hijack"], list![]);
     assert_eq!(tun["device"], Value::from("utun233")); // 网卡名固定：root 那边的启动脚本靠它分清路由表里哪些是自己的
     assert!(tun.get("route-exclude-address").is_none(), "{tun}"); // 只给 route-address：sing-tun 照原样加，不再合并成和别的 TUN 一样大的段
@@ -377,7 +374,7 @@ fn config_only_udp_goes_to_node(t: &mut Ctx) {
     for k in ["external-controller", "external-controller-unix", "port", "mixed-port", "socks-port", "listeners"] {
         assert!(c.get(k).is_none(), "{k}");
     }
-    assert!(!sandbox::truthy(&c["allow-lan"]), "{c}");
+    assert!(!py::truthy(&c["allow-lan"]), "{c}");
 }
 
 fn config_keeps_dialer_chain(t: &mut Ctx) {
@@ -513,8 +510,8 @@ fn view_and_running(t: &mut Ctx) {
     let running = procs(&[(10, &format!("{root}/mihomo -d {root} -f {root}/config.yaml"))]);
     assert_eq!(fx.udp_view(&running), view(Some("US-A"), "ok", true, true, None, false));
     // 在不在跑只认命令行里「root 那边的目录/mihomo -d 」这一段
-    assert!(sandbox::truthy(&fx.udp_view(&procs(&[(11, &format!("/bin/bash {root}/mihomo -d x"))]))["running"]));
-    assert!(!sandbox::truthy(&fx.udp_view(&procs(&[(12, &format!("/usr/bin/vi {root}/mihomo"))]))["running"]));
+    assert!(py::truthy(&fx.udp_view(&procs(&[(11, &format!("/bin/bash {root}/mihomo -d x"))]))["running"]));
+    assert!(!py::truthy(&fx.udp_view(&procs(&[(12, &format!("/usr/bin/vi {root}/mihomo"))]))["running"]));
     // 启动脚本给别的 VPN 让开了：other-vpn 里的网卡名，启动脚本在跑时才算；只认网卡名
     fsx::write(Path::new(&root).join("other-vpn"), "utun5\n");
     let script = procs(&[(13, &format!("/bin/sh {root}/cca-udp"))]);
@@ -527,7 +524,7 @@ fn view_and_running(t: &mut Ctx) {
     fsx::write(fx.sb.cca.join("udp/home"), "");
     assert_eq!(fx.udp_view(&[]), view(Some("US-A"), "ok", true, false, None, true));
     fsx::write(fx.sb.cca.join("udp/on"), "");
-    assert!(!sandbox::truthy(&fx.udp_view(&[])["paused"]));
+    assert!(!py::truthy(&fx.udp_view(&[])["paused"]));
     std::fs::remove_file(fx.sb.cca.join("udp/on")).unwrap();
     fx.run_cmd(&["local-set", "udp", ""], &[]);
     assert_eq!(fx.udp_view(&[]), view(None, "off", true, false, None, false));

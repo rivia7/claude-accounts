@@ -6,7 +6,8 @@
 //! - Python 往重定向了的 stdout 上 print 是攒着、退出时才写出去的（没有 flush 的那些）：这里也攒着（print / write_out），
 //!   角色结束时一起写出去；原来 flush 了的地方照样 flush
 //! - Python 里没人接的异常：stderr 上说一句、退出码 1（Fail；原来的 traceback 只留最后那一行的意思）
-//! - 起子进程像 subprocess（close_fds=True）：子进程只拿到 0、1、2（cloexec_inherited），环境照传（钩子、apiKeyHelper 要 cca 的环境）
+//! - 起子进程像 subprocess（close_fds=True）：子进程只拿到 0、1、2（起之前 kit::proc::cloexec_all），环境照传（钩子、apiKeyHelper 要 cca 的环境）
+//! - 空白、拆行、真假、repr 这些 Python 的语义用 kit::py 的那一份（py::strip、splitlines、truthy、py_str、repr_str……）
 //!
 //! regress.sh 用 pgrep -f / pkill -f 找其中几个（fake_oauth、fake_usage、fake_codex_server、fake_agy）：假命令用
 //! exec -a "$CCA_T/fake_oauth" "$CCA_T/cca-test" fake-oauth … 起它们，命令行里就有这个名字。
@@ -27,8 +28,11 @@ mod oauth;
 mod stun;
 mod usage;
 
+pub use kit::crypto::uuid4;
 pub use kit::json::{self, Value};
 pub use kit::obj;
+pub use kit::proc::cloexec_all;
+pub use kit::py::{self, py_repr, py_str, repr_str, splitlines, truthy};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
@@ -430,111 +434,6 @@ pub fn type_name(v: &Value) -> &'static str {
     }
 }
 
-/// Python 的真假
-pub fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Int(n) => *n != 0,
-        Value::Float(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(l) => !l.is_empty(),
-        Value::Obj(o) => !o.is_empty(),
-    }
-}
-
-/// str(v)：'%s' % v 写出来的样子
-pub fn py_str(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        other => py_repr(other),
-    }
-}
-
-/// repr(v)
-pub fn py_repr(v: &Value) -> String {
-    match v {
-        Value::Null => "None".into(),
-        Value::Bool(true) => "True".into(),
-        Value::Bool(false) => "False".into(),
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => json::float_repr(*f),
-        Value::Str(s) => repr_str(s),
-        Value::List(l) => format!("[{}]", l.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Obj(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", repr_str(k), py_repr(v))).collect::<Vec<_>>().join(", "))
-        }
-    }
-}
-
-/// repr(str)：单引号（里面有单引号、没有双引号时用双引号），不可打印的转义
-pub fn repr_str(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::new();
-    out.push(q);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            c if c == q => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || (0x7f..0xa0).contains(&(c as u32)) || c == '\u{ad}' => {
-                out.push_str(&format!("\\x{:02x}", c as u32))
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(q);
-    out
-}
-
-/// str.isspace() 认的空白
-pub fn is_py_space(c: char) -> bool {
-    matches!(c, '\t'..='\r' | '\x1c'..='\x1f' | ' ' | '\u{85}' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}')
-}
-
-/// str.strip()
-pub fn py_strip(s: &str) -> &str {
-    s.trim_matches(is_py_space)
-}
-
-/// str.splitlines()
-pub fn splitlines(s: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut it = s.char_indices().peekable();
-    while let Some((i, c)) = it.next() {
-        if matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
-            out.push(&s[start..i]);
-            let mut end = i + c.len_utf8();
-            if c == '\r' && it.peek().is_some_and(|(_, n)| *n == '\n') {
-                it.next();
-                end += 1;
-            }
-            start = end;
-        }
-    }
-    if start < s.len() {
-        out.push(&s[start..]);
-    }
-    out
-}
-
-/// str(uuid.uuid4())
-pub fn uuid4() -> String {
-    use ring::rand::SecureRandom;
-    let mut b = [0u8; 16];
-    ring::rand::SystemRandom::new().fill(&mut b).expect("系统的随机数用不了");
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
-}
-
 pub fn sleep(secs: f64) {
     std::thread::sleep(Duration::from_secs_f64(secs));
 }
@@ -550,31 +449,7 @@ pub fn local_stamp() -> String {
     }
 }
 
-/// email.utils.formatdate(usegmt=True)：HTTP 回答里的 Date
-fn http_date() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-    let d = kit::plist::date_from_unix(secs);
-    let wd = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][secs.div_euclid(86400).rem_euclid(7) as usize];
-    let mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.month as usize - 1];
-    format!("{wd}, {:02} {mon} {:04} {:02}:{:02}:{:02} GMT", d.day, d.year, d.hour, d.minute, d.second)
-}
-
 // ---- 子进程 ----
-
-/// 像 subprocess 的 close_fds=True：继承来的 3 号以上的描述符（bash 交过来的 3 号之类）标成 exec 时关掉，子进程拿不到
-pub fn cloexec_inherited() {
-    let Ok(dir) = std::fs::read_dir("/dev/fd") else { return };
-    let fds: Vec<i32> = dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok()).collect();
-    for fd in fds.into_iter().filter(|fd| *fd > 2) {
-        // SAFETY: 只改描述符的 FD_CLOEXEC 标记；已经关掉的描述符 fcntl 返回 -1，不管
-        unsafe {
-            let fl = libc::fcntl(fd, libc::F_GETFD);
-            if fl >= 0 {
-                libc::fcntl(fd, libc::F_SETFD, fl | libc::FD_CLOEXEC);
-            }
-        }
-    }
-}
 
 /// subprocess.run 的结果：退出码（被信号杀掉是负的信号值），文本模式读出来的 stdout、stderr
 pub struct Done {
@@ -598,7 +473,7 @@ fn text_mode(b: Vec<u8>) -> R<String> {
 
 /// subprocess.run(argv, stdin=DEVNULL)：stdout、stderr 照用这边的，等它退出（退出码不管）
 pub fn run_wait(argv: &[String]) -> R<i32> {
-    cloexec_inherited();
+    cloexec_all();
     let st = std::process::Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
@@ -611,7 +486,7 @@ pub fn run_wait(argv: &[String]) -> R<i32> {
 /// 超时（秒数和它在 Python 里 str() 的样子）到了杀掉、等它退出，算没人接的异常（TimeoutExpired）
 pub fn run_capture(argv: &[String], input: Option<&[u8]>, timeout: Option<(f64, &str)>) -> R<Done> {
     use std::process::{Command, Stdio};
-    cloexec_inherited();
+    cloexec_all();
     let start = Instant::now();
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..])
@@ -821,7 +696,11 @@ fn reason(code: u16) -> &'static str {
 
 impl Req {
     pub fn send_response(&mut self, code: u16) {
-        let line = format!("HTTP/1.0 {code} {}\r\nServer: BaseHTTP/0.6 cca-test\r\nDate: {}\r\n", reason(code), http_date());
+        let line = format!(
+            "HTTP/1.0 {code} {}\r\nServer: BaseHTTP/0.6 cca-test\r\nDate: {}\r\n",
+            reason(code),
+            kit::httpd::http_date(std::time::SystemTime::now())
+        );
         self.head.extend_from_slice(line.as_bytes());
     }
     pub fn send_header(&mut self, k: &str, v: &str) {
@@ -914,17 +793,6 @@ mod tests {
     }
 
     #[test]
-    fn text_like_python() {
-        assert_eq!(splitlines("a\nb\r\nc\rd\x0be\n"), ["a", "b", "c", "d", "e"]);
-        assert_eq!(splitlines(""), Vec::<&str>::new());
-        assert_eq!(splitlines("\n"), [""]);
-        assert_eq!(py_strip(" \t\x1cx y\u{3000}\n"), "x y");
-        assert_eq!(repr_str("a'b"), "\"a'b\"");
-        assert_eq!(repr_str("a\nb\x01"), "'a\\nb\\x01'");
-        assert_eq!(py_str(&json::parse(r#"{"a": [1, 2.0, null, true, "x"]}"#).unwrap()), "{'a': [1, 2.0, None, True, 'x']}");
-    }
-
-    #[test]
     fn urls_like_urllib() {
         assert_eq!(quote_plus("http://localhost:1/callback a@b"), "http%3A%2F%2Flocalhost%3A1%2Fcallback+a%40b");
         assert_eq!(urlencode(&[("scope", "openid email"), ("x", "~_.-")]), "scope=openid+email&x=~_.-");
@@ -944,13 +812,5 @@ mod tests {
         assert_eq!((s.path.as_str(), s.query.as_str()), ("/callback", "code=1"));
         assert!(urlsplit("http://h:x/").unwrap().port().is_err());
         assert_eq!(urlsplit("http://[::1]:9/").unwrap().port().ok().flatten(), Some(9));
-    }
-
-    #[test]
-    fn uuid_shape() {
-        let u = uuid4();
-        assert_eq!(u.len(), 36);
-        assert_eq!(&u[14..15], "4");
-        assert!(matches!(&u[19..20], "8" | "9" | "a" | "b"));
     }
 }

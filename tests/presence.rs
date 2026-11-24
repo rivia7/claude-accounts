@@ -16,7 +16,7 @@ use kit::harness::{Ctx, Module};
 use kit::http::Request;
 use kit::json::{self, Obj, Style, Value};
 use kit::proc::Cmd;
-use kit::sandbox::truthy;
+use kit::py::truthy;
 use kit::{case, crypto, list, obj, pki, spec};
 use std::collections::BTreeMap;
 use std::fs::{DirBuilder, OpenOptions};

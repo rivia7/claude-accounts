@@ -29,7 +29,8 @@
 //! 不会被 <size …> 从中间插开；Python 里没人接的异常（0 号不是终端、写不出去、exit 后面不是数……）在 stderr 上说一句、
 //! 退出码 1。不一样的只有一处：一句话写到一半被信号打断时接着写完（原来剩下的就丢了）。
 
-use crate::fake::{is_py_space, os_text, py_strip, repr_str};
+use crate::fake::os_text;
+use kit::py::{self, repr_str};
 use std::io::Write;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -184,10 +185,10 @@ fn exit_code(text: &str) -> Option<i32> {
 fn command(line: &[u8], pipe: libc::c_int) {
     // sys.stdin 是照 UTF-8 读的：不是 UTF-8 的字节留在字符串里（surrogateescape），哪条命令都对不上，原样说回去时才出错
     let text = String::from_utf8_lossy(line);
-    let cmd = py_strip(&text);
+    let cmd = py::strip(&text);
     if cmd.starts_with("exit ") {
         // cmd.split()[1]
-        let word = cmd.split(is_py_space).filter(|w| !w.is_empty()).nth(1).unwrap_or_default();
+        let word = py::split(cmd).nth(1).unwrap_or_default();
         match exit_code(word) {
             Some(code) => std::process::exit(code),
             None => die(&format!("ValueError: invalid literal for int() with base 10: {}", repr_str(word))),

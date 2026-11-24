@@ -54,7 +54,6 @@ fn sub_named(name: &str) -> Sub {
         "val" => Sub::Val,
         "edit" => Sub::Edit,
         "run" => Sub::Run,
-        "syntax" => Sub::Syntax,
         other => panic!("没有 {other} 这个子命令"),
     }
 }
@@ -932,14 +931,13 @@ fn trap_only_when_exit_is_2() {
     let tmp = Tmp::new("trap");
     let trap = tmp.0.join("trap.log");
     // 退出码 0、1 是 Python 那边的结果（Python 层面的异常也是）：什么都不记，文件都不建
-    let quiet: [&[&str]; 8] = [
+    let quiet: [&[&str]; 7] = [
         &["check", "1 == 1"],
         &["check", "1 == 2"],
         &["val", "1 / 0"],
         &["val", "{}['k']"],
         &["run", "sys.exit(1)"],
         &["run", "assert False"],
-        &["syntax", "1 + 1"],
         &["evq", "/nonexistent/ev.jsonl", "True"],
     ];
     for cmd in quiet {
@@ -958,7 +956,7 @@ fn trap_gets_one_line_per_exit_2() {
     let tmp = Tmp::new("trap");
     let trap = tmp.0.join("trap.log");
     // 命令、记下的子命令、记下的程序（用法不对、还没读到程序的，记的是整条命令的参数）
-    let cases: [(&[&str], &str, &str); 11] = [
+    let cases: [(&[&str], &str, &str); 10] = [
         (&["val", "nope + 1"], "val", "nope + 1"),
         (&["check", "1 +"], "check", "1 +"),
         (&["run", "import os"], "run", "import os"),
@@ -967,7 +965,6 @@ fn trap_gets_one_line_per_exit_2() {
         (&["jok", "f\"x\"", "/nonexistent"], "jok", "f\"x\""),
         (&["evq", "/nonexistent/ev.jsonl", "1 +"], "evq", "1 +"),
         (&["edit", "j=/nonexistent/x.json", "def f(): pass"], "edit", "def f(): pass"),
-        (&["syntax", "1 + 1", "nope(", "also bad ("], "syntax", "nope("),
         (&["val"], "val", ""),
         (&["check", "--bogus", "1"], "check", "--bogus 1"),
     ];
@@ -1035,14 +1032,6 @@ fn trap_lines_do_not_interleave() {
     seen.sort();
     seen.dedup();
     assert_eq!(seen.len(), 8 * 40);
-}
-
-#[test]
-fn trap_comes_from_the_environment() {
-    // CCA_TEST_TRAP 没设、设成空的：不记
-    assert_eq!(cli::trap_of(None), None);
-    assert_eq!(cli::trap_of(Some("".into())), None);
-    assert_eq!(cli::trap_of(Some("/x/trap.log".into())), Some(PathBuf::from("/x/trap.log")));
 }
 
 // ---- ③ stdout 和 stderr 的先后 ----

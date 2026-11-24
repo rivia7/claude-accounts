@@ -13,7 +13,6 @@
 //! 和原来的 Python 逐字节比。
 
 use kit::mailfake::{self, Ar, Eml, Pinned, Random, Source};
-use std::io::Write;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -26,16 +25,9 @@ const HELP: &str =
 /// eml 认的选项（都要一个值），先后和原来 add_argument 的一样
 const EML_OPTS: &[&str] = &["--to", "--link", "--subject", "--sign", "--ar", "--from", "--dkim-d", "--reply-to", "--at", "--msgid"];
 
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
+/// 用法不对：说在 stderr（后面接着用法），在 $CCA_TEST_TRAP 里记一行，退出码 2
 fn usage(args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test mail：{why}（用法见 cca-test mail -h）");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test mail {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
+    crate::trap::usage_with("mail", args, why, "（用法见 cca-test mail -h）")
 }
 
 /// 解析的结果

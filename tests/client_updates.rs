@@ -7,7 +7,8 @@
 
 use kit::harness::{Ctx, Module};
 use kit::proc::Cmd;
-use kit::sandbox::{ran, splitlines};
+use kit::py::splitlines;
+use kit::sandbox::ran;
 use kit::{case, cca_src, fsx};
 
 pub const MODULE: Module = Module {

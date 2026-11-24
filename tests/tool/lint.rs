@@ -31,8 +31,9 @@
 //! Rust 的 regex 没有“往后看一眼”：dollar 原来的 \$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f]) 在这里是手写的一小段（dollar_hit）；
 //! prompts 的 \b 也是手写的（Python 和 regex 对“哪些字符算词的一部分”说法不一样）。
 
-use crate::fake::{self, is_py_space, repr_str};
+use crate::fake;
 use crate::fx::{arg, dispatch, raise, read_text, unsupported, Sub, R};
+use kit::py::{self, repr_str};
 
 pub const CMDS: &[(&str, crate::Run)] = &[("lint", run)];
 
@@ -117,7 +118,7 @@ fn prompts(a: &[String], out: &mut String) -> R<i32> {
         }
         if line.contains("<&3")
             && !line.contains(": <&3")
-            && !line.trim_start_matches(is_py_space).starts_with('#')
+            && !line.trim_start_matches(py::isspace).starts_with('#')
             && !ASKERS.contains(&func)
         {
             bad.push(func);

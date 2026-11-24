@@ -356,19 +356,6 @@ fn executable(path: &str) -> bool {
     unsafe { libc::access(c.as_ptr(), libc::X_OK) == 0 }
 }
 
-/// Python 的真假：null、false、0、空串、空的数组和对象都算假
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Int(n)) => *n != 0,
-        Some(Value::Float(f)) => *f != 0.0,
-        Some(Value::Str(s)) => !s.is_empty(),
-        Some(Value::List(l)) => !l.is_empty(),
-        Some(Value::Obj(o)) => !o.is_empty(),
-    }
-}
-
 /// 候选里这一项是不是这个字符串（c.get(键) == 值）
 fn is(candidate: &Value, key: &str, value: &str) -> bool {
     candidate.get(key).and_then(Value::as_str) == Some(value)
@@ -404,7 +391,7 @@ fn prepare_removes_url_exception_and_real_chrome_blocks_udp(t: &mut Ctx) {
             let (baseline_packets, baseline_candidates) = fx.ice(&profile);
             assert!(baseline_packets > 0, "baseline 必须实际收到 STUN UDP；否则测试不能证明防护有效");
             assert!(
-                baseline_candidates.iter().any(|c| is(c, "type", "srflx") && truthy(c.get("testAddress"))),
+                baseline_candidates.iter().any(|c| is(c, "type", "srflx") && c.get("testAddress").is_some_and(kit::py::truthy)),
                 "baseline 未接收到受控 STUN 响应"
             );
 

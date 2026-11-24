@@ -5,7 +5,6 @@
 //! 不是给人用的；见 kit::hubbox 开头）。
 
 use kit::hubbox::{self, Box, Opts};
-use std::io::Write;
 use std::path::Path;
 
 pub const CMDS: &[(&str, crate::Run)] =
@@ -13,16 +12,9 @@ pub const CMDS: &[(&str, crate::Run)] =
 
 const USAGE: &str = "用法：cca-test hub-box 目录 [--docker] [--no-systemd] [--ip 地址] [--any-ip]";
 
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
+/// 用法不对：说在 stderr（后面接着用法），在 $CCA_TEST_TRAP 里记一行，退出码 2
 fn usage(args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test hub-box：{why}\n{USAGE}");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test hub-box {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
+    crate::trap::usage_with("hub-box", args, why, &format!("\n{USAGE}"))
 }
 
 /// 假服务器里的命令要知道 cca-test 在哪（起服务要换会话，经 cca-test exec；证书助手也是它）：就是自己

@@ -16,6 +16,7 @@ use kit::harness::{self, Ctx, Module};
 use kit::json::{self, Style, Value};
 use kit::mailfake::{self, Ar, Eml, Proxy, Server, FOLDERS};
 use kit::proc::{Child, Cmd, Stdio};
+use kit::py::splitlines;
 use kit::{list, obj};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
@@ -623,28 +624,6 @@ fn read_lossy(path: &Path) -> String {
 #[track_caller]
 fn parse(text: &str) -> Value {
     json::parse(text).unwrap_or_else(|e| panic!("不是 JSON（{e}）：{text:?}"))
-}
-
-/// str.splitlines()：\n、\r、\r\n、\v、\f、\x1c、\x1d、\x1e、U+0085、U+2028、U+2029 都算换行；最后一行后面的换行不另算一行
-fn splitlines(s: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut it = s.char_indices().peekable();
-    while let Some((i, c)) = it.next() {
-        if !matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
-            continue;
-        }
-        out.push(&s[start..i]);
-        start = i + c.len_utf8();
-        if c == '\r' && it.peek().is_some_and(|(_, next)| *next == '\n') {
-            it.next();
-            start += 1;
-        }
-    }
-    if start < s.len() {
-        out.push(&s[start..]);
-    }
-    out
 }
 
 /// shutil.which(name, path=…)：PATH 里头一个能执行、不是目录的

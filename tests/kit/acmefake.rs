@@ -335,14 +335,6 @@ fn thumbprint(jwk: &Value) -> String {
     crypto::b64url_nopad(&crypto::sha256(text.as_bytes()))
 }
 
-/// 去掉两头的空白（Python 的 bytes.strip()：空格、\t、\n、\r、\x0b、\x0c）
-fn py_strip(b: &[u8]) -> &[u8] {
-    let ws = |c: &u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
-    let start = b.iter().position(|c| !ws(c)).unwrap_or(b.len());
-    let end = b.iter().rposition(|c| !ws(c)).map_or(start, |i| i + 1);
-    &b[start..end]
-}
-
 /// 核对过的一个 JWS
 struct Signed {
     /// 用 kid 的：那个账户的公钥摘要；用 jwk 的是 None
@@ -658,7 +650,7 @@ impl Ca {
         let want = format!("{token}.{thumb}");
         let (ok, why) = match fetch(self.knobs.http_port, &value, &format!("/.well-known/acme-challenge/{token}")) {
             Ok((status, got)) => {
-                let ok = status == 200 && py_strip(&got) == want.as_bytes();
+                let ok = status == 200 && crate::py::strip_bytes(&got) == want.as_bytes();
                 (ok, (!ok).then(|| format!("取到的内容不对（状态码 {status}）")))
             }
             Err(kind) => (false, Some(format!("连不上 80 端口（{kind}）"))),
@@ -897,10 +889,6 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
-    fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
-    }
-
     /// 只回一次的应答端口：读完请求的头，原样写回 reply，然后断开（chunked、什么都不回这几种 kit::httpd 不会写）
     fn once(reply: &'static [u8]) -> u16 {
         let l = TcpListener::bind("127.0.0.1:0").expect("听一个端口");
@@ -926,21 +914,20 @@ mod tests {
         let mut sig = vec![0u8; 32];
         sig.push(0x80);
         sig.extend([1u8; 31]);
-        assert_eq!(hex(&der_sig(&sig)), "30260201000221008001010101010101010101010101010101010101010101010101010101010101");
+        assert_eq!(crypto::hex(&der_sig(&sig)), "30260201000221008001010101010101010101010101010101010101010101010101010101010101");
         let mut sig = vec![0u8, 0, 0x7f];
         sig.extend([2u8; 29]);
         sig.extend([0u8, 0xff]);
         sig.extend([3u8; 30]);
         assert_eq!(
-            hex(&der_sig(&sig)),
+            crypto::hex(&der_sig(&sig)),
             "3042021e7f0202020202020202020202020202020202020202020202020202020202022000ff030303030303030303030303030303030303030303030303030303030303"
         );
     }
 
-    /// 公钥的摘要（RFC 7638）只看 crv、kty、x、y；期望值是 Python 的 json.dumps(sort_keys=True, separators=(',', ':')) 算的。
-    /// 两头去空白照 Python 的 bytes.strip()
+    /// 公钥的摘要（RFC 7638）只看 crv、kty、x、y；期望值是 Python 的 json.dumps(sort_keys=True, separators=(',', ':')) 算的
     #[test]
-    fn thumbprint_and_strip_like_python() {
+    fn thumbprint_like_python() {
         let jwk = crate::obj! {
             "kty" => "EC",
             "crv" => "P-256",
@@ -949,9 +936,6 @@ mod tests {
             "extra" => 1,
         };
         assert_eq!(thumbprint(&jwk), "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U");
-        assert_eq!(py_strip(b" \t\x0b\x0cabc d\r\n"), b"abc d");
-        assert_eq!(py_strip(b" \t\r\n"), b"");
-        assert_eq!(py_strip(b"x"), b"x");
     }
 
     /// http-01 的那一下：Host 是要验证的地址、内容最多要 4096 个字节、chunked 也读得懂；连不上、对方什么都没回就断了、

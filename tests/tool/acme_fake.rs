@@ -8,23 +8,15 @@
 //! 起不来（证书读不了、openssl 失败……）是 1。
 
 use kit::acmefake::{self, FakeCa, Knobs};
-use std::io::Write;
 use std::path::Path;
 
 pub const CMDS: &[(&str, crate::Run)] = &[("acme-fake", run)];
 
 const USAGE: &str = "用法：cca-test acme-fake 目录 应答端口 [--bad-nonce N] [--no-shortlived]";
 
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
+/// 用法不对：说在 stderr（后面接着用法），在 $CCA_TEST_TRAP 里记一行，退出码 2
 fn usage(args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test acme-fake：{why}\n{USAGE}");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test acme-fake {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
+    crate::trap::usage_with("acme-fake", args, why, &format!("\n{USAGE}"))
 }
 
 extern "C" fn on_term(_: libc::c_int) {

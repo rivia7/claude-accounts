@@ -70,10 +70,13 @@ unit_stop() {   # 退出时还没跑完（被打断、前面就退出了）：�
 	wait "$UNIT_PID" 2>/dev/null   # 收掉它：不然 bash 退出时自己说一句 Terminated
 	UNIT_PID=""
 }
-suite_ok() {   # suite_ok 模块：后台那一趟里 suite 的这个模块（tests/<模块>.rs）过了没有；out 是它的记录的最后几行（DEBUG_OUT 时附在失败的用例后面）
+# suite_ok 模块：后台那一趟里 suite 的这个模块（tests/<模块>.rs）过了没有；out 是它的记录的最后几行（DEBUG_OUT 时附在失败的用例后面）。
+# 和 tests/linux.sh 的 suite_run 一个标准：结果文件里它那一行（名字 pass|fail 通过 失败 跳过 秒）是 pass、通过的用例不止 0 个、没有失败的——
+# 用例全跳过了的模块 suite 自己记的是 pass，这里不算过（一个用例都没跑成，等于没测）
+suite_ok() {
 	SUITE_SEEN="$SUITE_SEEN $1"
 	out=$(tail -n 40 "$UNITD/logs/$1.log" 2>/dev/null || tail -n 40 "$UNITD/suite.log" 2>/dev/null)
-	[ "$(awk -F'\t' -v m="$1" '$1 == m { print $2 }' "$UNITD/results.tsv" 2>/dev/null)" = pass ]
+	[ "$(awk -F'\t' -v m="$1" '$1 == m { if ($2 == "pass" && $3 + 0 > 0 && $4 + 0 == 0) print "ok"; else print "no" }' "$UNITD/results.tsv" 2>/dev/null)" = ok ]
 }
 cargo_ok() { out=$(tail -n 40 "$UNITD/$1.log" 2>/dev/null); [ "$(cat "$UNITD/$1.rc" 2>/dev/null)" = 0 ]; }   # cargo_ok 哪一样：后台那一路里的这条 cargo 命令过了没有
 unit_wanted && unit_start

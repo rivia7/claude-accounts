@@ -9,7 +9,6 @@
 //! 被测的程序看到的环境只有 [`Sandbox::set_env`] 设过的那几个（一开始只有 HOME），不带开发者 shell 里的任何东西。
 
 use crate::harness::{self, Ctx};
-use crate::json::Value;
 use crate::proc::Cmd;
 use crate::{crypto, fsx};
 use std::collections::BTreeMap;
@@ -141,19 +140,6 @@ pub fn ident(email: &str) -> String {
 /// 账号表的键里的邮箱：`别名(邮箱)` 的括号里那一段，没有别名就是它自己（`key.split('(')[-1].rstrip(')')`）
 pub fn email_of(key: &str) -> &str {
     key.rsplit('(').next().unwrap_or(key).trim_end_matches(')')
-}
-
-/// Python 里这个值算不算真（`assertTrue(x)`、`if x`）：null、false、0、0.0、空字符串、空数组、空对象是假，别的都是真
-pub fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Int(n) => *n != 0,
-        Value::Float(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(l) => !l.is_empty(),
-        Value::Obj(o) => !o.is_empty(),
-    }
 }
 
 /// 两个路径是不是同一个文件（`os.path.samefile`：跟着链接走，比设备号和 inode）；有一个不在就 panic
@@ -291,27 +277,6 @@ pub fn shell_vars(text: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// 拆成一行行（`str.splitlines()`：\n、\r、\r\n 和 Python 认的别的几个分行符都算，末尾的分行符后面不多出一个空行）
-pub fn splitlines(text: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
-            lines.push(&text[start..i]);
-            start = i + c.len_utf8();
-            if c == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') {
-                chars.next();
-                start += 1;
-            }
-        }
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,26 +289,6 @@ mod tests {
         assert_eq!(ident("@@@"), "acct-ffab3b");
         assert_eq!(email_of("工作(alice@example.com)"), "alice@example.com");
         assert_eq!(email_of("bob@example.com"), "bob@example.com");
-    }
-
-    #[test]
-    fn python_truthiness() {
-        for (text, want) in [
-            ("null", false),
-            ("false", false),
-            ("true", true),
-            ("0", false),
-            ("0.0", false),
-            ("2", true),
-            ("\"\"", false),
-            ("\"x\"", true),
-            ("[]", false),
-            ("[0]", true),
-            ("{}", false),
-            ("{\"a\":0}", true),
-        ] {
-            assert_eq!(truthy(&crate::json::parse(text).unwrap()), want, "{text}");
-        }
     }
 
     #[test]
@@ -362,14 +307,6 @@ mod tests {
         assert_eq!(shell_split("X='it'\\''s'"), ["X=it's"]);
         let vars = shell_vars("UDP_NODE=''\nUDP_STATE=off\nUDP_ROOT=/a/b=c\n");
         assert_eq!((vars["UDP_NODE"].as_str(), vars["UDP_STATE"].as_str(), vars["UDP_ROOT"].as_str()), ("", "off", "/a/b=c"));
-    }
-
-    #[test]
-    fn splitlines_like_python() {
-        assert_eq!(splitlines(""), Vec::<&str>::new());
-        assert_eq!(splitlines("a\nb\n"), ["a", "b"]);
-        assert_eq!(splitlines("a\r\nb\rc\x0cd\u{2028}e"), ["a", "b", "c", "d", "e"]);
-        assert_eq!(splitlines("\n\nx"), ["", "", "x"]);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Python 的 repr()、str() 和 % 格式化：写出来要和 Python 一个字不差。
+//! Python 的 repr()、str() 和 % 格式化：写出来要和 Python 一个字不差。字符串的 repr、哪些算空白用 kit::py 的那一份。
 
 use std::fmt::Write as _;
 use std::rc::Rc;
@@ -49,7 +49,7 @@ fn write_repr(out: &mut String, v: &V, seen: &mut Vec<usize>) -> R<()> {
             let _ = write!(out, "{n}");
         }
         V::Float(f) => out.push_str(&float_repr(*f)),
-        V::Str(s) => repr_str(out, s),
+        V::Str(s) => kit::py::push_repr_str(out, s),
         V::List(l) => {
             let id = Rc::as_ptr(l) as usize;
             if seen.contains(&id) {
@@ -163,64 +163,10 @@ fn write_repr(out: &mut String, v: &V, seen: &mut Vec<usize>) -> R<()> {
     Ok(())
 }
 
-/// repr(字符串)：有单引号、没有双引号时用双引号括，别的都用单引号
-pub fn repr_str(out: &mut String, s: &str) {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    out.push(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            ' '..='~' => out.push(c),
-            c if printable(c) => out.push(c),
-            c => {
-                let n = c as u32;
-                let _ = if n < 0x100 {
-                    write!(out, "\\x{n:02x}")
-                } else if n < 0x10000 {
-                    write!(out, "\\u{n:04x}")
-                } else {
-                    write!(out, "\\U{n:08x}")
-                };
-            }
-        }
-    }
-    out.push(quote);
-}
-
 /// 一个字符属于这类 Unicode 字符吗（表用到才编）
 fn in_class(cell: &'static OnceLock<regex::Regex>, pattern: &'static str, c: char) -> bool {
     let re = cell.get_or_init(|| regex::Regex::new(pattern).expect("写死的正则"));
     re.is_match(c.encode_utf8(&mut [0; 4]))
-}
-
-/// str.isprintable 那个意思：Unicode 的 Other（控制符、格式符、没分配的……）和 Separator 两大类不可打印（空格除外）
-fn printable(c: char) -> bool {
-    let n = c as u32;
-    if n < 0x7f {
-        return n >= 0x20;
-    }
-    // 常见的几段直接认，不动用 Unicode 的表
-    let known = matches!(n,
-        0xa1..=0xac | 0xae..=0x24f | 0x391..=0x3a1 | 0x3a3..=0x3c9 | 0x410..=0x44f | 0x2010..=0x2027 | 0x2030..=0x205e
-        | 0x2190..=0x22ff | 0x2500..=0x257f | 0x25a0..=0x26ff | 0x3001..=0x303f | 0x3041..=0x3096 | 0x30a0..=0x30ff
-        | 0x4e00..=0x9fff | 0xac00..=0xd7a3 | 0xff01..=0xff5e);
-    if known {
-        return true;
-    }
-    static OTHER: OnceLock<regex::Regex> = OnceLock::new();
-    !in_class(&OTHER, r"^[\p{C}\p{Z}]$", c)
-}
-
-/// str.isspace 认的空白：Unicode 的空白，加上 Python 另算的四个分隔控制符
-pub fn py_space(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
 /// 字母（Unicode 的 L 大类：str.isalpha）

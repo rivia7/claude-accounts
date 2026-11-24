@@ -30,7 +30,7 @@ use crate::harness::{self, Ctx};
 use crate::json::{self, Obj, Style, Value};
 use crate::proc::{Child, Cmd, Stdio};
 use crate::sandbox;
-use crate::{crypto, http, obj, pki, server, spec, tls};
+use crate::{crypto, http, obj, pki, py, server, spec, tls};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
@@ -396,11 +396,6 @@ impl Server {
     /// 原来的 `FreshServer(d, team_root=…)`（每个用例重起一次的服务器）：ttl 60 秒、闲置 600 秒，端口随便挑
     pub fn fresh(d: &Path, team_root: &str) -> Server {
         Server::start_with(d, team_root, &ServerOpts::fresh())
-    }
-
-    /// 原来的 `FreshServer(d, port=…, team_root=…)`：监听给的端口
-    pub fn fresh_on(d: &Path, team_root: &str, port: u16) -> Server {
-        Server::start_with(d, team_root, &ServerOpts::fresh().port(port))
     }
 
     /// 照 opts 起。命令行和原来一样：`--listen 127.0.0.1:端口 --port-file d/port`，证书（或者 `--behind-proxy`），
@@ -943,7 +938,7 @@ impl Device {
         let waiting = waiting_kicks(&self.env["CCA_SELF"]).unwrap_or_else(|e| panic!("进程表看不了：{e}"));
         // 先看进程表、再读文件：这中间记完退出了的在文件里；两边都有的（记了、还没退出）按进程号只算一次
         let log = fsx::try_read_text(self.home.join("kicks.log")).unwrap_or_default();
-        let done: Vec<(&str, &str)> = sandbox::splitlines(&log).into_iter().map(|l| l.split_once(' ').unwrap_or((l, ""))).collect();
+        let done: Vec<(&str, &str)> = py::splitlines(&log).into_iter().map(|l| l.split_once(' ').unwrap_or((l, ""))).collect();
         let mut out: Vec<String> = done.iter().map(|(_, args)| args.to_string()).collect();
         out.extend(waiting.iter().filter(|(pid, _)| !done.iter().any(|(p, _)| p == pid)).map(|(_, args)| args.clone()));
         out
@@ -1247,7 +1242,7 @@ pub fn agent(t: &mut Ctx, dev: &Device) -> Agent {
 
 /// 上报进程看了几次进程表（每转一圈看一次）
 pub fn rounds(dev: &Device) -> usize {
-    fsx::try_read_text(dev.home.join("ps.log")).map_or(0, |log| sandbox::splitlines(&log).len())
+    fsx::try_read_text(dev.home.join("ps.log")).map_or(0, |log| py::splitlines(&log).len())
 }
 
 /// 等这几台设备的上报进程各自再转 n 圈（原来 n 默认是 3）

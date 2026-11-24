@@ -15,7 +15,7 @@ use crate::crypto::{
 use crate::fsx::TempDir;
 use crate::json::{self, Style, Value};
 use crate::proc::{Cmd, Stdio};
-use crate::{http, obj, tls};
+use crate::{http, obj, py, tls};
 use std::io;
 use std::path::Path;
 use std::time::Duration;
@@ -69,26 +69,16 @@ fn loads(plain: &[u8]) -> Value {
     json::parse_bytes(plain).unwrap_or_else(|e| panic!("认证过的明文不是 JSON：{e}"))
 }
 
-/// Python 的 `str.split()` 认的空白：Unicode 的空白，加上 U+001C 到 U+001F
-fn py_space(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
-}
-
-/// `text.split()`：照空白切开，空的不要
-fn py_split(text: &str) -> Vec<&str> {
-    text.split(py_space).filter(|part| !part.is_empty()).collect()
-}
-
 /// 公钥那一行（`ssh-ed25519 AAAA… 备注`）里 base64 的那一段解出来的字节
 fn pub_blob(line: &str) -> Vec<u8> {
-    let parts = py_split(line);
+    let parts: Vec<&str> = py::split(line).collect();
     let Some(body) = parts.get(1) else { panic!("不是公钥的那一行（要“类型 base64 [备注]”）：{line:?}") };
     unb64(body)
 }
 
 /// 公钥那一行（`ssh-ed25519 AAAA… 备注`）的前两段，中间一个空格：加入 Team 时交的、allowed_signers 里写的都是这个样子
 pub fn pub_line(line: &str) -> String {
-    py_split(line).into_iter().take(2).collect::<Vec<_>>().join(" ")
+    py::split(line).take(2).collect::<Vec<_>>().join(" ")
 }
 
 /// HMAC-SHA256
@@ -547,7 +537,7 @@ pub fn invite_encode(
     exp: Option<&Value>,
     device: Option<&str>,
 ) -> String {
-    let parts = py_split(root_pub);
+    let parts: Vec<&str> = py::split(root_pub).collect();
     let Some(root) = parts.get(1) else { panic!("不是公钥的那一行（要“类型 base64 [备注]”）：{root_pub:?}") };
     let mut doc = obj! { "u" => url, "p" => pins.to_vec(), "r" => *root, "k" => secret, "n" => name };
     let fields = doc.as_obj_mut().expect("obj! 拼的是对象");
@@ -563,7 +553,7 @@ pub fn invite_encode(
 
 /// 读邀请链接（中间的空白不算）：`{"u", "p", "r", "k", "n"[, "e"][, "d"]}`；不对是 Err（原来的 ValueError）
 pub fn invite_decode(link: &str) -> Result<Value, String> {
-    let s: String = link.chars().filter(|c| !py_space(*c)).collect();
+    let s: String = link.chars().filter(|c| !py::isspace(*c)).collect();
     let (head, check) = s.rsplit_once('.').unwrap_or(("", &s));
     if !head.starts_with(TEAM_LINK) || &sha256_hex(head.as_bytes())[..4] != check {
         return Err("不是邀请链接，或者抄错了".to_string());

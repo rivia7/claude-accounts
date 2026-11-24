@@ -51,6 +51,7 @@
 
 use crate::json;
 use crate::proc::{Cmd, Output, Session, Stdio};
+use crate::py;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
@@ -460,40 +461,9 @@ fn newlines(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// Python 的 str.isspace()：比 Rust 的多 \x1c-\x1f 这四个
-fn is_py_space(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
-}
-
-/// Python 的 str.split()：按连着的空白分开，头尾的空白不算
-fn py_split(s: &str) -> impl Iterator<Item = &str> {
-    s.split(is_py_space).filter(|t| !t.is_empty())
-}
-
-/// Python 的 str.splitlines()：\n、\r、\r\n 和另外几个分行的字符都算，最后一行后面的换行不另算一行
-fn splitlines(s: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut chars = s.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if matches!(c, '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}') {
-            out.push(&s[start..i]);
-            start = i + c.len_utf8();
-            if c == '\r' && chars.peek().is_some_and(|&(_, n)| n == '\n') {
-                chars.next();
-                start += 1;
-            }
-        }
-    }
-    if start < s.len() {
-        out.push(&s[start..]);
-    }
-    out
-}
-
 /// unit、.env 里 `名字=值` 的那几行（# 开头的、没有 = 的不算；同一个名字写了几次，算最后一次的）。原来的 env_file
 pub fn env_file(text: &str) -> BTreeMap<String, String> {
-    splitlines(text)
+    py::splitlines(text)
         .into_iter()
         .filter(|l| !l.starts_with('#'))
         .filter_map(|l| l.split_once('='))
@@ -509,30 +479,8 @@ fn put(map: &mut Vec<(String, String)>, key: &str, value: &str) {
     }
 }
 
-/// 字符串的 Python repr（出错的说明里用）
-fn py_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(q);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str(r"\\"),
-            '\n' => out.push_str(r"\n"),
-            '\r' => out.push_str(r"\r"),
-            '\t' => out.push_str(r"\t"),
-            c if c == q => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!(r"\x{:02x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push(q);
-    out
-}
-
 fn py_list(a: &[String]) -> String {
-    format!("[{}]", a.iter().map(|s| py_repr(s)).collect::<Vec<_>>().join(", "))
+    format!("[{}]", a.iter().map(|s| py::repr_str(s)).collect::<Vec<_>>().join(", "))
 }
 
 fn pid_file(boxd: &Path, svc: &str) -> PathBuf {
@@ -544,7 +492,7 @@ fn pid_file(boxd: &Path, svc: &str) -> PathBuf {
 }
 
 fn read_pid(f: &Path) -> Option<i32> {
-    fs::read_to_string(f).ok()?.trim_matches(is_py_space).parse().ok()
+    py::strip(&fs::read_to_string(f).ok()?).parse().ok()
 }
 
 /// 信号 0：这个进程还在（和 os.kill(pid, 0) 一样）
@@ -693,7 +641,7 @@ fn systemctl_run(a: &[String]) -> Result<i32, Fail> {
             let kv = env_file(&read_text(Path::new(&format!("{root}/etc/systemd/system/{svc}.service")))?);
             let key = |k: &str| kv.get(k).cloned().ok_or_else(|| format!("KeyError: '{k}'（{svc}.service 里没有）"));
             let file_env = env_file(&read_text(Path::new(&format!("{root}{}", key("EnvironmentFile")?)))?);
-            let mut argv: Vec<String> = py_split(&key("ExecStart")?).map(str::to_string).collect();
+            let mut argv: Vec<String> = py::split(&key("ExecStart")?).map(str::to_string).collect();
             // `/` 开头的都是服务器上的路径，连同第一个（要运行的程序：安装脚本放上去的那一份）：接到 root/ 后面
             for x in argv.iter_mut() {
                 if x.starts_with('/') {
@@ -734,7 +682,7 @@ fn braces(x: &str, var: &dyn Fn(&str) -> Option<String>) -> Result<String, Fail>
 /// server/hub-install.sh 写出来的样子是约定，改了两边一起看）
 pub fn services(y: &str) -> Vec<String> {
     let mut out: Vec<Vec<&str>> = Vec::new();
-    for line in splitlines(y) {
+    for line in py::splitlines(y) {
         if re!(r"^  [\w.-]+:$").is_match(line) {
             out.push(Vec::new());
         } else if let Some(block) = out.last_mut() {
@@ -860,7 +808,7 @@ fn docker_run(args: &[String]) -> Result<i32, Fail> {
                     up_projects(&boxd).join("、")
                 ));
             }
-            let rest: String = py_split(&read_text(&images)?).filter(|i| i != name).map(|i| format!("{i}\n")).collect();
+            let rest: String = py::split(&read_text(&images)?).filter(|i| i != name).map(|i| format!("{i}\n")).collect();
             fs::write(&images, rest).map_err(|e| format!("写不了 {}：{e}", images.display()))?;
             println!("Untagged: {name}");
         }
@@ -893,7 +841,7 @@ fn docker_run(args: &[String]) -> Result<i32, Fail> {
 
 /// 这个镜像在本机（docker import 建过）
 fn has_image(images: &Path, name: &str) -> bool {
-    fs::read(images).is_ok_and(|b| py_split(&String::from_utf8_lossy(&b)).any(|i| i == name))
+    fs::read(images).is_ok_and(|b| py::split(&String::from_utf8_lossy(&b)).any(|i| i == name))
 }
 
 /// 起着的 compose 项目（目录下的 compose.<项目名>.up）
@@ -917,7 +865,7 @@ fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), F
     let y = read_text(Path::new("compose.yaml"))?;
     let env = env_file(&read_text(Path::new(".env"))?);
     let up = boxd.join(format!("compose.{proj}.up"));
-    let before: Vec<String> = if up.exists() { py_split(&read_text(&up)?).map(str::to_string).collect() } else { Vec::new() };
+    let before: Vec<String> = if up.exists() { py::split(&read_text(&up)?).map(str::to_string).collect() } else { Vec::new() };
     let mut names = Vec::new();
     for block in services(&y) {
         let svc = container_name(&block)?;
@@ -1027,7 +975,7 @@ fn acme_run(a: &[String]) -> Result<i32, Fail> {
     let boxd = box_dir()?;
     append(&boxd.join("acme.argv"), &format!("{}\n", a.join(" ")))?;
     let opt = |k: &str| -> Result<PathBuf, Fail> {
-        let i = a.iter().position(|x| x == k).ok_or_else(|| format!("ValueError: {} is not in list", py_repr(k)))?;
+        let i = a.iter().position(|x| x == k).ok_or_else(|| format!("ValueError: {} is not in list", py::repr_str(k)))?;
         a.get(i + 1).map(PathBuf::from).ok_or_else(|| "IndexError: list index out of range".to_string())
     };
     if !opt("--account")?.is_dir() {
@@ -1052,7 +1000,7 @@ fn acme_run(a: &[String]) -> Result<i32, Fail> {
                 continue; // 安装脚本正写到一半的
             }
             let ident = fs::read_to_string(teams.join(&t)).map_err(|e| format!("读不了 {}：{e}", teams.join(&t).display()))?;
-            let ident = ident.trim_matches(is_py_space);
+            let ident = py::strip(&ident);
             let (s, d) = (store.join(ident.replace(':', "_")), out.join(&t));
             fs::create_dir_all(&s).map_err(|e| format!("建不了 {}：{e}", s.display()))?;
             if !s.join("fullchain.pem").exists() {
@@ -1152,14 +1100,6 @@ mod tests {
     fn env_file_like_dict_of_pairs() {
         let e = env_file("# c=1\nA=1\nB==2\nnoeq\nA=3\r\n C= x \n");
         assert_eq!(e, env(&[("A", "3"), ("B", "=2"), (" C", " x ")]));
-    }
-
-    #[test]
-    fn splitlines_like_python() {
-        assert_eq!(splitlines("a\nb\r\nc\rd\u{0b}e\u{2028}f\n"), vec!["a", "b", "c", "d", "e", "f"]);
-        assert_eq!(splitlines("\n\nx"), vec!["", "", "x"]);
-        assert!(splitlines("").is_empty());
-        assert_eq!(py_split(" a\t b\u{1c}c  ").collect::<Vec<_>>(), vec!["a", "b", "c"]);
     }
 
     #[test]

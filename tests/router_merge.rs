@@ -6,7 +6,7 @@
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Style, Value};
 use kit::sandbox::{self, ran, Sandbox};
-use kit::{case, fsx, list, obj};
+use kit::{case, fsx, list, obj, py};
 use std::time::Duration;
 
 pub const MODULE: Module = Module {
@@ -164,7 +164,7 @@ fn single_device_none(t: &mut Ctx) {
     assert_eq!(fx.sent, want);
     let c = fx.cfg();
     assert_eq!(owners, obj! { "1" => &c["device_id"], "2" => &c["device_id"] });
-    assert!(sandbox::truthy(&c["device_id"]), "{c}");
+    assert!(py::truthy(&c["device_id"]), "{c}");
 }
 
 /// 回读到的账号都是我这台的（owners 全是我）：仍然逐字节一样

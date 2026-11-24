@@ -2,11 +2,13 @@
 
 use std::rc::Rc;
 
+use kit::py;
+
 use super::ast::{BinOp, CmpOp};
 use super::interp::{Interp, Kw};
 use super::iter::{reversed, set_items};
 use super::ops::{self, as_int, num, truthy, Num};
-use super::pyfmt::{self, py_space, SET_ORDER};
+use super::pyfmt::{self, SET_ORDER};
 use super::value::*;
 use super::{jsonio, methods};
 
@@ -51,25 +53,6 @@ pub fn builtin(name: &str) -> Option<V> {
         "json" => V::Module(Mod::Json),
         "sys" => V::Module(Mod::Sys),
         "time" => V::Module(Mod::Time),
-        _ => return None,
-    })
-}
-
-/// 各个内建函数、类型认的关键字参数（syntax 子命令拿它查；这里列了的才实现了）
-pub fn keywords(name: &str) -> Option<&'static [&'static str]> {
-    Some(match name {
-        "sum" => &["start"],
-        "min" | "max" => &["key", "default"],
-        "sorted" => &["key", "reverse"],
-        "round" => &["ndigits"],
-        "print" => &["sep", "end", "file", "flush"],
-        "open" => &["mode", "encoding"],
-        "int" => &["base"],
-        "enumerate" => &["start"],
-        "len" | "any" | "all" | "next" | "iter" | "repr" | "abs" | "isinstance" | "divmod" | "chr" | "ord" | "exit" | "str"
-        | "float" | "bool" | "list" | "tuple" | "set" | "frozenset" | "type" | "range" | "map" | "filter" | "zip" | "reversed" => {
-            &[]
-        }
         _ => return None,
     })
 }
@@ -898,12 +881,8 @@ pub fn construct(it: &mut Interp, ty: Ty, args: Vec<V>, mut kw: Kw) -> R<V> {
 
 /// int(字符串, 进制)：照 Python 的写法（两头的空白、正负号、数字中间的下划线、进制前缀）
 fn parse_int(text: &str, base: u32) -> R<i128> {
-    let invalid = || -> R<i128> {
-        let mut shown = String::new();
-        pyfmt::repr_str(&mut shown, text);
-        value_err(format!("invalid literal for int() with base {base}: {shown}"))
-    };
-    let s = text.trim_matches(py_space);
+    let invalid = || -> R<i128> { value_err(format!("invalid literal for int() with base {base}: {}", py::repr_str(text))) };
+    let s = py::strip(text);
     if !s.is_ascii() {
         // 别的文字里的数字（全角、阿拉伯文数字……）Python 也认，这里没做
         return if s.chars().any(|c| !c.is_ascii() && c.is_numeric()) {
@@ -951,12 +930,8 @@ fn parse_int(text: &str, base: u32) -> R<i128> {
 
 /// float(字符串)
 fn parse_float(text: &str) -> R<f64> {
-    let invalid = || -> R<f64> {
-        let mut shown = String::new();
-        pyfmt::repr_str(&mut shown, text);
-        value_err(format!("could not convert string to float: {shown}"))
-    };
-    let s = text.trim_matches(py_space);
+    let invalid = || -> R<f64> { value_err(format!("could not convert string to float: {}", py::repr_str(text))) };
+    let s = py::strip(text);
     if !s.is_ascii() {
         return if s.chars().any(|c| !c.is_ascii() && c.is_numeric()) {
             unsupported("float() 读非 ASCII 的数字")

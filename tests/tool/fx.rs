@@ -50,9 +50,10 @@
 //!
 //! lint.rs 也用这里的 Stop / finish / read_text 这几样。
 
-use crate::fake::{self, repr_str, type_name};
+use crate::fake::{self, type_name};
 use kit::json::{self, Obj, Style, Value};
 use kit::obj;
+use kit::py::{self, repr_str};
 use std::io::Write;
 
 pub const CMDS: &[(&str, crate::Run)] = &[("fx", run)];
@@ -127,18 +128,9 @@ pub fn finish(group: &str, args: &[String], r: R<i32>, out: &str) -> i32 {
         }
         Err(Stop::Unsupported(msg)) => {
             eprintln!("cca-test：{group}：{msg}");
-            write_trap(&format!("{group}\t{msg}\t{}", args.join(" ")));
+            crate::trap::record(group, &msg, &args.join(" "));
             2
         }
-    }
-}
-
-/// 往 $CCA_TEST_TRAP 追加一行（换行写成 \n，一次 write 写完：几个进程同时写也不会串行）；没设、写不进去都不管
-fn write_trap(line: &str) {
-    let Some(path) = std::env::var_os("CCA_TEST_TRAP").filter(|p| !p.is_empty()) else { return };
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let line = format!("{}\n", line.replace('\n', "\\n").replace('\r', "\\r"));
-        let _ = f.write(line.as_bytes());
     }
 }
 
@@ -232,7 +224,7 @@ fn py_float(s: &str) -> R<f64> {
         return unsupported(format!("float() 的参数里有非 ASCII 字符：{s}"));
     }
     let bad = || raise(format!("ValueError: could not convert string to float: {}", repr_str(s)));
-    let t = s.trim_matches(|c: char| fake::is_py_space(c));
+    let t = py::strip(s);
     let b = t.as_bytes();
     let mut plain = String::with_capacity(t.len());
     for (i, c) in t.char_indices() {

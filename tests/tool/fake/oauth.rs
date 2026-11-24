@@ -18,7 +18,7 @@ struct Got {
 pub fn run(a: &[String]) -> R<i32> {
     let (p, email) = (arg(a, 0)?.to_string(), arg(a, 1)?.to_string());
     let t = cca_t()?;
-    let state = py_strip(&read_text(&join(&[&t, "oauth_flow"]))?).to_string();
+    let state = py::strip(&read_text(&join(&[&t, "oauth_flow"]))?).to_string();
     let state = if state.is_empty() { "st-claude".to_string() } else { state };
     let got = Arc::new((Mutex::new(Got::default()), Condvar::new()));
     let (g, want) = (Arc::clone(&got), state.clone());

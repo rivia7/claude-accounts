@@ -4,7 +4,7 @@
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Style, Value};
 use kit::sandbox::{self, ran, samefile, Sandbox, ACCOUNTS};
-use kit::{case, crypto, fsx, obj};
+use kit::{case, crypto, fsx, obj, py};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -57,19 +57,10 @@ fn fields(tool: &str) -> &'static [&'static str] {
     }
 }
 
-/// 一个随机的 UUID（第 4 版，小写、带横线：`str(uuid.uuid4())`）
-fn uuid4() -> String {
-    let mut b = crypto::random(16);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h = crypto::hex(&b);
-    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
-}
-
 /// 写成 Codex 那样的标识（installation_id 是新的 UUID）或者 Claude 那样的（userID、machineID 是 64 位十六进制）
 fn fresh_identity(tool: &str, claude: (&str, &str)) -> Value {
     if tool == "codex" {
-        obj! { "installation_id" => uuid4() }
+        obj! { "installation_id" => crypto::uuid4() }
     } else {
         obj! { "userID" => claude.0.repeat(64), "machineID" => claude.1.repeat(64) }
     }
@@ -207,7 +198,7 @@ fn unique_existing_identity_and_other_account_data_survive_migration(t: &mut Ctx
             assert_eq!(fx.client_identity(tool, ACCOUNTS[0]), original);
             if tool == "claude" {
                 let data = fsx::read_json(fx.client_path(tool, ACCOUNTS[0]));
-                assert!(sandbox::truthy(&data["localPreference"]), "{data}");
+                assert!(py::truthy(&data["localPreference"]), "{data}");
                 assert_eq!(data["oauthAccount"]["emailAddress"], Value::from(ACCOUNTS[0]));
             }
         });

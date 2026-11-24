@@ -23,12 +23,19 @@
 //! - 选哪些：模块名（`team`：整个模块），或者 `模块::用例` 里的一截（`remote_host::closetty`）；`--module 名字` 只跑这个模块
 //!   （可以写几次）；`--skip 一截` 去掉名字里带这一截的；`--all` 连平时不跑的模块（`default: false`）也跑；`--list` 只列出来
 //! - `--jobs N`（libtest 的 `--test-threads N` 也认）：同时跑几个模块，默认 `CCA_SUITE_JOBS` 或者 4
-//! - `--results 文件`：每个模块一行 `名字<TAB>pass|fail<TAB>通过<TAB>失败<TAB>跳过<TAB>秒`
+//! - `--results 文件`：每个模块一行 `名字<TAB>pass|fail<TAB>通过<TAB>失败<TAB>跳过<TAB>秒`。pass 是没有失败的、选中的用例都报了结果；
+//!   跳过的不算失败，所以用例全跳过的模块也是 pass、通过数是 0。拿这个文件把关的（tests/regress.sh 的 `suite_ok`、tests/linux.sh 的
+//!   `suite_run`）是同一个标准：这一行是 pass、通过数大于 0、失败数是 0——一个用例都没过的模块不放行
 //! - `--logs 目录`：`<模块>.log`（每个用例一行 `ok|FAIL|skip|TIMEOUT|SLOW|NOTRUN 用例 秒 …`，失败的后面缩进 4 格跟着它的输出）
 //!   和 `timing.tsv`（`模块<TAB>用例<TAB>结果<TAB>秒`）。SLOW 是多记的一行：用掉了时限的一多半。带括号的不是用例：
 //!   `(audit)` 有用例漏登记，`(teardown)` 模块的收尾没成，`(module)` 模块的进程没好好结束
 //! - `--setsid`：自己换一个会话再跑（回归在后台起它时用：读 /dev/tty 马上失败，杀进程组就能全停掉）
 //! - `--nocapture`：用例的输出直接打出来（平时只在失败时附在后面）；`-q`：通过的用例不一行行报
+//!
+//! 退出码：0 是选中的模块都过了，1 是有模块没过，2 是写错了——不认识的开关、没有这个模块、什么都没选中（点名跑一个不存在的
+//! 用例不能看着像是过了；`--list` 什么都没列出来还是 0）。所以按名字跑 kit、cca-test 自己的单元测试时带上 `--lib --bins`
+//! （`cargo test --profile kit -p cca-tests --lib --bins 名字`）：不带的话 cargo 把这个名字也交给 suite，它一个都选不中。
+//! 被信号打断是 128 + 信号
 //!
 //! 环境变量：`CCA_HELPER`（辅助程序，默认仓库里编出来的）、`CCA_REPO`（仓库在哪）、`CCA_TEST_BIN`（cca-test）、
 //! `CCA_SUITE_TMP`（临时目录建在哪）、`KEEP`（临时目录留着不删）。用例里经 [`helper`]、[`repo`]、[`tool`]、[`Ctx::tmp`] 拿。

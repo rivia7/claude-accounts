@@ -29,7 +29,7 @@ use kit::hubbox::{self, Box as FakeBox, Opts, SS, UFW};
 use kit::json::{self, Value};
 use kit::proc::{Cmd, Session, Stdio};
 use kit::sandbox::{self, Ran};
-use kit::{list, obj, pki, tls};
+use kit::{list, obj, pki, py, tls};
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -317,7 +317,7 @@ fn key_of(root: &str) -> &str {
 
 /// team-deploy 成了时的输出：sh 的 键=值，一行一项
 fn kv(out: &str) -> BTreeMap<String, String> {
-    sandbox::splitlines(out)
+    py::splitlines(out)
         .into_iter()
         .filter(|l| !l.is_empty())
         .map(|l| {
@@ -1034,7 +1034,7 @@ fn web_skipped(t: &mut Ctx) {
     fx.install(&b, &["--dir", &dir_arg, "--relay-port", &one_port().to_string()]);
     let env = fsx::read_text(d.join(".env"));
     let kept: String =
-        sandbox::splitlines(&env).into_iter().filter(|l| !l.starts_with("CCA_HUB_HOST=")).map(|l| format!("{l}\n")).collect();
+        py::splitlines(&env).into_iter().filter(|l| !l.starts_with("CCA_HUB_HOST=")).map(|l| format!("{l}\n")).collect();
     fsx::write(d.join(".env"), kept);
     fsx::write(b.d.join("ip"), "10.9.0.5");
     let r = fx.install(&b, &["--dir", &dir_arg]);
@@ -2066,7 +2066,7 @@ fn unreachable_then_again(t: &mut Ctx) {
     assert_eq!(reason, "unreachable");
     assert_in(&format!("服务器上装好了（127.0.0.1:{port}），但没接上"), why);
     assert_in(&format!("放行 TCP {port}，放行以后再运行一次"), why);
-    assert!(!team_json(&a, &tid).get("url").is_some_and(sandbox::truthy), "没接上：还是没接着服务器");
+    assert!(!team_json(&a, &tid).get("url").is_some_and(py::truthy), "没接上：还是没接着服务器");
     std::fs::remove_file(a.home.join("reply/team_enroll")).expect("删掉 reply/team_enroll");
     b.fake("ufw", &format!("#!/bin/sh\n{UFW}"));
     let r = deploy_ok(&a, &tid, &b, &[], &[]);

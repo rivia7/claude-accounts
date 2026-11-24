@@ -1,72 +1,19 @@
 //! 照 Python 的语义写的几个小函数：假 Gmail 是照原来的 tests/mail_fake.py 一行行搬过来的，空白、拆行、整数、repr、真假、时间都要和 Python 一样
-//! （辅助程序的 IMAP 客户端是照着原来那一份写的）。
+//! （辅助程序的 IMAP 客户端是照着原来那一份写的）。空白、拆行、repr、真假用 kit 里共用的那一份（kit::py），这里只有假 Gmail 另外要的：
+//! 整数和小数怎么读、时间。
 
-use crate::json::{float_repr, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// str.isspace() 认的字符（比 Rust 的 char::is_whitespace 多 \x1c–\x1f）
-pub fn isspace(c: char) -> bool {
-    matches!(
-        c,
-        '\t'..='\r'
-            | '\x1c'..='\x1f'
-            | ' '
-            | '\u{85}'
-            | '\u{a0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
-    )
-}
+pub use crate::py::{isspace, py_str, repr_str, split, splitlines, strip, truthy};
 
 /// s.isspace()：不是空串、每个字符都是空白
 pub fn all_space(s: &str) -> bool {
     !s.is_empty() && s.chars().all(isspace)
 }
 
-/// str.strip()
-pub fn strip(s: &str) -> &str {
-    s.trim_matches(isspace)
-}
-
 /// str.lstrip()
 pub fn lstrip(s: &str) -> &str {
     s.trim_start_matches(isspace)
-}
-
-/// str.split()（不带参数）：按连续的空白切开，不留空的
-pub fn split_ws(s: &str) -> Vec<&str> {
-    s.split(isspace).filter(|x| !x.is_empty()).collect()
-}
-
-/// str.splitlines()：\n、\r、\r\n、\v、\f、\x1c、\x1d、\x1e、U+0085、U+2028、U+2029 都算换行；不带换行符，最后一行后面的换行不另算一行
-pub fn splitlines(s: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut it = s.char_indices().peekable();
-    while let Some((i, c)) = it.next() {
-        let brk = matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}');
-        if !brk {
-            continue;
-        }
-        out.push(&s[start..i]);
-        let mut end = i + c.len_utf8();
-        if c == '\r' {
-            if let Some(&(j, '\n')) = it.peek() {
-                it.next();
-                end = j + 1;
-            }
-        }
-        start = end;
-    }
-    if start < s.len() {
-        out.push(&s[start..]);
-    }
-    out
 }
 
 /// str.upper()（整个 Unicode 的大小写对应，ß 变成 SS）
@@ -136,82 +83,6 @@ pub fn float(s: &str) -> Option<f64> {
     clean.parse::<f64>().ok()
 }
 
-/// str.isprintable() 的反面：这几类字符 repr 时要转义
-fn unprintable(c: char) -> bool {
-    c != ' ' && re!(r"^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]$").is_match(c.encode_utf8(&mut [0; 4]))
-}
-
-/// repr(str)：单引号，里面有单引号又没有双引号时用双引号；控制字符、不可打印的转义
-pub fn repr_str(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
-            c if c.is_ascii() => out.push(c),
-            c if unprintable(c) => {
-                let n = c as u32;
-                if n < 0x100 {
-                    out.push_str(&format!("\\x{n:02x}"));
-                } else if n < 0x10000 {
-                    out.push_str(&format!("\\u{n:04x}"));
-                } else {
-                    out.push_str(&format!("\\U{n:08x}"));
-                }
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
-/// bool(x)：JSON 读出来的值在 Python 里算不算真
-pub fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Int(n) => *n != 0,
-        Value::Float(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(l) => !l.is_empty(),
-        Value::Obj(o) => !o.is_empty(),
-    }
-}
-
-/// str(x)：json.load 读出来的值在 '%s' 里的样子
-pub fn py_str(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        other => py_repr(other),
-    }
-}
-
-/// repr(x)
-pub fn py_repr(v: &Value) -> String {
-    match v {
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => float_repr(*f),
-        Value::Str(s) => repr_str(s),
-        Value::List(l) => format!("[{}]", l.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Obj(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", repr_str(k), py_repr(v))).collect::<Vec<_>>().join(", "))
-        }
-    }
-}
-
 /// time.time()
 pub fn now() -> f64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -268,11 +139,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn whitespace_and_lines_like_python() {
-        assert!(isspace('\x1c') && isspace('\u{3000}') && !isspace('\u{200b}'));
-        assert_eq!(splitlines("a\r\nb\rc\nd\x0be\u{2028}f\n"), ["a", "b", "c", "d", "e", "f"]);
-        assert_eq!(splitlines("\n\nx"), ["", "", "x"]);
-        assert_eq!(split_ws("  a \t b\x1c c "), ["a", "b", "c"]);
+    fn whitespace_like_python() {
+        assert!(all_space(" \t\x1c\u{3000}") && !all_space("") && !all_space(" x"));
+        assert_eq!(lstrip("\x1c \tx "), "x ");
     }
 
     #[test]
@@ -288,18 +157,6 @@ mod tests {
         assert_eq!(float("1_5"), Some(15.0));
         assert!(float("-inf").is_some_and(|f| f.is_infinite()));
         assert_eq!(float("x"), None);
-    }
-
-    #[test]
-    fn repr_like_python() {
-        assert_eq!(repr_str("a'b"), "\"a'b\"");
-        assert_eq!(repr_str("a\"b"), "'a\"b'");
-        assert_eq!(repr_str("a'\"b"), r#"'a\'"b'"#);
-        // Python：repr('\x1b\x85\xa0' + chr(0x2028) + 'x' + chr(0x1F600))
-        let want = concat!(r"'\x1b\x85\xa0\", "u2028x\u{1F600}'");
-        assert_eq!(repr_str("\x1b\u{85}\u{a0}\u{2028}x\u{1F600}"), want);
-        let v = crate::json::parse(r#"[1, 2.5, true, null, "x", {"k": "v"}]"#).unwrap();
-        assert_eq!(py_str(&v), "[1, 2.5, True, None, 'x', {'k': 'v'}]");
     }
 
     #[test]

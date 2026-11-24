@@ -1,5 +1,6 @@
 //! cca-test：回归用的小工具。用法：cca-test 子命令 参数…
-//! 各个子命令在各自的模块里（每个模块一张 CMDS 表）；出错（用法不对、认不出的写法）退出码 2，说在 stderr。
+//! 各个子命令在各自的模块里（每个模块一张 CMDS 表）；出错（用法不对、认不出的写法）退出码 2，说在 stderr，各个子命令另在
+//! $CCA_TEST_TRAP 里记一行（trap.rs）。
 mod acme_fake;
 mod double;
 mod ev;
@@ -13,6 +14,7 @@ mod lint;
 mod linux;
 mod mail;
 mod spec;
+mod trap;
 mod util;
 mod web_demo;
 

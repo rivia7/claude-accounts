@@ -2,7 +2,7 @@
 //!
 //! 名字照 Python 里测试原来用的那几个：`hashlib.sha256` → [`sha256`]，`hmac.new(k, m, sha256)` → [`hmac_sha256`]，
 //! `hashlib.pbkdf2_hmac` → [`pbkdf2_hmac_sha256`]，`secrets.token_bytes / token_hex` → [`random`] / [`token_hex`]，
-//! `hmac.compare_digest` → [`ct_eq`]，`base64.b64encode / urlsafe_b64encode` → [`b64`] / [`b64url`]。
+//! `hmac.compare_digest` → [`ct_eq`]，`base64.b64encode / urlsafe_b64encode` → [`b64`] / [`b64url`]，`uuid.uuid4` → [`uuid4`]。
 //! 解码都是严格的：字母表以外的字符、= 的个数不对、末尾多出来的位不是 0，一律不认（测试拿到的是被测的程序写出来的，
 //! 写得不规矩就该看得出来）。
 
@@ -63,6 +63,15 @@ pub fn token_hex(n: usize) -> String {
 /// n 个随机字节写成 URL 安全的 base64、不带 =（`secrets.token_urlsafe(n)`）
 pub fn token_urlsafe(n: usize) -> String {
     b64url_nopad(&random(n))
+}
+
+/// 一个随机的 UUID（第 4 版，小写、带横线：`str(uuid.uuid4())`）
+pub fn uuid4() -> String {
+    let mut b = random(16);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h = hex(&b);
+    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
 }
 
 /// 两段字节是不是一样；用时只看长度，不看从第几个字节开始不一样（`hmac.compare_digest`）
@@ -424,6 +433,10 @@ mod tests {
         assert!(t.len() == 32 && t.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{t}");
         let u = token_urlsafe(16);
         assert!(u.len() == 22 && b64url_nopad_decode(&u).unwrap().len() == 16, "{u}");
+        // 第 4 版的 UUID：8-4-4-4-12，第三段以 4 开头，第四段以 8、9、a、b 开头
+        let id = uuid4();
+        let shape = regex::Regex::new("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").unwrap();
+        assert!(shape.is_match(&id) && id != uuid4(), "{id}");
         assert!(ct_eq(b"", b""));
         assert!(ct_eq(b"same bytes", b"same bytes"));
         assert!(!ct_eq(b"same bytes", b"same bytez"));

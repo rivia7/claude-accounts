@@ -10,8 +10,8 @@ use kit::fleet::{Device, ServerProc, WAIT};
 use kit::fsx::{self, wait_for};
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Style, Value};
-use kit::relay::{self, Base, Popen};
-use kit::term::{self, Term};
+use kit::relay::{self, cols, has, matches, names, rows_of, secs, Base, Popen};
+use kit::term::Term;
 use kit::{case, list, obj, pki};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -36,43 +36,9 @@ const OTHER_KEY: &str = "other(bob@example.com)";
 
 // ---- 小东西 ----
 
-fn secs(n: u64) -> Duration {
-    Duration::from_secs(n)
-}
-
 /// 路径当参数用（临时目录都是 UTF-8 的）
 fn text(path: &Path) -> String {
     path.to_str().unwrap_or_else(|| panic!("路径不是 UTF-8：{}", path.display())).to_string()
-}
-
-/// 对象的键，照里面的先后（`list(d)`）
-fn names(v: &Value) -> Vec<String> {
-    v.obj().keys().map(str::to_string).collect()
-}
-
-/// 字节里有没有这一截（`needle in out`）
-fn has(hay: &[u8], needle: impl AsRef<[u8]>) -> bool {
-    term::find(hay, needle).is_some()
-}
-
-/// Python 的 re.search(pattern, text) 找不找得到。正则照原来的写；只有末尾的 $ 换一种写法：Python 里它在最后那个换行的
-/// 前面也算数，regex 这个库的 $ 只认真正的末尾
-fn matches(pattern: &str, text: &str) -> bool {
-    let pattern = match pattern.strip_suffix('$') {
-        Some(head) => format!("{head}\n?\\z"),
-        None => pattern.to_string(),
-    };
-    regex::Regex::new(&pattern).unwrap_or_else(|e| panic!("正则 {pattern:?} 写得不对：{e}")).is_match(text)
-}
-
-/// 对象里这几个键的值，照给的先后排成一个数组（原来拿元组比的地方）
-fn cols(row: &Value, keys: &[&str]) -> Value {
-    Value::List(keys.iter().map(|k| row[*k].clone()).collect())
-}
-
-/// 数组里每一项的这几个键（`[(p['a'], p['b']) for p in rows]`）
-fn rows_of(rows: &Value, keys: &[&str]) -> Vec<Value> {
-    rows.list().iter().map(|row| cols(row, keys)).collect()
 }
 
 /// 数组里每一项的这两个键（都是字符串），排好序（`sorted((s[a], s[b]) for s in rows)`）
@@ -361,7 +327,7 @@ fn terminal(t: &mut Ctx) {
     assert_eq!((fx.edges().obj().len(), names(&rsrv.edges())), (1, vec![team_pid.to_string()]));
     let r = fx.cca(b, &["remote", "peers"]);
     let via: Vec<&str> =
-        kit::sandbox::splitlines(&r.out).into_iter().map(|line| line.rsplit_once("  ").map_or(line, |(_, last)| last)).collect();
+        kit::py::splitlines(&r.out).into_iter().map(|line| line.rsplit_once("  ").map_or(line, |(_, last)| last)).collect();
     assert_eq!(sorted(via), ["经「测试组」的服务器", "经「研发组」的服务器"]);
 }
 

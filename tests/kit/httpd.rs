@@ -189,12 +189,11 @@ pub fn http_date(t: SystemTime) -> String {
 /// 处理请求的闭包
 type Handler = dyn Fn(&Request) -> Response + Send + Sync;
 
-/// 绑好了端口、还没开始接连接的服务（[`Server::bind`] 给的）：在这里定 TLS、HTTP/1.0、空闲多久断开，再 [`Setup::start`]
+/// 绑好了端口、还没开始接连接的服务（[`Server::bind`] 给的）：在这里定 TLS、HTTP/1.0，再 [`Setup::start`]
 pub struct Setup {
     listener: TcpListener,
     tls: Option<Acceptor>,
     http10: bool,
-    idle: Option<Duration>,
 }
 
 impl Setup {
@@ -215,12 +214,6 @@ impl Setup {
         self
     }
 
-    /// 一个连接上这么久读不到东西就断开（默认一直等，和 Python 的 http.server 一样）
-    pub fn idle_timeout(mut self, limit: Duration) -> Setup {
-        self.idle = Some(limit);
-        self
-    }
-
     /// 开始接连接：一个连接一个线程，每个请求交给 handler
     pub fn start(self, handler: impl Fn(&Request) -> Response + Send + Sync + 'static) -> io::Result<Server> {
         let addr = self.listener.local_addr()?;
@@ -235,7 +228,6 @@ impl Setup {
             handler: Box::new(handler),
             tls: self.tls,
             http10: self.http10,
-            idle: self.idle,
         });
         let sh = shared.clone();
         let listener = self.listener;
@@ -256,7 +248,6 @@ struct Shared {
     handler: Box<Handler>,
     tls: Option<Acceptor>,
     http10: bool,
-    idle: Option<Duration>,
 }
 
 fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -273,7 +264,7 @@ pub struct Server {
 impl Server {
     /// 绑一个地址（`("127.0.0.1", 0)`：系统给一个空闲端口）
     pub fn bind(addr: impl ToSocketAddrs) -> io::Result<Setup> {
-        Ok(Setup { listener: TcpListener::bind(addr)?, tls: None, http10: false, idle: None })
+        Ok(Setup { listener: TcpListener::bind(addr)?, tls: None, http10: false })
     }
 
     /// 监听的端口
@@ -369,9 +360,6 @@ impl Drop for Done {
 fn connection(sh: &Shared, sock: TcpStream, peer: SocketAddr) {
     let Ok(local) = sock.local_addr() else { return };
     let _ = sock.set_nodelay(true);
-    if let Some(limit) = sh.idle {
-        let _ = sock.set_read_timeout(Some(limit));
-    }
     match &sh.tls {
         Some(acceptor) => {
             if let Ok(stream) = acceptor.accept(sock) {

@@ -148,6 +148,12 @@ struct Tally {
 }
 
 impl Tally {
+    /// 定下这个模块过没过：没有失败的，选中的用例都报了结果。跳过的不算失败，所以选中的用例全跳过了的模块也是 pass、通过数是 0——
+    /// 拿结果文件把关的（tests/regress.sh 的 suite_ok、tests/linux.sh 的 suite_run）另看那两栏：通过数是 0 的不放行
+    fn settle(&mut self) {
+        self.pass = self.failed == 0 && self.notrun == 0;
+    }
+
     fn line(&self) -> String {
         let verdict = if self.pass { "pass" } else { "fail" };
         format!("{}\t{verdict}\t{}\t{}\t{}\t{}\n", self.name, self.passed, self.failed, self.skipped, secs(self.took))
@@ -346,7 +352,7 @@ fn finish(sink: &mut Sink, tally: &mut Tally, mut run: Run, exit: Exit) {
         fsx::remove_tree(&run.dir);
     }
     tally.took = run.started.elapsed();
-    tally.pass = tally.failed == 0 && tally.notrun == 0;
+    tally.settle();
     close(sink, tally);
 }
 
@@ -473,6 +479,12 @@ pub(super) fn run(opts: &Opts, modules: &[Module], args: &[String]) -> i32 {
         }
         return 0;
     }
+    // 什么都没选中（名字写错了，或者这一份 suite 里没有这个用例）：和写错了模块名一样算错。不然点名跑一个不存在的用例，
+    // 看着像是过了
+    if picked.is_empty() {
+        eprintln!("suite：没有选中的用例（--list 看有哪些）");
+        return 2;
+    }
     if opts.setsid {
         if let Some(code) = detach(args) {
             return code;
@@ -515,10 +527,6 @@ pub(super) fn run(opts: &Opts, modules: &[Module], args: &[String]) -> i32 {
             pass: false,
         })
         .collect();
-    if tallies.is_empty() {
-        sink.say("suite：没有选中的用例");
-        return 0;
-    }
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(e) => {
@@ -670,6 +678,49 @@ mod tests {
         let mut buf = b"end\tx\tweird\t1\t0\nend\tx\tok\tsoon\t0\n".to_vec();
         assert_eq!(take_record(&mut buf), Some(Err("end\tx\tweird\t1\t0".to_string())));
         assert_eq!(take_record(&mut buf), Some(Err("end\tx\tok\tsoon\t0".to_string())));
+    }
+
+    /// 一个模块的结果：选中 tests 个用例，各种结果各几个
+    fn tally(passed: usize, failed: usize, skipped: usize, notrun: usize) -> Tally {
+        let mut tally = Tally {
+            name: "m",
+            tests: Vec::new(),
+            seen: Vec::new(),
+            passed,
+            failed,
+            skipped,
+            notrun,
+            took: Duration::from_millis(1500),
+            pass: false,
+        };
+        tally.settle();
+        tally
+    }
+
+    #[test]
+    fn module_verdict_and_result_line() {
+        assert_eq!(tally(3, 0, 1, 0).line(), "m\tpass\t3\t0\t1\t1.50\n");
+        // 有失败的、有没跑的（超时以后剩下的、模块的进程中途没了）：fail
+        assert_eq!(tally(3, 1, 0, 0).line(), "m\tfail\t3\t1\t0\t1.50\n");
+        assert_eq!(tally(3, 0, 0, 2).line(), "m\tfail\t3\t0\t0\t1.50\n");
+        // 全跳过了：没有失败，还是 pass——通过数是 0，把关的脚本看这一栏（见 Tally::settle）
+        assert_eq!(tally(0, 0, 2, 0).line(), "m\tpass\t0\t0\t2\t1.50\n");
+    }
+
+    #[test]
+    fn nothing_selected_is_an_error() {
+        let dir = TempDir::new("cca-suite-test.");
+        let results = dir.path().join("results.tsv");
+        let opts = |args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            Opts::parse(&args).unwrap()
+        };
+        // 退出码 2，在动手之前就停下：结果文件不建
+        let nothing = opts(&["没有这样的用例", "--results", results.to_str().unwrap()]);
+        assert_eq!(run(&nothing, &[], &[]), 2);
+        assert!(!results.exists());
+        // --list 只是列出来：什么都没有也不算错
+        assert_eq!(run(&opts(&["--list", "没有这样的用例"]), &[], &[]), 0);
     }
 
     #[test]

@@ -28,7 +28,9 @@
 //! 一条用例查这个文件是空的。
 //! 读文字文件照 Python 的 open(p).read()：得是 UTF-8，\r\n、\r 读成 \n；写回去是整个覆盖（文件是符号链接时改的是它指着的）。
 
+use crate::trap::usage;
 use kit::json::{self, Obj, Style, Value};
+use kit::py;
 use std::io::{Read, Write};
 
 pub const CMDS: &[(&str, crate::Run)] = &[
@@ -46,18 +48,6 @@ pub const CMDS: &[(&str, crate::Run)] = &[
     ("b64", b64),
     ("plist-json", plist_json),
 ];
-
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
-fn usage(role: &str, args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test {role}：{why}");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test {role} {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
-}
 
 /// 原来那一行 Python 在这里会抛异常：说一行，退出码 1
 fn raised(role: &str, why: impl std::fmt::Display) -> i32 {
@@ -92,40 +82,6 @@ fn read_text(path: &str) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("读不了 {path}：{e}"))?;
     let text = String::from_utf8(bytes).map_err(|e| format!("{path} 不是 UTF-8：{e}"))?;
     Ok(universal_newlines(&text))
-}
-
-/// str.isspace() 认的字符：比 Rust 的 char::is_whitespace 多 U+001C～U+001F 四个
-fn py_space(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
-}
-
-/// str.strip()
-fn py_strip(s: &str) -> &str {
-    s.trim_matches(py_space)
-}
-
-/// str.splitlines()：在 \n、\r、\r\n、\v、\f、U+001C～U+001E、U+0085、U+2028、U+2029 处断开；最后一行后面有没有换行都一样
-fn py_splitlines(text: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut chars = text.char_indices().peekable();
-    while let Some((at, c)) = chars.next() {
-        if !matches!(c, '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}') {
-            continue;
-        }
-        lines.push(&text[start..at]);
-        start = at + c.len_utf8();
-        if c == '\r' {
-            if let Some(&(_, '\n')) = chars.peek() {
-                chars.next();
-                start += 1;
-            }
-        }
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    }
-    lines
 }
 
 /// 现在的时间戳（time.time()）
@@ -164,7 +120,7 @@ fn split_and(text: &str) -> Vec<String> {
         i += 1;
     }
     parts.push(cur);
-    parts.iter().map(|p| py_strip(p).to_string()).collect()
+    parts.iter().map(|p| py::strip(p).to_string()).collect()
 }
 
 fn split_and_cmd(args: &[String]) -> i32 {
@@ -212,7 +168,7 @@ fn hold_port(args: &[String]) -> i32 {
 
 /// 最宽的一行占几格；一行都没有是 None
 fn max_width(text: &str) -> Option<usize> {
-    py_splitlines(text).into_iter().map(kit::width::of).max()
+    py::splitlines(text).into_iter().map(kit::width::of).max()
 }
 
 fn maxw(args: &[String]) -> i32 {
@@ -333,7 +289,7 @@ fn small(text: &str, lo: i32, hi: i32) -> Option<i32> {
 /// ps -o lstart= 的那一行（C locale："Mon Nov 24 19:05:12 2026"，中间的空白多少不论）→ [年, 月, 日, 时, 分, 秒]；
 /// 照 time.strptime(" ".join(s.split()), "%a %b %d %H:%M:%S %Y") 的认法，认不出是 None
 fn lstart_fields(text: &str) -> Option<[i32; 6]> {
-    let fields: Vec<&str> = text.split(py_space).filter(|f| !f.is_empty()).collect();
+    let fields: Vec<&str> = py::split(text).collect();
     let [weekday, month, day, clock, year] = fields[..] else { return None };
     WEEKDAYS.iter().position(|w| w.eq_ignore_ascii_case(weekday))?;
     let month = MONTHS.iter().position(|m| m.eq_ignore_ascii_case(month))? as i32 + 1;
@@ -552,15 +508,15 @@ fn ck_text(v: Option<&Value>) -> Option<String> {
 /// 节点不是对象、哪个字段是数组或者对象：None
 fn ckof(node: &Value) -> Option<String> {
     let node = node.as_obj()?;
-    let host = |v: Option<&Value>| Some(py_strip(&ck_text(v)?).to_lowercase().trim_end_matches('.').to_string());
+    let host = |v: Option<&Value>| Some(py::strip(&ck_text(v)?).to_lowercase().trim_end_matches('.').to_string());
     let sni = match node.get("servername") {
         None | Some(Value::Null | Value::Bool(false)) => node.get("sni"),
         named => named,
     };
     let mut key = vec![
-        py_strip(&ck_text(node.get("type"))?).to_lowercase(),
+        py::strip(&ck_text(node.get("type"))?).to_lowercase(),
         host(node.get("server"))?,
-        py_strip(&ck_text(node.get("port"))?).to_string(),
+        py::strip(&ck_text(node.get("port"))?).to_string(),
         host(sni)?,
     ];
     for field in ["username", "password", "uuid"] {
@@ -619,15 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn splitlines_and_width_like_python() {
-        assert_eq!(py_splitlines(""), Vec::<&str>::new());
-        assert_eq!(py_splitlines("a\nb\n"), ["a", "b"]);
-        assert_eq!(py_splitlines("a\r\nb\rc"), ["a", "b", "c"]);
-        assert_eq!(py_splitlines("\n\n"), ["", ""]);
-        assert_eq!(
-            py_splitlines("a\u{0b}b\u{0c}c\u{1c}d\u{1d}e\u{1e}f\u{85}g\u{2028}h\u{2029}i\u{1f}j"),
-            ["a", "b", "c", "d", "e", "f", "g", "h", "i\u{1f}j"]
-        );
+    fn width_like_python() {
         assert_eq!(max_width(""), None);
         assert_eq!(max_width("\n"), Some(0));
         assert_eq!(max_width("abc\n中文ab\nabcde"), Some(6));

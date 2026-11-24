@@ -5,85 +5,18 @@
 //! account/rateLimits/read 按登录的邮箱回 codex_usage/<邮箱>.json；account/rateLimitResetCredit/consume 用掉一次重置机会。
 //! codex_rpc_off：不支持 app-server；codex_usage/unsupported、hang：不支持查用量、卡住；rpc_error：里面的话当出错说明回。
 //! --write-auth：只写 auth.json（假 codex 的 login，cca 退回 codex login 时）。
+//!
+//! id_token 怎么写、怎么读回邮箱（b64、email_now）和 tests/linux.sh 的假 codex 是同一份（linux_codex.rs）：中间那一段只认规规矩矩的
+//! base64url（原来 Python 的解码会跳过字母表以外的字符），不规矩的和别的读不出来的情况一样当成没登录。
 
 use super::codex::regex;
+use super::linux_codex::{b64, email_now};
 use super::*;
 use kit::json::Obj;
 use std::io::BufRead;
 
 fn log(t: &str, s: &str) -> R<()> {
     append_text(&join(&[t, "codex.log"]), &format!("{s}\n"))
-}
-
-/// base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
-fn b64(v: &Value) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let b = dumps(v).into_bytes();
-    let mut s = String::new();
-    for c in b.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
-        let k = c.len() + 1;
-        for i in 0..k {
-            s.push(A[(n >> (18 - 6 * i)) as usize & 63] as char);
-        }
-    }
-    s
-}
-
-/// base64.urlsafe_b64decode（不严格的那种，像 binascii：字母表以外的跳过，补齐的 = 够了就停；长度不对是错）
-fn b64_decode(s: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let (mut acc, mut q, mut pads) = (0u32, 0usize, 0usize);
-    let tail = |out: &mut Vec<u8>, acc: u32, q: usize| match q {
-        2 => out.push((acc >> 4) as u8),
-        3 => out.extend_from_slice(&[(acc >> 10) as u8, (acc >> 2) as u8]),
-        _ => {}
-    };
-    for c in s.bytes() {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
-            b'=' => {
-                if q >= 2 {
-                    pads += 1;
-                    if q + pads >= 4 {
-                        tail(&mut out, acc, q);
-                        return Some(out);
-                    }
-                }
-                continue;
-            }
-            _ => continue,
-        };
-        acc = (acc << 6) | u32::from(v);
-        q += 1;
-        if q == 4 {
-            out.extend_from_slice(&[(acc >> 16) as u8, (acc >> 8) as u8, acc as u8]);
-            acc = 0;
-            q = 0;
-        }
-    }
-    (q == 0).then_some(out)
-}
-
-/// 现在登录的邮箱：auth.json 里 id_token 的 email；读不出来是 ''
-fn email_now(home: &str) -> Value {
-    let found = || -> Option<Value> {
-        let j = load_json(&join(&[home, "auth.json"])).ok()?;
-        let tok = j.get("tokens")?.get("id_token")?.as_str()?;
-        let part = tok.split('.').nth(1)?;
-        let pad = (4 - part.chars().count() % 4) % 4;
-        let raw = b64_decode(&format!("{part}{}", "=".repeat(pad)))?;
-        let v = json::parse(std::str::from_utf8(&raw).ok()?).ok()?;
-        match &v {
-            Value::Obj(o) => o.get("email").cloned(),
-            _ => None,
-        }
-    };
-    found().unwrap_or_else(|| Value::from(""))
 }
 
 /// email_now() or '-'
@@ -106,11 +39,11 @@ fn json_name(v: &Value) -> R<String> {
 /// 写登录凭证（假的 id_token），日志里记下设备标识和登录的邮箱
 fn write_auth(t: &str, home: &str) -> R<()> {
     let device = join(&[home, "installation_id"]);
-    let dev = if exists(&device) { py_strip(&read_text(&device)?).to_string() } else { String::new() };
+    let dev = if exists(&device) { py::strip(&read_text(&device)?).to_string() } else { String::new() };
     log(t, &format!("LOGIN-DEVICE {dev} @ {home}"))?;
     let p = join(&[t, "codex_login_as"]);
     let email = if exists(&p) {
-        let e = py_strip(&read_text(&p)?).to_string();
+        let e = py::strip(&read_text(&p)?).to_string();
         remove(&p)?;
         e
     } else {
@@ -304,7 +237,7 @@ fn reset_consume(t: &str, home: &str, u: &str, prm: &Value, rid: Value) -> R<()>
         }
     }
     let outcome = if exists(&join(&[u, "reset_outcome"])) {
-        py_strip(&read_text(&join(&[u, "reset_outcome"]))?).to_string()
+        py::strip(&read_text(&join(&[u, "reset_outcome"]))?).to_string()
     } else if num_le_zero(get(&rc, "availableCount")?.unwrap_or(&Value::Int(0)))?
         || (credit_arg.is_some() && !any_id(&avail, &cid)?)
     {
@@ -383,7 +316,7 @@ fn py_eq(a: &Value, b: &Value) -> bool {
 /// 回登录网址；回调的 state 不对回 400（State mismatch）、接着等，对的就“换 token”（code 以 good 开头算成功，写 auth.json），
 /// 换完才回答浏览器，再发 account/login/completed。换 token 时的代理记进 codex.log
 fn start_oauth(t: &str, home: &str, rid: Value) -> R<()> {
-    let state = py_strip(&read_text(&join(&[t, "oauth_flow"]))?).to_string();
+    let state = py::strip(&read_text(&join(&[t, "oauth_flow"]))?).to_string();
     let state = if state.is_empty() { "st-codex".to_string() } else { state };
     let (tt, hh, want) = (t.to_string(), home.to_string(), state.clone());
     let port =

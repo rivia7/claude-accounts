@@ -22,10 +22,12 @@ use kit::harness::{self, Ctx, Module};
 use kit::http::Request;
 use kit::json::{self, Style, Value};
 use kit::proc::{self, Child, Cmd, Session, Stdio};
+use kit::py::truthy;
 use kit::relay::{self, ctl, dial, read_ctl, read_exact, read_line, recv, sendall};
+use kit::relay::{cols, has, matches, named_like, names, only, parsed, rows_of, secs, walk};
 use kit::relay::{Base, Popen, RelayOpts, RelayServer, F_ANNOUNCE, F_JOIN};
 use kit::spec::{self, Channel};
-use kit::{case, crypto, list, obj, pki, term, tls};
+use kit::{case, crypto, list, obj, pki, tls};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -66,20 +68,6 @@ pub const MODULE: Module = Module {
 
 // ---- 几份用例共用的小东西 ----
 
-fn secs(n: u64) -> Duration {
-    Duration::from_secs(n)
-}
-
-/// 对象的键，照里面的先后（`list(d)`）
-fn names(v: &Value) -> Vec<String> {
-    v.obj().keys().map(str::to_string).collect()
-}
-
-/// `json.loads(text)`
-fn parsed(text: &str) -> Value {
-    json::parse(text).unwrap_or_else(|e| panic!("不是 JSON（{e}）：{text}"))
-}
-
 /// `json.dumps(v)`
 fn dumps(v: &Value) -> String {
     json::dumps(v, &Style::default())
@@ -93,65 +81,6 @@ fn unb64(v: &Value) -> Vec<u8> {
 /// `bytes.fromhex(v)`
 fn unhex(v: &Value) -> Vec<u8> {
     crypto::unhex(v.str()).unwrap_or_else(|e| panic!("不是十六进制（{e}）：{v}"))
-}
-
-/// Python 里拿一个值当真假用（`if x`、`bool(x)`）：null、false、0、空的字符串 / 数组 / 对象是假
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Int(n) => *n != 0,
-        Value::Float(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(l) => !l.is_empty(),
-        Value::Obj(o) => !o.is_empty(),
-    }
-}
-
-/// 对象里这几个键的值，照给的先后排成一个数组（原来拿元组比的地方：`(d['a'], d['b']) == (…)`）
-fn cols(row: &Value, keys: &[&str]) -> Value {
-    Value::List(keys.iter().map(|k| row[*k].clone()).collect())
-}
-
-/// 数组里每一项的这几个键（`[(p['a'], p['b']) for p in rows]`）
-fn rows_of(rows: &Value, keys: &[&str]) -> Vec<Value> {
-    rows.list().iter().map(|row| cols(row, keys)).collect()
-}
-
-/// 列表里正好一项（`(row,) = …`）
-fn only(v: &Value) -> &Value {
-    let rows = v.list();
-    assert_eq!(rows.len(), 1, "该正好一项：{v}");
-    &rows[0]
-}
-
-/// 字节里有没有这一截（`needle in out`）
-fn has(hay: &[u8], needle: impl AsRef<[u8]>) -> bool {
-    term::find(hay, needle).is_some()
-}
-
-/// Python 的 re.search(pattern, text) 找不找得到。正则照原来的写；只有末尾的 $ 换一种写法：Python 里它在最后那个换行的
-/// 前面也算数，regex 这个库的 $ 只认真正的末尾
-fn matches(pattern: &str, text: &str) -> bool {
-    let pattern = match pattern.strip_suffix('$') {
-        Some(head) => format!("{head}\n?\\z"),
-        None => pattern.to_string(),
-    };
-    regex::Regex::new(&pattern).unwrap_or_else(|e| panic!("正则 {pattern:?} 写得不对：{e}")).is_match(text)
-}
-
-/// 目录底下所有的文件和目录（一层层往下走，不跟着链接走）
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return found };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            found.extend(walk(&path));
-        }
-        found.push(path);
-    }
-    found
 }
 
 /// 路径当参数用（临时目录都是 UTF-8 的）
@@ -1455,11 +1384,6 @@ fn view_only_unpair_and_no_session(t: &mut Ctx) {
 }
 
 // ---- bash 这一层：cca remote pair --web（真的 cca 脚本），终端里和界面 App 的提问会话里；手机那一头照文档自己说话（Guest） ----
-
-/// 文件名是不是以 prefix 开头（原来的 `d.glob('**/cca-pair.*')`）
-fn named_like(path: &Path, prefix: &str) -> bool {
-    path.file_name().is_some_and(|name| name.to_string_lossy().starts_with(prefix))
-}
 
 fn terminal(t: &mut Ctx) {
     let (fx, web, a, _b) = web_fx(t);

@@ -18,6 +18,7 @@ pub mod pki;
 pub mod plist;
 pub mod proc;
 pub mod pty;
+pub mod py;
 pub mod relay;
 pub mod sandbox;
 pub mod server;

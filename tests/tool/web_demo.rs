@@ -42,16 +42,9 @@ fn say(line: &str) {
     let _ = out.flush();
 }
 
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
+/// 用法不对：说在 stderr（后面接着用法），在 $CCA_TEST_TRAP 里记一行，退出码 2
 fn usage(args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test web-demo：{why}\n{USAGE}");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test web-demo {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
+    crate::trap::usage_with("web-demo", args, why, &format!("\n{USAGE}"))
 }
 
 /// 命令行上写的

@@ -15,7 +15,7 @@ use super::*;
 /// 一个文件里在监听的端口：一个一行，接在 lines 后面（中途出了异常，前面的那些已经在里面了）
 fn listing(text: &str, lines: &mut Vec<String>) -> R<()> {
     for row in splitlines(text).into_iter().skip(1) {
-        let p: Vec<&str> = row.split(is_py_space).filter(|w| !w.is_empty()).collect();
+        let p: Vec<&str> = row.split(py::isspace).filter(|w| !w.is_empty()).collect();
         if p.len() > 3 && p[3] == "0A" {
             // int(p[1].rsplit(':', 1)[1], 16)
             let Some((_, hex)) = p[1].rsplit_once(':') else { return fail("IndexError: list index out of range") };

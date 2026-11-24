@@ -39,6 +39,7 @@
 
 use kit::crypto::{b64, hex, random, sha256_hex, unhex};
 use kit::json::{self, Style, Value};
+use kit::py::{py_repr, py_str, truthy};
 use kit::spec;
 use kit::{list, obj};
 use std::collections::BTreeSet;
@@ -80,7 +81,7 @@ const OPS: &[(&str, &str, fn(&[String]) -> R<()>)] = &[
 fn run(args: &[String]) -> i32 {
     match dispatch(args) {
         Ok(()) => 0,
-        Err(Stop::Usage(why)) => usage(args, &why),
+        Err(Stop::Usage(why)) => crate::trap::usage("spec", args, &why),
         Err(Stop::Fail(why)) => {
             eprintln!("cca-test spec {}：{why}", args[0]);
             1
@@ -99,18 +100,6 @@ fn dispatch(args: &[String]) -> R<()> {
         Ok(done) => done,
         Err(_) => Err(Stop::Panicked),
     }
-}
-
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
-fn usage(args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test spec：{why}");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test spec {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
 }
 
 fn bad<T>(why: impl Into<String>) -> R<T> {
@@ -197,63 +186,7 @@ fn say(line: &str) -> R<()> {
     out.write_all(format!("{line}\n").as_bytes()).and_then(|()| out.flush()).or_else(|e| fail(format!("写不了 stdout：{e}")))
 }
 
-// ---------------------------------------------------------------- Python 的几样写法
-
-/// Python 里算不算真（if x / x or y）
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Int(i) => *i != 0,
-        Value::Float(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(l) => !l.is_empty(),
-        Value::Obj(o) => !o.is_empty(),
-    }
-}
-
-/// Python 的 repr：出错时服务器回的 JSON 照原来 '%s' % (j,) 的样子写（{'error': 'bad_token'}）。不可打印的非 ASCII 字符
-/// Python 会转义，这里原样写——只是给人看的
-fn py_repr(v: &Value) -> String {
-    match v {
-        Value::Null => "None".to_string(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::Float(f) => json::float_repr(*f),
-        Value::Str(s) => py_quote(s),
-        Value::List(l) => format!("[{}]", l.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Obj(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", py_quote(k), py_repr(v))).collect::<Vec<_>>().join(", "))
-        }
-    }
-}
-
-/// repr(str)：单引号；里面有单引号、没有双引号时改用双引号
-fn py_quote(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => out.extend(['\\', c]),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
-/// Python 的 str()：字符串原样，别的照 repr
-fn py_str(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        other => py_repr(other),
-    }
-}
+// ---------------------------------------------------------------- Python 的几样写法（真假、str()、repr() 在 kit::py）
 
 /// Python 的 float // float（floatobject.c 的 float_floor_div：先 fmod 再除，商凑到最近的整数）
 fn py_floordiv(vx: f64, wx: f64) -> f64 {
@@ -658,37 +591,6 @@ fn dpair(a: &[String]) -> R<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn values_print_like_python() {
-        let j =
-            json::parse(r#"{"error": "bad_token", "n": [1, 2.5, null, true, false], "名字": "it's", "q": "a\"b'c\n"}"#).unwrap();
-        assert_eq!(py_repr(&j), r#"{'error': 'bad_token', 'n': [1, 2.5, None, True, False], '名字': "it's", 'q': 'a"b\'c\n'}"#);
-        assert_eq!(py_repr(&obj! {}), "{}");
-        assert_eq!(py_str(&Value::from("原样")), "原样");
-        assert_eq!(py_str(&Value::from(7)), "7");
-        assert_eq!(py_str(&Value::from(2.0)), "2.0");
-    }
-
-    #[test]
-    fn truth_like_python() {
-        for (text, want) in [
-            ("null", false),
-            ("false", false),
-            ("0", false),
-            ("0.0", false),
-            ("\"\"", false),
-            ("[]", false),
-            ("{}", false),
-            ("true", true),
-            ("3", true),
-            ("\"0\"", true),
-            ("[0]", true),
-            ("{\"a\": null}", true),
-        ] {
-            assert_eq!(truthy(&json::parse(text).unwrap()), want, "{text}");
-        }
-    }
 
     #[test]
     fn floor_division_and_sums_like_python() {

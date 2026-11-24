@@ -6,23 +6,15 @@
 use kit::gui_session::{self, Opts};
 use kit::json;
 use kit::proc::Cmd;
-use std::io::Write;
 use std::path::Path;
 
 pub const CMDS: &[(&str, crate::Run)] = &[("gui-session", gui_session)];
 
 const USAGE: &str = "用法：cca-test gui-session 事件文件 答案表 [--eof-at 题号] [--stale] [--wrong-field 题号] [--keep] -- 命令…";
 
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
+/// 用法不对：说在 stderr（后面接着用法），在 $CCA_TEST_TRAP 里记一行，退出码 2
 fn usage(args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test gui-session：{why}\n{USAGE}");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test gui-session {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
+    crate::trap::usage_with("gui-session", args, why, &format!("\n{USAGE}"))
 }
 
 fn gui_session(args: &[String]) -> i32 {

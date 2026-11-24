@@ -384,7 +384,7 @@ impl Session {
                         continue;
                     }
                     let (data, label): (Vec<u8>, Option<String>) = if let Some(hf) = &hf {
-                        let names: HashSet<String> = py::split_ws(&hf[1]).into_iter().map(py::upper).collect();
+                        let names: HashSet<String> = py::split(&hf[1]).map(py::upper).collect();
                         (header_fields(&m.raw, &names), Some(format!("BODY[HEADER.FIELDS ({})]", &hf[1])))
                     } else if let Some(part) = &part {
                         let n = py::int(&part[1]).map_err(|_| Abort)?.clamp(0, m.raw.len() as i128) as usize;

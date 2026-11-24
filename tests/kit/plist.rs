@@ -67,12 +67,6 @@ impl Value {
             _ => None,
         }
     }
-    pub fn as_dict(&self) -> Option<&[(String, Value)]> {
-        match self {
-            Value::Dict(d) => Some(d),
-            _ => None,
-        }
-    }
     /// 给字典放一项：键已经在的换掉值、位置不动（和 Python 的 dict 一样）；不是字典什么都不做
     pub fn set(&mut self, key: &str, value: Value) {
         if let Value::Dict(d) = self {

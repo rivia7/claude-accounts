@@ -10,7 +10,6 @@ use super::ast::CmpOp;
 use super::builtins::{no_kw, take_kw};
 use super::interp::Kw;
 use super::ops::{self, as_int, truthy, MAX_DATA_DEPTH};
-use super::pyfmt;
 use super::value::*;
 
 // ---- 文件 ----
@@ -18,9 +17,7 @@ use super::value::*;
 /// 读文件时系统的出错 → Python 的异常（FileNotFoundError: [Errno 2] No such file or directory: '路径'）
 pub fn io_error(e: &std::io::Error, path: &str) -> Stop {
     let Exc { kind, msg } = os_error(e);
-    let mut shown = String::new();
-    pyfmt::repr_str(&mut shown, path);
-    Stop::Raise(Exc { kind, msg: format!("{msg}: {shown}") })
+    Stop::Raise(Exc { kind, msg: format!("{msg}: {}", kit::py::repr_str(path)) })
 }
 
 /// 系统的出错 → Python 的异常是哪一类、“[Errno 2] No such file or directory” 这一段
@@ -256,7 +253,7 @@ fn english(msg: &str) -> &str {
 pub fn json_lines(text: &str) -> R<V> {
     let mut items = Vec::new();
     for line in text.split('\n') {
-        if line.trim_matches(pyfmt::py_space).is_empty() {
+        if kit::py::strip(line).is_empty() {
             continue;
         }
         items.push(parse_json(line)?);

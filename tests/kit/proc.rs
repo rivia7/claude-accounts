@@ -712,11 +712,11 @@ impl Attr {
     }
 }
 
-/// Linux 上没有“没写明的描述符一个不带”的开关：起子进程之前把这个进程 3 号以上的都标成 exec 时关掉
-/// （要带给子进程的是在子进程里 dup2 出来的，不受这个标记影响）
-#[cfg(target_os = "linux")]
-fn cloexec_all() {
-    let Ok(dir) = std::fs::read_dir("/proc/self/fd") else { return };
+/// 把这个进程 3 号以上的描述符都标成 exec 时关掉：之后起的子进程只拿得到 0、1、2（Python 的 subprocess 的 close_fds=True）。
+/// Linux 上没有“没写明的描述符一个不带”的开关，[`Cmd`] 起子进程之前先做这一步（要带给子进程的是在子进程里 dup2 出来的，
+/// 不受这个标记影响）；macOS 上 [`Cmd`] 用不着它，那里是给经 std::process::Command 起子进程的假命令（tests/tool/fake）用的
+pub fn cloexec_all() {
+    let Ok(dir) = std::fs::read_dir(if cfg!(target_os = "linux") { "/proc/self/fd" } else { "/dev/fd" }) else { return };
     let fds: Vec<RawFd> = dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok()).filter(|fd| *fd >= 3).collect();
     for fd in fds {
         // SAFETY: 只是给这个描述符设标记（列目录用的那个这时已经关了：EBADF，不管）

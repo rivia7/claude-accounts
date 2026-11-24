@@ -15,10 +15,11 @@ use kit::fleet::{self, Device, WAIT};
 use kit::fsx::{self, wait_for};
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Style, Value};
+use kit::py::splitlines;
 use kit::relay::{self, connect, ctl, dial, frame, read_all, read_ctl, read_exact, read_line, recv, sendall};
+use kit::relay::{cols, has, matches, named_like, names, only, parsed, rows_of, secs, walk};
 use kit::relay::{Base, Popen, Reader, RelayOpts, RelayServer, SpecPeer};
 use kit::relay::{EXIT, F_ANNOUNCE, F_BYE, F_JOIN, F_PING, F_PONG, HELLO, INPUT, OUTPUT, RESIZE};
-use kit::sandbox::splitlines;
 use kit::term::{self, Term};
 use kit::{case, crypto, list, obj, spec};
 use std::cell::RefCell;
@@ -58,11 +59,6 @@ fn err(status: u16, code: &str) -> (u16, Value) {
     (status, obj! { "error" => code })
 }
 
-/// 对象的键，照里面的先后（`list(d)`）
-fn names(v: &Value) -> Vec<String> {
-    v.obj().keys().map(str::to_string).collect()
-}
-
 /// `json.dumps(v).encode()`
 fn dumps(v: &Value) -> Vec<u8> {
     json::dumps(v, &Style::default()).into_bytes()
@@ -71,13 +67,6 @@ fn dumps(v: &Value) -> Vec<u8> {
 /// `base64.b64decode(v)`（票据的密钥）
 fn b64(v: &Value) -> Vec<u8> {
     crypto::b64_decode(v.str()).unwrap_or_else(|e| panic!("不是 base64（{e}）：{v}"))
-}
-
-/// 列表里正好一项（`(row,) = …`）
-fn only(v: &Value) -> &Value {
-    let rows = v.list();
-    assert_eq!(rows.len(), 1, "该正好一项：{v}");
-    &rows[0]
 }
 
 /// dev 经配对 pid 看到的：relay_list 回的整个 JSON
@@ -100,40 +89,6 @@ fn no_values() -> Vec<Value> {
     Vec::new()
 }
 
-fn secs(n: u64) -> Duration {
-    Duration::from_secs(n)
-}
-
-/// 字节里有没有这一截（`needle in out`）
-fn has(hay: &[u8], needle: impl AsRef<[u8]>) -> bool {
-    term::find(hay, needle).is_some()
-}
-
-/// Python 的 re.search(pattern, text) 找不找得到。正则照原来的写；只有末尾的 $ 换一种写法：Python 里它在最后那个换行的
-/// 前面也算数，regex 这个库的 $ 只认真正的末尾
-fn matches(pattern: &str, text: &str) -> bool {
-    let pattern = match pattern.strip_suffix('$') {
-        Some(head) => format!("{head}\n?\\z"),
-        None => pattern.to_string(),
-    };
-    regex::Regex::new(&pattern).unwrap_or_else(|e| panic!("正则 {pattern:?} 写得不对：{e}")).is_match(text)
-}
-
-/// `json.loads(text)`
-fn parsed(text: &str) -> Value {
-    json::parse(text).unwrap_or_else(|e| panic!("不是 JSON（{e}）：{text}"))
-}
-
-/// 对象里这几个键的值，照给的先后排成一个数组（原来拿元组比的地方：`(d['a'], d['b']) == (…)`）
-fn cols(row: &Value, keys: &[&str]) -> Value {
-    Value::List(keys.iter().map(|k| row[*k].clone()).collect())
-}
-
-/// 数组里每一项的这几个键（`[(p['a'], p['b']) for p in rows]`）
-fn rows_of(rows: &Value, keys: &[&str]) -> Vec<Value> {
-    rows.list().iter().map(|row| cols(row, keys)).collect()
-}
-
 /// 目录里（不往下走）各个 .json 文件的内容接在一起（`''.join(p.read_text() for p in d.glob('*.json'))`）
 fn json_files(dir: &Path) -> String {
     let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
@@ -142,25 +97,6 @@ fn json_files(dir: &Path) -> String {
     };
     files.sort();
     files.iter().map(fsx::read_text).collect()
-}
-
-/// 目录底下所有的文件和目录（一层层往下走，不跟着链接走）
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return found };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            found.extend(walk(&path));
-        }
-        found.push(path);
-    }
-    found
-}
-
-/// 文件名是不是以 prefix 开头
-fn named_like(path: &Path, prefix: &str) -> bool {
-    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(prefix))
 }
 
 /// 等终端的输出里出现 needle（照字面找），最多等 limit：等到了没有。到时限、终端那头关了还没有是 false

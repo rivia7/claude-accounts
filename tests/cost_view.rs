@@ -8,7 +8,8 @@
 use kit::harness::{self, Ctx, Module};
 use kit::json::{self, Obj, Style, Value};
 use kit::proc::{Cmd, Stdio};
-use kit::sandbox::{email_of, ident, ran, splitlines, truthy, utime, Ran};
+use kit::py::{splitlines, truthy};
+use kit::sandbox::{email_of, ident, ran, utime, Ran};
 use kit::{case, crypto, fsx, list, obj, plist, spec};
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::io::Write;

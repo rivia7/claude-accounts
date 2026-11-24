@@ -4,7 +4,7 @@
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Style, Value};
 use kit::sandbox::{self, ran, samefile, utime, Ran, Sandbox, ACCOUNTS};
-use kit::{case, fsx, list, obj};
+use kit::{case, fsx, list, obj, py};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -670,7 +670,7 @@ fn native_config_conflicts_keep_shared_preference_and_account_identity(t: &mut C
     let shared = fsx::read_json(&master_path);
     assert_eq!(shared["theme"], Value::from("light"));
     assert_eq!(shared["editorMode"], Value::from("vim"));
-    assert!(sandbox::truthy(&shared["verbose"]), "{shared}");
+    assert!(py::truthy(&shared["verbose"]), "{shared}");
     for field in ["oauthAccount", "userID", "machineID"] {
         assert_eq!(shared[field], master_before[field], "{field}");
     }
@@ -679,7 +679,7 @@ fn native_config_conflicts_keep_shared_preference_and_account_identity(t: &mut C
         let account = fsx::read_json(fx.client("claude", key).join(".claude.json"));
         assert_eq!(account["theme"], Value::from("light"));
         assert_eq!(account["editorMode"], Value::from("vim"));
-        assert!(sandbox::truthy(&account["verbose"]), "{account}");
+        assert!(py::truthy(&account["verbose"]), "{account}");
         assert_eq!(account["oauthAccount"]["emailAddress"], Value::from(key));
         assert_eq!(account["cachedUsageUtilization"]["account"], Value::from(key));
         let fixed = fsx::read_json(fx.directory("claude", key).join("device.json"));

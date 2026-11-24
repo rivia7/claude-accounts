@@ -18,6 +18,7 @@
 
 use crate::json::{self, Value};
 use crate::proc::{Cmd, Session, Stdio};
+use crate::py::{py_str, truthy};
 use std::fs::File;
 use std::io::{self, PipeWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -175,19 +176,6 @@ impl App {
     }
 }
 
-/// Python 里算不算真
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Int(i) => *i != 0,
-        Value::Float(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(l) => !l.is_empty(),
-        Value::Obj(o) => !o.is_empty(),
-    }
-}
-
 /// Python 的 '%d' % 序号：小数截掉小数部分，true 是 1；别的（字符串、null、无穷大）算错
 fn py_d(v: &Value) -> io::Result<String> {
     match v {
@@ -201,93 +189,9 @@ fn py_d(v: &Value) -> io::Result<String> {
     }
 }
 
-/// Python 的 str()：字符串原样，别的照 Python 的 repr（None、True、1.0、['a', 1]……）
-fn py_str(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        _ => py_repr(v),
-    }
-}
-
-fn py_repr(v: &Value) -> String {
-    match v {
-        Value::Null => "None".to_string(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::Float(f) if f.is_nan() => "nan".to_string(),
-        Value::Float(f) if f.is_infinite() => if *f > 0.0 { "inf" } else { "-inf" }.to_string(),
-        Value::Float(f) => json::float_repr(*f),
-        Value::Str(s) => str_repr(s),
-        Value::List(l) => format!("[{}]", l.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Obj(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", str_repr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
-        }
-    }
-}
-
-/// 字符串的 Python repr：单引号（里面有单引号、没有双引号时用双引号），不能显示的字符写成 \x、\u 转义
-fn str_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(q);
-    for c in s.chars() {
-        let n = c as u32;
-        match c {
-            '\\' => out.push_str(r"\\"),
-            '\n' => out.push_str(r"\n"),
-            '\r' => out.push_str(r"\r"),
-            '\t' => out.push_str(r"\t"),
-            _ if c == q => {
-                out.push('\\');
-                out.push(c);
-            }
-            // 控制字符、各种空格（普通的空格除外）、格式字符、私用区：Python 的 str.isprintable() 是假的那些里常见的
-            _ if n < 0x20
-                || (0x7f..=0xa0).contains(&n)
-                || n == 0xad
-                || n == 0x1680
-                || (0x2000..=0x200f).contains(&n)
-                || (0x2028..=0x202f).contains(&n)
-                || (0x205f..=0x2064).contains(&n)
-                || n == 0x3000
-                || n == 0xfeff
-                || (0xe000..=0xf8ff).contains(&n) =>
-            {
-                if n < 0x100 {
-                    out.push_str(&format!(r"\x{n:02x}"));
-                } else {
-                    out.push('\\');
-                    out.push_str(&format!("u{n:04x}"));
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    out.push(q);
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn values_print_like_python_str() {
-        let v = |s: &str| json::parse(s).unwrap();
-        for (json_text, want) in [
-            (r#""机房组""#, "机房组"),
-            ("true", "True"),
-            ("null", "None"),
-            ("7890", "7890"),
-            ("1.0", "1.0"),
-            ("1e16", "1e+16"),
-            ("Infinity", "inf"),
-            (r#"["a", 1, false, {"k": "it's"}]"#, r#"['a', 1, False, {'k': "it's"}]"#),
-        ] {
-            assert_eq!(py_str(&v(json_text)), want, "{json_text}");
-        }
-        let odd = Value::List(vec![Value::Str("a\nb\u{a0}\u{1}\u{3000}".to_string())]);
-        assert_eq!(py_str(&odd), format!("['a{0}nb{0}xa0{0}x01{0}u3000']", '\\'));
-    }
 
     #[test]
     fn seq_like_percent_d() {
@@ -299,22 +203,5 @@ mod tests {
         assert_eq!(d("true"), Some("1".to_string()));
         assert_eq!(d(r#""1""#), None);
         assert_eq!(d("null"), None);
-    }
-
-    #[test]
-    fn truthy_like_python() {
-        for (s, want) in [
-            ("0", false),
-            ("0.0", false),
-            (r#""""#, false),
-            ("[]", false),
-            ("{}", false),
-            ("null", false),
-            ("1", true),
-            (r#""0""#, true),
-            ("[0]", true),
-        ] {
-            assert_eq!(truthy(&json::parse(s).unwrap()), want, "{s}");
-        }
     }
 }

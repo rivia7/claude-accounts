@@ -12,6 +12,7 @@
 //! - 设备上的东西：[`work`]、[`client`]、[`helper`]、[`helper_cmd`]、[`term`]、[`session`]（宿主里的会话）、[`peers`]、[`secret`]
 //! - [`Popen`]：一个接着管道的子进程（等它的一行输出、之后收齐剩下的；原来的 subprocess.Popen）；[`pgrep`]
 //! - [`SpecPeer`]、[`Reader`]：照文档自己说话的另一头（原来的 PyPeer、Reader）
+//! - 用例里写断言用的小东西：[`secs`]、[`names`]、[`only`]、[`has`]、[`matches`]、[`parsed`]、[`cols`] / [`rows_of`]、[`walk`]、[`named_like`]
 //!
 //! 和原来不一样的几处（都是 Rust 里本来的样子）：
 //! - 连接、终端离开作用域就关掉，所以没有 `SOCKS` / `close_socks()`、`self.terms`：用例里把它们声明在 [`Base`] 后面
@@ -38,7 +39,7 @@ use crate::proc::{Child, Cmd, Stdio};
 use crate::sandbox::{self, Ran};
 use crate::spec::{self, Channel};
 use crate::term::{self, Term};
-use crate::{crypto, obj, pki};
+use crate::{crypto, obj, pki, py};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -845,8 +846,75 @@ pub fn edges_in(d: &Path) -> Value {
 /// 事件文件里的事件，一行一个（空行不算）
 pub fn events(path: &Path) -> Vec<Value> {
     let text = fsx::read_text(path);
-    let lines = sandbox::splitlines(&text).into_iter().filter(|line| !line.trim().is_empty());
+    let lines = py::splitlines(&text).into_iter().filter(|line| !line.trim().is_empty());
     lines.map(|line| json::parse(line).unwrap_or_else(|e| panic!("事件文件里有一行不是 JSON（{e}）：{line}"))).collect()
+}
+
+// ---- 用例里写断言用的小东西（remote_relay、web_relay、team_relay 三个模块共用） ----
+
+pub fn secs(n: u64) -> Duration {
+    Duration::from_secs(n)
+}
+
+/// 对象的键，照里面的先后（`list(d)`）
+pub fn names(v: &Value) -> Vec<String> {
+    v.obj().keys().map(str::to_string).collect()
+}
+
+/// 列表里正好一项（`(row,) = …`）
+pub fn only(v: &Value) -> &Value {
+    let rows = v.list();
+    assert_eq!(rows.len(), 1, "该正好一项：{v}");
+    &rows[0]
+}
+
+/// 字节里有没有这一截（`needle in out`）
+pub fn has(hay: &[u8], needle: impl AsRef<[u8]>) -> bool {
+    term::find(hay, needle).is_some()
+}
+
+/// Python 的 re.search(pattern, text) 找不找得到。正则照原来的写；只有末尾的 $ 换一种写法：Python 里它在最后那个换行的
+/// 前面也算数，regex 这个库的 $ 只认真正的末尾
+pub fn matches(pattern: &str, text: &str) -> bool {
+    let pattern = match pattern.strip_suffix('$') {
+        Some(head) => format!("{head}\n?\\z"),
+        None => pattern.to_string(),
+    };
+    regex::Regex::new(&pattern).unwrap_or_else(|e| panic!("正则 {pattern:?} 写得不对：{e}")).is_match(text)
+}
+
+/// `json.loads(text)`
+pub fn parsed(text: &str) -> Value {
+    json::parse(text).unwrap_or_else(|e| panic!("不是 JSON（{e}）：{text}"))
+}
+
+/// 对象里这几个键的值，照给的先后排成一个数组（原来拿元组比的地方：`(d['a'], d['b']) == (…)`）
+pub fn cols(row: &Value, keys: &[&str]) -> Value {
+    Value::List(keys.iter().map(|k| row[*k].clone()).collect())
+}
+
+/// 数组里每一项的这几个键（`[(p['a'], p['b']) for p in rows]`）
+pub fn rows_of(rows: &Value, keys: &[&str]) -> Vec<Value> {
+    rows.list().iter().map(|row| cols(row, keys)).collect()
+}
+
+/// 目录底下所有的文件和目录（一层层往下走，不跟着链接走）
+pub fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return found };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            found.extend(walk(&path));
+        }
+        found.push(path);
+    }
+    found
+}
+
+/// 文件名是不是以 prefix 开头
+pub fn named_like(path: &Path, prefix: &str) -> bool {
+    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(prefix))
 }
 
 // ---- 设备上的东西 ----

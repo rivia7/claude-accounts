@@ -4,11 +4,13 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use kit::py;
+
 use super::ast::BinOp;
 use super::builtins::{arity, index_arg, no_kw, sort_values, take_kw};
 use super::interp::{Interp, Kw};
 use super::ops::{self, char_len, dict_key, eq_item, set_elem};
-use super::pyfmt::{self, is_decimal, is_letter, is_other_number, py_space};
+use super::pyfmt::{self, is_decimal, is_letter, is_other_number};
 use super::value::*;
 use super::{jsonio, names};
 
@@ -61,10 +63,6 @@ const FROZENSET: &[&str] =
 const TUPLE: &[&str] = &["count", "index"];
 const FILE: &[&str] = &["close", "read", "readline", "readlines"];
 const VIEW: &[&str] = &["isdisjoint"];
-/// 不是方法的属性
-const VALUES: &[&str] = &["__name__", "start", "stop", "step", "stdout", "stderr"];
-/// 模块里有的
-const MODULE: &[&str] = &["loads", "load", "dumps", "exit", "time"];
 
 /// 这个类型上实现了的方法、Python 里它有的全部属性名
 fn methods_of(ty: Ty) -> (&'static [&'static str], &'static [&'static str]) {
@@ -85,24 +83,6 @@ fn methods_of(ty: Ty) -> (&'static [&'static str], &'static [&'static str]) {
         Ty::File => (FILE, names::FILE),
         _ => (&[], &[]),
     }
-}
-
-/// syntax 子命令用：这个名字是不是哪种类型上支持的方法或者属性
-pub fn known_attr(name: &str) -> bool {
-    [STR, LIST, DICT, SET, FROZENSET, TUPLE, FILE, VIEW, VALUES, MODULE].iter().any(|t| t.contains(&name))
-}
-
-/// 方法认的关键字参数（syntax 子命令用）；None：这个方法什么关键字参数都认（dict.update）
-pub fn method_keywords(name: &str) -> Option<&'static [&'static str]> {
-    Some(match name {
-        "sort" => &["key", "reverse"],
-        "split" | "rsplit" => &["sep", "maxsplit"],
-        "splitlines" => &["keepends"],
-        "replace" => &["count"],
-        "dumps" => &["indent", "ensure_ascii", "sort_keys", "separators"],
-        "update" => return None,
-        _ => &[],
-    })
 }
 
 pub fn is_instance(v: &V, ty: Ty) -> bool {
@@ -174,11 +154,6 @@ fn module_names(m: Mod) -> &'static [&'static str] {
         Mod::Sys => names::MOD_SYS,
         Mod::Time => names::MOD_TIME,
     }
-}
-
-/// syntax 子命令用：模块.名字 这里有没有
-pub fn module_has(module: &str, name: &str) -> bool {
-    matches!((module, name), ("json", "loads" | "load" | "dumps") | ("sys", "exit" | "stdout" | "stderr") | ("time", "time"))
 }
 
 fn type_attr(ty: Ty, name: &str) -> R<V> {
@@ -358,7 +333,8 @@ fn str_method(it: &mut Interp, s: &Rc<str>, name: &'static str, args: Vec<V>, mu
             no_kw(name, &kw)?;
             kw_arity(name, &args, 0, 1)?;
             let keep = args.first().cloned().or(keep_kw).is_some_and(|v| ops::truthy(&v));
-            Ok(V::list(splitlines(text, keep).into_iter().map(V::str).collect()))
+            let lines = if keep { py::splitlines_keep(text) } else { py::splitlines(text) };
+            Ok(V::list(lines.into_iter().map(V::str).collect()))
         }
         "strip" | "lstrip" | "rstrip" => {
             no_kw(name, &kw)?;
@@ -371,7 +347,7 @@ fn str_method(it: &mut Interp, s: &Rc<str>, name: &'static str, args: Vec<V>, mu
             };
             let strip = |c: char| match &chars {
                 Some(set) => set.contains(&c),
-                None => py_space(c),
+                None => py::isspace(c),
             };
             let mut out = text;
             if left {
@@ -486,7 +462,7 @@ fn str_method(it: &mut Interp, s: &Rc<str>, name: &'static str, args: Vec<V>, mu
                     "isdigit" => (is_decimal(c), is_other_number(c)),
                     "isalpha" => (is_letter(c), false),
                     "isalnum" => (is_letter(c) || is_decimal(c), is_other_number(c)),
-                    _ => (py_space(c), false),
+                    _ => (py::isspace(c), false),
                 };
                 if maybe {
                     unsure = true;
@@ -568,7 +544,7 @@ fn split_space(text: &str, max: i128, right: bool) -> Vec<&str> {
     let mut rest = text;
     let mut left = if max < 0 { usize::MAX } else { max as usize };
     loop {
-        rest = if right { rest.trim_end_matches(py_space) } else { rest.trim_start_matches(py_space) };
+        rest = if right { rest.trim_end_matches(py::isspace) } else { rest.trim_start_matches(py::isspace) };
         if rest.is_empty() {
             break;
         }
@@ -578,42 +554,17 @@ fn split_space(text: &str, max: i128, right: bool) -> Vec<&str> {
         }
         left -= 1;
         if right {
-            let cut = rest.rfind(py_space).map(|i| i + rest[i..].chars().next().map_or(1, char::len_utf8)).unwrap_or(0);
+            let cut = rest.rfind(py::isspace).map(|i| i + rest[i..].chars().next().map_or(1, char::len_utf8)).unwrap_or(0);
             out.push(&rest[cut..]);
             rest = &rest[..cut];
         } else {
-            let cut = rest.find(py_space).unwrap_or(rest.len());
+            let cut = rest.find(py::isspace).unwrap_or(rest.len());
             out.push(&rest[..cut]);
             rest = &rest[cut..];
         }
     }
     if right {
         out.reverse();
-    }
-    out
-}
-
-/// str.splitlines 认的换行比文件多：\v、\f、\x1c–\x1e、\x85、U+2028、U+2029 也算
-fn splitlines(text: &str, keep: bool) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if !matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}') {
-            continue;
-        }
-        let mut end = i + c.len_utf8();
-        if c == '\r' {
-            if let Some((j, '\n')) = chars.peek().copied() {
-                chars.next();
-                end = j + 1;
-            }
-        }
-        out.push(&text[start..if keep { end } else { i }]);
-        start = end;
-    }
-    if start < text.len() {
-        out.push(&text[start..]);
     }
     out
 }

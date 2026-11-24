@@ -23,6 +23,7 @@
 //! 用法不对（少了参数、正则写错了、环境里没有要搜的变量、号不是数）：stderr 上说一句，退出码 2，在 $CCA_TEST_TRAP 里记一行——
 //! 原来的 Python 这几种是没人接的异常、退出码 1，可 1 是「搜不到」：要是正则这边认不了，测试会把它当成没有这个进程，悄悄通过。
 
+use crate::trap::usage;
 use kit::json::{self, Obj, Style, Value};
 use std::io::{Read, Write};
 
@@ -34,18 +35,6 @@ pub const CMDS: &[(&str, crate::Run)] = &[
     ("fd-closed", fd_closed),
     ("hold", hold),
 ];
-
-/// 用法不对：说在 stderr，在 $CCA_TEST_TRAP 里记一行（参数里的换行写成 \n，保证一条一行），退出码 2
-fn usage(role: &str, args: &[String], why: &str) -> i32 {
-    eprintln!("cca-test {role}：{why}");
-    if let Some(trap) = std::env::var_os("CCA_TEST_TRAP").filter(|t| !t.is_empty()) {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(trap) {
-            let line = format!("cca-test {role} {}：{why}", args.join(" ")).replace('\n', "\\n");
-            let _ = writeln!(f, "{line}");
-        }
-    }
-    2
-}
 
 /// print(json.dumps(v))：写一行。对方不收了（EPIPE）就算了
 fn print_json(v: &Value) -> i32 {

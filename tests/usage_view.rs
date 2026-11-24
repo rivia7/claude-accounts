@@ -6,8 +6,8 @@
 
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Style, Value};
-use kit::sandbox::{self, email_of, ident, ran, Ran, Sandbox};
-use kit::{case, crypto, fsx, list, obj, plist, width};
+use kit::sandbox::{email_of, ident, ran, Ran, Sandbox};
+use kit::{case, crypto, fsx, list, obj, plist, py, width};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -201,7 +201,7 @@ impl Fx {
 
     /// 表格的各行
     fn table_lines(&self, keys: &[String], cols: u32) -> Vec<String> {
-        sandbox::splitlines(&self.render(keys, "table", cols, 0)).into_iter().map(str::to_string).collect()
+        py::splitlines(&self.render(keys, "table", cols, 0)).into_iter().map(str::to_string).collect()
     }
 
     /// JSON 里各账号的条目
@@ -554,7 +554,7 @@ fn usage_cached_keeps_model_scoped(t: &mut Ctx) {
         fx.cache(key, caches[0], "claude");
         let claude_json = fx.login(key, Some("u-1"), caches[1], &obj! {});
         let before = fsx::read_text(&claude_json);
-        let any = caches.iter().any(|c| c.is_some_and(sandbox::truthy));
+        let any = caches.iter().any(|c| c.is_some_and(py::truthy));
         let accounts = fx.accounts(&[key.to_string()], if any { 0 } else { 1 });
         let [e] = accounts.as_slice() else { panic!("不是正好一个账号：{}", Value::List(accounts.clone())) };
         assert_eq!(fsx::read_text(&claude_json), before); // 只在给出去的那份里补，读到的不改

@@ -19,7 +19,7 @@ pub fn features(a: &[String]) -> R<i32> {
     let set = regex(&format!("^[{PY_WS}]*{}[{PY_WS}]*=", regex::escape(key)))?;
     let (mut result, mut inside, mut found) = (Vec::<String>::new(), false, false);
     for line in splitlines(&s) {
-        let st = py_strip(line);
+        let st = py::strip(line);
         if st.starts_with('[') {
             inside = st == "[features]";
             result.push(line.to_string());
@@ -113,7 +113,7 @@ pub fn session(a: &[String]) -> R<i32> {
         q(tag)
     );
     let db = join(&[dbhome, "state_5.sqlite"]);
-    cloexec_inherited();
+    cloexec_all();
     let mut child = std::process::Command::new("/usr/bin/sqlite3")
         .args(["-batch", "-bail", "-init", "/dev/null", &db])
         .stdin(std::process::Stdio::piped())

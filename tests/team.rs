@@ -11,7 +11,7 @@ use kit::fleet::{self, ident, CliSession, Device, Server, ServerOpts, SESSION_PI
 use kit::fsx::{self, wait_for};
 use kit::harness::{Ctx, Module};
 use kit::json::{self, Obj, Style, Value};
-use kit::sandbox::{splitlines, truthy};
+use kit::py::{splitlines, truthy};
 use kit::{case, crypto, list, obj, pki, spec};
 use regex::Regex;
 use rustls::pki_types::pem::PemObject;

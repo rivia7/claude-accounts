@@ -21,7 +21,7 @@ pub fn run(a: &[String]) -> R<i32> {
         // 读不到 stun_ip 就不回答（原来的 except OSError: continue）
         let Ok(raw) = std::fs::read(join(&[t, "stun_ip"])) else { continue };
         let ip = String::from_utf8(raw).map_err(|_| Fail("UnicodeDecodeError: 'utf-8' codec can't decode stun_ip".into()))?;
-        let ip = py_strip(&ip.replace("\r\n", "\n").replace('\r', "\n")).to_string();
+        let ip = py::strip(&ip.replace("\r\n", "\n").replace('\r', "\n")).to_string();
         append_text(&join(&[t, "stun.log"]), &format!("STUN {ip}\n"))?;
         let addr = inet_aton(&ip)?;
         let port = match peer {

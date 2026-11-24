@@ -26,7 +26,7 @@ fn mark(t: &str, name: &str) -> R<Option<String>> {
     if !exists(&p) {
         return Ok(None);
     }
-    Ok(Some(py_strip(&read_text(&p)?).to_string()))
+    Ok(Some(py::strip(&read_text(&p)?).to_string()))
 }
 
 pub fn run(a: &[String]) -> R<i32> {
@@ -100,7 +100,7 @@ pub fn run(a: &[String]) -> R<i32> {
 fn login(t: &str, g: &str, cli: &str, log: &dyn Fn(&str) -> R<()>) -> R<i32> {
     let name = format!("acp-login-{}-{}.log", local_stamp(), std::process::id());
     let mut text = String::from("I1124 11:01:12.000000 1 main.go:1] agy 1.5.16\n");
-    let forced = matches!(py_strip(&env_or("AGY_CLI_FORCE_FILE_TOKEN_STORAGE", "")).to_lowercase().as_str(), "1" | "true");
+    let forced = matches!(py::strip(&env_or("AGY_CLI_FORCE_FILE_TOKEN_STORAGE", "")).to_lowercase().as_str(), "1" | "true");
     if forced && mark(t, "agy_noswitch")?.is_none() {
         text.push_str(
             "I1124 11:01:12.000001 1 composite_token_storage.go:207] Using file-based token storage because AGY_CLI_FORCE_FILE_TOKEN_STORAGE is set\n",
@@ -138,7 +138,7 @@ fn login(t: &str, g: &str, cli: &str, log: &dyn Fn(&str) -> R<()>) -> R<i32> {
             return Ok(1);
         }
         let line = String::from_utf8_lossy(&buf).into_owned();
-        let mut code = py_strip(&line).to_string();
+        let mut code = py::strip(&line).to_string();
         if code.starts_with("http") {
             let qq = parse_qsl(&urlsplit(&code)?.query);
             if qs_get(&qq, "state") != Some(state.as_str()) {
@@ -165,7 +165,7 @@ fn login(t: &str, g: &str, cli: &str, log: &dyn Fn(&str) -> R<()>) -> R<i32> {
     };
     let alt = join(&[t, "agy_login_as"]);
     if exists(&alt) {
-        email = py_strip(&read_text(&alt)?).to_string();
+        email = py::strip(&read_text(&alt)?).to_string();
         remove(&alt)?;
     }
     let mut tok = Obj::new();
