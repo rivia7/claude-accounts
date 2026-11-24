@@ -1,11 +1,14 @@
 //! Team 的同步服务器的一键部署（docs/dev/team.md「部署」）。辅助程序生成的安装脚本（hub-installer）在假服务器（kit::hubbox：临时目录
-//! 当作 /，假的 systemctl、docker 起真的服务端；证书助手换成假的，照登记的地址写一张自签的证书）上运行。有 /bin/dash（Debian、Ubuntu
+//! 当作 /，假的 systemctl、docker 起安装脚本放上去的那一份服务端程序；证书助手换成假的，照登记的地址写一张自签的证书）上运行。
+//! 安装脚本里带的服务端程序本该是 Linux 的两份 cca-core：这里用这台机器上的辅助程序顶替（[`cores`]：CCA_HUB_CORE_X86_64、
+//! CCA_HUB_CORE_AARCH64 都指着它），假服务器上才运行得了；假服务器上没有 Python、拉不了镜像（[`clean`] 查没人去找过）。有 /bin/dash（Debian、Ubuntu
 //! 的 sh）就用它运行，有的用例用 /bin/sh（macOS、Fedora 上是 bash，Alpine 上是 busybox）。装好以后管理员的设备（kit::fleet 的
 //! Device：临时 HOME、假 curl）用辅助程序真的接上、发邀请，别的设备加入。cca team deploy 的那一半（team-deploy）经假的 ssh 在同一台
 //! 假服务器上运行同一个脚本。
 //!
 //! 原来是 tests/hub_deploy.py（InstallerTest 13 个用例、DeployTest 10 个；两个类里都有 test_web，这里叫 installer_test_web、
-//! deploy_test_web）。断言一条没少，和原来不一样的只有端口怎么来：
+//! deploy_test_web）；服务端从 Python 换成 cca-core 以后加了 from_python、core_checks、no_ca_bundle、runtime_image 四个。
+//! 和原来不一样的还有端口怎么来：
 //! - 给安装脚本的端口（[`team_port`]、[`one_port`]）：原来是“绑一下 0 号端口、记下系统给的”，可安装脚本没写中转的端口时自己用
 //!   下一个（P + 1），而 macOS 给 0 号端口的办法是整台机器一个接一个往下发——同时在跑的别的测试再要一个端口，拿到的正好是
 //!   P + 1，这边的服务端就起不来（Address already in use）。现在从系统不会自己发出去的那一段里挑，四个一格：三个连着的都看过
@@ -24,9 +27,8 @@ use kit::harness::{self, Ctx, Module};
 use kit::http::Request;
 use kit::hubbox::{self, Box as FakeBox, Opts, SS, UFW};
 use kit::json::{self, Value};
-use kit::proc::{self, Cmd, Session, Stdio};
+use kit::proc::{Cmd, Session, Stdio};
 use kit::sandbox::{self, Ran};
-use kit::server::Flavor;
 use kit::{list, obj, pki, tls};
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -53,6 +55,10 @@ pub const MODULE: Module = Module {
         case!(needs),
         case!(old_own_server),
         case!(teams),
+        case!(from_python),
+        case!(core_checks),
+        case!(no_ca_bundle),
+        case!(runtime_image),
         // cca team deploy（team-deploy）：经假的 ssh 把同一个脚本交给假服务器，装好了接上
         case!(deploy),
         case!(undeploy),
@@ -67,8 +73,8 @@ pub const MODULE: Module = Module {
     ],
 };
 
-/// 安装脚本照这个先后试的两个 python 镜像（server/hub-install.sh 的 IMAGES）
-const IMAGES: [&str; 2] = ["public.ecr.aws/docker/library/python:3.13-slim", "mirror.ccs.tencentyun.com/library/python:3.13-slim"];
+/// 以前的版本（3.6.x）的安装脚本用的 python 镜像：摆成以前的样子时写进 .env
+const OLD_IMAGE: &str = "public.ecr.aws/docker/library/python:3.13-slim";
 /// 假服务器上放 unit 的目录（root/ 下面）
 const UNITS: &str = "etc/systemd/system";
 /// 这台服务器上几个 Team 共用的证书助手（/opt/cca-team-acme）
@@ -107,21 +113,31 @@ printf '%s\n' "$HUB_SSH_SAYS" >&2
 exit 255
 "#;
 
-// ---- 假服务器上的服务用哪个程序跑 ----
+// ---- 安装脚本里带的服务端程序 ----
 
-/// 假服务器上的服务用这台机器上的哪个程序跑（交给 kit::hubbox 的 HUB_BOX_PYTHON、HUB_BOX_SERVER，见它开头「起的是哪个程序」）。
-/// 整个模块只有这一处管这件事。现在安装脚本部署的是 Python 的服务端（server/cca-presence.py）：compose 里容器的 python3 要换成
-/// 这台机器上的，和 kit::server 给 Python 那一份找 python3 的办法一样，照这个进程的 PATH 找，不写死路径（systemd 的 unit 里是安装
-/// 脚本在假服务器上 `command -v python3` 找到的，不归这里管）。CCA_TEST_SERVER=rust 时假服务器自己把服务端换成辅助程序里的那
-/// 一份（kit::hubbox 认这个开关），这里什么都不用给。安装脚本改成部署辅助程序以后，这里换成
-/// `("HUB_BOX_SERVER", harness::helper())`，python3 那一支去掉
-fn host_programs() -> Vec<(&'static str, String)> {
-    if Flavor::current().is_rust() {
-        return Vec::new();
-    }
-    let python = proc::which("python3")
-        .unwrap_or_else(|| panic!("PATH 上没有 python3：安装脚本部署的是 Python 的服务端，假服务器上起不了它（CCA_TEST_SERVER=rust 用辅助程序里的那一份）"));
-    vec![("HUB_BOX_PYTHON", python.to_string_lossy().into_owned())]
+/// 安装脚本里带的两份服务端程序用哪个文件顶替（给辅助程序的环境变量，见 cli/src/cmd/hub/payload.rs：仓库里的 cca 认它们）：都是
+/// 这台机器上的辅助程序。真的是 Linux 的 x86_64、aarch64 两份，在 Mac 上运行不了；在 Linux 上跑这份测试时辅助程序本来就是
+/// 其中一份，另一份只是带着、用不到
+fn cores() -> [(&'static str, String); 2] {
+    let helper = harness::helper().to_string_lossy().into_owned();
+    [("CCA_HUB_CORE_X86_64", helper.clone()), ("CCA_HUB_CORE_AARCH64", helper)]
+}
+
+/// 让辅助程序生成一份安装脚本（hub-installer），写成 dir/name：env 是带哪几份服务端程序（[`cores`]，或者别的文件）
+fn installer(dir: &Path, name: &str, env: &[(&str, &str)]) -> PathBuf {
+    let out = Cmd::new(harness::helper())
+        .arg("hub-installer")
+        .env("HOME", dir)
+        .env("PATH", "/usr/bin:/bin")
+        .env("CCA_VERSION", "9.9.9")
+        .envs(env.iter().copied())
+        .timeout(Duration::from_secs(30))
+        .output()
+        .unwrap_or_else(|e| panic!("hub-installer 运行不了：{e}"));
+    assert_eq!((out.status.py(), out.err().as_str()), (0, ""));
+    let script = dir.join(name);
+    fsx::write(&script, &out.stdout);
+    script
 }
 
 // ---- 端口 ----
@@ -364,6 +380,19 @@ fn fake_ss(b: &FakeBox) {
     b.fake("ss", &format!("#!/bin/sh\n{SS}"));
 }
 
+/// 这台假服务器上没人找过 Python、没人拉过镜像（服务端是安装脚本带着的 cca-core，Docker 的镜像是本机建的）
+#[track_caller]
+fn clean(b: &FakeBox) {
+    assert_eq!(b.log("python3.log"), "", "有人调了 python3");
+    let pulled: Vec<String> = b.log("docker.log").lines().filter(|l| l.starts_with("pull")).map(str::to_string).collect();
+    assert!(pulled.is_empty(), "有人拉了镜像：{pulled:?}");
+}
+
+/// 辅助程序（安装脚本里带的那一份服务端程序就是它）的内容
+fn helper_bytes() -> Vec<u8> {
+    fsx::read(harness::helper())
+}
+
 /// 设备记着的 team.json
 fn team_json(dev: &Device, tid: &str) -> Value {
     fsx::read_json(dev.cca.join("teams").join(tid).join("team.json"))
@@ -453,31 +482,21 @@ struct Fx {
 }
 
 /// 建临时目录，让辅助程序生成安装脚本（hub-installer）放进去。每个用例生成一次：
-/// 只是把编在辅助程序里的那份打出来，十来毫秒，用例之间就没有共用的东西了
+/// 把模板打出来、带上两份服务端程序（现压，几十毫秒），用例之间就没有共用的东西了
 fn setup(t: &mut Ctx) -> Fx {
     // 最先登记，最后才跑：假服务器都停了，再放开这个用例占着的端口
     t.defer(release_ports);
     let dir = t.tmp("cca-hub-deploy-");
-    let out = Cmd::new(harness::helper())
-        .arg("hub-installer")
-        .env("HOME", &dir)
-        .env("PATH", "/usr/bin:/bin")
-        .env("CCA_VERSION", "9.9.9")
-        .timeout(Duration::from_secs(30))
-        .output()
-        .unwrap_or_else(|e| panic!("hub-installer 运行不了：{e}"));
-    assert_eq!((out.status.py(), out.err().as_str()), (0, ""));
-    let script = dir.join("cca-hub-install.sh");
-    fsx::write(&script, &out.stdout);
+    let both = cores();
+    let both: Vec<(&str, &str)> = both.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let script = installer(&dir, "cca-hub-install.sh", &both);
     Fx { dir, script }
 }
 
 impl Fx {
     /// 一台假服务器；用例完了停掉它起的服务
     fn hub(&self, t: &mut Ctx, opts: &Opts) -> FakeBox {
-        let host = host_programs();
-        let host: Vec<(&str, &str)> = host.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let b = FakeBox::new_with(self.dir.join(format!("box-{}", crypto::token_hex(4))), opts, &host);
+        let b = FakeBox::new(self.dir.join(format!("box-{}", crypto::token_hex(4))), opts);
         t.defer({
             let b = b.clone();
             move || stop_box(&b)
@@ -485,10 +504,11 @@ impl Fx {
         b
     }
 
-    /// 一台设备，设备上的 ssh 是假的（连到 HUB_ENTER 那台假服务器）
+    /// 一台设备，设备上的 ssh 是假的（连到 HUB_ENTER 那台假服务器）；它部署时带的服务端程序也是顶替的那一份（[`cores`]）
     fn admin(&self, name: &str) -> Device {
-        let dev = Device::new(&self.dir.join(format!("{name}-{}", crypto::token_hex(4))), name, &obj! {});
+        let mut dev = Device::new(&self.dir.join(format!("{name}-{}", crypto::token_hex(4))), name, &obj! {});
         dev.fake("ssh", SSH);
+        dev.env.extend(cores().into_iter().map(|(k, v)| (k.to_string(), v)));
         dev
     }
 
@@ -550,7 +570,7 @@ fn deploy_ok(dev: &Device, tid: &str, b: &FakeBox, args: &[&str], env: &[(&str, 
 
 // ---- 在服务器上直接运行安装脚本（sudo sh cca-hub-install.sh --team-root …）----
 
-/// 生成的脚本：sh -n 过得去、带着版本、服务端程序和证书助手；模板本身不能运行；参数、root 的检查（什么都不动）
+/// 生成的脚本：sh -n 过得去、带着版本和两份服务端程序（校验值、解出来的都是那个文件）；模板本身不能运行；参数、root 的检查（什么都不动）
 fn script_itself(t: &mut Ctx) {
     let fx = setup(t);
     let s = fsx::read_text(&fx.script);
@@ -559,10 +579,24 @@ fn script_itself(t: &mut Ctx) {
         let out = Cmd::new(sh).arg("-n").arg(&fx.script).output().unwrap_or_else(|e| panic!("{sh} -n 运行不了：{e}"));
         assert_eq!(out.status.py(), 0, "{sh}：{}", out.err());
     }
-    assert_in("CCA_HUB_VERSION='9.9.9'", &s);
-    for f in ["cca-presence.py", "cca-acme.py"] {
-        assert!(s.contains(&fsx::read_text(server_dir().join(f))), "脚本里没有原样的 {f}");
+    assert_in("\nCCA_HUB_VERSION='9.9.9'\nCCA_HUB_CORES='X86_64 AARCH64'\n", &s);
+    // 带着的两份服务端程序：校验值是那个文件的；那一段（gzip 过的、base64）照安装脚本的办法解出来也是它
+    let sum = crypto::sha256_hex(&helper_bytes());
+    for arch in ["X86_64", "AARCH64"] {
+        assert_in(&format!("\nCCA_HUB_CORE_SHA256_{arch}='{sum}'\n"), &s);
+        let open = format!("\nhub_core_{arch}() {{\n\tcat <<'CCA_HUB_CORE_{arch}_EOF'\n");
+        let close = format!("\nCCA_HUB_CORE_{arch}_EOF\n}}\n");
+        let from = s.find(&open).unwrap_or_else(|| panic!("没有 {arch} 的那一段")) + open.len();
+        let to = from + s[from..].find(&close).unwrap_or_else(|| panic!("{arch} 的那一段没有结束行"));
+        let out = Cmd::new("/bin/sh")
+            .args(["-c", "openssl base64 -d | gzip -dc | openssl dgst -sha256 -r"])
+            .pass_env(&["PATH"])
+            .input(format!("{}\n", &s[from..to]))
+            .output()
+            .unwrap_or_else(|e| panic!("解不了 {arch} 的那一段：{e}"));
+        assert!(out.out().starts_with(&sum), "{arch} 的那一段解出来不是那个文件：{}{}", out.out(), out.err());
     }
+    assert!(!(s.contains("python3") || s.contains("docker pull")), "服务器上不用 Python、不拉镜像");
     let managed = regex::Regex::new(r"(?m)^CCA_HUB_MANAGED=1$").expect("正则");
     assert!(!managed.is_match(&s), "直接在服务器上运行的那一份不带 team-deploy 放进的那几项");
     let b = fx.hub(t, &plain());
@@ -609,7 +643,7 @@ fn script_itself(t: &mut Ctx) {
     assert_eq!(names(&b.root), ["etc", "run"], "什么都没动");
 }
 
-/// systemd + python3：装好、打出管理员接上它的那一行（地址是内网的：网页端不开，说一声）；目录、权限、unit；再运行是更新；换端口
+/// systemd：装好（服务端程序是安装脚本带着的 cca-core，不找 Python）、打出管理员接上它的那一行（地址是内网的：网页端不开，说一声）；目录、权限、unit；再运行是更新；换端口
 /// 照记下的地址再打一次那一行；--uninstall
 fn systemd(t: &mut Ctx) {
     let fx = setup(t);
@@ -621,7 +655,7 @@ fn systemd(t: &mut Ctx) {
     let port = team_port();
     let (ps, relay) = (port.to_string(), (port + 1).to_string());
     let r = fx.install(&b, &["--team-root", &root, "--host", "127.0.0.1", "--port", &ps]);
-    assert_in(&format!("✓ Team 的同步服务器在运行（/opt/{svc}，systemd + python"), &r.out);
+    assert_in(&format!("✓ Team 的同步服务器在运行（/opt/{svc}，systemd，端口 {port}，服务名 {svc}）"), &r.out);
     assert_in(&format!("cca team attach Team https://127.0.0.1:{port} {}", pin(&d)), &r.out);
     assert_in("手机的网页端没开：127.0.0.1 是内网地址", &r.out);
     assert_in(&format!("要放行 TCP {port}、{}（远程会话的中转）。", port + 1), &r.out);
@@ -636,18 +670,13 @@ fn systemd(t: &mut Ctx) {
     );
     assert!(!e.contains_key("CCA_HUB_IMAGE") && !e.contains_key("CCA_HUB_WEB_URL"));
     assert_eq!(
-        modes(
-            &d,
-            &[".", ".env", ".cca-hub", "app", "app/web", "app/web/index.html", "certs", "certs/key.pem", "certs/cert.pem", "data"],
-            0o777
-        ),
+        modes(&d, &[".", ".env", ".cca-hub", "app", "app/cca-core", "certs", "certs/key.pem", "certs/cert.pem", "data"], 0o777),
         pairs(&[
             (".", "0o755"),
             (".env", "0o600"),
             (".cca-hub", "0o644"),
             ("app", "0o755"),
-            ("app/web", "0o755"),
-            ("app/web/index.html", "0o644"),
+            ("app/cca-core", "0o755"),
             ("certs", "0o700"),
             ("certs/key.pem", "0o600"),
             ("certs/cert.pem", "0o644"),
@@ -663,13 +692,12 @@ fn systemd(t: &mut Ctx) {
         "NoNewPrivileges=yes".to_string(),
         "ProtectSystem=full".to_string(),
         "TasksMax=64\n".to_string(),
-        format!("--mode team --listen 0.0.0.0:${{CCA_HUB_PORT}} --cert /opt/{svc}/certs/cert.pem"),
+        format!("ExecStart=/opt/{svc}/app/cca-core team-server --mode team --listen 0.0.0.0:${{CCA_HUB_PORT}} --cert /opt/{svc}/certs/cert.pem"),
         format!("--relay-listen 0.0.0.0:{} --relay-port {}\n", port + 1, port + 1),
     ] {
         assert_in(&want, &unit);
     }
-    let exec = regex::Regex::new(&format!(r"ExecStart=/\S+python3\S* -I /opt/{svc}/app/cca-presence.py ")).expect("正则");
-    assert!(exec.is_match(&unit), "{unit}");
+    assert_not_in("python", &unit);
     assert_not_in("--web", &unit);
     assert!(!(units.join(format!("{ASVC}.service")).exists() || opt(&b, ASVC).exists()), "网页端没开：没有证书助手");
     assert_in(&format!("-r -M -d /opt/{svc}"), &b.log("useradd.log"));
@@ -678,16 +706,11 @@ fn systemd(t: &mut Ctx) {
         b.log("systemctl.log").split('\n').take(3).collect::<Vec<_>>(),
         ["daemon-reload".to_string(), format!("enable {svc}"), format!("restart {svc}")]
     );
-    assert!(
-        fsx::read_text(d.join("app/cca-presence.py")) == fsx::read_text(server_dir().join("cca-presence.py")),
-        "装上去的服务端程序和仓库里的不一样"
-    );
-    assert_eq!(names(&d.join("app")), ["cca-presence.py", "web"], "没写 --name：没有 name");
-    let web = server_dir().join("web");
-    assert_eq!(names(&d.join("app/web")), names(&web));
-    for f in names(&web) {
-        assert!(fsx::read(d.join("app/web").join(&f)) == fsx::read(web.join(&f)), "{f}");
-    }
+    assert!(fsx::read(d.join("app/cca-core")) == helper_bytes(), "装上去的服务端程序不是安装脚本带着的那一份");
+    assert_eq!(names(&d.join("app")), ["cca-core"], "没写 --name：没有 name；网页端的文件编在程序里；解的时候用的那个临时文件不留");
+    // 起的就是装上去的那个文件
+    let started = b.log("server.argv");
+    assert_in(&format!("{} team-server --mode team --listen 127.0.0.1:{port} ", d.join("app/cca-core").display()), &started);
     let url = format!("https://127.0.0.1:{port}");
     assert_eq!(a.ok(&["team-attach", &tid, &url, &pin(&d)]).split('\n').next(), Some(format!("127.0.0.1:{port}").as_str()));
     // 再运行（只写目录）：更新，端口、证书没变：不再打接上它的那一行
@@ -706,6 +729,7 @@ fn systemd(t: &mut Ctx) {
     assert!(!(d.exists() || units.join(format!("{svc}.service")).exists() || b.running(&svc)));
     assert_eq!(names(&b.d.join("users")), Vec::<String>::new());
     assert_in(&format!("disable --now {svc}"), &b.log("systemctl.log"));
+    clean(&b);
 }
 
 /// 手机的网页端（systemd）：另开一个端口；这台服务器上共用的证书助手（cca-team-acme：自己的系统用户，只给绑 80 端口的权限）照登记的
@@ -747,8 +771,8 @@ fn installer_test_web(t: &mut Ctx) {
         "CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n".to_string(),
         "NoNewPrivileges=yes".to_string(),
         format!(
-            "-I /opt/{ASVC}/app/cca-acme.py --teams /opt/{ASVC}/teams --store /opt/{ASVC}/store --out /opt/{ASVC}/webcert \
-             --account /opt/{ASVC}/acme --listen 0.0.0.0:80\n"
+            "ExecStart=/opt/{ASVC}/app/cca-core team-acme --teams /opt/{ASVC}/teams --store /opt/{ASVC}/store --out \
+             /opt/{ASVC}/webcert --account /opt/{ASVC}/acme --listen 0.0.0.0:80\n"
         ),
     ] {
         assert_in(&want, &acme);
@@ -756,10 +780,13 @@ fn installer_test_web(t: &mut Ctx) {
     assert!(!units.join(format!("{svc}-acme.service")).exists(), "不再是每个 Team 自己一个");
     assert!(b.running(ASVC));
     assert_eq!(fsx::read_text(ad.join("teams").join(&svc)), "127.0.0.1\n", "登记了这个 Team 的地址");
-    assert!(
-        fsx::read_text(ad.join("app/cca-acme.py")) == fsx::read_text(server_dir().join("cca-acme.py")),
-        "装上去的证书助手和仓库里的不一样"
+    assert!(fsx::read(ad.join("app/cca-core")) == helper_bytes(), "证书助手就是那一份 cca-core（team-acme）：拷过去的");
+    assert_eq!(
+        (names(&ad.join("app")), fsx::mode(ad.join("app/cca-core")) & 0o777),
+        (vec!["cca-core".to_string()], 0o755),
+        "systemd 方式：CA 证书它自己在系统里找，不用拷一份"
     );
+    assert_not_in("python", &acme);
     let mine = format!("webcert/{svc}");
     assert_eq!(
         modes(&ad, &[".", ".env", "app", "teams", "store", "acme", "webcert", &mine], 0o7777),
@@ -834,6 +861,7 @@ fn installer_test_web(t: &mut Ctx) {
     assert!(!(d.exists() || ad.exists() || units.join(format!("{ASVC}.service")).exists() || b.running(ASVC) || b.running(&svc)));
     assert_in(&format!("disable --now {ASVC}"), &b.log("systemctl.log"));
     assert_eq!(names(&b.d.join("users")), Vec::<String>::new());
+    clean(&b);
 }
 
 /// 一台服务器上两个 Team 都开网页端：第二个在共用的证书助手那里登记（80 端口上是它，不算被占着），同一个地址只要一张证书，
@@ -912,7 +940,8 @@ fn web_old_helper(t: &mut Ctx) {
         std::fs::DirBuilder::new().mode(0o700).create(d1.join(x)).unwrap_or_else(|e| panic!("建不了 {x}：{e}"));
     }
     fsx::write(d1.join("acme/account.key"), "以前的账户的私钥\n");
-    // 以前的 unit 就是这个样子（里面的 /usr/bin/python3 只是它的内容：假的 systemctl 把证书助手换成假的，不会真去运行）
+    fsx::write(d1.join("app/cca-acme.py"), "# 以前的证书助手（Python）\n");
+    // 以前的 unit 就是这个样子（Python 的）。这台假服务器上起不了它：正在运行的那个证书助手由假的顶替（照 --id 要一张证书）
     fsx::write(
         units.join(format!("{svc1}-acme.service")),
         format!(
@@ -920,12 +949,11 @@ fn web_old_helper(t: &mut Ctx) {
              ${{CCA_HUB_HOST}} --out /opt/{svc1}/webcert --account /opt/{svc1}/acme --listen 0.0.0.0:80\n"
         ),
     );
-    Cmd::new(b.bin.join("systemctl"))
-        .args(["restart", &format!("{svc1}-acme")])
-        .envs(b.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .output()
-        .unwrap_or_else(|e| panic!("假的 systemctl 运行不了：{e}"))
-        .check();
+    b.stand_in(
+        &format!("{svc1}-acme"),
+        &[p(&harness::tool()), "acme-stub", "--id", "127.0.0.1", "--out", p(&d1.join("webcert")), "--account", p(&d1.join("acme"))],
+        &[],
+    );
     wait_for("以前的证书助手要来证书", WAIT, || d1.join("webcert/fullchain.pem").exists());
     let old: Vec<(&str, Vec<u8>)> =
         ["fullchain.pem", "privkey.pem"].into_iter().map(|f| (f, fsx::read(d1.join("webcert").join(f)))).collect();
@@ -944,6 +972,7 @@ fn web_old_helper(t: &mut Ctx) {
     assert_in(&format!("disable --now {svc1}-acme"), &b.log("systemctl.log"));
     assert!(!(b.running(&format!("{svc1}-acme")) || units.join(format!("{svc1}-acme.service")).exists()));
     assert!(!(d1.join("webcert").exists() || d1.join("acme").exists()), "以前的目录搬空、删掉了");
+    assert_eq!(names(&d1.join("app")), ["cca-core"], "以前的证书助手的程序也删掉了");
     assert_eq!(fsx::read_text(ad.join("acme/account.key")), "以前的账户的私钥\n", "账户搬过来了");
     for (f, raw) in &old {
         assert!(fsx::read(ad.join("webcert").join(&svc1).join(f)) == *raw, "{f}：接着用原来的那张");
@@ -955,6 +984,7 @@ fn web_old_helper(t: &mut Ctx) {
     assert_in(&format!("手机的网页端：https://127.0.0.1:{w2}/（证书是"), &r.out);
     assert!(fsx::read(ad.join("webcert").join(&svc2).join("fullchain.pem")) == old[0].1);
     assert_eq!(b.log("acme.issued"), "127.0.0.1\n");
+    clean(&b);
 }
 
 /// 网页端这一次开不了：80 端口被别的程序占着、地址是内网的、认不出地址、它的端口被占着——照样装好，说一声，选的端口记着（下次再看）；
@@ -1019,9 +1049,9 @@ fn web_skipped(t: &mut Ctx) {
     assert_in("手机的网页端没开：10.0.0.5 是内网地址", &r.out);
 }
 
-/// Docker compose：用第一个拉得到的镜像，容器里的用户 10001，项目名是服务名；网页端开着时共用的证书助手也是 Docker 的（自己的
+/// Docker compose：容器用本机建的空镜像（docker import，不拉镜像），里面运行挂进去的 app/cca-core，用户 10001，项目名是服务名；网页端开着时共用的证书助手也是 Docker 的（自己的
 /// compose 项目 cca-team-acme，80 端口），这个 Team 只读挂着它放给自己的那一份；改用 systemd 时这个 Team 的容器停掉，证书助手照旧
-/// （Docker 还能用）；拉不到镜像时自动改用 systemd，指定了 --docker 就停下
+/// （Docker 还能用）；建不了镜像时自动改用 systemd，指定了 --docker 就停下
 fn docker(t: &mut Ctx) {
     let fx = setup(t);
     let b = fx.hub(t, &docker_any_ip());
@@ -1037,14 +1067,18 @@ fn docker(t: &mut Ctx) {
         &[],
     );
     let e = b.envfile(Some(&d));
-    assert_eq!(pick(&e, &["CCA_HUB_MODE", "CCA_HUB_IMAGE"]), ["docker", IMAGES[0]]);
-    assert_in(&format!("Docker compose，镜像 {}", IMAGES[0]), &r.out);
+    assert_eq!((e["CCA_HUB_MODE"].as_str(), e.contains_key("CCA_HUB_IMAGE")), ("docker", false), "镜像是本机建的：不用记");
+    assert_in(&format!("✓ Team 的同步服务器在运行（/opt/{svc}，Docker compose，端口 {port}，服务名 {svc}）"), &r.out);
+    assert_eq!(b.log("images"), format!("{}\n", hubbox::RUNTIME), "容器用的空镜像建好了");
     let y = fsx::read_text(d.join("compose.yaml"));
     for want in [
         format!("container_name: {svc}\n"),
+        format!("    image: {}\n", hubbox::RUNTIME),
+        r#"command: ["/app/cca-core", "team-server", "--mode", "team", "--listen", "0.0.0.0:18445", "#.to_string(),
         r#"user: "10001:10001""#.to_string(),
         "read_only: true".to_string(),
         "cap_drop: [ALL]".to_string(),
+        "- ./app:/app:ro,z".to_string(),
         "- ./data:/data:z".to_string(),
         r#"- "${CCA_HUB_WEB:?}:18447""#.to_string(),
         format!("- /opt/{ASVC}/webcert/{svc}:/webcert:ro,z\n"),
@@ -1062,6 +1096,7 @@ fn docker(t: &mut Ctx) {
     let ay = fsx::read_text(ad.join("compose.yaml"));
     for want in [
         format!("container_name: {ASVC}\n"),
+        format!("    image: {}\n", hubbox::RUNTIME),
         r#"user: "10001:10001""#.to_string(),
         "read_only: true".to_string(),
         "cap_drop: [ALL]".to_string(),
@@ -1070,15 +1105,17 @@ fn docker(t: &mut Ctx) {
         "- ./store:/store:z".to_string(),
         "- ./webcert:/webcert:z".to_string(),
         "- ./acme:/acme:z".to_string(),
-        r#""--teams", "/teams", "--store", "/store", "--out", "/webcert", "--account", "/acme", "--listen", "0.0.0.0:18080""#
+        r#"command: ["/app/cca-core", "team-acme", "--teams", "/teams", "--store", "/store", "--out", "/webcert", "--account", "/acme", "--listen", "0.0.0.0:18080", "--ca", "/app/ca.pem"]"#
             .to_string(),
     ] {
         assert_in(&want, &ay);
     }
-    assert_eq!(
-        b.envfile(Some(&ad)),
-        map(&[("CCA_HUB_MODE", "docker"), ("CCA_HUB_IMAGE", IMAGES[0]), ("CCA_HUB_VERSION", "9.9.9")])
-    );
+    assert_eq!(b.envfile(Some(&ad)), map(&[("CCA_HUB_MODE", "docker"), ("CCA_HUB_VERSION", "9.9.9")]));
+    // 证书助手的容器也是空的：程序是拷过去的同一份，CA 证书是这台服务器的那一份拷的（--ca 指着它）
+    assert_eq!(names(&ad.join("app")), ["ca.pem", "cca-core"]);
+    assert!(fsx::read(ad.join("app/cca-core")) == helper_bytes());
+    assert!(fsx::read(ad.join("app/ca.pem")) == fsx::read(b.root.join(hubbox::CA_BUNDLE)));
+    assert_eq!(modes(&ad, &["app/cca-core", "app/ca.pem"], 0o777), pairs(&[("app/cca-core", "0o755"), ("app/ca.pem", "0o644")]));
     let chown = b.log("chown.log");
     for want in [
         format!("-R 10001:10001 {d}/certs {d}/data\n", d = d.display()),
@@ -1090,6 +1127,11 @@ fn docker(t: &mut Ctx) {
     let log = b.log("docker.log");
     assert_in(&format!("compose -p {svc} -f compose.yaml up -d --force-recreate --remove-orphans"), &log);
     assert_in(&format!("compose -p {ASVC} -f compose.yaml up -d --force-recreate --remove-orphans"), &log);
+    assert_eq!(
+        log.lines().filter(|l| l.starts_with("import")).collect::<Vec<_>>(),
+        [format!("import - {}", hubbox::RUNTIME)],
+        "空镜像只建一次（证书助手用的是同一个）"
+    );
     assert!(!(units.join(format!("{svc}.service")).exists() || units.join(format!("{ASVC}.service")).exists()));
     assert_eq!(b.log("useradd.log"), "");
     assert!(b.running(&svc) && b.running(ASVC));
@@ -1107,19 +1149,23 @@ fn docker(t: &mut Ctx) {
     assert_in(&format!("手机的网页端：https://127.0.0.1:{web}/（证书是"), &r.out);
     assert_eq!(sync_state(&a), "ok", "换了运行方式，照旧连得上");
     let r = fx.install(&b, &["--dir", &dir_arg]);
-    assert!(r.out.contains("systemd + python"), "没指定：照上次的");
-    // 拉不到镜像
+    assert!(r.out.contains("，systemd，端口 "), "没指定：照上次的");
+    clean(&b);
+    // 建不了镜像（docker import 没成）
     let c = fx.hub(t, &with_docker());
-    c.flag("no_pull", true);
+    c.flag("import_fail", true);
     let r = fx.install(&c, &["--team-root", &root, "--host", "127.0.0.1", "--port", &team_port().to_string()]);
-    assert_in("改用 systemd", &r.out);
+    assert_in("Docker 建不了 cca 的运行环境（docker import 没成）：改用 systemd", &r.out);
     assert_eq!(env_of(&c, &opt(&c, &svc), "CCA_HUB_MODE"), "systemd");
+    assert!(c.running(&svc));
     let f = fx.hub(t, &with_docker());
-    f.flag("no_pull", true);
+    f.flag("import_fail", true);
     let r = fx.try_install(&f, &["--team-root", &root, "--docker", "--host", "127.0.0.1", "--port", &team_port().to_string()]);
     assert_eq!(r.code, 1);
-    assert_in("拉不到 python:3.13-slim 镜像", &r.err);
-    assert!(!opt(&f, &svc).exists(), "没拉到镜像：什么都还没动");
+    assert_in("✗ Docker 建不了 cca 的运行环境（docker import 没成）：看看 Docker，或者换 --systemd", &r.err);
+    assert!(!opt(&f, &svc).exists(), "没建成镜像：什么都还没动");
+    clean(&c);
+    clean(&f);
 }
 
 /// 只用 compose 插件：只有老的 docker-compose 1.x 时改用 systemd（--docker 时停下）；compose up 起不来时打出它说的、
@@ -1250,8 +1296,8 @@ fn failed_update_rolls_back(t: &mut Ctx) {
     wait_for("重启后照样连得上", WAIT, || a.run(&["team-sync"]).out.split('\t').nth(2) == Some("ok"));
 }
 
-/// 缺东西时停下、说怎么办，什么都不动：没有 Docker 也没有 systemd + python3、Python 太旧、端口被占、认不出公网地址；
-/// 机器上看得到的公网 IP 照用（网页端也开）
+/// 缺东西时停下、说怎么办，什么都不动：没有 Docker 也没有 systemd、端口被占、认不出公网地址；服务器上没有 Python 不碍事
+/// （systemd 方式也不找它）；机器上看得到的公网 IP 照用（网页端也开）
 fn needs(t: &mut Ctx) {
     let fx = setup(t);
     let (_a, _tid, root, svc) = fx.team("甲组");
@@ -1259,10 +1305,14 @@ fn needs(t: &mut Ctx) {
     let r = fx.try_install(&b, &["--team-root", &root]);
     assert_eq!(r.code, 1);
     assert_in("两样都没有", &r.err);
+    let r = fx.try_install(&b, &["--team-root", &root, "--systemd"]);
+    assert_eq!((r.code, r.err.trim()), (1, "✗ 这台服务器上没有 systemd：换 --docker"));
+    // 服务器上没有 Python（假服务器上的 python3 一调就失败、记一笔）：systemd 方式照样装得上，没人去找它
     let c = fx.hub(t, &plain());
-    c.fake("python3", "#!/bin/sh\nexit 1\n"); // 3.6 以前的、没有 ssl 的
-    let r = fx.try_install(&c, &["--team-root", &root, "--systemd"]);
-    assert_in("要 systemd 和 python3（3.6 起）", &r.err);
+    let r = fx.install(&c, &["--team-root", &root, "--systemd", "--host", "127.0.0.1", "--port", &team_port().to_string()]);
+    assert_in("，systemd，端口 ", &r.out);
+    assert!(c.running(&svc));
+    clean(&c);
     let d = fx.hub(t, &plain());
     let port = one_port();
     fsx::write(d.d.join("listening"), format!("{port}\n"));
@@ -1273,7 +1323,7 @@ fn needs(t: &mut Ctx) {
     fsx::write(d.d.join("ip"), "10.9.0.5");
     let r = fx.try_install(&d, &["--team-root", &root, "--port", &one_port().to_string()]);
     assert_in("加上 --host", &r.err);
-    for x in [&b, &c, &d] {
+    for x in [&b, &d] {
         assert!(!opt(x, &svc).exists());
     }
     fsx::write(d.d.join("ip"), "203.0.113.7");
@@ -1434,6 +1484,310 @@ fn teams(t: &mut Ctx) {
     assert_eq!(sync_state(&c), "ok");
 }
 
+/// 这个服务的进程号（假服务器记在进程号文件里的）
+fn pid_of(b: &FakeBox, svc: &str) -> String {
+    fsx::read_text(b.pidfile(svc)).trim().to_string()
+}
+
+/// 把这一版装好的摆成 3.6.x 装的样子（那时候的服务端是 Python 的）：app/ 里是 cca-presence.py 和网页端的文件，没有 cca-core；
+/// unit、compose.yaml 里运行的是 python3；Docker 的 .env 记着 python 镜像，本机没有那个空镜像；共用的证书助手也是 Python 的。
+/// 正在运行的进程不动——它们就当是以前的那一份（假服务器上起不了 Python 的）
+fn make_python_era(b: &FakeBox, svc: &str, docker: bool) {
+    let (d, ad) = (opt(b, svc), opt(b, ASVC));
+    let units = b.root.join(UNITS);
+    let edit = |path: PathBuf, pairs: &[(&str, &str)]| {
+        let mut text = fsx::read_text(&path);
+        for (new, old) in pairs {
+            assert!(text.contains(new), "{} 里没有 {new:?}：\n{text}", path.display());
+            text = text.replace(new, old);
+        }
+        fsx::write(&path, text);
+    };
+    let image = "${CCA_HUB_IMAGE:-python:3.13-slim}";
+    for (dir, program) in [(&d, "cca-presence.py"), (&ad, "cca-acme.py")] {
+        for f in names(&dir.join("app")) {
+            if f != "name" {
+                std::fs::remove_file(dir.join("app").join(&f)).unwrap_or_else(|e| panic!("删不掉 app/{f}：{e}"));
+            }
+        }
+        fsx::write(dir.join("app").join(program), "# 3.6.9 的程序（Python）\n");
+    }
+    std::fs::create_dir(d.join("app/web")).expect("建 app/web");
+    fsx::write(d.join("app/web/index.html"), "<title>以前的页面</title>\n");
+    let now = "CCA_HUB_VERSION=9.9.9\n";
+    if docker {
+        let then = format!("CCA_HUB_IMAGE={OLD_IMAGE}\nCCA_HUB_VERSION=3.6.9\n");
+        edit(d.join(".env"), &[(now, &then)]);
+        edit(ad.join(".env"), &[(now, &then)]);
+        let run = format!("image: {}", hubbox::RUNTIME);
+        let old_run = format!("image: {image}");
+        edit(
+            d.join("compose.yaml"),
+            &[(&run, &old_run), (r#"["/app/cca-core", "team-server", "#, r#"["python3", "-I", "/app/cca-presence.py", "#)],
+        );
+        edit(
+            ad.join("compose.yaml"),
+            &[
+                (&run, &old_run),
+                (r#"["/app/cca-core", "team-acme", "#, r#"["python3", "-I", "/app/cca-acme.py", "#),
+                (r#", "--ca", "/app/ca.pem"]"#, "]"),
+            ],
+        );
+        std::fs::remove_file(b.d.join("images")).expect("本机没有那个空镜像");
+    } else {
+        edit(d.join(".env"), &[(now, "CCA_HUB_VERSION=3.6.9\n")]);
+        edit(ad.join(".env"), &[(now, "CCA_HUB_VERSION=3.6.9\n")]);
+        edit(
+            units.join(format!("{svc}.service")),
+            &[(
+                &format!("ExecStart=/opt/{svc}/app/cca-core team-server "),
+                &format!("ExecStart=/usr/bin/python3 -I /opt/{svc}/app/cca-presence.py "),
+            )],
+        );
+        edit(
+            units.join(format!("{ASVC}.service")),
+            &[(
+                &format!("ExecStart=/opt/{ASVC}/app/cca-core team-acme "),
+                &format!("ExecStart=/usr/bin/python3 -I /opt/{ASVC}/app/cca-acme.py "),
+            )],
+        );
+    }
+}
+
+/// 以前的版本（3.6.x）装的是 Python 的服务端：用这一版再运行，就地换成 cca-core——证书（指纹）、端口、数据、登记的设备都不变，
+/// 管理员和成员不用重新接；以前的程序、网页端的文件、记着的镜像都清掉；共用的证书助手也换成它（证书接着用，不再要一张）。
+/// 两种运行方式各走一遍
+fn from_python(t: &mut Ctx) {
+    t.sub("systemd", |t| python_era(t, false));
+    t.sub("docker", |t| python_era(t, true));
+}
+
+fn python_era(t: &mut Ctx, docker: bool) {
+    let fx = setup(t);
+    let b = fx.hub(t, &if docker { docker_any_ip() } else { any_ip() });
+    let (a, tid, root, svc) = fx.team("甲组");
+    let (d, ad) = (opt(&b, &svc), opt(&b, ASVC));
+    let units = b.root.join(UNITS);
+    let (port, web) = two_ports();
+    // 照这一版装好、接上、请进一台设备（数据里有东西了），再摆成以前的样子
+    fx.install(
+        &b,
+        &[
+            "--team-root",
+            &root,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--web-port",
+            &web.to_string(),
+            "--name",
+            "甲组",
+        ],
+    );
+    a.ok(&["team-attach", &tid, &format!("https://127.0.0.1:{port}"), &pin(&d)]);
+    let invite = a.ok(&["team-invite", &tid, "bob-mini"]);
+    let bob = Device::new(&fx.dir.join(format!("bob-{}", crypto::token_hex(4))), "bob", &obj! {});
+    bob.ok_with(&["team-join", "--name", "bob-mini"], invite.split('\n').next().unwrap_or_default(), &[]);
+    assert_eq!(sync_state(&bob), "ok");
+    fsx::write(d.join("data/keep.bin"), crypto::random(64));
+    fsx::write(ad.join("acme/account.key"), "证书机构那里的账户的私钥\n"); // 假的证书助手不建账户：放一个，看它留不留着
+    make_python_era(&b, &svc, docker);
+    let kept = ["CCA_HUB_MODE", "CCA_HUB_PORT", "CCA_TEAM_ROOT", "CCA_HUB_RELAY", "CCA_HUB_WEB", "CCA_HUB_HOST", "CCA_HUB_WEB_URL"];
+    let before = (
+        pin(&d),
+        fsx::read(d.join("certs/key.pem")),
+        pick(&b.envfile(Some(&d)), &kept),
+        fsx::read(d.join("data/state.json")),
+        fsx::read(d.join("data/keep.bin")),
+        fsx::read(ad.join("webcert").join(&svc).join("fullchain.pem")),
+        fsx::read(ad.join("acme/account.key")),
+    );
+    let (old_pid, old_helper) = (pid_of(&b, &svc), pid_of(&b, ASVC));
+    assert!(b.running(&svc) && b.running(ASVC), "以前的那两个进程还在运行");
+
+    // 用这一版再运行（只写目录）：更新
+    let r = fx.install(&b, &["--dir", &format!("/opt/{svc}")]);
+    assert_in("更新了服务端程序", &r.out);
+    assert_not_in("cca team attach", &r.out);
+    assert_in(&format!("手机的网页端：https://127.0.0.1:{web}/"), &r.out);
+    let e = b.envfile(Some(&d));
+    let after = (
+        pin(&d),
+        fsx::read(d.join("certs/key.pem")),
+        pick(&e, &kept),
+        fsx::read(d.join("data/state.json")),
+        fsx::read(d.join("data/keep.bin")),
+        fsx::read(ad.join("webcert").join(&svc).join("fullchain.pem")),
+        fsx::read(ad.join("acme/account.key")),
+    );
+    assert!(before == after, "证书、端口和地址、数据、网页端的证书、证书机构那里的账户都没变");
+    assert_eq!((e["CCA_HUB_VERSION"].as_str(), e.contains_key("CCA_HUB_IMAGE")), ("9.9.9", false), "不再记镜像");
+    assert_eq!(names(&d.join("app")), ["cca-core", "name"], "以前的程序、网页端的文件删掉了");
+    assert!(fsx::read(d.join("app/cca-core")) == helper_bytes());
+    assert!(b.running(&svc) && pid_of(&b, &svc) != old_pid, "换了一个进程：以前的那个停了");
+    let started = b.log("server.argv");
+    let last = started.lines().rev().find(|l| l.contains(" team-server ")).unwrap_or_default();
+    assert!(last.starts_with(&format!("{} team-server --mode team ", d.join("app/cca-core").display())), "{last}");
+    // 共用的证书助手也换了：同一份程序，证书接着用
+    assert!(b.running(ASVC) && pid_of(&b, ASVC) != old_helper);
+    assert!(fsx::read(ad.join("app/cca-core")) == helper_bytes());
+    assert_eq!(b.log("acme.issued"), "127.0.0.1\n", "没有再要一张");
+    let ae = b.envfile(Some(&ad));
+    assert_eq!((ae["CCA_HUB_VERSION"].as_str(), ae.contains_key("CCA_HUB_IMAGE")), ("9.9.9", false));
+    let texts = if docker {
+        assert_eq!(names(&ad.join("app")), ["ca.pem", "cca-core"]);
+        assert_eq!(b.log("images"), format!("{}\n", hubbox::RUNTIME), "容器用的空镜像这时才建");
+        [fsx::read_text(d.join("compose.yaml")), fsx::read_text(ad.join("compose.yaml"))]
+    } else {
+        assert_eq!(names(&ad.join("app")), ["cca-core"]);
+        [fsx::read_text(units.join(format!("{svc}.service"))), fsx::read_text(units.join(format!("{ASVC}.service")))]
+    };
+    for text in &texts {
+        assert!(text.contains("/app/cca-core") && !text.contains("python"), "{text}");
+    }
+    // 设备都不用动：照旧连得上、网页端照旧
+    assert_eq!((sync_state(&a), sync_state(&bob)), ("ok".to_string(), "ok".to_string()));
+    let (st, body) = https(web, "/");
+    assert_eq!(st, 200);
+    assert_in("<title>cca 远程会话（甲组）</title>", &utf8(body));
+    clean(&b);
+}
+
+/// 安装脚本带着的服务端程序不对时停下：这台服务器是别的机器（deps）、这一份脚本没带这种机器的（install）——都在动手之前；
+/// 那一段坏了（校验值对不上）、解出来的程序在这台服务器上运行不了（install）——装着的那一份、.env 都不动，正在运行的照旧，
+/// 写到一半的不留；第一次装时不留 .env
+fn core_checks(t: &mut Ctx) {
+    let fx = setup(t);
+    let b = fx.hub(t, &plain());
+    let (a, tid, root, svc) = fx.team("甲组");
+    let d = opt(&b, &svc);
+    let dir_arg = format!("/opt/{svc}");
+    let port = team_port().to_string();
+    let first = ["--team-root", root.as_str(), "--host", "127.0.0.1", "--port", port.as_str()];
+    let env = [("HUB_ENTER", p(&b.enter)), ("CCA_VERSION", "9.9.9")];
+    let helper = harness::helper();
+    // 别的机器（假的 uname）
+    b.fake("uname", "#!/bin/sh\necho riscv64\n");
+    let r = fx.try_install(&b, &first);
+    assert_eq!((r.code, r.err.trim()), (1, "✗ 这台服务器是 riscv64：服务端程序只有 x86_64、aarch64 的"));
+    assert_eq!(code(&a, &["team-deploy", &tid, "root@box", "--port", &port], &env), "deps");
+    // 这一份脚本只带了 aarch64 的，服务器是 x86_64 的
+    b.fake("uname", "#!/bin/sh\necho x86_64\n");
+    let arm_only = installer(&fx.dir, "arm-only.sh", &[("CCA_HUB_CORE_AARCH64", p(&helper))]);
+    assert_in("\nCCA_HUB_CORES='AARCH64'\n", &fsx::read_text(&arm_only));
+    let r = run_on(&b, &arm_only, &first);
+    assert_eq!((r.code, r.err.trim()), (1, "✗ 这一份安装脚本没带 X86_64 的服务端程序"));
+    let only_arm = [env[0], env[1], ("CCA_HUB_CORE_X86_64", "")];
+    assert_eq!(code(&a, &["team-deploy", &tid, "root@box", "--port", &port], &only_arm), "install");
+    assert!(!d.exists(), "都在动手之前：什么都没建");
+    std::fs::remove_file(b.bin.join("uname")).expect("拿掉假的 uname");
+
+    // 装好、接上；之后的几次更新都该不成，装着的原样
+    fx.install(&b, &first);
+    a.ok(&["team-attach", &tid, &format!("https://127.0.0.1:{port}"), &pin(&d)]);
+    let (env_text, pid, good) = (fsx::read_text(d.join(".env")), pid_of(&b, &svc), fsx::read(d.join("app/cca-core")));
+    let untouched = |what: &str| {
+        assert_eq!(fsx::read_text(d.join(".env")), env_text, "{what}：.env 没动");
+        assert!(!d.join(".env.prev").exists(), "{what}");
+        assert!(fsx::read(d.join("app/cca-core")) == good, "{what}：装着的程序没动");
+        assert_eq!(names(&d.join("app")), ["cca-core"], "{what}：写到一半的不留");
+        assert_eq!((pid_of(&b, &svc), b.running(&svc)), (pid.clone(), true), "{what}：服务照旧在运行");
+    };
+    // 那一段坏了（每一段各少一行）：校验值对不上
+    let s = fsx::read_text(&fx.script);
+    let mut lines: Vec<&str> = s.split('\n').collect();
+    for arch in ["X86_64", "AARCH64"] {
+        let open = format!("\tcat <<'CCA_HUB_CORE_{arch}_EOF'");
+        let at = lines.iter().position(|l| *l == open).unwrap_or_else(|| panic!("没有 {arch} 的那一段"));
+        lines.remove(at + 3);
+    }
+    let broken = fx.dir.join("broken.sh");
+    fsx::write(&broken, lines.join("\n"));
+    let r = run_on(&b, &broken, &["--dir", &dir_arg, "--port", &team_port().to_string()]);
+    assert_eq!((r.code, r.err.trim()), (1, "✗ 解不开服务端程序（安装脚本不完整？）"));
+    untouched("那一段坏了");
+    // 解得开、校验值也对，可在这台服务器上运行不了
+    let dud = fx.dir.join("dud");
+    fsx::write_script(&dud, "#!/bin/sh\nexit 1\n");
+    let duds = [("CCA_HUB_CORE_X86_64", p(&dud)), ("CCA_HUB_CORE_AARCH64", p(&dud))];
+    let bad = installer(&fx.dir, "dud.sh", &duds);
+    let r = run_on(&b, &bad, &["--dir", &dir_arg, "--port", &team_port().to_string()]);
+    assert_eq!(
+        (r.code, r.err.trim()),
+        (1, format!("✗ 服务端程序在这台服务器上运行不了（/opt/{svc} 所在的盘不许执行程序？换个目录：--dir）").as_str())
+    );
+    untouched("程序运行不了");
+    let with_duds = [env[0], env[1], duds[0], duds[1]];
+    assert_eq!(code(&a, &["team-deploy", &tid, "root@box"], &with_duds), "install");
+    untouched("经 cca team deploy");
+    assert_eq!(sync_state(&a), "ok");
+    // 第一次装就运行不了：.env 不留（下一次还是第一次装），没有服务
+    let c = fx.hub(t, &plain());
+    let r = run_on(&c, &bad, &["--team-root", &root, "--host", "127.0.0.1", "--port", &team_port().to_string()]);
+    assert_eq!(r.code, 1);
+    assert_in("运行不了", &r.err);
+    assert!(!(opt(&c, &svc).join(".env").exists() || opt(&c, &svc).join("app/cca-core").exists() || c.running(&svc)));
+    assert_eq!(c.log("systemctl.log"), "", "没到起服务那一步");
+    clean(&b);
+}
+
+/// 服务器上没有 CA 证书（没装 ca-certificates）：证书助手连不上 Let's Encrypt，说一声怎么办；Team 的同步服务器照样装好、在运行
+/// （网页端的证书以后再说）。装上 CA 证书以后再运行就开上。两种运行方式都一样
+fn no_ca_bundle(t: &mut Ctx) {
+    let fx = setup(t);
+    let (_a, _tid, root, svc) = fx.team("甲组");
+    for opts in [any_ip(), docker_any_ip()] {
+        let b = fx.hub(t, &opts);
+        let ca = b.root.join(hubbox::CA_BUNDLE);
+        let pem = fsx::read(&ca);
+        std::fs::remove_file(&ca).expect("删掉 CA 证书");
+        let (port, web) = two_ports();
+        let r = fx.install(
+            &b,
+            &["--team-root", &root, "--host", "127.0.0.1", "--port", &port.to_string(), "--web-port", &web.to_string()],
+        );
+        assert_in("! 找不到 CA 证书（", &r.out);
+        assert_in("）：证书助手连不上 Let's Encrypt", &r.out);
+        assert_in(&format!("! 证书助手（{ASVC}）起不来"), &r.out);
+        assert_in("✓ Team 的同步服务器在运行", &r.out);
+        assert!(b.running(&svc) && !b.running(ASVC), "Team 的服务器在运行，证书助手没起");
+        assert_eq!(health(port).get("web"), Some(&Value::from(format!("https://127.0.0.1:{web}/"))));
+        fsx::write(&ca, &pem);
+        let r = fx.install(&b, &["--dir", &format!("/opt/{svc}")]);
+        assert_in(&format!("手机的网页端：https://127.0.0.1:{web}/（证书是"), &r.out);
+        assert!(b.running(ASVC));
+        clean(&b);
+    }
+}
+
+/// Docker 方式的容器用的空镜像：这台服务器上的几个 Team 用同一个（只建一次）；卸载一个，另一个还用着：删不掉，留着；卸载
+/// 最后一个，镜像一起删掉。systemd 方式装的卸载时没有这个镜像，不碍事
+fn runtime_image(t: &mut Ctx) {
+    let fx = setup(t);
+    let b = fx.hub(t, &with_docker());
+    let (a1, a2) = (fx.admin("a"), fx.admin("b"));
+    let ((_tid1, root1, svc1), (_tid2, root2, svc2)) = (new_team(&a1, "甲组"), new_team(&a2, "乙组"));
+    let image = format!("{}\n", hubbox::RUNTIME);
+    for root in [&root1, &root2] {
+        fx.install(&b, &["--team-root", root, "--host", "127.0.0.1", "--port", &team_port().to_string()]);
+    }
+    let count = |what: &str| b.log("docker.log").lines().filter(|l| l.starts_with(what)).count();
+    assert_eq!((count("import "), b.log("images")), (1, image.clone()), "两个 Team 用同一个镜像，只建一次");
+    fx.install(&b, &["--uninstall", "--dir", &format!("/opt/{svc1}")]);
+    assert_eq!((count("image rm "), b.log("images")), (1, image), "另一个 Team 还用着：删不掉，留着");
+    assert!(b.running(&svc2) && !b.running(&svc1));
+    fx.install(&b, &["--uninstall", "--dir", &format!("/opt/{svc2}")]);
+    assert_eq!((count("image rm "), b.log("images")), (2, String::new()), "最后一个用它的卸载了：镜像也删掉");
+    clean(&b);
+    // systemd 方式（这台服务器上也有 Docker，只是没用它）：卸载时删镜像那一步不成，不碍事
+    let c = fx.hub(t, &with_docker());
+    fx.install(&c, &["--team-root", &root1, "--systemd", "--host", "127.0.0.1", "--port", &team_port().to_string()]);
+    let r = fx.install(&c, &["--uninstall", "--dir", &format!("/opt/{svc1}")]);
+    assert_in("卸载了 Team 的同步服务器", &r.out);
+    assert_eq!(c.log("images"), "");
+}
+
 // ---- cca team deploy（team-deploy）：经假的 ssh 把同一个脚本交给假服务器，装好了接上 ----
 
 /// 整个输出当成一串 sh 的 键=值 拆开（值里有换行——steps 是几行——所以整个一起拆，不能一行一行来）
@@ -1511,18 +1865,19 @@ fn deploy(t: &mut Ctx) {
     let r = deploy_ok(&a, &tid, &b, &[], &[("HUB_SSH_HOST", "10.0.0.5")]);
     assert_eq!(pick(&kv(&r.out), &["state", "host"]), ["update", host.as_str()]);
     assert_eq!(env_of(&b, &d, "CCA_HUB_HOST"), "127.0.0.1");
-    // 托管平台：生成部署文件（服务端程序、Dockerfile、README），里面只有公开的根公钥（后面那一段）
+    // 托管平台：生成部署文件（服务端程序 cca-core——Linux x86_64 的那一份、Dockerfile、README），里面只有公开的根公钥（后面那一段）
     let key = key_of(&root);
     let rw = a.home.join("rw");
     let out = kvs(&a.ok_with(&["team-hosted", &tid, "railway", "--dir", p(&rw)], "", &[("CCA_VERSION", "9.9.9")]));
     assert_eq!(pick(&out, &["dir", "tid", "name", "svc"]), [p(&rw), tid.as_str(), "甲组", svc.as_str()]);
-    assert_eq!(names(&rw), ["Dockerfile", "README.md", "cca-presence.py"]);
-    assert_in(&format!("ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT={key}\n"), &fsx::read_text(rw.join("Dockerfile")));
+    assert_eq!(names(&rw), ["Dockerfile", "README.md", "cca-core"]);
+    let dockerfile = fsx::read_text(rw.join("Dockerfile"));
+    assert_in(&format!("\nFROM scratch\nCOPY cca-core /cca-core\nENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT={key}\n"), &dockerfile);
+    assert!(dockerfile.ends_with("EXPOSE 8080\nCMD [\"/cca-core\", \"team-server\"]\n"), "{dockerfile}");
+    assert_not_in("python", &dockerfile.to_lowercase());
     assert_in(&format!("railway init --name {svc}"), &out["steps"]);
-    assert!(
-        fsx::read_text(rw.join("cca-presence.py")) == fsx::read_text(server_dir().join("cca-presence.py")),
-        "部署文件里的服务端程序和仓库里的不一样"
-    );
+    assert!(fsx::read(rw.join("cca-core")) == helper_bytes(), "部署文件里的服务端程序不是这份 cca 带着的那一份");
+    assert_eq!(fsx::mode(rw.join("cca-core")) & 0o777, 0o755, "能运行（镜像里直接运行它）");
     assert_in("cca team attach 甲组 https://", &fsx::read_text(rw.join("README.md")));
     // 托管平台只有 Railway：不写平台就是它；没写目录：~/<服务名>-railway
     let auto = a.home.join(format!("{svc}-railway"));
@@ -1543,14 +1898,17 @@ fn deploy(t: &mut Ctx) {
     fsx::write(rw.join("other.txt"), "x");
     assert_eq!(code(&a, &["team-hosted", &tid, "railway", "--dir", p(&rw)], &[]), "dir");
     assert_eq!(code(&a, &["team-hosted", &tid, "heroku"], &[]), "usage");
-    let files: String =
-        [&rw, &auto].into_iter().flat_map(|d| names(d).into_iter().map(move |f| fsx::read_text(d.join(f)))).collect();
+    let files: String = [&rw, &auto]
+        .into_iter()
+        .flat_map(|d| names(d).into_iter().map(move |f| String::from_utf8_lossy(&fsx::read(d.join(f))).into_owned()))
+        .collect();
     assert!(!files.contains(p(&a.cca)), "部署文件里没有这台设备上的东西");
     // 写错的：没有这个 Team、Team 的部署没有 --reset、成员不是管理员
     let env = [("HUB_ENTER", p(&b.enter)), ("CCA_VERSION", "9.9.9")];
     assert_eq!(code(&a, &["team-deploy", "nope", "root@box"], &env), "no_team");
     assert_eq!(code(&a, &["team-deploy", &tid, "root@box", "--reset"], &env), "usage");
     assert_eq!(code(&bob, &["team-deploy", &tid, "root@box"], &env), "not_admin");
+    clean(&b);
 }
 
 /// 删除 Team 时卸载（team-undeploy：cca team leave 的管理员经它）：经 SSH 运行同一个脚本的 --uninstall，带着这个 Team 的根公钥——

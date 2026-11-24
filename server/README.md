@@ -1,4 +1,4 @@
-# cca 的同步服务器（cca-presence.py）
+# cca 的同步服务器（cca-core team-server）
 
 这是 Team 的同步服务器（cca 那一半见 docs/dev/team.md）。一个 Team 有管理员的设备和别的设备，服务器由管理员自己部署（`cca team deploy`，
 托管平台上 `cca team hosted`）：管理员给每台设备发邀请、定它能用哪些账号，账号走哪个节点、节点的定义由管理员的设备加密、签名后存在
@@ -11,9 +11,11 @@
 它还给这个 Team 的远程会话做中转（`cca remote pair` / `attach`，见「远程会话的中转」）：两台配对过的机器之间的终端内容经它转发，
 是端到端加密的，它只转字节；开了网页端时，手机在浏览器里也接得进来（见「网页端」）。
 
-这个目录里：`cca-presence.py`（服务端，只用 Python 标准库）、`hub-install.sh`（一键安装脚本：`cca team deploy` 经 SSH 运行它，
-发布页上的 `cca-hub-install.sh` 就是它）、`cca-acme.py`（给网页端向 Let's Encrypt 要证书的证书助手）、`web/`（网页端的页面）。
-它们都编进了 cca 的辅助程序（`cca team deploy`、`cca team hosted` 用的是那一份），改了要重新编（`cd cli && cargo build --release --locked`）。
+服务端程序就是 cca 的辅助程序自己：`cca-core team-server`，给网页端向 Let's Encrypt 要证书的证书助手是 `cca-core team-acme`（代码在
+`cli/src/server/`；装到 Linux 服务器上的是 musl 静态链接的那一份，x86_64、arm64 各一份，服务器上不用 Python）。这个目录里：`hub-install.sh`
+（一键安装脚本的模板：辅助程序把服务端程序放进去才是能运行的那一份，`cca team deploy` 经 SSH 运行它，发布页上的 `cca-hub-install.sh` 就是它）、
+`web/`（网页端的页面）。这两样都编进了辅助程序，改了要重新编（`cd cli && cargo build --release --locked`）。3.6.x 以前服务端是 Python 写的
+（`cca-presence.py`，证书助手 `cca-acme.py`）：那时装的服务器用这一版再部署一次就换过来，见「部署」。
 
 以前还有两种服务器，都去掉了：3.5.3 以前的「自己的同步服务器」（`--mode own`，cca 的 `cca hub`）；3.6.0 以前的维护者的服务器
 （`--mode maintainer`，`./policy.sh presence deploy` 装的 compose 项目：只认维护者拿发布密钥（`--release-key`）签的设备清单
@@ -145,8 +147,9 @@ docs/dev/team.md。`tests/kit/spec.rs` 的 `team_id`、`invite_parts`、`invite_
 
 ### 部署
 
-一台 Linux 服务器（很小的就够：只用 Python 标准库，内存限在 256 MB）上，要 openssl，还要 Docker（带 compose 插件：`docker compose`；
-老的 `docker-compose` 1.x 不用）或者 systemd + python3（3.6 起）：
+一台 Linux 服务器（x86_64 或者 arm64，很小的就够：服务端是一个静态链接的程序，内存限在 256 MB）上，要 openssl、gzip，还要 Docker
+（带 compose 插件：`docker compose`；老的 `docker-compose` 1.x 不用）或者 systemd。服务端程序带在安装脚本里（两种机器的都带，约 10 MB）：
+服务器上不用 Python、不拉镜像、不联网下载。
 
 - 从管理员的设备上：`cca team deploy Team root@服务器`（`-p` SSH 端口、`-i` 私钥、`--port` 服务的端口、`--host` 各台设备连的地址、
   `--web-port` / `--no-web` 手机的网页端、`--docker` / `--systemd`、`--dir` 装在哪；App 里是「共享与同步」里这个 Team 的「部署到我的服务器…」，接上以后在「更多」里：「更新服务器、搬到别的服务器…」）。
@@ -156,23 +159,27 @@ docs/dev/team.md。`tests/kit/spec.rs` 的 `team_id`、`invite_parts`、`invite_
   另有 `--host`、`--port`、`--relay-port` / `--no-relay`、`--web-port` / `--no-web`、`--docker` / `--systemd`、`--dir`。最后打出管理员接上它的那一行
   `cca team attach Team https://地址:端口 sha256//指纹`（地址和指纹都是公开的）；认不出公网地址时有终端就问，没有就要加 `--host 公网IP或域名`。
   再运行（带 `--team-root`，或者 `--dir 装过的目录`）是更新。
-- 自己运行：`python3 -I cca-presence.py --team-root 'ssh-ed25519 AAAA…' --cert … --key … --state …`（中转、网页端见下面两节）。
+- 3.6.x 以前装的（Python 的服务端）：用这一版再部署一次（或者在服务器上运行新的安装脚本）就换成 `cca-core`，数据、证书、端口、指纹都不变，
+  各台设备不用动；换好了才删掉以前的程序。还用着 3.6.x 的管理员设备再部署会换回 Python 的那一份（数据同样不动），所以管理员的设备先更新。
+- 自己运行：`cca-core team-server --team-root 'ssh-ed25519 AAAA…' --cert … --key … --state …`（Linux 的 `cca-core`：装过的服务器的 `app/` 里
+  就有；中转、网页端见下面两节）。
   根公钥也可以经环境变量 `CCA_TEAM_ROOT` 给，只写 `ssh-ed25519` 后面那一段也行（没有空格，环境变量文件里好写）。
 
 每个 Team 一个服务：systemd 的服务名 / 系统用户、Docker 的容器名 / compose 的项目名都是 `cca-team-<Team 编号的前 8 位>`（下面叫「服务名」），
 装在 `/opt/<服务名>`（`--dir` 换：要是新的、空的目录，或者以前装过这个 Team 的，不能在 `/usr`、`/etc`、`/home`、`/root`、`/run`、`/tmp` 这些下面），
 所以一台服务器上能装几个 Team，互不相干。端口没写时照上次的，第一次从 18445 起找空着的。这个 Team 的远程会话的中转默认开着，数据端口是下一个
-空着的；手机的网页端再用一个，证书由证书助手（`cca-acme.py`）向 Let's Encrypt 要（给 IP 地址的是短期证书），到期前自己续。网页端要中转开着、
+空着的；手机的网页端再用一个，证书由证书助手（`cca-core team-acme`）向 Let's Encrypt 要（给 IP 地址的是短期证书），到期前自己续。网页端要中转开着、
 认得出公网地址、地址不是内网的、80 端口给得了证书助手（证书机构从公网连它验证）：开不了时照样装好、说为什么，再运行时再看。80 端口只有一个：
 一台服务器上的几个 Team 共用一个证书助手（服务名 `cca-team-acme`，装在 `/opt/cca-team-acme`）——第一个开网页端的 Team 装上它，别的 Team 在它
 那里登记自己的地址，同一个地址只要一张证书，各个 Team 只读得了放给自己的那一份；最后一个用它的 Team 卸载时连同它一起删掉。3.5.3-beta.5 以前的
 安装脚本每个 Team 自己一个证书助手（`<服务名>-acme`，占着 80 端口）：用新的再运行一次那个 Team，它的证书、账户就搬给共用的、接着用。
 `--name`（`cca team deploy` 放进 Team 的名字）：网页的标题、手机主屏幕上的名字带上它。
 
-目录里：`app/`（这个程序、网页端的文件、Team 的名字 `name`）、`certs/`（自签的 P-256 证书，私钥不出这台服务器：设备按公钥指纹认它）、`data/`
+目录里：`app/`（服务端程序 `cca-core`——网页端的文件编在它里面——和 Team 的名字 `name`）、`certs/`（自签的 P-256 证书，私钥不出这台服务器：设备按公钥指纹认它）、`data/`
 （设备、记录、密文）、`.env`（运行方式、端口、根公钥；改了以后再运行一次安装脚本；没装完时换回原来的）、`.cca-hub`（记着这个目录是安装脚本装的）。
-Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、腾讯云和 DaoCloud 的同步源、Docker Hub；只读、去掉所有权限），容器是
-`<服务名>`；systemd 的是 `/etc/systemd/system/<服务名>.service`。共用的证书助手的目录里：`app/cca-acme.py`、`teams/`（用它的 Team 登记的地址）、
+Docker 的另有 `compose.yaml`（容器用本机建的一个空镜像 `cca-team-runtime:1`——`docker import` 一个空的 tar，不拉镜像——程序从 `app/`
+只读挂进去；只读、去掉所有权限），容器是
+`<服务名>`；systemd 的是 `/etc/systemd/system/<服务名>.service`。共用的证书助手的目录里：`app/cca-core`（同一个程序；Docker 的还有 `app/ca.pem`：这台服务器的 CA 证书拷的一份，容器里没有）、`teams/`（用它的 Team 登记的地址）、
 `store/`（每个地址的证书）、`webcert/<服务名>/`（放给那个 Team 的：只有它读得了私钥）、`acme/`（证书机构那里的账户的私钥）；容器、systemd 的服务
 都叫 `cca-team-acme`。日志：`docker logs <服务名>` 或者 `journalctl -u <服务名>`（证书助手的换成 `cca-team-acme`）。
 
@@ -191,7 +198,7 @@ Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、�
 - 卸载：管理员删除这个 Team（`cca team leave`）时经 SSH 自己卸掉（带着根公钥：目录里装的是别的 Team 的不动）；手动的话
   `cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/<服务名>`（或者在服务器上
   `sudo sh cca-hub-install.sh --uninstall --dir /opt/<服务名>`），连同数据一起删掉。3.5.3 以前装的自己的同步服务器（`/opt/cca-hub`）也这样卸载
-  （`--dir /opt/cca-hub`），安装脚本不再往里装。
+  （`--dir /opt/cca-hub`），安装脚本不再往里装。Docker 方式的那个空镜像在这台服务器上最后一个 Team 卸载时一起删掉。
 
 ### 托管平台
 
@@ -203,9 +210,10 @@ Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、�
 - 程序照样是这一个，只是 `--behind-proxy`：只说 HTTP，HTTPS 由平台做（设备照系统的证书机构验平台的证书，接上时没有指纹）；
   每个 IP 的限额按 `X-Forwarded-For` 的最后一项算（平台的代理加的那一项，客户端改不了），同一个 IP 同时几个连接不限（连过来的都是代理）。
 - 平台上只给得了环境变量和一条命令（生成的 `Dockerfile` 里写好了）：环境变量 `CCA_HUB_HOSTED=1` 等于 `--mode team --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`
-  （命令行里写了的照命令行的），`CCA_TEAM_ROOT` 是根公钥 `ssh-ed25519` 后面那一段，命令是 `python3 -I /app/cca-presence.py`。端口固定是 8080
+  （命令行里写了的照命令行的），`CCA_TEAM_ROOT` 是根公钥 `ssh-ed25519` 后面那一段，命令是 `/cca-core team-server`。端口固定是 8080
   （平台的公网地址转到它）。`/data` 要挂一块存储：没有时不启动（不然重启一次记录就没了）。
-- Railway：生成的是 `Dockerfile`（`python:3.13-slim`，`ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=…`）和程序，用它的命令行工具
+- Railway：生成的是 `Dockerfile`（`FROM scratch`：镜像里只有 `cca-core` 这一个静态链接的程序，Linux x86_64 的；`ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=…`）
+  和程序 `cca-core`，用它的命令行工具
   `railway init`、`railway add`、`railway volume add --mount-path /data`、`railway up`、`railway domain --port 8080`。按用量计费（见它的价格页）；
   国内不一定连得上 `*.up.railway.app`。
 - 更新：再运行一次 `cca team hosted`（这个 Team 接着的就是托管平台上的那一台时是更新），照打出来的步骤换上新的程序；数据在 `/data` 里照旧，

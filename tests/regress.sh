@@ -2423,10 +2423,18 @@ ssh-keygen -q -t ed25519 -N '' -C test-release -f "$T/relkey"; ssh-keygen -q -t 
 TESTPUB=$(cut -d' ' -f1,2 "$T/relkey.pub")
 mkver() {   # mkver 版本 输出文件 [路由器脚本标记]：换成测试密钥、改版本号，可在路由器脚本里加个标记
 	# 内置代理的内核换成假的 mihomo（setup.sh 打包、算好的校验值）。像发布的那样接着辅助程序（只接这台机器的那一份；$T/cca.packed
-	# 是仓库里的 cca 接好的：第一次用、或者 cca、辅助程序比它新（分节续跑时快照里那份是旧的）时做一份，之后只在它上面改这几行）
-	{ [ "$T/cca.packed" -nt "$CCA" ] && [ "$T/cca.packed" -nt "$HELPER_BIN" ]; } || run "$HELPER_BIN" pack "$CCA" "$T/cca.packed" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null || return 1
+	# 是仓库里的 cca 接好的：第一次用、或者 cca、辅助程序比它新（分节续跑时快照里那份是旧的）时做一份，之后只在它上面改这几行）。
+	# MKVER_LINUX=1 mkver …：另外接上 Linux 的那两份，都拿这台机器的辅助程序冒充（11b3d：cca team deploy、cca team hosted 传到服务器上
+	# 的服务端程序就是发布的 cca 接着的这两份，假服务器是这台 Mac）；单做一份 $T/cca.packed-linux，平时那一份不变
+	local packed="$T/cca.packed"
+	if [ -n "${MKVER_LINUX:-}" ]; then
+		packed="$T/cca.packed-linux"
+		{ [ "$packed" -nt "$CCA" ] && [ "$packed" -nt "$HELPER_BIN" ]; } || run "$HELPER_BIN" pack "$CCA" "$packed" --only "$HOST_TARGET=$HELPER_BIN" "x86_64-unknown-linux-musl=$HELPER_BIN" "aarch64-unknown-linux-musl=$HELPER_BIN" >/dev/null || return 1
+	else
+		{ [ "$packed" -nt "$CCA" ] && [ "$packed" -nt "$HELPER_BIN" ]; } || run "$HELPER_BIN" pack "$CCA" "$packed" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null || return 1
+	fi
 	sed -e "s|^VERSION=\".*\"$|VERSION=\"$1\"|" -e "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" \
-		-e "s|^CORE_SHA256_ARM64=\".*\"$|CORE_SHA256_ARM64=\"$(cat "$T/mihomo/sha256")\"|" -e "s|^CORE_SHA256_AMD64=\".*\"$|CORE_SHA256_AMD64=\"$(cat "$T/mihomo/sha256")\"|" "$T/cca.packed" > "$2"
+		-e "s|^CORE_SHA256_ARM64=\".*\"$|CORE_SHA256_ARM64=\"$(cat "$T/mihomo/sha256")\"|" -e "s|^CORE_SHA256_AMD64=\".*\"$|CORE_SHA256_AMD64=\"$(cat "$T/mihomo/sha256")\"|" "$packed" > "$2"
 	[ -n "${3:-}" ] && sed -i '' "s|^# cca-router：|# cca-router（$3）：|" "$2"
 	chmod 755 "$2"
 }
@@ -3361,15 +3369,17 @@ out=$(runev cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "cca team leave（成员）：App 里先发同意事件（team_leave，范围是 Team 的编号）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_leave\" and e[\"scope\"] == \"$TMBID\"" && [ -d "$H/.cca/teams/$TMBID" ]'
 out=$(runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "同意以后退出了（result 的 team_left）：本机记着的删掉，另一个 Team 还在" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMBID" ] && [ -d "$H/.cca/teams/$TMID" ]'
-# --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（cca-test hub-box 建的假服务器，tests/kit/hubbox.rs：目录当根，假 systemctl 起真的
-#     server/cca-presence.py；一台服务器上每个 Team 一个服务），装好了自动接上。Docker、拉不到镜像、网页端和证书助手、连不上、几个 Team 这些
+# --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（cca-test hub-box 建的假服务器，tests/kit/hubbox.rs：目录当根，假 systemctl 起
+#     安装脚本放上去的那一份服务端程序 app/cca-core；一台服务器上每个 Team 一个服务），装好了自动接上。Docker、容器用的空镜像、从以前 Python 的
+#     那一版更新上来、网页端和证书助手、连不上、几个 Team 这些
 #     细的在 tests/hub_deploy.rs。App 里新建问名字（team.new），部署问服务器（hub.deploy）、密码（hub.password）、怎么加公钥（hub.pubkey）
+# 装着的这一份 cca 换成还接着 Linux 那两份辅助程序的（要传到服务器上的服务端程序就是它们）；这一节最后一次部署以后换回去
+MKVER_LINUX=1 mkver "$(ver)" "$H/.cca/bin/cca"
 "$TESTBIN" hub-box "$T/hubbox"
-out=$(run cca team deploy --script 2>/dev/null); rc=$?
-HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$(printf '%s\n' "$out" | head -n 1)
-hbdoc() { printf '%s\n' "$out" | sed -n "/^	cat <<'$1'\$/,/^$1\$/p" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1; }   # hbdoc 结束行：安装脚本里那一段 here-document 的 SHA-256
-HBWEB=$(printf '%s\n' "$out" | sed -n 's/^	web_file "\$1" \([^ ]*\) \([0-9a-f]\{64\}\) .*/\1 \2/p' | while read -r n h; do [ "$h" = "$(shasum -a 256 < "$D/../server/web/$n" | cut -d' ' -f1)" ] && echo "$n"; done | wc -l | tr -d ' ')
-ok "cca team deploy --script：打出安装脚本（带着这一版的版本号，原样的服务端程序、证书助手，网页端的每个文件的校验和都对，sh -n 过得去；不带 team-deploy 给的那几项）" '[ $rc -eq 0 ] && [ "$HB1" = "#!/bin/sh" ] && [ "$HBV" = "$(ver)" ] && printf "%s\n" "$out" | /bin/dash -n && [ "$(hbdoc CCA_HUB_SERVER_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-presence.py" | cut -d" " -f1)" ] && [ "$(hbdoc CCA_HUB_ACME_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-acme.py" | cut -d" " -f1)" ] && [ "$HBWEB" = "$(ls "$D/../server/web" | wc -l | tr -d " ")" ] && ! printf "%s\n" "$out" | grep -q "^CCA_HUB_MANAGED="'
+run cca team deploy --script > "$T/tmd-install.sh" 2>/dev/null; rc=$?; out=$(head -n 3 "$T/tmd-install.sh")
+HBV=$(sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p" "$T/tmd-install.sh"); HB1=$(head -n 1 "$T/tmd-install.sh"); HBSUM=$(shasum -a 256 < "$HELPER_BIN" | cut -d' ' -f1)
+hbcore() { sed -n "/^	cat <<'CCA_HUB_CORE_$1_EOF'\$/,/^CCA_HUB_CORE_$1_EOF\$/p" "$T/tmd-install.sh" | sed '1d;$d' | openssl base64 -d | gzip -dc | shasum -a 256 | cut -d' ' -f1; }   # hbcore 机器名：安装脚本里这种机器的服务端程序解出来的 SHA-256
+ok "cca team deploy --script：打出安装脚本（带着这一版的版本号，两种机器的服务端程序解出来就是这份 cca 接着的那两份、校验值写在脚本里，sh -n 过得去；不带以前 Python 的服务端程序和网页端的文件，不带 team-deploy 给的那几项）" '[ $rc -eq 0 ] && [ "$HB1" = "#!/bin/sh" ] && [ "$HBV" = "$(ver)" ] && /bin/dash -n "$T/tmd-install.sh" && grep -qx "CCA_HUB_CORES=.X86_64 AARCH64." "$T/tmd-install.sh" && [ "$(hbcore X86_64)" = "$HBSUM" ] && [ "$(hbcore AARCH64)" = "$HBSUM" ] && grep -qx "CCA_HUB_CORE_SHA256_X86_64=.$HBSUM." "$T/tmd-install.sh" && grep -qx "CCA_HUB_CORE_SHA256_AARCH64=.$HBSUM." "$T/tmd-install.sh" && ! grep -q "^CCA_HUB_MANAGED=\|_PY_EOF\|CCA_HUB_WEB_EOF\|python3" "$T/tmd-install.sh"'
 # 新建时问这台设备上哪些账号放进去（team-candidates 列出的：自己加的官方账号，和这台设备当管理员的 Team 给的；第三方 API 账号、只是成员的 Team 给的不列）
 TMCAND=$(run "$HELPER_BIN" team-candidates); TMCN=$(printf '%s\n' "$TMCAND" | grep -c .)
 TMCOWN=$(printf '%s\n' "$TMCAND" | awk -F '\t' '$5 == "-" { printf "%s%d", (n++ ? " " : ""), NR }')   # 自己加的是第几个：预先勾上
@@ -3420,7 +3430,7 @@ touch "$T/hubbox/ssh_denied"; out=$(runev cca team deploy 机房组 root@hubbox 
 ok "SSH 登录不了：fail 事件 team_ssh（说在终端里运行），服务器上什么都没装" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_ssh\" and \"SSH 连不上 root@hubbox\" in e[\"message\"]" && [ ! -e "$TMDD" ]'
 : > "$T/curl.argv"; : > "$T/env.log"
 out=$(runev cca team deploy "${TMDID:0:8}" root@hubbox --port "$TMDPORT" 2>&1); rc=$?
-ok "cca team deploy：经 SSH 装好（systemd + python3；服务名、目录是这个 Team 的）、自动接上（result 事件 team_deployed）；服务器上只有公开的根公钥；地址是内网的：说一声（team_lan），手机的网页端不开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署「机房组」的同步服务器到 root@hubbox（/opt/${TMDSVC}，systemd + python3，端口 ${TMDPORT}，服务名 ${TMDSVC}），接上了" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && evbefore fail:team_lan result:team_deployed && printf "%s" "$out" | grep -q "手机的网页端没开：127.0.0.1 是内网地址" && grep -q "^CCA_TEAM_ROOT=AAAA" "$TMDD/.env" && ! grep -q ADMIT "$TMDD/.env" && ! grep -rq "PRIVATE KEY" "$TMDD/.env" "$TMDD/app" && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
+ok "cca team deploy：经 SSH 装好（systemd；服务名、目录是这个 Team 的）、自动接上（result 事件 team_deployed）；服务器上只有公开的根公钥；地址是内网的：说一声（team_lan），手机的网页端不开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署「机房组」的同步服务器到 root@hubbox（/opt/${TMDSVC}，systemd，端口 ${TMDPORT}，服务名 ${TMDSVC}），接上了" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && evbefore fail:team_lan result:team_deployed && printf "%s" "$out" | grep -q "手机的网页端没开：127.0.0.1 是内网地址" && grep -q "^CCA_TEAM_ROOT=AAAA" "$TMDD/.env" && ! grep -q ADMIT "$TMDD/.env" && ! grep -rq --exclude=cca-core "PRIVATE KEY" "$TMDD/.env" "$TMDD/app" && [ "$(shasum -a 256 < "$TMDD/app/cca-core" | cut -d" " -f1)" = "$HBSUM" ] && [ ! -s "$T/hubbox/python3.log" ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
 TMDPIN=$(tmdpin); rm -f "$TMDD/certs/cert.pem" "$TMDD/certs/key.pem"; : > "$T/ssh.log"   # 服务器上的证书没了：更新时重新生成，这台设备照新的指纹重新接上
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
 ok "App 里再部署（不写服务器）：一页填地址、SSH 用户、端口（标题说的是这个 Team，预填部署时记下的那台，说数据不变）；先查登录得上不，再部署：只更新（result 事件 team_deployed）；证书是新生成的：照新的指纹重新接上" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and \"机房组\" in e[\"title\"] and [f[\"id\"] for f in e[\"fields\"]] == [\"host\", \"user\", \"port\"] and [f[\"value\"] for f in e[\"fields\"]] == [\"hubbox\", \"root\", \"22\"] and \"数据不变\" in e[\"message\"]" && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && grep -q "^SSH root@hubbox :: true$" "$T/ssh.log" && [ -n "$TMDPIN" ] && [ "$(tmdpin)" != "$TMDPIN" ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
@@ -3447,7 +3457,7 @@ out=$(run CCA_TTY="$(ans '' '' '')" cca team deploy 机房组 2>&1); rc=$?
 ok "终端里不写服务器（App 里「改在终端里完成」）：问地址、SSH 用户、端口（都预填部署时记下的：hubbox、root、22），再部署（只更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
 # 托管平台只有 Railway：不写平台就是它（以前问选哪个）；写 sealos 交给辅助程序，说不再支持、换什么，什么都不生成
 out=$(run cca team hosted 机房组 --dir "$T/tm-hosted" 2>&1); rc=$?
-ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -s "$T/tm-hosted/cca-presence.py" ] && [ -s "$T/tm-hosted/README.md" ] && grep -q "^ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=AAAA" "$T/tm-hosted/Dockerfile" && printf "%s" "$out" | grep -q "railway up --detach" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
+ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -x "$T/tm-hosted/cca-core" ] && [ "$(shasum -a 256 < "$T/tm-hosted/cca-core" | cut -d" " -f1)" = "$HBSUM" ] && [ "$(ls "$T/tm-hosted" | LC_ALL=C sort | tr "\n" " ")" = "Dockerfile README.md cca-core " ] && grep -qx "FROM scratch" "$T/tm-hosted/Dockerfile" && grep -qx "CMD \[\"/cca-core\", \"team-server\"\]" "$T/tm-hosted/Dockerfile" && grep -q "^ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=AAAA" "$T/tm-hosted/Dockerfile" && printf "%s" "$out" | grep -q "railway up --detach" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
 out=$(runev cca team hosted 机房组 sealos --dir "$T/tm-sealos" 2>&1); rc=$?
 ok "cca team hosted 机房组 sealos：不再支持 Sealos（fail 事件 team_usage，说换 Railway 或者自己的服务器），什么都不生成" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再支持 Sealos：部署到 Railway，或者自己的服务器（cca team deploy）" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && [ ! -e "$T/tm-sealos" ]'
 # 删除 Team（管理员的 cca team leave）：先经 SSH 卸掉它的同步服务器（cca team deploy 记下了装到哪：root@hubbox、端口 22、/opt/<服务名>），
@@ -3477,6 +3487,7 @@ ok "App 里再部署、部署时写了私钥：那一页预填记下的那台、
 : > "$T/ssh.env"
 out=$(runev cca team deploy 机房组 root@hubbox 2>&1); rc=$?
 ok "终端里再部署、写的就是记下的那台、没写 -p、-i：照记下的端口、私钥登录（说用的是哪把），部署记录里接着记着" '[ $rc -eq 0 ] && [ "$(lastres)" = team_deployed ] && grep "^ARGV" "$T/ssh.env" | grep -v " -G " | grep -F -- " -p 22 " | grep -qF -- "-i $T/hub_id -o IdentitiesOnly=yes" && printf "%s" "$out" | grep -qF "用私钥 $T/hub_id 登录" && [ "$(tmdident)" = "$T/hub_id" ]'
+mkver "$(ver)" "$H/.cca/bin/cca"   # 换回只接着这台机器的辅助程序的那一份：后面的用例、各节（和它们的快照）照旧
 echo always > "$T/hubbox/ssh_denied"
 out=$(sess '{"consent.team_delete":[{"v":"y"}],"team.keep_server":[{"v":"n"}]}' -- cca team leave 机房组 2>&1); rc=$?
 rm -f "$T/hubbox/ssh_denied"
@@ -4222,7 +4233,7 @@ printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep 
 # 装着的是接着辅助程序的那一份（11b 的 mkver）：它解出来的辅助程序在缓存目录的 cca-helper 里，卸载时整个目录删掉（别的版本解出来的
 # 也在里面）。run 不带 TMPDIR 时缓存目录是这个用户真的临时目录：这一次换成它下面单独的一个（TMPDIR 在 /var/folders 下时 cca 就用它；
 # $T 是 /private/var/… 开头的，不认），不然删的是这台 Mac 上真的 cca、同时在跑的别的回归解出来的那些
-hs=$(sed -n 's/^HELPER_SUMS="[^=]*=\([0-9a-f]*\)"$/\1/p' "$H/.cca/bin/cca" 2>/dev/null)
+hs=$(sed -n 's/^HELPER_SUMS="\([^"]*\)".*$/\1/p' "$H/.cca/bin/cca" 2>/dev/null | tr ' ' '\n' | sed -n "s/^$HOST_TARGET=//p")   # 这台机器的那一份的校验值（接着几种机器的都认）
 un_cache="$(getconf DARWIN_USER_TEMP_DIR)cca-regress-cache.$$"
 mkdir -p "$un_cache/cca-helper" "$un_cache/cca-py" "$T/dock/cca-dock"; chmod 700 "$un_cache/cca-helper"
 : > "$un_cache/cca-helper/0000-another-version"; : > "$un_cache/cca-py/old.pyc"; : > "$T/dock/cca-dock/queued"

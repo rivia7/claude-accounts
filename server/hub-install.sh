@@ -1,5 +1,8 @@
 #!/bin/sh
-# cca 的 Team 的同步服务器（cca team）的一键安装：在 Linux 服务器上用 root 运行，Docker compose（compose 插件）或者 systemd + 系统的 python3（3.6 起）。
+# cca 的 Team 的同步服务器（cca team）的一键安装：在 Linux 服务器（x86_64、aarch64）上用 root 运行，Docker compose（compose 插件）或者 systemd。
+# 服务端程序（cca-core：一个静态链接的程序）就带在这一份脚本里，服务器上不用 Python、不拉镜像、不联网下载。
+# 服务器上要有：openssl、gzip，和 coreutils / busybox 的那些（sed、awk、grep、od、tr、cut、head、tail、dd、cat、cp、mv、rm、mkdir、
+# chmod、chown、id、uname、sleep）；systemd 方式还要 useradd、userdel。ss / netstat、ip、timeout 有就用，没有也行。
 #
 #   sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…' [--host 公网地址] [--port 端口] [--relay-port 端口 | --no-relay]
 #                              [--web-port 端口 | --no-web] [--docker | --systemd] [--dir 目录] [--name Team的名字]
@@ -11,21 +14,26 @@
 # 同时给这个 Team 的远程会话（cca remote，docs/dev/remote.md）做中转：另开一个数据端口（普通的 TCP，上面是两台设备之间端到端加密的内容），
 # 没写时从 HTTPS 那个端口的下一个起找一个空着的；--relay-port 端口 指定，--no-relay 不开。
 # 还有手机的网页端（在手机的浏览器里接入远程会话）：再开一个端口，没写时从数据端口的下一个起找一个空着的（--web-port 指定，--no-web 不开），
-# 用浏览器信得过的证书：证书助手（cca-acme.py）向 Let's Encrypt 要（给 IP 地址的是约 6 天的短期证书），到期前自己续。证书机构验证时
+# 用浏览器信得过的证书：证书助手（cca-core team-acme）向 Let's Encrypt 要（给 IP 地址的是约 6 天的短期证书），到期前自己续。证书机构验证时
 # 从公网连这台服务器的 80 端口，80 端口只有一个：这台服务器上的几个 Team 共用一个证书助手（服务 cca-team-acme，装在 /opt/cca-team-acme：
 # 第一个开网页端的 Team 装上它，别的 Team 在它那里登记自己的地址；同一个地址只要一张证书；最后一个 Team 卸载时连同它一起删掉）。
 # 80 端口被别的程序占着、地址是内网的，这一次就不开（说一声，再运行时再看）。--name：网页的标题、手机主屏幕上的名字带上 Team 的名字。
 # 选的都记在 .env 里，再运行照旧。
 #
 # 也可以在管理员的电脑上运行 cca team deploy Team root@服务器：经 SSH 装上这一份，装好了自动接上。
-# 目录里：app/ 服务端程序、证书助手（都只用 Python 标准库）、网页端的文件和 Team 的名字（name），certs/ 自签的证书（私钥不出这台服务器），
-# data/ 设备和密文，.env 运行方式、端口、根公钥，.cca-hub 记着这个目录是它装的。证书助手的目录里：teams/ 用它的 Team 登记的地址，
+# 目录里：app/ 服务端程序 cca-core（同步服务器、证书助手都是它的子命令，网页端的文件编在它里面）和 Team 的名字（name），certs/ 自签的
+# 证书（私钥不出这台服务器），data/ 设备和密文，.env 运行方式、端口、根公钥，.cca-hub 记着这个目录是它装的。证书助手的目录里：
+# app/ 同一个 cca-core（Docker 方式还有 ca.pem：这台服务器的 CA 证书拷的一份，容器是空的，里面没有），teams/ 用它的 Team 登记的地址，
 # store/ 每个地址的证书，webcert/<服务名>/ 放给那个 Team 的（只有它读得了私钥），acme/ 证书机构那里的账户的私钥。
+# Docker 方式的容器用本机建的一个空镜像（cca-team-runtime:1，docker import：不联网），里面只有挂进去的 app/。
 # 不改 Docker 的全局配置，不动防火墙（要放行哪些端口最后会说）。
 # 3.5.3 以前这一份还装「自己的同步服务器」（cca hub，/opt/cca-hub）：没有了，改成建一个 Team。以前装的用 --uninstall --dir /opt/cca-hub 卸掉。
+# 以前的版本装的是 Python 的服务端（app/cca-presence.py、app/web/，Docker 用 python 镜像）：再运行这一份就换成 cca-core，数据、证书、
+# 端口都不变；换好了（新的服务在回话了）才删掉以前的那几个文件。
 #
-# 这一份是 cca 仓库里的模板（server/hub-install.sh）：辅助程序在下面标着 CCA-HUB-EMBED 的那一行放进版本、服务端程序、证书助手和网页端的
-# 文件，才是能运行的安装脚本（cca team deploy --script 打出来的、发布页上的 cca-hub-install.sh）。格式见 server/README.md「Team 的同步服务器」
+# 这一份是 cca 仓库里的模板（server/hub-install.sh）：辅助程序在下面标着 CCA-HUB-EMBED 的那一行放进版本和服务端程序（CCA_HUB_VERSION、
+# CCA_HUB_CORES 带着哪几种机器的、每种一个校验值 CCA_HUB_CORE_SHA256_<机器名> 和一个函数 hub_core_<机器名>：gzip 过的 cca-core 的
+# base64），才是能运行的安装脚本（cca team deploy --script 打出来的、发布页上的 cca-hub-install.sh）。见 docs/dev/team.md「部署」
 # @CCA-HUB-EMBED@
 
 set -u
@@ -49,9 +57,11 @@ DEF_PORT=18445
 # 每个 Team 的安装脚本都要找得到它）。3.5.3-beta.4 以前每个 Team 自己一个（<服务名>-acme，占着 80 端口：只有一个 Team 开得了网页端）
 ASVC=cca-team-acme
 AD=/opt/$ASVC
-AMODE="" AIMG=""           # 证书助手怎么运行、用哪个镜像（acme_mode）
-# 官方的 python 镜像：上次用的那个，再依次试官方镜像的几个同步源（国内常常连不上 Docker Hub），最后是 Docker Hub 上的
-IMAGES="public.ecr.aws/docker/library/python:3.13-slim mirror.ccs.tencentyun.com/library/python:3.13-slim docker.m.daocloud.io/library/python:3.13-slim python:3.13-slim"
+AMODE=""                   # 证书助手怎么运行（acme_mode）
+# Docker 方式的容器用的镜像：本机建的一个空镜像（rimg），不联网、不靠哪个镜像仓库；cca-core 是静态链接的，从 app/ 挂进去就能运行。
+# compose_yaml、acme_compose 里写的也是它（那两处是原样的 here-document），假服务器的 docker 认的也是它：一起改
+RIMG=cca-team-runtime:1
+CARCH="" CORENEW=""        # 这台服务器用安装脚本里带的哪一份服务端程序（core_pick）；正在写的那一份（core_put）：没装完时删掉
 # cca team deploy 经 SSH 运行时（上面那一行放进了 CCA_HUB_MANAGED=1、根公钥和参数）：进度写 stderr，结果一行一项（CCA-HUB 键 值）写 stdout
 MANAGED=${CCA_HUB_MANAGED:-}
 VERSION=${CCA_HUB_VERSION:-}
@@ -59,8 +69,9 @@ ROLLBACK=""                # 这一次写过 .env 了：没装完时换回原来
 
 say() { if [ -n "$MANAGED" ]; then printf '  %s\n' "$*" >&2; else printf '%s\n' "$*"; fi; }
 note() { [ -z "$MANAGED" ] || printf 'CCA-HUB %s\n' "$*"; }
-die() {   # die 原因码 说明（原因码见 cli/src/cmd/hub/deploy.rs 的 fail_code）：.env 先换回原来的
+die() {   # die 原因码 说明（原因码见 cli/src/cmd/hub/deploy.rs 的 fail_code）：.env 先换回原来的，写到一半的服务端程序删掉
 	rollback
+	[ -z "$CORENEW" ] || rm -f "$CORENEW"
 	code=$1
 	shift
 	if [ -n "$MANAGED" ]; then printf 'CCA-HUB fail %s %s\n' "$code" "$*"; else printf '✗ %s\n' "$*" >&2; fi
@@ -69,6 +80,7 @@ die() {   # die 原因码 说明（原因码见 cli/src/cmd/hub/deploy.rs 的 fa
 interrupted() {   # Ctrl-C、SSH 断了（之后再往断了的管道里写是 SIGPIPE）：服务还没起来的话 .env 换回原来的，就退出，不再写什么
 	trap '' HUP INT TERM PIPE
 	rollback
+	[ -z "$CORENEW" ] || rm -f "$CORENEW"
 	exit 1
 }
 usage() {
@@ -100,12 +112,7 @@ install_cmd() {   # 这个发行版上装这些包的那一行
 DCP=""   # compose 的项目名照服务名（-p）。不写的话是目录名：两个 Team 装在同名的目录里（/a/hub、/b/hub）会互相当成孤儿删掉
 dc() { (cd "$ROOT$D" && docker compose $DCP -f compose.yaml "$@") </dev/null; }
 have_docker() { command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
-PY=""
-have_systemd() {   # systemd 在管这台机器（/run/systemd/system 在），有 python3 3.6 起、带 ssl
-	[ -d "$ROOT/run/systemd/system" ] && command -v systemctl >/dev/null 2>&1 || return 1
-	PY=$(command -v python3 2>/dev/null) || return 1
-	"$PY" -c 'import sys, ssl, selectors, socketserver, http.server; sys.exit(0 if sys.version_info >= (3, 6) else 1)' >/dev/null 2>&1
-}
+have_systemd() { [ -d "$ROOT/run/systemd/system" ] && command -v systemctl >/dev/null 2>&1; }   # systemd 在管这台机器（/run/systemd/system 在）
 running_as() {   # running_as docker|systemd 名字：这个容器、这个 systemd 服务在运行
 	case "$1" in
 		docker) [ "$(docker inspect -f '{{.State.Running}}' "$2" 2>/dev/null)" = true ] ;;
@@ -243,16 +250,16 @@ other_kind() {   # 写了 --team-root，这个目录里装着的却是另一个 
 }
 
 # --- 这一次怎么装 ------------------------------------------------------------------------------------------------------------
-pick_mode() {   # MODE：--docker、--systemd 照说的；没说时上次是 systemd、还能用就照旧，再是 Docker（AUTO：拉不到镜像、起不来时改用 systemd），再是 systemd
+pick_mode() {   # MODE：--docker、--systemd 照说的；没说时上次是 systemd、还能用就照旧，再是 Docker（AUTO：建不了空镜像、起不来时改用 systemd），再是 systemd
 	OLD=$(env_get CCA_HUB_MODE)
 	case "$MODE" in
 		docker) have_docker || die deps "这台服务器上没有 Docker（带 compose 插件：docker compose），或者 Docker 没在运行：先装好，或者换 --systemd" ;;
-		systemd) have_systemd || die deps "要 systemd 和 python3（3.6 起）：$(install_cmd python3)；或者换 --docker" ;;
+		systemd) have_systemd || die deps "这台服务器上没有 systemd：换 --docker" ;;
 		*)
 			if [ "$OLD" = systemd ] && have_systemd; then MODE=systemd
 			elif have_docker; then MODE=docker AUTO=1
 			elif have_systemd; then MODE=systemd
-			else die deps "要 Docker（带 compose 插件：docker compose），或者 systemd + python3（3.6 起，$(install_cmd python3)）：这台服务器上两样都没有"
+			else die deps "要 Docker（带 compose 插件：docker compose）或者 systemd：这台服务器上两样都没有"
 			fi ;;
 	esac
 }
@@ -341,7 +348,7 @@ pick_web() {   # WEB：手机的网页端的端口；off 不开。--web-port / -
 	fi
 	WEBON=1 WEBURL="https://${HP}:${WEB}/"
 }
-acme_mode() {   # AMODE：共用的证书助手怎么运行——装着的照旧（还能用的话），没装过照这个 Team 的；AIMG：Docker 的用哪个镜像（这个 Team 刚拉的优先）
+acme_mode() {   # AMODE：共用的证书助手怎么运行——装着的照旧（还能用的话），没装过照这个 Team 的
 	AMODE=$(aenv_get CCA_HUB_MODE)
 	case "$AMODE" in
 		docker) have_docker || AMODE="" ;;
@@ -349,44 +356,53 @@ acme_mode() {   # AMODE：共用的证书助手怎么运行——装着的照旧
 		*) AMODE="" ;;
 	esac
 	[ -n "$AMODE" ] || AMODE=$MODE
-	AIMG=$IMG
-	[ -n "$AIMG" ] || AIMG=$(aenv_get CCA_HUB_IMAGE)
 }
 auid() { if [ "$AMODE" = docker ]; then printf '%s' "$CUID"; else printf '%s' "$ASVC"; fi; }   # 证书助手以哪个用户运行
 tgid() { if [ "$MODE" = docker ]; then printf '%s' "$CUID"; else id -g "$SVC"; fi; }       # 这个 Team 的服务端的组
-pull_image() {   # IMG：上次用的那个，再依次试几个同步源，第一个拉得到（或者本机已经有）的；都不行时 AUTO 的改用 systemd
-	for i in $(env_get CCA_HUB_IMAGE) $IMAGES; do
-		say "拉取镜像 ${i}…"
-		if tmo 300 docker pull -q "$i" </dev/null >/dev/null 2>&1 || docker image inspect "$i" >/dev/null 2>&1; then IMG=$i; return 0; fi
+rimg() {   # Docker 方式的容器用的空镜像（RIMG）：本机还没有就建一个——docker import 一个空的 tar（10240 个 0 字节：tar 的结束块），不联网
+	docker image inspect "$RIMG" >/dev/null 2>&1 ||
+		dd if=/dev/zero bs=10240 count=1 2>/dev/null | tmo 120 docker import - "$RIMG" >/dev/null 2>&1
+}
+ca_bundle() {   # 这台服务器的 CA 证书（各个发行版放的地方不一样；cca-core team-acme 自己找的那几个——cli/src/server/acme/roots.rs 的 SYSTEM——都在里面、先后一样）：打出路径，没有返回 1
+	for cab in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/pki/tls/cacert.pem \
+		/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/cert.pem; do
+		[ -s "$ROOT$cab" ] && { printf '%s' "$ROOT$cab"; return 0; }
 	done
-	[ -n "$AUTO" ] && have_systemd ||
-		die image "拉不到 python:3.13-slim 镜像（Docker Hub 和几个同步源都连不上）：给 Docker 配上镜像加速再运行，或者换 --systemd"
-	say "拉不到 python 镜像（Docker Hub 和几个同步源都连不上）：改用 systemd + 系统的 python3"
-	MODE=systemd
+	return 1
 }
 
 # --- 装 ----------------------------------------------------------------------------------------------------------------------
-web_file() {   # web_file 目录 名字 SHA-256：stdin（base64）解开写成 目录/名字，核对 SHA-256（hub_web_files 一个文件调一次）
-	openssl base64 -d > "$1/$2" 2>/dev/null && [ "$(openssl dgst -sha256 -binary < "$1/$2" 2>/dev/null | hexof)" = "$3" ]
+core_arch() {   # 这台服务器是哪种机器（安装脚本里带的服务端程序的机器名：cli/src/cmd/hub/payload.rs 的 LINUX）；别的机器返回 1
+	case "$(uname -m 2>/dev/null)" in
+		x86_64|amd64) echo X86_64 ;;
+		aarch64|arm64) echo AARCH64 ;;
+		*) return 1 ;;
+	esac
 }
-web_put() {   # 网页端的文件（安装脚本里带着的）换上：先都写进 app/web.new、核对过，再换掉 app/web（正在运行的服务端启动时已经读进内存了）
-	w=$ROOT$D/app/web
-	rm -rf "$w.new" "$w.old" && mkdir "$w.new" || die install "写不了 ${D}/app/web.new"
-	hub_web_files "$w.new" || { rm -rf "$w.new"; die install "写不了网页端的文件（openssl base64 -d）"; }
-	chmod 755 "$w.new" && chmod 644 "$w.new"/* || die install "改不了网页端的文件的权限"
-	if [ -d "$w" ]; then mv "$w" "$w.old" || die install "换不了 ${D}/app/web"; fi
-	mv "$w.new" "$w" || die install "换不了 ${D}/app/web"
-	rm -rf "$w.old"
+core_pick() {   # CARCH：这台服务器用安装脚本里带的哪一份服务端程序。别的机器、这一份脚本没带这一种的：停下（什么都还没动）
+	CARCH=$(core_arch) || die deps "这台服务器是 $(uname -m 2>/dev/null)：服务端程序只有 x86_64、aarch64 的"
+	case " ${CCA_HUB_CORES:-} " in *" $CARCH "*) ;; *) die install "这一份安装脚本没带 ${CARCH} 的服务端程序" ;; esac
 }
-prepare() {   # 目录（.cca-hub 记着是这里装的）、服务端程序、网页端的文件、Team 的名字（--name；没写时留着上次的）、证书（没有才生成：
+core_put() {   # 服务端程序（安装脚本里带着的 cca-core，core_pick 定了哪一份）换上：解到 app/.cca-core.new、核对 SHA-256、试运行一次，
+	           # 再 mv 换掉 app/cca-core（正在运行的旧进程不受影响：它开着的还是原来那个文件；直接往上写的话内核不让改正在运行的程序）
+	CORENEW=$ROOT$D/app/.cca-core.new
+	eval "cwant=\${CCA_HUB_CORE_SHA256_$CARCH:-}"
+	"hub_core_$CARCH" | openssl base64 -d 2>/dev/null | gzip -dc > "$CORENEW" 2>/dev/null &&
+		[ -n "$cwant" ] && [ "$(openssl dgst -sha256 -binary < "$CORENEW" 2>/dev/null | hexof)" = "$cwant" ] ||
+		die install "解不开服务端程序（安装脚本不完整？）"
+	chmod 755 "$CORENEW" && [ "$("$CORENEW" sh-re-escape ok 2>/dev/null)" = ok ] ||
+		die install "服务端程序在这台服务器上运行不了（${D} 所在的盘不许执行程序？换个目录：--dir）"
+	mv -f "$CORENEW" "$ROOT$D/app/cca-core" || die install "换不了 ${D}/app/cca-core"
+	CORENEW=""
+}
+prepare() {   # 目录（.cca-hub 记着是这里装的）、服务端程序、Team 的名字（--name；没写时留着上次的）、证书（没有才生成：
 	           # NEWCERT）；PIN 是证书公钥的指纹。证书助手不在这里了（共用的那一个：acme_dirs）；以前的 webcert/、acme/ 留到 acme_start 搬走
 	mkdir -p "$ROOT$D/app" "$ROOT$D/certs" "$ROOT$D/data" || die install "建不了 ${D}"
 	printf '# cca 的同步服务器（%s）装在这个目录：安装脚本认这个文件（再运行是更新，--uninstall 删掉它装的那些）\n# svc=%s\n' "$WHAT" "$SVC" > "$ROOT$D/.cca-hub" ||
 		die install "写不了 ${D}/.cca-hub"
 	chmod 755 "$ROOT$D" "$ROOT$D/app" && chmod 700 "$ROOT$D/certs" "$ROOT$D/data" || die install "改不了 ${D} 的权限"
-	put "$ROOT$D/app/cca-presence.py" 644 hub_server_py
+	core_put
 	[ -z "$NAME" ] || put "$ROOT$D/app/name" 644 printf '%s\n' "$NAME"
-	web_put
 	if [ ! -s "$ROOT$D/certs/key.pem" ] || [ ! -s "$ROOT$D/certs/cert.pem" ]; then
 		# 自签的 P-256 证书（macOS 的 curl 只给 RSA 和 P-256/P-384 做公钥钉住），私钥不出这台服务器
 		rm -f "$ROOT$D/certs/key.pem" "$ROOT$D/certs/cert.pem"
@@ -406,7 +422,6 @@ env_file() {
 	printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_TEAM_ROOT=%s\nCCA_HUB_RELAY=%s\nCCA_HUB_WEB=%s\n' "$MODE" "$PORT" "$TEAMROOT" "$RELAY" "$WEB"
 	[ -z "$HOST" ] || printf 'CCA_HUB_HOST=%s\n' "$HOST"
 	[ -z "$WEBON" ] || printf 'CCA_HUB_WEB_URL=%s\n' "$WEBURL"
-	[ -z "$IMG" ] || printf 'CCA_HUB_IMAGE=%s\n' "$IMG"
 	[ -z "$VERSION" ] || printf 'CCA_HUB_VERSION=%s\n' "$VERSION"
 }
 write_env() {   # .env 换成这一次的（起服务之前）。没装完（die、被打断）时 rollback 换回原来的（第一次装时删掉）：下一次照原来的判断是哪种情况
@@ -429,16 +444,17 @@ compose_yaml() {   # @SVC@ 换成服务名（容器名）、@AD@ 换成证书助
 	if relay_on; then relay='s/@RELAY@\([^@]*\)@@/\1/g'; else relay='/^@RELAY@[^@]*@@$/d;s/@RELAY@[^@]*@@//g'; fi
 	if [ -n "$WEBON" ]; then web='s/@WEB@\([^@]*\)@@/\1/g'; else web='/^@WEB@[^@]*@@$/d;s/@WEB@[^@]*@@//g'; fi
 	if [ -n "$WEBON" ] && named; then name='s/@NAME@\([^@]*\)@@/\1/g'; else name='s/@NAME@[^@]*@@//g'; fi
-	# 容器里：HTTPS 听 18445，中转的数据端口 18446，网页端 18447；对外是 .env 里的 CCA_HUB_PORT、CCA_HUB_RELAY、CCA_HUB_WEB
+	# 容器里：HTTPS 听 18445，中转的数据端口 18446，网页端 18447；对外是 .env 里的 CCA_HUB_PORT、CCA_HUB_RELAY、CCA_HUB_WEB。
+	# 镜像是本机建的空镜像（RIMG），程序是只读挂进去的 app/cca-core
 	sed -e "s/@SVC@/$SVC/g" -e "s|@AD@|$AD|g" -e "s/@PIDS@/$(tasks)/" -e "$relay" -e "$name" -e "$web" <<'EOF'
 # cca 的 Team 的同步服务器（@SVC@）：安装脚本写的，再运行安装脚本时会换掉。设置在 .env 里
 services:
   @SVC@:
-    image: ${CCA_HUB_IMAGE:-python:3.13-slim}
+    image: cca-team-runtime:1
     container_name: @SVC@
     restart: unless-stopped
     user: "10001:10001"
-    command: ["python3", "-I", "/app/cca-presence.py", "--mode", "team", "--listen", "0.0.0.0:18445", "--cert", "/certs/cert.pem", "--key", "/certs/key.pem", "--state", "/data/state.json"@RELAY@, "--relay-listen", "0.0.0.0:18446", "--relay-port", "${CCA_HUB_RELAY:?}"@@@WEB@, "--web-url", "${CCA_HUB_WEB_URL:?}", "--web-listen", "0.0.0.0:18447", "--web-cert", "/webcert/fullchain.pem", "--web-key", "/webcert/privkey.pem"@NAME@, "--web-name-file", "/app/name"@@@@]
+    command: ["/app/cca-core", "team-server", "--mode", "team", "--listen", "0.0.0.0:18445", "--cert", "/certs/cert.pem", "--key", "/certs/key.pem", "--state", "/data/state.json"@RELAY@, "--relay-listen", "0.0.0.0:18446", "--relay-port", "${CCA_HUB_RELAY:?}"@@@WEB@, "--web-url", "${CCA_HUB_WEB_URL:?}", "--web-listen", "0.0.0.0:18447", "--web-cert", "/webcert/fullchain.pem", "--web-key", "/webcert/privkey.pem"@NAME@, "--web-name-file", "/app/name"@@@@]
     ports:
       - "${CCA_HUB_PORT:-18445}:18445"
 @RELAY@      - "${CCA_HUB_RELAY:?}:18446"@@
@@ -480,7 +496,7 @@ Wants=network-online.target
 [Service]
 User=$SVC
 EnvironmentFile=$D/.env
-ExecStart=$PY -I $D/app/cca-presence.py --mode team --listen 0.0.0.0:\${CCA_HUB_PORT} --cert $D/certs/cert.pem --key $D/certs/key.pem --state $D/data/state.json${extra}
+ExecStart=$D/app/cca-core team-server --mode team --listen 0.0.0.0:\${CCA_HUB_PORT} --cert $D/certs/cert.pem --key $D/certs/key.pem --state $D/data/state.json${extra}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
@@ -500,20 +516,20 @@ EOF
 acme_env() {
 	printf '# 这台服务器上几个 Team 共用的证书助手的设置：安装脚本写的（用它的 Team 登记在 teams/ 里）\n'
 	printf 'CCA_HUB_MODE=%s\n' "$AMODE"
-	[ "$AMODE" != docker ] || printf 'CCA_HUB_IMAGE=%s\n' "$AIMG"
 	[ -z "$VERSION" ] || printf 'CCA_HUB_VERSION=%s\n' "$VERSION"
 }
-acme_compose() {   # 共用的证书助手（Docker）：证书机构从公网连 80 端口验证（容器里听 18080）
+acme_compose() {   # 共用的证书助手（Docker）：证书机构从公网连 80 端口验证（容器里听 18080）。容器是空的，没有 CA 证书：照 --ca 用
+                   # acme_start 拷进 app/ 的那一份（这台服务器的）
 	cat <<'EOF'
 # cca 的 Team 的同步服务器共用的证书助手（cca-team-acme）：给这台服务器上各个 Team 的手机网页端向 Let's Encrypt 要证书、到期前续上。
 # 安装脚本写的，再运行安装脚本时会换掉。设置在 .env 里
 services:
   cca-team-acme:
-    image: ${CCA_HUB_IMAGE:-python:3.13-slim}
+    image: cca-team-runtime:1
     container_name: cca-team-acme
     restart: unless-stopped
     user: "10001:10001"
-    command: ["python3", "-I", "/app/cca-acme.py", "--teams", "/teams", "--store", "/store", "--out", "/webcert", "--account", "/acme", "--listen", "0.0.0.0:18080"]
+    command: ["/app/cca-core", "team-acme", "--teams", "/teams", "--store", "/store", "--out", "/webcert", "--account", "/acme", "--listen", "0.0.0.0:18080", "--ca", "/app/ca.pem"]
     ports:
       - "80:18080"
     volumes:
@@ -537,7 +553,7 @@ services:
         max-file: "3"
 EOF
 }
-acme_unit_file() {   # 共用的证书助手（systemd）：直接听 80 端口（只给它绑低端口的权限）
+acme_unit_file() {   # 共用的证书助手（systemd）：直接听 80 端口（只给它绑低端口的权限）；CA 证书它自己照 ca_bundle 那几个地方找
 	cat <<EOF
 # cca 的 Team 的同步服务器共用的证书助手（${ASVC}）：给这台服务器上各个 Team 的手机网页端向 Let's Encrypt 要证书、到期前续上。
 # 安装脚本写的，再运行安装脚本时会换掉
@@ -549,7 +565,7 @@ Wants=network-online.target
 [Service]
 User=$ASVC
 EnvironmentFile=$AD/.env
-ExecStart=$PY -I $AD/app/cca-acme.py --teams $AD/teams --store $AD/store --out $AD/webcert --account $AD/acme --listen 0.0.0.0:80
+ExecStart=$AD/app/cca-core team-acme --teams $AD/teams --store $AD/store --out $AD/webcert --account $AD/acme --listen 0.0.0.0:80
 Restart=on-failure
 RestartSec=60
 NoNewPrivileges=yes
@@ -627,7 +643,9 @@ start_systemd() {
 acme_fail() { say "! 证书助手（${ASVC}）起不来：手机的网页端拿不到证书（$(acme_logs) 看它说的）"; CERT_WAIT=0; }
 acme_start() {   # 网页端开着、这个 Team 的服务已经用这一次的设置起来了：以前它自己的证书助手（<服务名>-acme，刚才已经停掉）的证书、
 	             # 账户搬过来（证书放进它的那一份：共用的证书助手看到还用得了就接着用，不再要一张——同样的证书 7 天最多发 5 张），
-	             # 登记这个 Team 的地址（teams/<服务名>），换上这一版的证书助手、重新起它（登记的变了它过几秒自己也会照新的）
+	             # 登记这个 Team 的地址（teams/<服务名>），换上这一版的证书助手、重新起它（登记的变了它过几秒自己也会照新的）。
+	             # 证书助手就是 cca-core（team-acme）：把这个 Team 刚换上的那一份拷过去。它起不来、缺东西都不算装坏了（acme_fail：
+	             # 说一声，网页端的证书以后再说）——这个 Team 的服务已经在运行
 	a=$ROOT$AD od=$ROOT$D
 	if [ -s "$od/webcert/fullchain.pem" ] && [ -s "$od/webcert/privkey.pem" ] && [ ! -s "$a/webcert/$SVC/fullchain.pem" ]; then
 		mv -f "$od/webcert/privkey.pem" "$a/webcert/$SVC/privkey.pem" && mv -f "$od/webcert/fullchain.pem" "$a/webcert/$SVC/fullchain.pem" ||
@@ -642,9 +660,18 @@ acme_start() {   # 网页端开着、这个 Team 的服务已经用这一次的�
 		[ ! -f "$a/webcert/$SVC/${f%:*}" ] || chmod "${f#*:}" "$a/webcert/$SVC/${f%:*}" || die install "改不了 ${AD}/webcert/${SVC} 的权限"
 	done
 	put "$a/teams/$SVC" 644 printf '%s\n' "$HOST"
-	put "$a/app/cca-acme.py" 644 hub_acme_py
+	# 先拷到旁边再换上：证书助手正在运行的话，它开着的还是原来那个文件
+	cp "$od/app/cca-core" "$a/app/.cca-core.new" 2>/dev/null && chmod 755 "$a/app/.cca-core.new" && mv -f "$a/app/.cca-core.new" "$a/app/cca-core" ||
+		{ rm -f "$a/app/.cca-core.new"; say "! 写不了 ${AD}/app/cca-core"; acme_fail; return 0; }
+	rm -f "$a/app/cca-acme.py"   # 以前的版本装的 Python 的证书助手
+	# 证书助手连 Let's Encrypt 要验它的证书：这台服务器上得有 CA 证书
+	cabundle=$(ca_bundle) || { say "! 找不到 CA 证书（$(install_cmd ca-certificates)）：证书助手连不上 Let's Encrypt"; acme_fail; return 0; }
 	put "$a/.env" 600 acme_env
 	if [ "$AMODE" = docker ]; then
+		# 容器是空的：CA 证书拷一份放进 app/（只读挂进去，--ca 指着它）。不直接挂 /etc 下的：SELinux 的机器上挂载要改系统文件的标签
+		cp "$cabundle" "$a/app/.ca.pem.new" 2>/dev/null && chmod 644 "$a/app/.ca.pem.new" && mv -f "$a/app/.ca.pem.new" "$a/app/ca.pem" ||
+			{ rm -f "$a/app/.ca.pem.new"; say "! 写不了 ${AD}/app/ca.pem"; acme_fail; return 0; }
+		rimg || { say "! Docker 建不了 cca 的运行环境（docker import 没成）"; acme_fail; return 0; }
 		! drop_unit "$ASVC" || systemctl daemon-reload </dev/null >/dev/null 2>&1   # 以前是 systemd 的
 		put "$a/compose.yaml" 644 acme_compose
 		out=$(adc up -d --force-recreate --remove-orphans 2>&1) || { printf '%s\n' "$out" | tail -n 20 | sed 's/^/    /' >&2; acme_fail; }
@@ -702,11 +729,7 @@ wait_cert() {   # 等证书助手拿到网页端的证书（最多 CERT_WAIT 秒
 }
 
 # --- 说结果 ------------------------------------------------------------------------------------------------------------------
-how() {
-	if [ "$MODE" = docker ]; then printf 'Docker compose，镜像 %s' "$IMG"
-	else printf 'systemd + %s' "$("$PY" -c 'import platform; print("python " + platform.python_version())' 2>/dev/null)"
-	fi
-}
+how() { if [ "$MODE" = docker ]; then printf 'Docker compose'; else printf 'systemd'; fi; }
 report_managed() {   # 给 cca team deploy：一行一项（deploy.rs 的 report 读）。host 是这次定下的地址（pick_host；认不出时不说）
 	say "${WHAT}在运行（${D}，$(how)，端口 ${PORT}）"
 	fw_hint
@@ -772,6 +795,8 @@ uninstall() {   # 停掉、删掉这个目录里装的（只认装过的目录�
 	rm -f "$ROOT$D/.env" "$ROOT$D/.env.prev" "$ROOT$D/.cca-hub"
 	rmdir "$ROOT$D" 2>/dev/null
 	[ -n "$o" ] || ! id "$SVC" >/dev/null 2>&1 || userdel "$SVC" >/dev/null 2>&1
+	# Docker 方式用的空镜像：还有容器用着它（别的 Team、证书助手）时 Docker 不让删，最后一个卸载的才真的删掉
+	! command -v docker >/dev/null 2>&1 || docker image rm "$RIMG" >/dev/null 2>&1 || :
 	if [ "$SVC" = cca-hub ]; then say "✓ 卸载了以前的自己的同步服务器（${D} 里的程序、证书、数据都删了）"
 	elif [ -n "$MANAGED" ]; then say "✓ 卸载了 Team 的同步服务器（${D} 里的程序、证书、数据都删了）"   # 删除 Team（cca team leave）时：接着删的就是这个 Team
 	else say "✓ 卸载了 Team 的同步服务器（${D} 里的程序、证书、数据都删了）。管理员要换一台接上（cca team attach），或者各台设备退出（cca team leave）"; fi
@@ -785,7 +810,7 @@ port_arg() {   # port_arg 选项 值：1024～65535 的端口
 }
 
 main() {
-	HOST="" PORT="" MODE="" UNINSTALL="" AUTO="" IMG="" NEWCERT="" HP="" RELAY="" WEB="" WEBSET="" WEBON="" WEB_WHY="" WEBURL="" CERTOK=""
+	HOST="" PORT="" MODE="" UNINSTALL="" AUTO="" NEWCERT="" HP="" RELAY="" WEB="" WEBSET="" WEBON="" WEB_WHY="" WEBURL="" CERTOK=""
 	OLD="" OLDPORT="" OLDWEBURL="" OLDACME="" ACMEGONE=""
 	trap interrupted HUP INT TERM PIPE
 	while [ $# -gt 0 ]; do
@@ -808,7 +833,7 @@ main() {
 		esac
 		shift
 	done
-	command -v hub_server_py >/dev/null 2>&1 || die usage "这是 cca 仓库里的模板：要运行的是 cca team deploy --script 生成的那一份（发布页上的 cca-hub-install.sh）"
+	[ -n "${CCA_HUB_VERSION+x}" ] || die usage "这是 cca 仓库里的模板：要运行的是 cca team deploy --script 生成的那一份（发布页上的 cca-hub-install.sh）"
 	if [ -n "$TEAMROOT" ]; then
 		command -v openssl >/dev/null 2>&1 || die deps "要 openssl（生成证书、算指纹）：$(install_cmd openssl)"
 		team_setup
@@ -835,7 +860,11 @@ main() {
 		uninstall
 		return
 	fi
+	# 卸载用的那一份（cca team leave 经 SSH 给的）不带服务端程序；装要带着
+	[ -n "${CCA_HUB_CORES:-}" ] || die install "这一份安装脚本没带服务端程序：用 cca team deploy --script 重新生成一份"
 	command -v openssl >/dev/null 2>&1 || die deps "要 openssl（生成证书、算指纹）：$(install_cmd openssl)"
+	command -v gzip >/dev/null 2>&1 || die deps "要 gzip（解开服务端程序）：$(install_cmd gzip)"
+	core_pick   # 别的机器（32 位的、riscv……）上没有服务端程序：什么都还没动就停下
 	dir_ours || die usage "${D} 里已经有别的东西（不是装过的${WHAT}）：换一个新的目录（--dir）"
 	o=$(other_kind) && die taken "${D} 里装着的是${o}：换一个目录（--dir），或者先卸载它（--uninstall --dir ${D}）"
 	o=$(other_dir)
@@ -849,7 +878,12 @@ main() {
 	[ -n "$MANAGED" ] || { [ "$STATE" = update ] && [ "$PORT" = "$OLDPORT" ]; } || need=1
 	pick_host "$need"
 	pick_web
-	[ "$MODE" != docker ] || pull_image
+	# Docker 方式：先有容器用的空镜像。建不了时没指定 --docker 的改用 systemd
+	if [ "$MODE" = docker ] && ! rimg; then
+		[ -n "$AUTO" ] && have_systemd || die image "Docker 建不了 cca 的运行环境（docker import 没成）：看看 Docker，或者换 --systemd"
+		say "Docker 建不了 cca 的运行环境（docker import 没成）：改用 systemd"
+		MODE=systemd
+	fi
 	if port_busy "$PORT" && ! { [ "$PORT" = "$OLDPORT" ] && svc_running; }; then
 		die port "端口 ${PORT} 被别的程序占着：换一个（--port）"
 	fi
@@ -859,8 +893,8 @@ main() {
 		write_env
 		if ! start_docker; then
 			[ -n "$AUTO" ] && have_systemd || die start "docker compose up 没成（上面是它说的）"
-			say "Docker compose 起不来（上面是它说的）：改用 systemd + 系统的 python3"
-			MODE=systemd IMG=""
+			say "Docker compose 起不来（上面是它说的）：改用 systemd"
+			MODE=systemd
 		fi
 	fi
 	if [ "$MODE" = systemd ]; then
@@ -871,6 +905,8 @@ main() {
 	# 服务用这一份 .env 起来了：之后再断（打结果时 SSH 断了是 SIGPIPE）、被打断也不换回，不然跑着的服务和 .env 对不上
 	ROLLBACK=""
 	rm -f "$ROOT$D/.env.prev"
+	# 以前的版本装的 Python 的服务端、网页端的文件：新的服务在回话了才删（没换成时留着：用以前的安装脚本再运行一次就回得去）
+	rm -rf "$ROOT$D/app/cca-presence.py" "$ROOT$D/app/cca-acme.py" "$ROOT$D/app/web" "$ROOT$D/app/web.new" "$ROOT$D/app/web.old"
 	# 共用的证书助手：网页端开着就登记（以前它自己的证书助手的证书、账户搬过去）、起它；没开就去掉登记（没有 Team 用了就停掉它）
 	if [ -n "$WEBON" ]; then acme_start; wait_cert; else acme_leave; fi
 	if [ -n "$MANAGED" ]; then report_managed; else report; fi

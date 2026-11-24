@@ -17,7 +17,8 @@
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
 #     路由器、选节点、加账号、问过后重载，经路由器的端口出去，启动账号，在家时给内置代理拷节点（路由器端自己写 JSON）
 #   远程会话、Team 的同步服务器的一键安装脚本：测试程序 suite 的几个模块（tests/remote_host.rs、remote_relay.rs、hub_deploy.rs；安装脚本那一个的
-#     假服务器是 tests/kit/hubbox.rs：这个发行版的 sh、openssl，假的 systemctl、docker 起真的服务端）
+#     假服务器是 tests/kit/hubbox.rs：这个发行版的 sh、openssl、gzip，安装脚本带的服务端程序就是这一份 musl 的辅助程序，
+#     假的 systemctl、docker 把解出来的那一份起成服务——真的 Linux 程序经安装脚本走一遍只有这里测得到）
 # 测试节点是本机另一个 mihomo（socks5 → DIRECT）。端口池固定从 7901 起，被占用时不跑
 # 辅助程序（cli/ 的 Rust 程序）用静态链接的那一份：cli/target/<x86_64|aarch64>-unknown-linux-musl/release/cca-core。--docker 时在宿主机上
 # 先编（Mac 上是交叉编译，见 cli/.cargo/config.toml 和 cli/musl-env.sh）；直接在 Linux 上跑时没有就自己编（要 Rust 和这个目标），或者用 CCA_HELPER 指一份
@@ -836,8 +837,9 @@ elif [ ! -x "$D/mihomo" ]; then
 else
 	router_test
 fi
-# Team 的同步服务器的一键安装脚本（suite 的 hub_deploy 模块，假服务器是 tests/kit/hubbox.rs）：这个发行版的 sh、openssl、coreutils / busybox，
-# 假的 systemctl、docker 起真的服务端（设备的密钥要 ssh-keygen）
+# Team 的同步服务器的一键安装脚本（suite 的 hub_deploy 模块，假服务器是 tests/kit/hubbox.rs）：这个发行版的 sh、openssl、gzip、coreutils / busybox，
+# 安装脚本带着的服务端程序（两种机器的都是这一份辅助程序，下面的 HB）解出来、校验、试运行，假的 systemctl、docker 起的就是它
+# （app/cca-core team-server；设备的密钥要 ssh-keygen；gzip 和 cca 自己要的 gunzip 是同一个包）
 if ! command -v openssl >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
 	echo "  （跳过 Team 的同步服务器的安装脚本：要 openssl、ssh-keygen）"
 elif suite_run hub_deploy; then

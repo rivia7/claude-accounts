@@ -83,7 +83,7 @@ private struct TeamBlock: View {
                 if team.isAdmin, team.state == .local {
                     RowAction("部署到我的服务器…", systemImage: "server.rack") { model.deployTeam(team) }
                         .disabled(model.flow != nil || model.teamBusy)
-                        .help("经 SSH 把这个 Team 的同步服务器装到你自己的 Linux 服务器上（root 登录；有 Docker 用 Docker，没有用 systemd + python3），装好了自动接上")
+                        .help("经 SSH 把这个 Team 的同步服务器装到你自己的 Linux 服务器上（root 登录；有 Docker 用 Docker，没有用 systemd），装好了自动接上")
                 }
                 Menu {
                     if team.isAdmin, team.state != .local {

@@ -241,7 +241,7 @@ done
 dest="${args[$i]}"; i=$((i+1)); cmd="${args[*]:$i}"
 echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
 # Team 的同步服务器的一键部署（11b3d）：hubbox 是 cca-test hub-box 建的假服务器（tests/kit/hubbox.rs；$CCA_T/hubbox：目录当根，假 systemctl
-# 起真的 server/cca-presence.py），命令交给它的 enter（stdin 是安装脚本；$CCA_T/hubbox/ssh_denied 时登录不了）。-G 说它在 127.0.0.1。
+# 起安装脚本放上去的那一份服务端程序：app/cca-core team-server），命令交给它的 enter（stdin 是安装脚本；$CCA_T/hubbox/ssh_denied 时登录不了）。-G 说它在 127.0.0.1。
 # $CCA_T/hubbox/password 在时不认这台 Mac 的密钥、只认这个密码：像真的 ssh 一样经 SSH_ASKPASS 取（每次连接一次，ASKPASS 和它在哪个目录记在 ssh.log）。
 # 每次的命令行和环境记在 ssh.env（查密码不在里面）。nohub 是解析不了的主机名
 case "$dest" in

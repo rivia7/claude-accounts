@@ -10,9 +10,8 @@
 //!   辅助程序冒充 Linux 的）；都没写时用仓库里交叉编译出来的 `cli/target/<目标>/release/cca-core`，编出来几个用几个，一个都没有时
 //!   说怎么编。
 //!
-//! 还没有谁调它：安装脚本（`hub-installer`）、`cca team deploy`（deploy.rs 的 `team_install`）、`cca team hosted`（hosted.rs 的
-//! `team_files`）改成传 cca-core 的时候接上。也只有这几条子命令会用到：别让启动的路上碰它。
-#![allow(dead_code)] // 上面说的那几处接上以前没人调
+//! 只有三处用它：安装脚本（`hub-installer`）、`cca team deploy`（deploy.rs 的 `team_install`）、`cca team hosted`（hosted.rs 的
+//! `team_files`）。别让启动的路上碰它：读一遍十几 MB 的 cca、解两份程序要几十毫秒。
 
 use crate::core::base::CCA_HOME;
 use crate::py::base64::a2b_base64;

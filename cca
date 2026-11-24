@@ -6316,7 +6316,7 @@ cmd_devices() {   # cca [codex] devices [账号…] [--json]：账号连着哪�
 
 # ---------------------------------------------------------------------------
 # Team（cca team；docs/dev/team.md）：一组设备加一份配置（哪些账号、各走哪个节点、节点的定义），配置由管理员的设备维护、存在这个 Team 的
-# 同步服务器上（server/cca-presence.py --mode team）。这里只管问和说，事情在辅助程序的 team-*（cli/src/cmd/team.rs）。
+# 同步服务器上（辅助程序的 team-server，cli/src/server/：装到服务器上的就是它，Linux 的那一份）。这里只管问和说，事情在辅助程序的 team-*（cli/src/cmd/team.rs）。
 # 配置同步到本机（~/.cca/teams/）以后，账号表照它改（team_settle）。
 TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪些 Team 里
       cca team join [--stdin] [--name 名字]        拿管理员给的邀请链接加入（链接不写在命令行上）
@@ -7029,7 +7029,7 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	if [ -n "$at" ]; then
 		DEPLOY_MSG="「${name}」现在接着 ${at}：经 SSH 把服务器上的程序换成这一版 cca 带的（数据不变）；填别的服务器就是搬过去，各台设备同步到新的配置以后自己换过来。要用 root 登录，或者能免密码 sudo 的用户。"
 	else
-		DEPLOY_MSG="经 SSH 在你自己的 Linux 服务器上装好「${name}」的同步服务器（有 Docker 用 Docker，没有用 systemd + python3），装好了自动接上。一台服务器上可以装几个 Team，各是一个服务、各用一个端口（从 18445 起找空着的）：云服务商的安全组里要放行它。要用 root 登录，或者能免密码 sudo 的用户。"
+		DEPLOY_MSG="经 SSH 在你自己的 Linux 服务器上装好「${name}」的同步服务器（有 Docker 用 Docker，没有用 systemd），装好了自动接上。一台服务器上可以装几个 Team，各是一个服务、各用一个端口（从 18445 起找空着的）：云服务商的安全组里要放行它。要用 root 登录，或者能免密码 sudo 的用户。"
 	fi
 	if [ -z "$target" ] && [ -n "$PROMPT_GUI" ]; then
 		hub_deploy_ask || return 1
@@ -7045,11 +7045,11 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	[ -z "$ident" ] || args+=(--identity "$ident")
 	[ -z "$udir" ] || args+=(--dir "$udir")
 	if [ -n "$PROMPT_GUI" ] || ! (: </dev/tty) 2>/dev/null; then args+=(--batch); fi
-	info "部署「${name}」的同步服务器到 ${target}（${ident:+用私钥 ${ident} 登录；}第一次用 Docker 时要先拉镜像，可能要几分钟）…"
+	info "部署「${name}」的同步服务器到 ${target}（${ident:+用私钥 ${ident} 登录；}要把服务端程序（约 10 MB）传过去，网慢时要一会儿）…"
 	hub_deploy_run "$target" ${args[@]+"${args[@]}"}; rc=$?
 	[ $rc -eq 0 ] || team_fail "$out" "没有部署成"
 	eval "$out"   # mode state port relay dir lan host device members stored note svc web web_cert web_off（辅助程序的 sh：键=值）
-	case "$mode" in docker) how="Docker compose" ;; *) how="systemd + python3" ;; esac
+	case "$mode" in docker) how="Docker compose" ;; *) how="systemd" ;; esac
 	if [ "$state" = update ]; then okay "已更新 ${target} 上「${name}」的同步服务器（${dir}，${how}，端口 ${port}，服务名 ${svc}）：数据没变，照旧接着"
 	else okay "已部署「${name}」的同步服务器到 ${target}（${dir}，${how}，端口 ${port}，服务名 ${svc}），接上了：这台设备叫 ${device}，现在有 ${members} 台设备；$(team_stored "$stored")"; fi
 	[ "$state" = update ] || say "  给别的设备发邀请：cca team invite ${tid:0:8} 名字（或者 App 的「共享与同步」里）"

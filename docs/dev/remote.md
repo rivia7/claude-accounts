@@ -249,7 +249,7 @@
   已经装好的 Team 服务器重新 `cca team deploy` 一次就有了。托管平台上的（Railway）只给一个 HTTP 端口，数据端口过不去：不做中转
 - 升级以后要知道的：3.6.0 以前记在维护者那一台上的配对读的时候就丢掉了，要在 Team 的服务器上再配一次
   （`cca remote pair --team 名字`）
-- 证书（给网页端）：`server/cca-acme.py`，见下面「网页端」里“证书从哪来”
+- 证书（给网页端）：证书助手 `cca-core team-acme`（`cli/src/server/acme/`；3.6.x 以前是 Python 写的 `server/cca-acme.py`），见下面「网页端」里“证书从哪来”
 
 ## 网页端（手机，M5）
 
@@ -307,11 +307,11 @@
   `--web-url` 写的那个）：终端里打印出来，App 里是一页（题号 `remote.pair_web`：地址画成二维码，`kind` 是 `qr`）。服务器没开网页端、
   是旧版（不认 `web` 这一项，照普通的配对开了）时辅助程序把那次配对作废、说清楚（`no_web()`：是哪个 Team 的服务器、要管理员重新部署把网页端打开）。配对表里这一项记着 `web`
   （只是给人看的：`cca remote peers` 里标「手机上的网页端」，App 里一个「手机」的标签），它能做什么照旧是 `incoming`
-- 部署：Team 的安装脚本（`cca team deploy`；默认开着网页端，`--no-web` 不开）装好页面的文件、带证书的那个端口和一台服务器上几个 Team 共用的
-  证书助手 `cca-team-acme`（team.md「部署」「安装脚本」）。3.6.0 以前维护者的服务器经 `./policy.sh presence deploy --web-url …` 部署
+- 部署：Team 的安装脚本（`cca team deploy`；默认开着网页端，`--no-web` 不开）开上带证书的那个端口、装好一台服务器上几个 Team 共用的
+  证书助手 `cca-team-acme`（team.md「部署」「安装脚本」）；页面的文件编在服务端程序（`cca-core team-server`）里，不用另外装。3.6.0 以前维护者的服务器经 `./policy.sh presence deploy --web-url …` 部署
   （`compose.web.yaml`、`compose.acme.yaml`），跟着 policy.sh 删掉了
-- 证书从哪来：用户定了用 **Let's Encrypt 给 IP 地址签的证书**（2026-11-22；不用域名）。`server/cca-acme.py` 是为它写的证书助手
-  （只用标准库和 openssl 命令的 ACME 客户端）：
+- 证书从哪来：用户定了用 **Let's Encrypt 给 IP 地址签的证书**（2026-11-22；不用域名）。证书助手（`cca-core team-acme`，辅助程序里的 ACME 客户端：`cli/src/server/acme/`；
+  3.6.x 以前是 Python 写的 `server/cca-acme.py`）是为它写的：
   - 照 Let's Encrypt 现在的规矩（2026-11 查的）：给 IP 签的只有约 6 天（160 小时）的短期证书这一种，下单时写 `"profile": "shortlived"`；
     验证只能用 http-01（证书机构从公网连这台机器的 **80 端口**取一个文件）或者 tls-alpn-01，不能用 DNS；证书里不许有 Common Name
     （地址只写在 subjectAltName 里）
@@ -336,7 +336,8 @@
     （`LOOK`）看一次登记的变了没有，有了新的马上去要；登记的地址不对的跳过（日志里说一次）；各个地址各自隔开重试（`RETRY`）；
     `--once` 时登记的地址都有了才算成
   - 接进了 Team 的安装脚本（`cca-team-acme`，team.md「部署」）。别处要用得自己
-    在服务器上把它跑起来（`python3 cca-acme.py --id 公网IP --out 证书目录 --account 账户目录 --listen 0.0.0.0:80`，或者 `--webroot 目录`）
+    在服务器上把它跑起来（`cca-core team-acme --id 公网IP --out 证书目录 --account 账户目录 --listen 0.0.0.0:80`，或者 `--webroot 目录`；
+    Linux 的 `cca-core` 从 Team 的服务器的 `app/` 里拿，或者照 team.md「安装脚本」说的交叉编译）
 - 还没做的：
   - 真的 iPhone 上一样都没试过：键盘弹出时的版面、手指滚动回看、输入法、添加到主屏幕以后的样子、切到后台再回来、
     Safari 对不可导出的 Ed25519 密钥存进 IndexedDB 认不认。页面只在 Chrome 的引擎里走过
@@ -344,7 +345,8 @@
     页面经带证书的那个端口给出来；还没有哪台设备上的 cca 能 `pair --web`（要发版）
   - Team 的安装脚本带上了网页端（页面的文件、带证书的端口、证书助手，team.md「部署」）：3.5.3-beta.3 的（每个 Team 自己一个证书助手）在一台
     真的服务器上给维护者的 Team 装过（2026-11-22）；3.5.3-beta.5 的共用证书助手、从以前的搬过来也在那台真的服务器上做过（同一天，两个 Team
-    共用一个证书助手，接着用原来那张证书）。
+    共用一个证书助手，接着用原来那张证书）。那都是 Python 服务端的时候；换成 cca-core 的这一版（服务端、证书助手都是它，Docker 方式的
+    容器是空的、CA 证书是拷进去的）还没在真的服务器上装过。
     托管平台上的（Railway）不做中转，也没有网页端
   - 证书助手对着真的证书机构只跑过上面那一次（Let's Encrypt 的测试环境、正式环境各签了一张）；续期还没真的走过（短期证书约 80 小时
     以后才续）。平时的测试对着 `tests/kit/acmefake.rs`（照规范逐项核对的假证书机构）

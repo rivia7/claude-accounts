@@ -92,13 +92,22 @@ case "$host" in
 esac
 echo "  发布的 cca：$(( $(wc -c < "$out/cca") / 1024 )) KB"
 cp install.sh "$out/install.sh"
-# Team 的同步服务器的一键安装脚本（docs/dev/team.md「部署」）：就是 cca team deploy --script 打出来的那一份，用这台机器的辅助程序生成。
-# 核对带着这一版的版本号，服务端程序、证书助手和 server/ 下的一字节不差，sh -n 过得去
-CCA_VERSION="$v" "cli/target/$host/release/cca-core" hub-installer > "$out/cca-hub-install.sh" || fail "生成不了 Team 的同步服务器的安装脚本"
-heredoc() { sed -n "/^	cat <<'$1'\$/,/^$1\$/p" "$out/cca-hub-install.sh" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1; }   # heredoc 结束行：安装脚本里那一段的 SHA-256
-grep -qxF "CCA_HUB_VERSION='$v'" "$out/cca-hub-install.sh" && /bin/dash -n "$out/cca-hub-install.sh" &&
-	[ "$(heredoc CCA_HUB_SERVER_PY_EOF)" = "$(shasum -a 256 < server/cca-presence.py | cut -d' ' -f1)" ] &&
-	[ "$(heredoc CCA_HUB_ACME_PY_EOF)" = "$(shasum -a 256 < server/cca-acme.py | cut -d' ' -f1)" ] || fail "Team 的同步服务器的安装脚本不对（版本号、服务端程序、证书助手、语法）"
+# Team 的同步服务器的一键安装脚本（docs/dev/team.md「部署」）：就是 cca team deploy --script 打出来的那一份，用这台机器的辅助程序、照发布的 cca 的
+# 走法生成（CCA_SELF 指着刚接好的那一份：要传到服务器上的服务端程序取的就是它后面接着的 Linux 的那两份）。核对：带着这一版的版本号；
+# 两种机器的服务端程序解出来和编出来的一字节不差（和 HELPER_SUMS 记的、脚本里写的校验值是同一个），是那种机器的程序；sh -n 过得去；
+# 不带只给 cca team deploy 用的那几项，也不带以前的东西（Python 的服务端程序、证书助手、网页端的文件）
+his="$out/cca-hub-install.sh"
+CCA_SELF="$out/cca" CCA_VERSION="$v" "cli/target/$host/release/cca-core" hub-installer > "$his" || fail "生成不了 Team 的同步服务器的安装脚本"
+core_ok() {   # core_ok 机器名 目标 file 说的样子：安装脚本里这种机器的服务端程序对不对
+	local arch="$1" t="$2" want="$3" f="$chk/core.$1" sum
+	sed -n "/^	cat <<'CCA_HUB_CORE_${arch}_EOF'\$/,/^CCA_HUB_CORE_${arch}_EOF\$/p" "$his" | sed '1d;$d' | openssl base64 -d | gzip -dc > "$f" || return 1
+	sum=$(shasum -a 256 "$f" | cut -d' ' -f1)
+	[ "$sum" = "$(shasum -a 256 "cli/target/$t/release/cca-core" | cut -d' ' -f1)" ] && grep -qxF "CCA_HUB_CORE_SHA256_${arch}='$sum'" "$his" &&
+		sed -n 's/^HELPER_SUMS="\([^"]*\)".*$/\1/p' "$out/cca" | tr ' ' '\n' | grep -qxF "$t=$sum" && file -b "$f" | grep -q "$want"
+}
+grep -qxF "CCA_HUB_VERSION='$v'" "$his" && /bin/dash -n "$his" && grep -qxF "CCA_HUB_CORES='X86_64 AARCH64'" "$his" &&
+	core_ok X86_64 x86_64-unknown-linux-musl 'ELF 64-bit LSB .*x86-64.*static' && core_ok AARCH64 aarch64-unknown-linux-musl 'ELF 64-bit LSB .*ARM aarch64.*static' &&
+	! grep -q "^CCA_HUB_MANAGED=\|_PY_EOF\|CCA_HUB_WEB_EOF" "$his" || fail "Team 的同步服务器的安装脚本不对（版本号、两种机器的服务端程序、语法、带着不该带的）"
 ssh-keygen -Y sign -q -n cca-release -f "$KEY" "$out/cca"
 printf 'cca-release %s\n' "$pub" > "$out/allowed"
 ssh-keygen -Y verify -f "$out/allowed" -I cca-release -n cca-release -s "$out/cca.sig" < "$out/cca" >/dev/null ||

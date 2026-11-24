@@ -1162,7 +1162,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）、删除 Team 时卸载
   （`cca team leave`）那一步的
   `team_ssh`、`team_ssh_hostkey`、`team_ssh_denied`、`team_root`、`team_deps`、`team_image`、`team_port`、`team_taken`、`team_host`、`team_start`、
-  `team_install`（SSH、服务器上的安装脚本说的，见 docs/dev/team.md「经 SSH 装」；卸载时目录里没装也是 `team_install`）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
+  `team_install`（SSH、服务器上的安装脚本说的，见 docs/dev/team.md「经 SSH 装」；卸载时目录里没装也是 `team_install`；这一份 cca 没带 Linux 的服务端程序——安装脚本、托管平台的部署文件（`team hosted`）要带的就是它——也是 `team_install`，原因里说重新安装 cca）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
   原来那台上没收尾成）。App 不按这些原因码分别处理：`fail` 事件的 `message` 照原样显示。
 
 ## 5. `cca gui`

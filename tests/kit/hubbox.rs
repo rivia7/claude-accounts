@@ -2,37 +2,41 @@
 //! hubbox（`cca-test hub-box 目录`，tests/tool/hubbox.rs）。
 //!
 //! 目录下的 root/ 当作 /（安装脚本的 CCA_HUB_ROOT），bin/ 里是假的系统命令：id、useradd、userdel、chown、ip、journalctl、sudo、
-//! 老的 docker-compose 是几行 shell（下面的常量，和原来一字不差）；systemctl、docker 是这个小工具的角色（bin/ 里是 exec
+//! 老的 docker-compose、python3 是几行 shell（下面的常量）；systemctl、docker 是这个小工具的角色（bin/ 里是 exec
 //! `cca-test box-systemctl`、`cca-test box-docker` 的两行 sh）：照 unit 的 ExecStart、compose.yaml 里各个服务的 command、端口和
 //! 挂载起真的服务端（监听 127.0.0.1）；证书助手不真的去找 Let's Encrypt，换成 `cca-test acme-stub`——几个 Team 共用的那一个照
 //! --teams 里登记的地址一个地址写一张自签的证书、放进各个 Team 的目录，以前每个 Team 自己的那种照 --id 往 --out 里写一张；写过的
 //! 记在 acme.issued。sh 是 /bin/dash（没有时 /bin/sh）。没有的 docker、systemctl 也放一个会失败的：不然会找到这台机器上真的。
+//! 假命令的 #! 都是绝对路径（/bin/sh）：bin/ 排在 PATH 最前面，里面的 sh 是换过的。
 //! enter 是假 ssh 的服务器那一头：在这台假服务器上运行一条命令（stdin 照样给它；目录下有 ssh_denied 时登录不了，它的内容是 once
 //! 时只拒这一次）。
 //!
+//! 服务器上本来就有的：root/etc/ssl/certs/ca-certificates.crt（[`CA_BUNDLE`]：CA 证书，证书助手连 Let's Encrypt 要它；删掉它
+//! 就是一台没装 ca-certificates 的服务器）。没有的：Python——bin/python3 谁调了就在 python3.log 里记一笔、失败（127），测试查
+//! 这个文件一直是空的；镜像仓库——docker pull 一律失败（docker.log 里看得到有没有人拉过）。
+//!
 //! 目录下这些文件在时：uid（id -u 说的；root 是 0）、sudo_ok（免密码的 sudo）、ip（默认路由出去的源地址）、listening（ss 说这些
-//! 端口有人监听）、no_pull（docker pull 拉不到）、docker_down（docker info 不通）、no_compose（没有 compose 插件，只有老的
-//! docker-compose 1.x）、compose_fail（docker compose up 起不来）、start_fail（systemctl restart 起不来）、start_hang（systemctl
-//! restart 一直不回来）、acme_fail（证书助手要不到证书）。安装脚本等证书最多 CCA_HUB_CERT_WAIT 秒（这里是 4）；any_ip 时内网地址
-//! 也开网页端（CCA_HUB_ANY_IP）。
+//! 端口有人监听）、import_fail（docker import 建不了镜像）、docker_down（docker info 不通）、no_compose（没有 compose 插件，只有
+//! 老的 docker-compose 1.x）、compose_fail（docker compose up 起不来）、start_fail（systemctl restart 起不来）、start_hang
+//! （systemctl restart 一直不回来）、acme_fail（证书助手要不到证书）。安装脚本等证书最多 CCA_HUB_CERT_WAIT 秒（这里是 4）；any_ip
+//! 时内网地址也开网页端（CCA_HUB_ANY_IP）。
 //!
 //! 假命令记下的（测试照这些查）：systemctl.log、docker.log（每次的参数一行）、server.argv（起的每条命令一行）、server.log（起的
 //! 程序的输出）、进程号文件 server.<服务名>.pid（以前的自己的同步服务器 cca-hub 是 server.pid；证书助手的服务名是 <服务名>-acme
-//! 或者共用的 cca-team-acme；停的时候给整个进程组发 TERM）、images（拉过的镜像）、compose.projects（`compose -p` 的项目名）、
-//! compose.<项目名>.up（这个项目上次起的容器）、useradd.log、chown.log、sudo.log；证书助手记 acme.argv、acme.issued。
+//! 或者共用的 cca-team-acme；停的时候给整个进程组发 TERM）、images（docker import 建的镜像）、compose.projects（`compose -p` 的
+//! 项目名）、compose.<项目名>.up（这个项目上次起的容器）、useradd.log、chown.log、sudo.log、python3.log；证书助手记 acme.argv、
+//! acme.issued。
 //!
-//! 起的是哪个程序：
-//! - unit 的 ExecStart 的第一个词原样用（安装脚本写的是假服务器上 `command -v python3` 找到的，这台机器上本来就有）；compose 的
-//!   command 的第一个是容器里的 python3：换成这台机器上的（环境变量 HUB_BOX_PYTHON；没设就是 PATH 上的 python3，假服务器自己的
-//!   bin/ 不算——测试会在那里放假的 python3）
-//! - 文件名是 cca-core 的（服务端改成 Rust 以后安装脚本写的 `<目录>/cca-core team-server 参数…`）：换成这台机器上的辅助程序（环境
-//!   变量 HUB_BOX_SERVER，没设就是仓库里编出来的 cli/target/release/cca-core）——安装脚本传上去的是 Linux 的程序，在 Mac 上跑不了
-//! - `…/cca-acme.py 参数…`、`cca-core team-acme 参数…`：换成 `cca-test acme-stub 参数…`
-//! - 建假服务器时设了 CCA_TEST_SERVER=rust：目录下写 server_impl（辅助程序在哪），`…/cca-presence.py 参数…` 换成
-//!   `辅助程序 team-server 参数…`（参数原样）
-//!
-//! HUB_BOX_PYTHON、HUB_BOX_SERVER 在建假服务器的环境里设了的，放进假服务器的环境（enter、install 都带着，假命令就看得到）；
-//! 没设时假服务器的环境和原来一字不差。在自己的进程里建假服务器的测试不改环境，直接给（[`Box::new_with`]）。
+//! 起的是哪个程序：只有一种——安装脚本放到服务器上的那一份 cca-core（`<目录>/app/cca-core`），原样运行，不换成别处的：
+//! - unit 的 ExecStart 里 `/` 开头的词（连同第一个：要运行的程序）都接到 root/ 后面；compose 的 command 里每一个词（连同第一个）
+//!   照 volumes 换成服务器上的路径。所以起的就是安装脚本解出来、核对过、换上去的那个文件。测试里它是这台机器上的辅助程序：生成
+//!   安装脚本时用 CCA_HUB_CORE_X86_64、CCA_HUB_CORE_AARCH64 指的（真的 Linux 的那两份在 Mac 上运行不了）
+//! - 第二个词是 team-server：同步服务器，照样运行；是 team-acme：证书助手，换成 `cca-test acme-stub 参数…`（先看那个程序在、
+//!   能运行）。别的都起不了、算失败：以前的版本写的 `python3 -I …/cca-presence.py` 也一样，这台假服务器上没有 Python
+//! - Docker 的容器用的镜像只能是安装脚本在本机建的那个空镜像（[`RUNTIME`]，和 server/hub-install.sh 的 RIMG 是约定）：
+//!   `docker import - 名字` 读走 stdin（得是安装脚本给的那个空的 tar）、记下名字；`image inspect` 只认建过的；compose up 时服务
+//!   写的不是它、它还没建，都起不来；`image rm` 在还有 compose 项目起着时不让删（真的 Docker 也是：有容器用着）
+//! - 以前的版本装的、正在运行的服务（更新它、搬它的证书的用例要它在）由测试起一个顶替的：[`Box::stand_in`]
 //!
 //! 在测试里用：
 //!
@@ -50,8 +54,7 @@ use crate::proc::{Cmd, Output, Session, Stdio};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::os::unix::ffi::OsStrExt;
+use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -119,11 +122,23 @@ while read -r p; do echo "LISTEN 0 4096 0.0.0.0:$p 0.0.0.0:*"; done < "$HUB_BOX/
 pub const COMPOSE_V1: &str = r#"printf '%s\n' "$*" >> "$HUB_BOX/docker-compose.log"
 echo 'docker-compose version 1.29.2, build unknown'
 "#;
+/// python3：这台服务器上用不着它（服务端是安装脚本带着的 cca-core）。谁调了记一笔、失败：测试查 python3.log 一直是空的
+pub const PYTHON3: &str = r#"printf '%s\n' "$*" >> "$HUB_BOX/python3.log"
+exit 127
+"#;
 /// 这台假服务器上没有的命令（没有 systemd、Docker 时的 systemctl、docker）：整个脚本，带着 #!/bin/sh
 pub const MISSING: &str = r#"#!/bin/sh
 echo "$0: 这台假服务器上没有" >&2
 exit 127
 "#;
+
+/// 这台服务器的 CA 证书在哪（root/ 下面；Debian、Ubuntu 放的地方，安装脚本的 ca_bundle 头一个看的就是它）。内容用不到：
+/// 证书助手是假的，不连 Let's Encrypt
+pub const CA_BUNDLE: &str = "etc/ssl/certs/ca-certificates.crt";
+/// Docker 的容器用的镜像：安装脚本在本机建的空镜像（server/hub-install.sh 的 RIMG，compose.yaml 里写的也是它：一起改）
+pub const RUNTIME: &str = "cca-team-runtime:1";
+/// `docker import` 该收到的：一个空的 tar（结束块，10240 个 0 字节）
+const EMPTY_TAR: usize = 10240;
 
 /// 建假服务器时的选项（原来 `Box(d, docker=False, systemd=True, ip='203.0.113.7', any_ip=False)` 的那几个，默认值一样）
 #[derive(Clone, Debug)]
@@ -168,27 +183,9 @@ impl Box {
         Box::create(d, opts).unwrap_or_else(|e| panic!("建不了假服务器 {}：{e}", d.display()))
     }
 
-    /// 同 [`Box::new`]，但起服务用这台机器上的哪个程序由调用的人给（host：`[("HUB_BOX_PYTHON", 路径)]`、`HUB_BOX_SERVER`，见模块开头
-    /// 「起的是哪个程序」），不看这个进程的环境——在自己的进程里建假服务器的测试用：测试的进程不该为了这个去改自己的环境
-    pub fn new_with(d: impl AsRef<Path>, opts: &Opts, host: &[(&str, &str)]) -> Box {
-        let d = d.as_ref();
-        Box::create_with(d, opts, host).unwrap_or_else(|e| panic!("建不了假服务器 {}：{e}", d.display()))
-    }
-
     /// 同上，建不成返回错误（`cca-test hub-box` 用）。假的 systemctl、docker 是 exec cca-test 的两行 sh：cca-test 在哪照
     /// [`crate::proc::tool`]
     pub fn create(d: &Path, opts: &Opts) -> io::Result<Box> {
-        // 起服务用这台机器上的哪个 python3、哪个辅助程序：建的时候（这个进程的环境里）设了才放进去，没设时假服务器的环境和原来一字不差
-        let set: Vec<(&str, String)> = ["HUB_BOX_PYTHON", "HUB_BOX_SERVER"]
-            .into_iter()
-            .filter_map(|key| Some((key, std::env::var(key).ok().filter(|v| !v.is_empty())?)))
-            .collect();
-        let host: Vec<(&str, &str)> = set.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        Box::create_with(d, opts, &host)
-    }
-
-    /// 同 [`Box::create`]，HUB_BOX_PYTHON、HUB_BOX_SERVER 由 host 给（照给的先后放进假服务器的环境），不看这个进程的环境
-    pub fn create_with(d: &Path, opts: &Opts, host: &[(&str, &str)]) -> io::Result<Box> {
         let d = tidy(d);
         let (root, bin) = (d.join("root"), d.join("bin"));
         for p in [&root, &bin, &d.join("users")] {
@@ -209,9 +206,14 @@ impl Box {
             ("journalctl", JOURNAL),
             ("sudo", SUDO),
             ("docker-compose", COMPOSE_V1),
+            ("python3", PYTHON3),
         ] {
             b.write_fake(name, &format!("#!/bin/sh\n{script}"))?;
         }
+        // 这台服务器的 CA 证书（证书助手连 Let's Encrypt 要它：安装脚本照 ca_bundle 找，Docker 方式拷一份进容器）
+        let ca = b.root.join(CA_BUNDLE);
+        mkdir_new(ca.parent().unwrap_or(&b.root))?;
+        fs::write(&ca, "# 假服务器的 CA 证书（内容用不到：证书助手是假的）\n")?;
         // 有的话是 exec cca-test 的角色（绝对路径：假服务器上的命令在别的目录里运行），没有的话是会失败的那一个
         let role = |on: bool, name: &str| -> io::Result<String> {
             if !on {
@@ -224,11 +226,6 @@ impl Box {
         b.write_fake("systemctl", &role(opts.systemd, "box-systemctl")?)?;
         b.write_fake("docker", &role(opts.docker, "box-docker")?)?;
         std::os::unix::fs::symlink(sh(), b.bin.join("sh"))?;
-        if std::env::var("CCA_TEST_SERVER").as_deref() == Ok("rust") {
-            // 服务端用辅助程序里的 Rust 版（和 tests/helper_bin.py 认的是同一个开关）：假的 systemctl、docker 是另外的进程
-            // （环境是这台假服务器的），照这个文件认
-            fs::write(d.join("server_impl"), crate::harness::helper().as_os_str().as_bytes())?;
-        }
         fs::write(d.join("ip"), &opts.ip)?;
         let text = |p: &Path| p.to_string_lossy().into_owned();
         b.env = vec![
@@ -241,9 +238,6 @@ impl Box {
         ];
         if opts.any_ip {
             b.env.push(("CCA_HUB_ANY_IP".to_string(), "1".to_string()));
-        }
-        for (key, value) in host {
-            b.env.push((key.to_string(), value.to_string()));
         }
         let assigns: Vec<String> = b.env.iter().map(|(k, v)| format!("{k}={}", quote(v))).collect();
         let dd = text(&d);
@@ -370,6 +364,18 @@ exec env -i {} /bin/sh -c "$1"
         let texts: Vec<String> =
             files.iter().filter_map(|p| fs::read(p).ok()).map(|b| String::from_utf8_lossy(&b).into_owned()).collect();
         texts.join("\n")
+    }
+
+    /// 起一个进程顶替以前的版本装的、正在运行的服务（更新它、搬它的证书的用例要它在；那时候的程序是 Python 的，这台假服务器上
+    /// 起不了）：argv 原样运行（第一个是这台机器上的程序），环境是这台假服务器的加上 env，输出进 server.log，进程号记在这个服务
+    /// 的进程号文件里——之后 systemctl stop / restart / disable --now、docker compose up / down、[`Box::stop`] 照样停得掉它
+    pub fn stand_in<S: AsRef<str>>(&self, svc: &str, argv: &[S], env: &[(&str, &str)]) {
+        let argv: Vec<String> = argv.iter().map(|x| x.as_ref().to_string()).collect();
+        let mut all = self.env.clone();
+        all.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        stop_service(&self.d, svc)
+            .and_then(|()| spawn_service(&self.d, &argv, false, &all, svc))
+            .unwrap_or_else(|why| panic!("起不了顶替 {svc} 的进程：{why}"));
     }
 }
 
@@ -603,66 +609,51 @@ fn tool_path() -> Result<String, Fail> {
     crate::proc::tool().map(|p| p.to_string_lossy().into_owned()).map_err(|e| e.to_string())
 }
 
-/// 这台机器上的辅助程序：HUB_BOX_SERVER，没设是仓库里编出来的那一份
-fn host_helper() -> String {
-    std::env::var("HUB_BOX_SERVER")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| crate::harness::helper().to_string_lossy().into_owned())
+/// 这个文件在、能运行
+fn runnable(p: &str) -> bool {
+    fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// compose 的 command 里容器的 python3 换成这台机器上的：HUB_BOX_PYTHON，没设就照 PATH 找（假服务器自己的 bin/ 不算：
-/// 测试会在那里放假的 python3）
-fn host_python(boxd: &Path) -> Result<String, Fail> {
-    if let Some(p) = std::env::var("HUB_BOX_PYTHON").ok().filter(|p| !p.is_empty()) {
-        return Ok(p);
+/// 要起的命令（路径已经换成这台假服务器上的）：只认安装脚本放上去的 cca-core（见模块开头「起的是哪个程序」）。team-server 照样
+/// 运行；team-acme 换成假的证书助手，参数原样；别的不起
+fn stage(svc: &str, argv: Vec<String>) -> Result<Vec<String>, Fail> {
+    let cannot = |why: &str| format!("{svc}：{why}：{}", argv.join(" "));
+    let Some(sub) = core_sub(&argv).map(str::to_string) else {
+        return Err(cannot("这台假服务器只起安装脚本放上去的 app/cca-core（上面没有 Python）"));
+    };
+    if !runnable(&argv[0]) {
+        return Err(cannot("要运行的程序不在，或者不能运行"));
     }
-    let fake = boxd.join("bin");
-    let path = std::env::var("PATH").unwrap_or_default();
-    for dir in path.split(':').filter(|d| !d.is_empty() && Path::new(d) != fake) {
-        let p = Path::new(dir).join("python3");
-        if fs::metadata(&p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) {
-            return Ok(p.to_string_lossy().into_owned());
-        }
-    }
-    Err("这台机器上找不到 python3（设 HUB_BOX_PYTHON）".to_string())
-}
-
-/// 要起的命令换成这台机器上能运行的（见模块开头「起的是哪个程序」）
-fn host_argv(boxd: &Path, mut argv: Vec<String>) -> Result<Vec<String>, Fail> {
-    let server_impl = boxd.join("server_impl");
-    if let Some(i) = argv.iter().position(|x| x.ends_with("/cca-acme.py")) {
+    match sub.as_str() {
+        "team-server" => Ok(argv),
         // 证书助手：不真的去找 Let's Encrypt，换成假的
-        Ok([vec![tool_path()?, "acme-stub".to_string()], argv.split_off(i + 1)].concat())
-    } else if core_sub(&argv) == Some("team-acme") {
-        Ok([vec![tool_path()?, "acme-stub".to_string()], argv.split_off(2)].concat())
-    } else if let Some(i) = argv.iter().position(|x| x.ends_with("/cca-presence.py")).filter(|_| server_impl.exists()) {
-        // CCA_TEST_SERVER=rust（建的时候写下的）：服务端换成辅助程序里的 Rust 版，参数原样
-        let helper = fs::read_to_string(&server_impl).map_err(|e| format!("读不了 {}：{e}", server_impl.display()))?;
-        Ok([vec![helper.trim_matches(is_py_space).to_string(), "team-server".to_string()], argv.split_off(i + 1)].concat())
-    } else {
-        if argv.first().is_some_and(|x| is_core(x)) {
-            // 安装脚本传上去的是 Linux 的程序：换成这台机器上的
-            argv[0] = host_helper();
-        }
-        Ok(argv)
+        "team-acme" => Ok([vec![tool_path()?, "acme-stub".to_string()], argv[2..].to_vec()].concat()),
+        _ => Err(cannot("cca-core 的这条子命令不是服务")),
     }
 }
 
-/// 起一个服务（原来的 start）：先停掉同名的；argv 换成这台机器上的（见 [`host_argv`]）记进 server.argv；输出接到 server.log，
-/// stdin 是 /dev/null，新的会话（停的时候整组发 TERM）；环境是自己的加上 overlay；进程号写进它的进程号文件
+/// 起一个服务（原来的 start）：先停掉同名的；argv 照 [`stage`] 看过、换过，环境是自己的（这台假服务器的）加上 overlay
 fn start_service(boxd: &Path, argv: Vec<String>, overlay: &[(String, String)], svc: &str) -> Result<(), Fail> {
     stop_service(boxd, svc)?;
-    let argv = host_argv(boxd, argv)?;
+    let argv = stage(svc, argv)?;
+    spawn_service(boxd, &argv, true, overlay, svc)
+}
+
+/// 起这条命令当这个服务：记进 server.argv；输出接到 server.log，stdin 是 /dev/null，新的会话（停的时候整组发 TERM）；环境是 env
+/// （inherit 时先带上自己的）；进程号写进它的进程号文件
+fn spawn_service(boxd: &Path, argv: &[String], inherit: bool, env: &[(String, String)], svc: &str) -> Result<(), Fail> {
     let Some((prog, args)) = argv.split_first() else { return Err(format!("{svc}：没有要运行的命令")) };
     let log = boxd.join("server.log");
     let out = OpenOptions::new().create(true).append(true).open(&log).map_err(|e| format!("写不了 {}：{e}", log.display()))?;
     let err = out.try_clone().map_err(|e| format!("写不了 {}：{e}", log.display()))?;
     append(&boxd.join("server.argv"), &format!("{}\n", argv.join(" ")))?;
-    let child = Cmd::new(prog)
-        .args(args)
-        .env_inherit()
-        .envs(overlay.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let mut cmd = Cmd::new(prog);
+    cmd.args(args);
+    if inherit {
+        cmd.env_inherit();
+    }
+    let child = cmd
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .stdin(Stdio::Null)
         .stdout(out)
         .stderr(err)
@@ -703,7 +694,8 @@ fn systemctl_run(a: &[String]) -> Result<i32, Fail> {
             let key = |k: &str| kv.get(k).cloned().ok_or_else(|| format!("KeyError: '{k}'（{svc}.service 里没有）"));
             let file_env = env_file(&read_text(Path::new(&format!("{root}{}", key("EnvironmentFile")?)))?);
             let mut argv: Vec<String> = py_split(&key("ExecStart")?).map(str::to_string).collect();
-            for x in argv.iter_mut().skip(1) {
+            // `/` 开头的都是服务器上的路径，连同第一个（要运行的程序：安装脚本放上去的那一份）：接到 root/ 后面
+            for x in argv.iter_mut() {
                 if x.starts_with('/') {
                     *x = format!("{root}{x}");
                 }
@@ -798,8 +790,8 @@ fn to_local(x: &str, ports: &[(String, String)]) -> String {
     }
 }
 
-/// 假的 docker（`cca-test box-docker 参数…`）：compose up 照 compose.yaml 起各个服务、down 停掉；pull、image inspect、inspect、
-/// info、compose version、compose logs 照标志文件回答（见模块开头）
+/// 假的 docker（`cca-test box-docker 参数…`）：compose up 照 compose.yaml 起各个服务、down 停掉；import 建镜像、image inspect /
+/// image rm 看的是建过的那些（见模块开头），pull 一律失败；inspect、info、compose version、compose logs 照标志文件回答
 pub fn docker(args: &[String]) -> i32 {
     finish(docker_run(args))
 }
@@ -836,18 +828,41 @@ fn docker_run(args: &[String]) -> Result<i32, Fail> {
     match s.as_slice() {
         ["compose", "version", ..] => println!("Docker Compose version v2.29.7"),
         ["info"] => return Ok(if flag_on(&boxd, "docker_down") { 1 } else { 0 }),
-        ["pull", ..] => {
-            if flag_on(&boxd, "no_pull") {
-                return Ok(1);
+        // 这台假服务器连不上镜像仓库（安装脚本也不该去拉：docker.log 里有这一行就是拉过）
+        ["pull", ..] => return Err(format!("Error response from daemon: pull access denied for {}", s[s.len() - 1])),
+        // docker import - 名字：stdin 是一个 tar，建成镜像。安装脚本给的是空的 tar；读完再说成不成（不然前面的 dd 写不进来）
+        ["import", "-", tag] => {
+            let mut tar = Vec::new();
+            io::stdin().read_to_end(&mut tar).map_err(|e| format!("读不了 stdin：{e}"))?;
+            if flag_on(&boxd, "import_fail") {
+                return Err(
+                    "Error response from daemon: write /var/lib/docker/tmp/docker-import: no space left on device".to_string()
+                );
             }
-            append(&images, &format!("{}\n", s[s.len() - 1]))?;
+            if tar.len() != EMPTY_TAR || tar.iter().any(|b| *b != 0) {
+                return Err(format!("AssertionError: docker import 收到的不是空的 tar（{} 字节）", tar.len()));
+            }
+            if !has_image(&images, tag) {
+                append(&images, &format!("{tag}\n"))?;
+            }
+            println!("sha256:{}", "0".repeat(64));
         }
-        ["image", "inspect", ..] => {
-            let ok = flag_on(&boxd, "images") && {
-                let name = third(&a)?;
-                py_split(&read_text(&images)?).any(|i| i == name)
-            };
-            return Ok(if ok { 0 } else { 1 });
+        ["image", "inspect", name] => return Ok(if has_image(&images, name) { 0 } else { 1 }),
+        // 还有容器用着的镜像删不了（起着的 compose 项目用的都是 RUNTIME：compose_up 查过）
+        ["image", "rm", name] => {
+            if !has_image(&images, name) {
+                return Err(format!("Error response from daemon: No such image: {name}"));
+            }
+            if *name == RUNTIME && !up_projects(&boxd).is_empty() {
+                return Err(format!(
+                    "Error response from daemon: conflict: unable to remove repository reference {name:?} (must force) - container is using its \
+                     referenced image（{}）",
+                    up_projects(&boxd).join("、")
+                ));
+            }
+            let rest: String = py_split(&read_text(&images)?).filter(|i| i != name).map(|i| format!("{i}\n")).collect();
+            fs::write(&images, rest).map_err(|e| format!("写不了 {}：{e}", images.display()))?;
+            println!("Untagged: {name}");
         }
         // docker inspect -f 格式 容器名
         ["inspect", ..] => println!("{}", if service_up(&boxd, s[s.len() - 1]) { "true" } else { "false" }),
@@ -876,25 +891,47 @@ fn docker_run(args: &[String]) -> Result<i32, Fail> {
     Ok(0)
 }
 
+/// 这个镜像在本机（docker import 建过）
+fn has_image(images: &Path, name: &str) -> bool {
+    fs::read(images).is_ok_and(|b| py_split(&String::from_utf8_lossy(&b)).any(|i| i == name))
+}
+
+/// 起着的 compose 项目（目录下的 compose.<项目名>.up）
+fn up_projects(boxd: &Path) -> Vec<String> {
+    let Ok(rd) = fs::read_dir(boxd) else { return Vec::new() };
+    let mut out: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| Some(e.file_name().to_string_lossy().strip_prefix("compose.")?.strip_suffix(".up")?.to_string()))
+        .collect();
+    out.sort();
+    out
+}
+
 /// docker compose up：照 compose.yaml 起各个服务（命令、环境、挂载、端口照 compose 的规矩换成这台假服务器上的），
-/// 查命令和 ports、挂载对得上（和 server/hub-install.sh 写的 compose.yaml 是约定）；--remove-orphans 时这个项目上次起的、
-/// 这次没有了的停掉（网页端关了，证书助手就没了）
+/// 查镜像是本机建的那个空镜像、命令和 ports、挂载对得上（和 server/hub-install.sh 写的 compose.yaml 是约定）；--remove-orphans 时
+/// 这个项目上次起的、这次没有了的停掉（网页端关了，证书助手就没了）
 fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), Fail> {
     if flag_on(boxd, "compose_fail") {
         return Err("Error response from daemon: driver failed programming external connectivity on endpoint cca-team".to_string());
     }
     let y = read_text(Path::new("compose.yaml"))?;
     let env = env_file(&read_text(Path::new(".env"))?);
-    let image = env.get("CCA_HUB_IMAGE").ok_or("KeyError: 'CCA_HUB_IMAGE'")?;
-    if !py_split(&read_text(&boxd.join("images"))?).any(|i| i == image) {
-        return Err(format!("AssertionError（镜像 {image} 没拉过）"));
-    }
     let up = boxd.join(format!("compose.{proj}.up"));
     let before: Vec<String> = if up.exists() { py_split(&read_text(&up)?).map(str::to_string).collect() } else { Vec::new() };
     let mut names = Vec::new();
     for block in services(&y) {
         let svc = container_name(&block)?;
         names.push(svc.clone());
+        // 镜像：只能是安装脚本在本机建的那个空镜像（写的是别的，真的 Docker 会去拉：这台服务器连不上镜像仓库）
+        let image = re!(r"(?m)^    image: (\S+)$").captures(&block).ok_or_else(|| format!("compose.yaml 里 {svc} 没写 image"))?;
+        if &image[1] != RUNTIME {
+            return Err(format!("AssertionError: {svc} 的镜像是 {}，该是本机建的 {RUNTIME}", &image[1]));
+        }
+        if !has_image(&boxd.join("images"), RUNTIME) {
+            return Err(format!(
+                "Error response from daemon: pull access denied for {RUNTIME}, repository does not exist（本机还没建这个镜像）"
+            ));
+        }
         // 交给容器的环境变量（Team 的根公钥）：compose.yaml 里写着「名字: ${名字:?}」，值在 .env 里
         let mut given = Vec::new();
         for c in re!(r"(?m)^      (\w+): \$\{(\w+):\?\}$").captures_iter(&block) {
@@ -916,12 +953,9 @@ fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), F
             };
             put(&mut vols, &c[2], &host);
         }
-        // 第一个是容器里的程序：cca-core 的留着（起的时候换成这台机器上的），别的是 python3
-        let mut argv = vec![match cmd.first().and_then(json::Value::as_str) {
-            Some(first) if is_core(first) => first.to_string(),
-            _ => host_python(boxd)?,
-        }];
-        for x in cmd.iter().skip(1) {
+        // 每一个词（连同第一个：容器里要运行的程序）照挂载换成这台假服务器上的路径：起的就是安装脚本放在 app/ 里的那一份
+        let mut argv = Vec::new();
+        for x in cmd.iter() {
             let x = x.as_str().ok_or_else(|| format!("{svc} 的 command 里有不是字符串的：{}", x.compact()))?;
             let mapped = vols
                 .iter()
@@ -940,7 +974,7 @@ fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), F
         let has = |k: &str| argv.iter().any(|x| x == k);
         let port = |k: &str| ports.iter().any(|(c, _)| c == k);
         let same = |xs: &[bool]| xs.windows(2).all(|w| w[0] == w[1]);
-        if joined.contains("cca-presence.py") || core_sub(&argv) == Some("team-server") {
+        if core_sub(&argv) == Some("team-server") {
             let relay = [has("--relay-listen"), env.get("CCA_HUB_RELAY").map_or("off", String::as_str) != "off", port("18446")];
             if !same(&relay) {
                 return Err("AssertionError: 开着中转：命令里有那两个参数、ports 里有数据端口；没开：都没有".to_string());
@@ -950,12 +984,21 @@ fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), F
                 return Err("AssertionError: 开着网页端：命令里有那几个参数、ports 里有它的端口、只读挂着共用的证书助手放给它的证书；没开：都没有"
                     .to_string());
             }
-        } else if !(ports.len() == 1
-            && ports[0].0 == "18080"
-            && ports[0].1 == "80"
-            && (joined.contains("cca-acme.py") || core_sub(&argv) == Some("team-acme")))
-        {
-            return Err("AssertionError: 证书助手：80 端口对到容器里的 18080".to_string());
+        } else if core_sub(&argv) == Some("team-acme") {
+            if !(ports.len() == 1 && ports[0].0 == "18080" && ports[0].1 == "80") {
+                return Err("AssertionError: 证书助手：80 端口对到容器里的 18080".to_string());
+            }
+            // 容器是空的，里面没有 CA 证书：--ca 要指着挂进去的那一份（安装脚本拷进 app/ 的）
+            let ca = argv.iter().position(|x| x == "--ca").and_then(|i| argv.get(i + 1));
+            let app = vols.iter().find(|(c, _)| c == "/app").map(|(_, h)| format!("{h}/"));
+            let mounted = |p: &String| app.as_ref().is_some_and(|app| p.starts_with(app.as_str()));
+            if !ca.is_some_and(|p| mounted(p) && fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() > 0)) {
+                return Err(format!(
+                    "AssertionError: 证书助手（Docker）：--ca 要指着挂进容器的 CA 证书（app/ca.pem），文件要在：{joined}"
+                ));
+            }
+        } else {
+            return Err(format!("AssertionError: {svc} 的 command 不是 app/cca-core team-server / team-acme：{joined}"));
         }
         start_service(boxd, argv, &given, &svc)?;
     }
@@ -969,7 +1012,7 @@ fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), F
 
 // ---- 假的证书助手 ----
 
-/// 假的证书助手（`cca-test acme-stub 参数…`，参数照真的 cca-acme.py）：参数记进 acme.argv；不听端口、不联网，一直运行
+/// 假的证书助手（`cca-test acme-stub 参数…`，参数照真的 `cca-core team-acme`；多出来的 --ca、--listen 不看）：参数记进 acme.argv；不听端口、不联网，一直运行
 /// （像真的那样等着续）。几个 Team 共用的（--teams、--store、--out）：照登记的地址一个地址一张自签的证书，存在
 /// --store/<地址>/（手里没有、Team 的目录里有就接着用它：以前它自己的证书助手要的），放进 --out/<服务名>/（目录不在不放：
 /// 安装脚本建）；登记的变了马上照新的。以前每个 Team 自己的（--id、--out）：照 --id 写一张（有了不再写）。写过的地址记在

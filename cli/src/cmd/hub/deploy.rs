@@ -1,35 +1,28 @@
 //! Team 的同步服务器的一键部署（docs/dev/team.md「部署」）：
-//! - hub-installer：安装脚本。模板 server/hub-install.sh 里标着 CCA-HUB-EMBED 的那一行换成版本、服务端程序 server/cca-presence.py、
-//!   证书助手 server/cca-acme.py 和网页端的文件 server/web/（都编进辅助程序里：改了要重新编）。`cca team deploy --script` 打出来的、
-//!   release.sh 放到发布页上的 cca-hub-install.sh 都是它：在服务器上用 root 运行（加 --team-root 这个 Team 的根公钥）
+//! - hub-installer：安装脚本。模板 server/hub-install.sh（编进辅助程序里：改了要重新编）里标着 CCA-HUB-EMBED 的那一行换成版本和
+//!   服务端程序——就是 Linux 上的 cca-core（`team-server`、`team-acme` 两条子命令；x86_64、aarch64 各一份，gzip 以后 base64，
+//!   服务器上照 `uname -m` 挑一份。从哪来见 payload.rs）。`cca team deploy --script` 打出来的、release.sh 放到发布页上的
+//!   cca-hub-install.sh 都是它：在服务器上用 root 运行（加 --team-root 这个 Team 的根公钥）。服务器上不用 Python、不拉镜像
 //! - `team_install`（cca team deploy 经 cmd/team/admin.rs 调）：经 SSH 在服务器上运行同一个脚本（从 stdin 给过去，前面放进根公钥和参数）
 //! - `team_uninstall`（删除 Team：cca team leave 的管理员经 cmd/team/admin.rs 的 cmd_team_undeploy 调）：同样经 SSH 运行它的 --uninstall
+//!   （这一份不带服务端程序：卸载用不着，不白传几 MB）
 
 use super::fail;
+use super::payload::{self, Core};
 use crate::cmd::cost::version_ok;
 use crate::cmd::presence::{PRESENCE_PIN_RE, PRESENCE_URL_RE};
 use crate::core::base::HOST_RE;
 use crate::py::base64::b64encode;
-use crate::py::hash::sha256_hex;
 use crate::py::path::{abspath, expanduser};
 use crate::py::proc::{getenv, Cmd as Proc, In, Out, ProcError};
 use crate::py::re::Re;
 use crate::py::{text, Fail, R};
-// 网页端的文件：安装脚本里每个是一段 base64，写进 app/web/。表和服务端用的是同一张（server/web.rs）
-use crate::server::web::FILES as WEB;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 const TEMPLATE: &str = include_str!("../../../../server/hub-install.sh");
-pub(super) const SERVER: &str = include_str!("../../../../server/cca-presence.py");
-const ACME: &str = include_str!("../../../../server/cca-acme.py");
 /// 模板里换成版本、服务端程序这些的那一行
 const EMBED: &str = "# @CCA-HUB-EMBED@\n";
-/// 服务端程序、证书助手、网页端的文件放在 here-document 里，这是它们的结束行（程序里不能有这一行：测试查；release.sh、regress 照它们
-/// 取出服务端程序、证书助手核对）
-const SERVER_EOF: &str = "CCA_HUB_SERVER_PY_EOF";
-const ACME_EOF: &str = "CCA_HUB_ACME_PY_EOF";
-const WEB_EOF: &str = "CCA_HUB_WEB_EOF";
 /// 在服务器上运行脚本的命令：root 直接运行，别的用户经免密码的 sudo（要密码时不运行，说一声：没有终端可问）。
 /// 外面再包一层 sh -c：登录 shell 不一定是 sh（fish、csh）
 const REMOTE: &str = r#"sh -c 'if [ "$(id -u)" = 0 ]; then exec sh -s; elif sudo -n true 2>/dev/null; then exec sudo -n sh -s; else echo "CCA-HUB fail sudo"; exit 1; fi'"#;
@@ -85,42 +78,50 @@ impl Job {
 /// SSH 的目标（[用户@]主机；ssh 配置里的别名也行）：不能以 - 开头（会被当成 ssh 的选项）
 static TARGET_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^[A-Za-z0-9_][A-Za-z0-9._@:%\[\]-]*$"));
 
-/// 安装脚本：模板里 EMBED 那一行换成版本、给 team_install 的几项（preamble；直接在服务器上运行的那一份是空的）、服务端程序、证书助手
-/// 和网页端的文件
-pub fn installer(preamble: &str) -> String {
+/// 服务端程序放在 here-document 里，这是这种机器的那一段的结束行（base64 里没有 _：数据的哪一行都不会和它一样；release.sh、
+/// regress 照它取出那一段核对）
+fn core_eof(arch: &str) -> String {
+    format!("CCA_HUB_CORE_{arch}_EOF")
+}
+
+/// 安装脚本：模板里 EMBED 那一行换成
+/// - 版本（CCA_HUB_VERSION）、带着哪几种机器的服务端程序（CCA_HUB_CORES：机器名用空格隔开，一份都不带是空的）和各份解开以后的
+///   SHA-256（CCA_HUB_CORE_SHA256_<机器名>）
+/// - 给 team_install 的几项（preamble；直接在服务器上运行的那一份是空的）
+/// - 每种机器一个函数 hub_core_<机器名>：把那一份 gzip 过的 cca-core 的 base64 打出来（一行 64 个字符：openssl base64 -d 认的
+///   样子），安装脚本的 core_put 解开、核对、试运行
+///
+/// cores 是空的（卸载用的那一份）就没有那几个函数：安装脚本装的时候看 CCA_HUB_CORES 是空的就停下
+pub fn installer(preamble: &str, cores: &[Core]) -> String {
     let version = getenv("CCA_VERSION").filter(|v| version_ok(v)).unwrap_or_default();
-    let embed = format!(
-        "CCA_HUB_VERSION='{version}'\n{preamble}hub_server_py() {{\n\tcat <<'{SERVER_EOF}'\n{SERVER}{SERVER_EOF}\n}}\n\
-         hub_acme_py() {{\n\tcat <<'{ACME_EOF}'\n{ACME}{ACME_EOF}\n}}\n{}",
-        web_files()
-    );
+    let arches: Vec<&str> = cores.iter().map(|c| c.arch).collect();
+    let mut embed = format!("CCA_HUB_VERSION='{version}'\nCCA_HUB_CORES='{}'\n", arches.join(" "));
+    for c in cores {
+        embed.push_str(&format!("CCA_HUB_CORE_SHA256_{}='{}'\n", c.arch, c.sha256));
+    }
+    embed.push_str(preamble);
+    for c in cores {
+        let eof = core_eof(c.arch);
+        let b = b64encode(&c.gz);
+        embed.reserve(b.len() + b.len() / 64 + 128);
+        embed.push_str(&format!("hub_core_{}() {{\n\tcat <<'{eof}'\n", c.arch));
+        for line in b.as_bytes().chunks(64) {
+            embed.push_str(std::str::from_utf8(line).unwrap_or_default());
+            embed.push('\n');
+        }
+        embed.push_str(&format!("{eof}\n}}\n"));
+    }
     TEMPLATE.replacen(EMBED, &embed, 1)
 }
 
-/// 安装脚本里的 hub_web_files：网页端的文件写进目录 $1，每个文件一段 base64（一行 64 个字符：openssl base64 -d 认的样子），
-/// 安装脚本的 web_file 解开、核对 SHA-256
-fn web_files() -> String {
-    let mut s = String::from("hub_web_files() {\n");
-    for (name, raw) in WEB {
-        s.push_str(&format!("\tweb_file \"$1\" {name} {} <<'{WEB_EOF}' || return 1\n", sha256_hex(raw)));
-        let b = b64encode(raw);
-        for line in b.as_bytes().chunks(64) {
-            s.push_str(std::str::from_utf8(line).unwrap_or_default());
-            s.push('\n');
-        }
-        s.push_str(WEB_EOF);
-        s.push('\n');
-    }
-    s.push_str("}\n");
-    s
-}
-
-/// py hub-installer：把安装脚本打到 stdout（cca team deploy --script；release.sh 的 cca-hub-install.sh）
+/// py hub-installer：把安装脚本打到 stdout（cca team deploy --script；release.sh 的 cca-hub-install.sh）。带着找得到的每种机器的
+/// 服务端程序（发布的 cca 是两种都带）；一份都找不到就不打（payload.rs 说了为什么、怎么办）
 pub fn cmd_hub_installer(args: &[String]) -> R<()> {
     if !args.is_empty() {
         return Err(Fail::Die("用法: py hub-installer".into()));
     }
-    crate::out_raw!("{}", installer(""));
+    let cores = payload::linux_cores().map_err(Fail::Die)?;
+    crate::out_raw!("{}", installer("", &cores));
     Ok(())
 }
 
@@ -272,11 +273,13 @@ fn ssh_argv(o: &Opts) -> Vec<String> {
 }
 
 /// 经 SSH 在服务器上运行安装脚本（装、更新、卸载），读它的结果：安装脚本说了 ok 才算成。-T：不要伪终端（ssh 配置里写了 RequestTTY
-/// 也不要：脚本从 stdin 过去）；ServerAliveInterval：拉镜像时好几分钟没有输出，别让路上的 NAT 把连接断了。整个最多等半个小时
-fn run_remote(o: &Opts, preamble: &str) -> R<Report> {
+/// 也不要：脚本从 stdin 过去）；ServerAliveInterval：等服务起来、等证书时可能好一阵没有输出，别让路上的 NAT 把连接断了。整个最多
+/// 等半个小时。cores：要传过去的服务端程序（卸载时是空的）。服务器那头没读完就退出了（sudo 要密码：REMOTE 说一声就退出）也没关系：
+/// 往断了的管道里写不算错（py::proc）
+fn run_remote(o: &Opts, preamble: &str, cores: &[Core]) -> R<Report> {
     let mut argv = ssh_argv(o);
     argv.extend(["-T".into(), "-o".into(), "ServerAliveInterval=30".into(), o.target.clone(), REMOTE.into()]);
-    let ran = Proc::new(argv).input(installer(preamble)).capture().stderr(Out::Inherit).timeout(1800.0).run();
+    let ran = Proc::new(argv).input(installer(preamble, cores)).capture().stderr(Out::Inherit).timeout(1800.0).run();
     crate::py::signal::check()?;
     let done = match ran {
         Ok(d) => d,
@@ -308,8 +311,8 @@ fn run_remote(o: &Opts, preamble: &str) -> R<Report> {
 }
 
 /// 装、更新（team_install）：run_remote，再要安装脚本说清楚装好的服务器用哪个端口、哪张证书
-fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
-    let r = run_remote(o, preamble)?;
+fn run_installer(o: &Opts, preamble: &str, cores: &[Core]) -> R<Report> {
+    let r = run_remote(o, preamble, cores)?;
     if PRESENCE_PIN_RE.fullmatch(&r.pin).is_none() || !(1..=65535).contains(&r.port) {
         return fail("install", "服务器没说清楚装好的服务器用哪个端口、哪张证书");
     }
@@ -439,6 +442,11 @@ pub fn team_install(
         return Ok(None);
     }
     let key = root_key(root)?;
+    // 要传过去的服务端程序：连服务器之前先找齐（这份 cca 不完整、刚更新过时，不用登录一次才知道）
+    let cores = match payload::linux_cores() {
+        Ok(c) => c,
+        Err(why) => return fail("install", &why),
+    };
     let mut pre = format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\n", sq(&key));
     if o.host.is_none() {
         let hint = ssh_host(&o);
@@ -465,7 +473,7 @@ pub fn team_install(
         pre.push_str(&format!(" --{m}"));
     }
     pre.push('\n');
-    let r = run_installer(&o, &pre)?;
+    let r = run_installer(&o, &pre, &cores)?;
     let host = match (&o.host, old) {
         (Some(h), _) => h.clone(),
         (None, Some((u, pins))) if pins.contains(&r.pin) => url_parts(u).0,
@@ -510,7 +518,8 @@ pub fn team_uninstall(args: &[String], root: &str, svc: &str) -> R<Option<String
         return Ok(None);
     }
     let key = root_key(root)?;
-    run_remote(&o, &uninstall_preamble(&key, &o.dir))?;
+    // 卸载用不着服务端程序：这一份不带（安装脚本的 --uninstall 不看它）
+    run_remote(&o, &uninstall_preamble(&key, &o.dir), &[])?;
     Ok(Some(o.dir))
 }
 
@@ -625,27 +634,103 @@ fn lan_only(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::py::hash::sha256_hex;
+
+    /// 冒充 Linux 上的服务端程序：两份不一样，一半能压、一半压不动（和 payload.rs 的测试一个办法）
+    fn fake_core(arch: &'static str, n: usize) -> (Core, Vec<u8>) {
+        let mut raw = format!("\x7fELF {arch} ").repeat(n).into_bytes();
+        raw.extend((0..n as u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8));
+        (Core { arch, gz: crate::py::gzip::compress(&raw, 9), sha256: sha256_hex(&raw) }, raw)
+    }
+
+    /// 在 sh 里运行一段脚本（从 stdin 给：和 ssh … sh -s 一样），给出退出码和 stdout
+    fn sh_s(shell: &str, script: &str) -> (Option<i32>, String) {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut p = Command::new(shell)
+            .arg("-s")
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = p.stdin.take().unwrap();
+        let text = script.to_string();
+        // 另起一个线程喂：脚本有几百 KB，管道装不下，sh 一边读一边往 stdout 写
+        let feed = std::thread::spawn(move || {
+            let _ = stdin.write_all(text.as_bytes());
+        });
+        let out = p.wait_with_output().unwrap();
+        feed.join().unwrap();
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+    }
 
     #[test]
-    fn installer_embeds_server_once() {
+    fn installer_embeds_each_core_once() {
         assert!(TEMPLATE.contains(EMBED), "模板里要有 {EMBED}");
-        for (src, eof) in [(SERVER, SERVER_EOF), (ACME, ACME_EOF)] {
-            assert!(src.ends_with('\n'));
-            assert!(!src.lines().any(|l| l == eof || l == WEB_EOF), "程序里不能有 here-document 的结束行");
-        }
-        let s = installer("CCA_HUB_MANAGED=1\n");
+        let ((x, _), (a, _)) = (fake_core("X86_64", 3000), fake_core("AARCH64", 2000));
+        let cores = [x, a];
+        let s = installer("CCA_HUB_MANAGED=1\n", &cores);
         assert!(!s.contains(EMBED));
-        assert_eq!((s.matches(SERVER).count(), s.matches(ACME).count()), (1, 1));
         assert!(s.starts_with("#!/bin/sh\n"));
-        assert!(s.contains("\nCCA_HUB_MANAGED=1\nhub_server_py() {\n"));
         assert!(s.trim_end().ends_with("main \"$@\""));
-        // 网页端的文件：一个一段，base64 解开和原来的一字节不差
-        for (name, raw) in WEB {
-            let head = format!("\tweb_file \"$1\" {name} {} <<'{WEB_EOF}' || return 1\n", sha256_hex(raw));
-            let body =
-                s.split(&head).nth(1).and_then(|r| r.split(&format!("\n{WEB_EOF}\n")).next()).unwrap_or_else(|| panic!("{name}"));
-            assert!(body.lines().all(|l| l.len() <= 64), "{name}");
-            assert_eq!(crate::py::base64::b64decode(&body.replace('\n', ""), true).ok().as_deref(), Some(raw), "{name}");
+        // 版本、带着哪几种、各自的校验值、放进的那几项，照这个先后，后面紧跟第一段
+        let head = format!(
+            "\nCCA_HUB_VERSION=''\nCCA_HUB_CORES='X86_64 AARCH64'\nCCA_HUB_CORE_SHA256_X86_64='{}'\n\
+             CCA_HUB_CORE_SHA256_AARCH64='{}'\nCCA_HUB_MANAGED=1\nhub_core_X86_64() {{\n\tcat <<'CCA_HUB_CORE_X86_64_EOF'\n",
+            cores[0].sha256, cores[1].sha256
+        );
+        assert!(s.contains(&head), "{}", &s[..s.find("hub_core_").unwrap_or(2000).min(s.len())]);
+        // 每种机器正好一段：一行最多 64 个字符，解开就是给的那一份 gzip
+        for c in &cores {
+            let (open, close) =
+                (format!("hub_core_{}() {{\n\tcat <<'{}'\n", c.arch, core_eof(c.arch)), format!("\n{}\n}}\n", core_eof(c.arch)));
+            assert_eq!((s.matches(&open).count(), s.matches(&close).count()), (1, 1), "{}", c.arch);
+            let body = s.split(&open).nth(1).and_then(|r| r.split(&close).next()).unwrap();
+            assert!(body.lines().all(|l| !l.is_empty() && l.len() <= 64), "{}", c.arch);
+            assert!(!body.contains('_'), "base64 里没有 _：哪一行都不会和结束行一样");
+            assert!(
+                crate::py::base64::b64decode(&body.replace('\n', ""), true).ok().as_deref() == Some(c.gz.as_slice()),
+                "{}",
+                c.arch
+            );
+        }
+        // 只带一种的：CCA_HUB_CORES 里只有它，没有另一种的函数和校验值
+        let one = installer("", &cores[1..]);
+        assert!(one.contains("\nCCA_HUB_CORES='AARCH64'\nCCA_HUB_CORE_SHA256_AARCH64='"));
+        assert!(!one.contains("hub_core_X86_64") && !one.contains("CCA_HUB_CORE_SHA256_X86_64"));
+    }
+
+    #[test]
+    fn installer_parses_and_the_core_comes_back() {
+        // 生成的脚本语法过得去（dash：Debian、Ubuntu 的 sh；没有时用 /bin/sh）；在 sh 里照安装脚本的 core_put 那一条管道解开，
+        // 就是原样的程序（SHA-256 和写在脚本里的那一行一样）。脚本从 stdin 给（ssh … sh -s 就是这样）
+        if !["/usr/bin/openssl", "/bin/openssl", "/usr/local/bin/openssl", "/opt/homebrew/bin/openssl"]
+            .iter()
+            .any(|p| std::path::Path::new(p).exists())
+        {
+            return; // 没有 openssl 的机器上测不了这一条
+        }
+        let ((x, x_raw), (a, a_raw)) = (fake_core("X86_64", 30000), fake_core("AARCH64", 20000));
+        let s = installer("", &[x, a]);
+        let dash = if std::path::Path::new("/bin/dash").exists() { "/bin/dash" } else { "/bin/sh" };
+        let dir = crate::py::fs::TempDir::new().unwrap();
+        let file = format!("{}/cca-hub-install.sh", dir.path);
+        std::fs::write(&file, &s).unwrap();
+        let body = s.trim_end().strip_suffix("main \"$@\"").expect("最后一行是 main \"$@\"");
+        for shell in [dash, "/bin/sh"] {
+            let syntax = std::process::Command::new(shell).arg("-n").arg(&file).current_dir(std::env::temp_dir()).output().unwrap();
+            assert!(syntax.status.success(), "{shell} -n：{}", String::from_utf8_lossy(&syntax.stderr));
+            for (arch, raw) in [("X86_64", &x_raw), ("AARCH64", &a_raw)] {
+                // 模板里的函数（hexof）都定义了，不运行 main：只做 core_put 的那一条管道，再打出脚本里记的校验值
+                let script = format!(
+                    "{body}hub_core_{arch} | openssl base64 -d | gzip -dc | openssl dgst -sha256 -binary | hexof\n\
+                     printf ' %s' \"$CCA_HUB_CORE_SHA256_{arch}\"\n"
+                );
+                let sum = sha256_hex(raw);
+                assert_eq!(sh_s(shell, &script), (Some(0), format!("{sum} {sum}")), "{shell} {arch}");
+            }
         }
     }
 
@@ -664,15 +749,17 @@ mod tests {
     }
 
     #[test]
-    fn web_files_are_all_there() {
+    fn the_binary_carries_every_web_file() {
+        // 安装脚本不再带网页端的文件：装上去的服务器给出的页面全靠编进服务端程序的那一张表（server/web.rs 的 FILES）。
+        // server/web/ 里新加、删掉了文件而表没跟着改，部署出去的服务器就少一个文件（多一个编不过）
+        use crate::server::web::FILES;
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../server/web");
         let mut have: Vec<String> =
             std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         have.sort();
-        let mut want: Vec<String> = WEB.iter().map(|(n, _)| n.to_string()).collect();
+        let mut want: Vec<String> = FILES.iter().map(|(n, _)| n.to_string()).collect();
         want.sort();
-        assert_eq!(have, want, "server/web/ 里新加、删掉了文件：WEB 跟着改");
-        assert!(WEB.iter().all(|(n, _)| n.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))));
+        assert_eq!(have, want, "server/web/ 里新加、删掉了文件：server/web.rs 的 FILES 跟着改");
     }
 
     #[test]
@@ -842,7 +929,11 @@ mod tests {
             pre,
             "CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT='AAAAC3NzaC1lZDI1NTE5AAAAIExample'\nset -- --uninstall --dir '/opt/cca-team-0123abcd'\n"
         );
-        assert!(installer(&pre).contains(&pre), "前面放进的几项原样进了安装脚本");
+        let s = installer(&pre, &[]);
+        assert!(s.contains(&format!("\nCCA_HUB_VERSION=''\nCCA_HUB_CORES=''\n{pre}")), "前面放进的几项原样进了安装脚本");
+        // 模板里自己提到这两个名字（core_put 调的、开头的说明）：看的是有没有顶格写的那几行
+        assert!(!s.contains("\nhub_core_") && !s.contains("\nCCA_HUB_CORE_SHA256_"), "卸载的那一份不带服务端程序");
+        assert!(s.len() < TEMPLATE.len() + 512, "只比模板多这几行");
         assert!(root_key("ssh-ed25519 AAAA+/09 cca-team").is_ok());
         for bad in ["", "ssh-ed25519", "ssh-ed25519  x", "ssh-ed25519 AAAA;rm"] {
             assert!(root_key(bad).is_err(), "{bad:?}");

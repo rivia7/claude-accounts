@@ -1125,7 +1125,7 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
     let [sel, rest @ ..] = args else {
         return Err(Fail::Die("用法: py team-deploy Team [用户@]主机 [选项]".into()));
     };
-    // 装的那一段经 SSH，可能要几分钟（第一次用 Docker 要拉镜像）：这段时间不拿着这个 Team 的锁（不然这台设备上同步配置、别的管理命令
+    // 装的那一段经 SSH，网慢时要一会儿（要把约 10 MB 的安装脚本传过去：里面带着服务端程序）：这段时间不拿着这个 Team 的锁（不然这台设备上同步配置、别的管理命令
     // 都卡着等）。装好了再取锁、重新读一遍（等的时候可能被别的命令改过），接上
     let (t, _a, lk) = admin_of(sel)?;
     let (tid, root, svc, name) = (t.id.clone(), t.root.clone(), format!("cca-team-{}", &t.id[..8]), t.name.clone());
@@ -1244,7 +1244,8 @@ pub fn undeploy_plan(t: &Team) -> Option<UndeployPlan> {
 
 /// py team-hosted Team [railway] [--dir 目录]：没有服务器时把这个 Team 的同步服务器部署到托管平台（只有 Railway，平台可以不写）：
 /// 生成部署文件（team_files）。这个 Team 已经接着一台照证书机构验的服务器（托管平台上的：没有指纹）时是更新。stdout 是 sh 的 键=值：
-/// dir、steps、tid、name、svc。原因码：no_team、not_admin、usage（写了别的平台；sealos 说不再支持）、dir、key
+/// dir、steps、tid、name、svc。原因码：no_team、not_admin、usage（写了别的平台；sealos 说不再支持）、dir、key、
+/// install（这一份 cca 没带 Linux 的服务端程序：payload.rs 说了为什么）
 pub fn cmd_team_hosted(args: &[String]) -> R<()> {
     const USAGE: &str = "用法: py team-hosted Team [railway] [--dir 目录]";
     let [sel, rest @ ..] = args else { return Err(Fail::Die(USAGE.into())) };
