@@ -2392,12 +2392,14 @@ if sect 11; then
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | "$TESTBIN" utf8'
 lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名，要写 ${变量}。
-	# 查发出去的 bash：cca、install.sh、release.sh、Team 的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 和 ios 下的脚本，
-	# 还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
-	"$TESTBIN" lint dollar "$D/.." "$CCA" install.sh release.sh server/hub-install.sh 'macos/*.sh' 'ios/*.sh' macos/Sources macos/tools   # 目录下面查 .sh、.swift
+	# 查哪些文件（发出去的 bash、App 里拼出来的 bash、Claude Code 的 hook）见 tests/lint_dollar.sh：.claude/hooks/quick-lint.sh 也用这一份名单
+	bash "$D/lint_dollar.sh" "$TESTBIN" "$D/.." "$CCA"
 }
 ld=$(lint_dollar)
 ok "lint：lint_dollar 列的脚本、App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
+# 给 Claude 看的规矩（CLAUDE.md、.claude/rules/*.md）有大小上限：超了就把只跟某一块有关的挪进 .claude/rules/ 或者 docs/dev/（见 tests/claude_md_size.sh）
+lcm=$(bash "$D/claude_md_size.sh" "$D/..")
+ok "lint：CLAUDE.md、.claude/rules/*.md 都没有超过各自的大小上限${lcm#ok}" '[ "$lcm" = ok ]'
 # 仓库里不再有 Python 的程序（辅助程序、服务端、测试、小工具都是 Rust）：.py 这类文件、python 的 shebang 都算（见 tests/tool/lint.rs）
 lpy=$("$TESTBIN" lint nopython "$D/..")
 ok "lint：仓库里没有 Python 的程序（.py 文件、第一行是 python 的脚本）${lpy#ok}" '[ "$lpy" = ok ]'
