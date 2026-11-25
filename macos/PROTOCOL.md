@@ -156,8 +156,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 工具（`tools[]`，顺序固定：claude、codex、agy；`codex.json`、`agy.json` 不存在时 `enabled` 为 false、`accounts` 是空的）：
 
 - `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`：5 小时、本周这些窗口，3.1）、
-  折合金额（`cost`）。Claude、Codex 都是 true；Antigravity 只有 `usage`（几组额度，3.1 的 `quota_groups`，账号的 `usage` 是缓存里的这些；
-  没有每周用量的统计，用量统计页不算它）。3.6.10 及以前的 cca 给 Antigravity 的 `usage` 是 false：账号的 `usage` 一直是 null，`can_why.usage`
+  折合金额（`cost`）。Claude、Codex 都是 true；Antigravity 有 `usage`（几组额度，3.1 的 `quota_groups`，账号的 `usage` 是缓存里的这些；
+  没有每周用量的统计，用量统计页不算它）和 `cost`（3.7.2 起；以前是 false）。3.6.10 及以前的 cca 给 Antigravity 的 `usage` 是 false：账号的 `usage` 一直是 null，`can_why.usage`
   是 `unsupported`，App 不显示、不调 `cca agy usage`。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有（`cost` 除外：没有这个键当作没有）。
 
 账号（`tools[].accounts[]`，顺序就是账号表的顺序）：
@@ -226,7 +226,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `devices` 是账号页有没有「设备」一节（3.4）：账号经某台服务器同步（`hub` 不是 null）：Team 给的账号、那个 Team 的服务器这台设备用得了
   （取到了配置、接上了服务器，4.14），config.json 里没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
   `api_key` 是能不能记下 / 显示 / 复制 API key（4.10）：新版 cca 的所有账号都是 true；旧版 cca 没有这一项，当作不能，不显示入口。
-  `cost` 是账号页有没有「折合金额」一节、折合金额页里有没有这一行：Claude、Codex 的官方账号（工具的 `features.cost`），
+  `cost` 是账号页有没有「折合金额」一节、折合金额页里有没有这一行：Claude、Codex 的官方账号和 Antigravity 的账号（工具的 `features.cost`；Antigravity 3.7.2 起），
   config.json 里没写 `"cost": false`。没登录的也是 true（照样显示以前记下的）。同样没有对应的 `can_why`；旧版 cca 没有这一项，当作没有。
   `mail` 是账号页有没有「邮箱」一节（4.11，邮箱助手）：只有 Claude 的官方账号、账号表里写了邮箱时为 true（和 `hello.mail` 一起把关）。
   同样没有对应的 `can_why`：不能就不显示这一节、不调 `mail` 的命令；旧版 cca 没有这一项，当作没有。
@@ -274,9 +274,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     （一周都没过完时为 null），`maxed` 用完（100% 及以上）的几周，`under_half` 没用到一半的几周。
 
   App 只排版、不重算：条的高低、哪一周填灰色、统计的数字都照这里的。
-- `cost`：折合金额（账号页的「折合金额」、侧栏的「折合金额」页）：这个账号用 Claude Code / Codex 干的活，按官方 API 的标价折成美元，
-  **不是实际花费**（订阅不按这个收费），只给 `can.cost` 为真的账号。cca 在后台读共享的会话记录（`~/.claude/projects`、`~/.codex/sessions`，
-  只取用量数字），按登录的账号身份、按小时累计，价格表写在 cca 里（`prices_date` 是核实价格的日期）。经某台服务器同步的账号（`hub`），
+- `cost`：折合金额（账号页的「折合金额」、侧栏的「折合金额」页）：这个账号用 Claude Code / Codex / Antigravity 干的活，按官方 API 的标价
+  （Anthropic、OpenAI、Google 的 Gemini API；Antigravity 里的 Claude 模型按 Anthropic 的）折成美元，
+  **不是实际花费**（订阅不按这个收费），只给 `can.cost` 为真的账号。cca 在后台读共享的会话记录（`~/.claude/projects`、`~/.codex/sessions`、
+  `~/.gemini/antigravity-cli/conversations`，只取用量数字；Antigravity 的会话里没有账号的身份，只有经 `cca agy` 启动的认得出是哪个账号的，
+  别的算进 `cost_total.unattributed`），按登录的账号身份、按小时累计，价格表写在 cca 里（`prices_date` 是核实价格的日期）。经某台服务器同步的账号（`hub`），
   各台设备算的加密后经那台服务器交换（`sync`），这里是所有设备加起来的。还没有任何记录（还没统计过、这个账号没用过）为 null。
   `state` 只读：读 cca 已经统计好的，不现读会话记录；要更新就运行 `cca cost sync --json`（3.5）。
 
@@ -491,7 +493,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - 各账号的周期不一样（额度窗口各自的重置时间），所以没有按周加起来的柱子：`current_usd` 是各账号当前那一项加起来，`weeks_usd`、`days_usd`、
   `today_usd` 同理；`average_usd`、`average_day_usd` 是有平均值的账号的平均加起来（一个都没有为 null）。`days[]` 是最近 30 个本地日历日，
   各账号加起来（日期是共同的）。
-- `by_tool`：按工具分开的同样几项，只列启用了的工具。
+- `by_tool`：按工具分开的同样几项，只列启用了的工具（`agy` 3.7.2 起）。
 - `models[]`：所有账号按模型加起来（3.6.8 起），一项的样子、排法和账号的 `models[]` 一样，没有 `tokens`；`me`、`devices[]` 里也有，
   各自的加起来（旧版 cca 没有：App 不显示按模型的那一块）。不含 `unattributed`。
 - `me`：只算这台设备的同样几项（`days`、`by_tool` 也有，工具和顶层的一样）：各账号里 `me` 为真的那台设备的 `summary`、`days_usd` 加起来，

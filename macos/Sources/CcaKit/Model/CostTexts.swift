@@ -256,6 +256,7 @@ extension Texts {
         let since = "从 " + dayText(epoch, now: now, calendar: calendar) + "开始有记录。"
         switch tool {
         case .codex: return since + "Codex 0.157 起的会话才带着账号信息，更早的算不进来。"
+        case .agy: return since + "只有用 cca 启动的 Antigravity 会话认得出是哪个账号的，直接运行 agy 的算进「认不出账号」。"
         default: return since + "Claude Code 2.1.317 起的会话才带着账号信息，更早的、Claude 桌面 App 里的会话算不进来。"
         }
     }

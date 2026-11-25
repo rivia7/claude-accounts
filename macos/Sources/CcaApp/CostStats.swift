@@ -84,7 +84,7 @@ struct CostStatsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
             TipCard(id: "cost-stats-page", title: "这一页怎么看",
-                    message: "按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
+                    message: "按 Anthropic、OpenAI、Google 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
                         + "右上角选看哪台设备（所有设备、本机，或者另一台）、按周还是按天看。"
                         + "每个账号一行，一根竖条是一周（或一天），颜色淡的那一项开始时还没有记录；看所有设备时，有好几台设备的账号下面分台列出。"
                         + "认不出是哪个账号的用量（Claude App 里的会话、旧版 Claude Code）不算进合计，单独列在最下面。"

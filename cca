@@ -5547,6 +5547,7 @@ run_account() {
 		env "${UNSETS[@]}" "${SETS[@]}" "$TOOL_BIN" "${ACC_ARGS[@]}" "$@" 3<&-
 	fi
 	rc=$?
+	[ "$TOOL" != agy ] || py agy-session-end "$key" "$$" >/dev/null 2>&1   # 折合金额：记下这次运行用过哪些会话（辅助程序的 cost/agy.rs）
 	session_close
 	trap - INT TERM HUP
 	py link "$key" cost >/dev/null || warn "退出后链接共享目录失败"

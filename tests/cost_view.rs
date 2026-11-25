@@ -71,7 +71,7 @@ const U5: &str = "aaaaaaaa-0000-4000-8000-000000000005";
 const M: i64 = 1_000_000;
 const WEEK: i64 = 7 * 86400;
 // cli/src/cmd/cost.rs 的同名常量
-const COST_PRICES_DATE: &str = "2026-11-24";
+const COST_PRICES_DATE: &str = "2026-11-25";
 /// 传给别的设备的留这么久
 const COST_PUBLISH: i64 = 14 * WEEK;
 // 服务器（cli/src/server/mod.rs）的同名常量（服务器的上限；辅助程序里的 COST_BLOB_MAX、COST_BATCH 要和它们一样：seal_open 里核对）

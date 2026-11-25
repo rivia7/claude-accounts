@@ -94,7 +94,82 @@ pub fn run(a: &[String]) -> R<i32> {
     if !lexists(&mcp) {
         write_text(&mcp, "")?;
     }
+    if let Some(conv) = mark(&t, "agy_cost")?.filter(|c| !c.is_empty()) {
+        reply(&cli, &conv)?;
+    }
     Ok(3)
+}
+
+/// 折合金额（$CCA_T/agy_cost 的内容是会话 id）：像 agy 1.5.16，在这次运行的日志（cli-<本地时间>.log）里写下用的会话，往共享的
+/// 会话库（conversations/<会话 id>.db，SQLite：用系统的 sqlite3 写）里加一次 Gemini 4 Neon 的回复：gen_metadata 一行（模型编号 1532、
+/// 名字），steps 一行（时间是现在，100 万输入、10 万输出、2 万缓存读：按 3 / 15 / 0.15 美元每百万折合 4.503 美元）。protobuf 的字段号照
+/// cli/src/cmd/cost/agy.rs
+fn reply(cli: &str, conv: &str) -> R<()> {
+    fn vint(mut x: u64, out: &mut Vec<u8>) {
+        loop {
+            let b = (x & 0x7f) as u8;
+            x >>= 7;
+            if x == 0 {
+                out.push(b);
+                return;
+            }
+            out.push(b | 0x80);
+        }
+    }
+    fn fint(n: u64, x: u64, out: &mut Vec<u8>) {
+        vint(n << 3, out);
+        vint(x, out);
+    }
+    fn fbytes(n: u64, b: &[u8], out: &mut Vec<u8>) {
+        vint((n << 3) | 2, out);
+        vint(b.len() as u64, out);
+        out.extend_from_slice(b);
+    }
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02X}")).collect::<String>();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let rid = format!("rid{}x{now}", std::process::id());
+    let mut usage = Vec::new();
+    fint(1, 1532, &mut usage);
+    fint(2, 1_000_000, &mut usage);
+    fint(3, 100_000, &mut usage);
+    fint(5, 20_000, &mut usage);
+    fint(6, 24, &mut usage);
+    fbytes(7, rid.as_bytes(), &mut usage);
+    let (mut at, mut user, mut step) = (Vec::new(), Vec::new(), Vec::new());
+    fint(1, now, &mut at);
+    fbytes(1, &at, &mut user); // 用户输入的那一步：没有用量
+    fbytes(1, &at, &mut step);
+    fbytes(9, &usage, &mut step);
+    fint(11, 1532, &mut step);
+    let (mut inner, mut gen) = (Vec::new(), Vec::new());
+    fbytes(4, &usage, &mut inner);
+    fbytes(19, b"gemini-4-neon", &mut inner);
+    fbytes(1, &inner, &mut gen);
+    append_text(
+        &join(&[cli, "log", &format!("cli-{}.log", local_stamp())]),
+        &format!("I1125 10:00:00.000000 1 server.go:1233] Created conversation {conv} (backend=BACKEND_TYPE_UNSPECIFIED)\n"),
+    )?;
+    let db = join(&[cli, "conversations", &format!("{conv}.db")]);
+    let sql = format!(
+        "create table if not exists steps (idx integer primary key, step_type integer not null default 0, status integer not null default 0, metadata blob);\n\
+         create table if not exists gen_metadata (idx integer primary key, data blob, size integer not null default 0);\n\
+         insert into gen_metadata (data) values (X'{}');\n\
+         insert into steps (step_type, status, metadata) values (14, 3, X'{}');\n\
+         insert into steps (step_type, status, metadata) values (15, 3, X'{}');\n",
+        hex(&gen),
+        hex(&user),
+        hex(&step)
+    );
+    let mut child = std::process::Command::new("sqlite3")
+        .arg(&db)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()?;
+    child.stdin.take().expect("piped").write_all(sql.as_bytes())?;
+    if !child.wait()?.success() {
+        return fail(format!("sqlite3 写不了 {db}"));
+    }
+    Ok(())
 }
 
 fn login(t: &str, g: &str, cli: &str, log: &dyn Fn(&str) -> R<()>) -> R<i32> {

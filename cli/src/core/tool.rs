@@ -380,7 +380,7 @@ pub static TOOLS: LazyLock<[Tool; 3]> = LazyLock::new(|| {
             has_app: false,
             has_api: false,
             has_usage: true,
-            has_cost: false,
+            has_cost: true,
         },
     ]
 });

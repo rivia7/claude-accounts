@@ -167,7 +167,8 @@ func costFixtureTests() {
               && n.tools.allSatisfy { !$0.features.cost && $0.accounts.allSatisfy { !$0.can.cost && $0.cost == nil } })
     }
     if let a = loadFixture(StateDoc.self, "state_agy.json") {
-        check("Antigravity 没有折合金额", a.tool(.agy)?.features.cost == false && a.tool(.agy)?.accounts.allSatisfy { !$0.can.cost } == true)
+        // 手写的这一份是 3.7.2 以前的样子（没有 features.cost）；回归里 cca 的真实输出（3.7.2 起）有，登录着的账号 can.cost
+        check("Antigravity 的折合金额：can.cost 只在 features.cost 为真时才有", a.tool(.agy).map { t in t.accounts.allSatisfy { !$0.can.cost || t.features.cost } } == true)
     }
     if let x = loadFixture(StateDoc.self, "state_cost.json") {
         let alice = x.account(AccountRef(tool: .claude, key: "alice@example.com"))?.cost

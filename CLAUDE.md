@@ -73,6 +73,7 @@
 - `RELEASE_KEY`：`cca` ↔ `install.sh` ↔ `~/.ssh/cca_release_ed25519.pub`（release.sh 会检查）
 - 辅助程序的四个目标：`cca` 的 `helper_find` ↔ `cca-core pack`（`cli/src/cmd/pack.rs`）的 `TARGETS` ↔ `release.sh` 的 `TARGETS` ↔ `install.sh` 查的机器种类；`cca` 里以 `HELPER_SUMS=""` 开头的那一行由 `cca-core pack` 填上；它接在后面的那几段的格式 ↔ `cca` 的 `helper_unpack`（`sed` 切出来、`base64` 解码、`gunzip`）↔ `cli/src/cmd/hub/payload.rs`（同样读那几段，取出 Linux 的两份给 Team 的服务器；它的 `LINUX` 要在 `TARGETS` 里）
 - bash 里 `py 子命令` 的参数和输出 ↔ `cli/src/cmd/` 里那个子命令（`CMDS` 表）
+- Antigravity 的折合金额：agy 会话库里 protobuf 的字段号、日志里认会话 id 的那几句（`cli/src/cmd/cost/agy.rs`）↔ 假 agy 的 `reply`（`tests/tool/fake/agy.rs`）；bash `run_account` 的 `py agy-session-end` ↔ 辅助程序的同名子命令；改了读的规则、Gemini 的价格表要改 `COST_BUILD`
 - 辅助程序里的常量 ↔ tests/ 下把它当黑盒测的那几份里写死的同一个值：`UDP_HELPER`（`cli/src/cmd/corenet/udp.rs`）↔ `tests/local_udp.rs`，`LEAK_FAIL_TTL`（`cli/src/cmd/leak.rs`）↔ `tests/isolation_leaks.rs`
 - App 的接口：PROTOCOL.md ↔ Swift 模型 ↔ regress 的 10g；`router_sh` 的 `status` 输出 ↔ `cmd_gui_live` 的 `GUI_SLOT_RE`（regress 守着）
 - Claude App 的会话记下账号（`cca cost hook`）：写进用户共享的 `~/.claude/settings.json` 的命令（`cost.rs` 的 `desktop_hook_command`、`DESKTOP_HOOK_MARK`）↔ bash 的 `_session-start` 分支（`--desktop` 原样交给 `py session-start`）↔ `cmd_session_start` 的 `--desktop`：已经加上的 hook 留在各台设备的设置里，改了这几处也要一直认原来的命令（`off`、卸载照 `DESKTOP_HOOK_MARK` 认出它）；同意项 `cost_hook`、结果 `cost_hook`、`unattributed.app_hook`：`cca` ↔ PROTOCOL（2.2、3.5、4.1、4.2）↔ Swift 的 `ConsentItem`、`ResultCode`、`CostAppHook` ↔ `macos/Tests/Fixtures/state.json`

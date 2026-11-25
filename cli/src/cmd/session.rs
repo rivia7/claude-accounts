@@ -10,7 +10,7 @@ use super::{arg, arity, Cmd};
 use crate::core::base::Lock;
 use crate::core::ctx::ctx;
 use crate::core::model::*;
-use crate::core::tool::t;
+use crate::core::tool::{t, Kind};
 use crate::py::fs::{self, load_json, load_quiet, save_json};
 use crate::py::obj::{repr_str, Dict, List, V};
 use crate::py::path;
@@ -414,12 +414,16 @@ pub fn cmd_session_open(args: &[String]) -> R<()> {
     let starts = proc_starts(&pids);
     let Some(started) = starts.get(&pid).copied() else { return Ok(()) };
     for (p, file) in &old {
-        let mark = load_quiet(file)
-            .and_then(|j| j.as_dict())
-            .and_then(|j| j.get("started"))
-            .filter(|s| s.is_int())
-            .and_then(|s| s.as_int());
-        if *p == pid || !mark.is_some_and(|s| cli_alive(*p, s, &starts)) {
+        let j = load_quiet(file).and_then(|j| j.as_dict());
+        let mark = j.as_ref().and_then(|j| j.get("started")).filter(|s| s.is_int()).and_then(|s| s.as_int());
+        let alive = mark.is_some_and(|s| cli_alive(*p, s, &starts));
+        if *p == pid || !alive {
+            // agy：cca 没来得及记下的那次运行（被 kill -9、远程会话里关了终端）先补记，折合金额靠它认出账号（cost/agy.rs）
+            if t().kind == Kind::Agy && !alive {
+                if let Some(since) = j.and_then(|j| j.get("since")).and_then(|s| s.as_num()) {
+                    crate::cmd::cost::agy_record_run(&d, *p, since, None);
+                }
+            }
             let _ = std::fs::remove_file(file);
         }
     }

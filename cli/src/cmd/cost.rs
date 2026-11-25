@@ -27,7 +27,7 @@ use super::usage::{parse_ts, WEEK, WEEKS_KEEP, WEEKS_SHOW};
 use super::{arity, Cmd};
 use crate::core::base::{Lock, CCA_HOME, CFG, EMAIL_RE, MASTER_JSON, SELF_PATH};
 use crate::core::model::{adir, cdir, is_api, parse_key};
-use crate::core::tool::{claude, codex, Kind, Tool, Using};
+use crate::core::tool::{agy, claude, codex, Kind, Tool, Using};
 use crate::py::fail::{errno_text, os_error_text};
 use crate::py::fs::{load_quiet, save_json, utime_now};
 use crate::py::hash::{sha1_hex, sha256_hex};
@@ -42,6 +42,9 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::sync::LazyLock;
 
+mod agy;
+pub(crate) use agy::record_run as agy_record_run;
+
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[
     Cmd::all("cost-worker", cmd_cost_worker),
@@ -51,16 +54,19 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("_cost-view", cmd_cost_view),
     Cmd::all("session-start", cmd_session_start),
     Cmd::all("cost-hook", cmd_cost_hook),
+    Cmd::all("agy-session-end", agy::cmd_agy_session_end),
 ];
 
 pub static COST_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "cost"));
-/// 价格表核实的日期（platform.claude.com/docs/en/about-claude/pricing、developers.openai.com/api/docs/pricing）
-pub const COST_PRICES_DATE: &str = "2026-11-24";
+/// 价格表核实的日期（platform.claude.com/docs/en/about-claude/pricing、developers.openai.com/api/docs/pricing、
+/// ai.google.dev/gemini-api/docs/pricing）
+pub const COST_PRICES_DATE: &str = "2026-11-25";
 /// 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算（COST_PRICES_DATE + "/第几版"；2026-11-13/2：按会话开始的
 /// 记录认账号、记下诊断；2026-11-24/1：补上 GPT-6.2 的标价，以前记成没有标价的请求按新价重算；2026-11-24/2：会话开始的记录比
 /// session-owner 新时按记录认（换了账号续接），认 Claude App 的记录；2026-11-24/3：价格表里还没有的新版本按同系列的标价估算
-/// （priced_by），以前记成没有标价的请求重算）。price_tables_pinned_to_build 守着：价格表、估算的规则变了它就不过
-pub const COST_BUILD: &str = "2026-11-24/3";
+/// （priced_by），以前记成没有标价的请求重算；2026-11-25/1：算上 Antigravity 的会话库（agy.rs）和 Gemini 的标价）。
+/// price_tables_pinned_to_build 守着：价格表、估算的规则变了它就不过
+pub const COST_BUILD: &str = "2026-11-25/1";
 /// 后台统计最多隔这么久起一次
 pub const COST_EVERY: f64 = 300.0;
 /// 和别的设备同步最多隔这么久一次（cca cost sync --now 不等）
@@ -455,14 +461,18 @@ pub fn cost_mrows_ok(rows: Option<&V>, cap: usize) -> bool {
 fn cost_fresh() -> Dict {
     dict! {
         "v" => 1, "build" => COST_BUILD, "done" => false, "files" => Dict::new(), "seen" => Dict::new(), "owners" => Dict::new(),
-        "h" => Dict::new(), "orphan" => Dict::new(), "um" => Dict::new(), "who" => Dict::new(), "hm" => Dict::new(), "om" => Dict::new(),
+        "h" => Dict::new(), "orphan" => Dict::new(), "um" => Dict::new(), "who" => Dict::new(), "hm" => Dict::new(), "om" => Dict::new(), "am" => Dict::new(),
     }
 }
 
-/// 身份的写法：claude:<accountUuid>、codex:<chatgpt_user_id>
+/// 身份的写法：claude:<accountUuid>、codex:<chatgpt_user_id>、agy:<邮箱>（会话库里没有账号的身份：按 cca 记下的运行认出账号，见 agy.rs）
 pub fn cost_ident_ok(k: &str) -> bool {
     let (tool, _, ident) = text::partition(k, ":");
-    (tool == "claude" || tool == "codex") && (8..=64).contains(&text::len(ident))
+    match tool {
+        "claude" | "codex" => (8..=64).contains(&text::len(ident)),
+        "agy" => text::len(ident) <= 254 && EMAIL_RE.matches(ident) && ident.to_lowercase() == ident,
+        _ => false,
+    }
 }
 
 /// docs（scan.json、local.json 的内容）里记下的身份 → 邮箱，合在一起（后面的优先）；格式不对的项不要
@@ -640,7 +650,7 @@ impl CompactSeen {
         loop {
             // "c0123456789abcdef"
             let key = b.get(i..i + 19)?;
-            if key[0] != b'"' || key[18] != b'"' || !matches!(key[1], b'c' | b'x') {
+            if key[0] != b'"' || key[18] != b'"' || !matches!(key[1], b'c' | b'x' | b'a') {
                 return None;
             }
             let mut id = 0u64;
@@ -951,7 +961,7 @@ fn is_int(x: &V) -> bool {
 fn cost_load_scan() -> (Dict, Seen) {
     let (j, seen) = scan_load();
     let base = cost_fresh();
-    let dicts = ["files", "owners", "h", "orphan", "um", "who", "hm", "om"];
+    let dicts = ["files", "owners", "h", "orphan", "um", "who", "hm", "om", "am"];
     let shape = j.get("build").is_some_and(|b| b.as_str() == Some(COST_BUILD))
         && j.get("v").is_some_and(|v| v.isinstance_int())
         && j.get("done").is_some_and(|d| d.is_bool())
@@ -971,6 +981,7 @@ fn cost_load_scan() -> (Dict, Seen) {
             && all("hm", &|r| cost_mrows_ok(Some(r), usize::MAX))
             && cost_mrows_ok(j.get("om").as_ref(), usize::MAX)
             && all("um", &|m| m.as_dict().is_some_and(|m| m.values().iter().all(is_int)))
+            && all("am", &|m| m.is_str())
     }) {
         j.set("who", cost_who_kept(&[&j]));
         // 诊断（以前的版本没有）不对就不要了，不为它从头重算
@@ -1314,16 +1325,7 @@ impl Marks {
         let Marks { files, known, by_sid } = self;
         by_sid.clear();
         for (p, who, _) in files.iter() {
-            let Ok(mut f) = std::fs::File::open(p) else { continue };
-            // SAFETY: f 开着，fd 有效；锁在 f 关上时放开（等正在写、正在截短的写完）
-            unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH) };
-            let mut raw = Vec::new();
-            if (&mut f).take(4 << 20).read_to_end(&mut raw).is_err() {
-                continue;
-            }
-            drop(f);
-            for line in raw.split(|b| *b == b'\n') {
-                let Ok(d) = line_doc(line) else { continue };
+            for d in jsonl_locked(p) {
                 let (Some(sid), Some(at)) =
                     (d.str("sid").filter(|s| (8..=64).contains(&s.len())), d.get("at").and_then(|a| a.as_num()))
                 else {
@@ -1344,6 +1346,19 @@ impl Marks {
     fn at(&self, sid: &str, ts: f64) -> Option<(f64, std::rc::Rc<MarkWho>)> {
         self.by_sid.get(sid)?.iter().rev().find(|(at, _)| *at <= ts + MARK_SLACK).map(|(at, w)| (*at, w.clone()))
     }
+}
+
+/// 记录文件（sessions.jsonl 这类，sessions_append 写的）里的各行（解析不了的跳过；读不了是空的）：读的时候拿着共享锁（等正在写、
+/// 正在截短的写完），最多读 4 MB
+fn jsonl_locked(p: &str) -> Vec<Dict> {
+    let Ok(mut f) = std::fs::File::open(p) else { return Vec::new() };
+    // SAFETY: f 开着，fd 有效；锁在 f 关上时放开
+    unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH) };
+    let mut raw = Vec::new();
+    if (&mut f).take(4 << 20).read_to_end(&mut raw).is_err() {
+        return Vec::new();
+    }
+    raw.split(|b| *b == b'\n').filter_map(|l| line_doc(l).ok()).collect()
 }
 
 /// 版本号的样子（cca 的、Claude Code 的）：最多 32 个字母、数字和 . _ + -
@@ -1973,6 +1988,7 @@ fn cost_scan(j: &Dict, seen: Seen, now: f64, checkpoint: &mut dyn FnMut(&Seen) -
         live.insert(p);
         checkpoint(&s.seen)?;
     }
+    s.agy(&mut live, checkpoint)?;
     let files = j.dict("files").expect("scan.json 核对过");
     for p in files.keys() {
         if !live.contains(&*p) {
@@ -2066,6 +2082,14 @@ fn cost_who(j: &Dict) {
     let x = codex_claims("", Some(&path::join(&codex().master, "auth.json")));
     found.push(("codex", x.get("user"), x.get("email")));
     let who = j.dict("who").expect("scan.json 核对过");
+    // agy 的身份就是账号表里的邮箱（agy.rs）
+    let agy_table = if path::exists(&agy().table) { load_quiet(&agy().table).and_then(|t| t.as_dict()) } else { None };
+    for k in agy_table.map(|t| t.keys()).unwrap_or_default() {
+        let email = parse_key(&k).1.to_lowercase();
+        if cost_ident_ok(&format!("agy:{email}")) {
+            who.set(format!("agy:{email}"), email);
+        }
+    }
     for (tool, ident, email) in found {
         let ident = ident.as_ref().and_then(|i| i.as_str()).filter(|i| (8..=64).contains(&text::len(i)));
         let email = email.as_ref().and_then(|e| e.as_str()).filter(|e| EMAIL_RE.matches(e));
@@ -2375,7 +2399,7 @@ fn cost_items(hub: &Hub) -> R<Option<Vec<Item>>> {
     let mut out = Vec::new();
     for (tool, key, _) in targets {
         let email = parse_key(&key).1.to_lowercase();
-        if !matches!(tool.kind, Kind::Claude | Kind::Codex) || email.is_empty() {
+        if !tool.has_cost || email.is_empty() {
             continue;
         }
         let ident = {
@@ -2781,10 +2805,10 @@ pub fn cmd_cost_worker(_args: &[String]) -> R<()> {
     }
 }
 
-/// 这台设备上 Claude、Codex 的官方账号有几个（读不了的表不算）
+/// 这台设备上 Claude、Codex、Antigravity 的官方账号有几个（读不了的表不算）
 fn cost_accounts() -> usize {
     let mut n = 0;
-    for tool in [claude(), codex()] {
+    for tool in [claude(), codex(), agy()] {
         if !path::exists(&tool.table) {
             continue;
         }
@@ -2807,7 +2831,7 @@ pub fn cmd_cost_sync(args: &[String]) -> R<()> {
         return exit(2);
     }
     if cost_accounts() == 0 {
-        out!("没有 Claude、Codex 的官方账号：没有可统计的");
+        out!("没有 Claude、Codex、Antigravity 的官方账号：没有可统计的");
         return exit(2);
     }
     let (scan, sync) = match cost_run(flag("--now"), COST_WAIT as f64) {
@@ -3705,7 +3729,7 @@ impl CostView {
                 .collect();
             out.set("days", days);
             let by_tool = Dict::new();
-            for tool in tools.iter().filter(|x| **x == "claude" || **x == "codex") {
+            for tool in tools.iter().filter(|x| matches!(**x, "claude" | "codex" | "agy")) {
                 let sel: Vec<&Money> = ms.iter().filter(|(x, _)| x == tool).map(|(_, m)| *m).collect();
                 by_tool.set(*tool, agg(&sel));
             }
@@ -3948,11 +3972,15 @@ mod tests {
         // 价格表、估算的规则变了要同时改 COST_BUILD（和这里记的摘要）：不然各台设备不从头重算，以前的用量还按旧价、旧规则
         let tables = format!(
             "{CLAUDE_PRICES:?}{CLAUDE_LONG:?}{CLAUDE_FAST:?}{CLAUDE_NO_GEO:?}{CLAUDE_WEB_SEARCH:?}{OPENAI_PRICES:?}{OPENAI_LONG:?}\
-             {OPENAI_TIERS:?}{OPENAI_ULTRA:?}{ULTRA_PROMO_END:?}{CLAUDE_FAMILIES:?}{OPENAI_FAMILIES:?}{CLAUDE_NAME:?}{OPENAI_NAME:?}"
+             {OPENAI_TIERS:?}{OPENAI_ULTRA:?}{ULTRA_PROMO_END:?}{CLAUDE_FAMILIES:?}{OPENAI_FAMILIES:?}{CLAUDE_NAME:?}{OPENAI_NAME:?}\
+             {:?}{:?}{:?}",
+            agy::GEMINI_PRICES,
+            agy::GEMINI_FROM,
+            agy::AGY_EFFORT
         );
         assert_eq!(
             (COST_BUILD, &sha256_hex(tables.as_bytes())[..16]),
-            ("2026-11-24/3", "bafda80d22537243"),
+            ("2026-11-25/1", "d683ff6f15725229"),
             "价格表变了：改 COST_BUILD，再把这里的两项换成新的"
         );
     }
