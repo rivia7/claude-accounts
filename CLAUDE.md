@@ -82,6 +82,7 @@
 - Claude App 的会话记下账号（`cca cost hook`）：写进用户共享的 `~/.claude/settings.json` 的命令（`cost.rs` 的 `desktop_hook_command`、`DESKTOP_HOOK_MARK`）↔ bash 的 `_session-start` 分支（`--desktop` 原样交给 `py session-start`）↔ `cmd_session_start` 的 `--desktop`：已经加上的 hook 留在各台设备的设置里，改了这几处也要一直认原来的命令（`off`、卸载照 `DESKTOP_HOOK_MARK` 认出它）；同意项 `cost_hook`、结果 `cost_hook`、`unattributed.app_hook`：`cca` ↔ PROTOCOL（2.2、3.5、4.1、4.2）↔ Swift 的 `ConsentItem`、`ResultCode`、`CostAppHook` ↔ `macos/Tests/Fixtures/state.json`
 - `VERSION` ↔ `WhatsNew.swift` 最前面的 `ReleaseNote`（`macos/test.sh` 查用词和版本先后）
 - Team（同步服务器、部署、托管平台、证书助手、线上格式、节点、界面里的 Team）和远程会话（中转、端到端加密、网页端、iOS 的 App、SwiftTerm、和手机配对、每个 Team 各用各的中转服务器）的成对修改在 `.claude/rules/team.md`、`.claude/rules/remote.md`：读到它们开头 `paths` 里列的文件时自动加载；只改 `cca` 里 bash 那一侧（`cmd_team`、`team_deploy`、`hub_deploy_*`、`remote_*`、`run_account` 的 `HOSTCMD`）时自己先读。这两块新的成对修改也写进那两份
+- `README.md`（中文）↔ `README.en.md`（英文）：同样的小节、同样的内容，一起改；`docs/images/` 的截图是界面 App 调试版的截图模式用演示数据截的（macos/README.md「看界面（截图）」），界面改了要重截
 
 ## 细节在哪
 动到哪一块，先读 `docs/dev/` 下对应的那一份（这一块怎么测也写在里面）：
