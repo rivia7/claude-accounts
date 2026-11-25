@@ -748,11 +748,15 @@ enum Texts {
         return brief ? "在用" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "") : doing
     }
 
-    /// 别的设备上在用：设备的名字是 Team 的管理员起的（cca 去掉了控制字符）；工位上的短写法把太长的名字截短
+    /// 别的设备上在用：设备的名字是 Team 的管理员起的（cca 去掉了控制字符）。工位上的短写法「在用（Mac-mini）」「在用（Mac-mini 等 2 台）」，
+    /// 太长的名字截短（窄的卡片上「在「Mac-mini」上在用」会在中间断行）；整句在悬停提示和读屏里
     static func elsewhere(_ names: [String], brief: Bool = false) -> String {
         guard let first = names.first else { return "在用" }
-        let name = brief && first.count > 14 ? String(first.prefix(13)) + "…" : first
-        return names.count == 1 ? "在「\(name)」上在用" : "在「\(name)」等 \(names.count) 台设备上在用"
+        if brief {
+            let name = first.count > 14 ? String(first.prefix(13)) + "…" : first
+            return names.count == 1 ? "在用（\(name)）" : "在用（\(name) 等 \(names.count) 台）"
+        }
+        return names.count == 1 ? "在「\(first)」上在用" : "在「\(first)」等 \(names.count) 台设备上在用"
     }
 
     /// 有问题时的那一句；在用、空闲是 nil

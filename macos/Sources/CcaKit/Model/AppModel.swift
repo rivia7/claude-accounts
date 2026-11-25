@@ -1541,11 +1541,13 @@ final class AppModel {
         a.devices.filter { !$0.isMe && $0.state == .inUse }.map(\.name)
     }
 
-    private func pollElsewhere() {
+    /// since：距上次查成不到这么多秒的不查（定时的：看得见时到点就查、看不见时 elsewhereHidden；刚打开窗口的：60 秒）
+    private func pollElsewhere(since: TimeInterval? = nil) {
         guard phase == .ready, hooks.systemConditions().idleSeconds < UsagePolling.awayAfter else { return }   // 走开了：不查
         let now = Date().timeIntervalSince1970
+        let gap = since ?? (isVisible ? 0 : Self.elsewhereHidden)
         for tool in visibleTools where accounts(tool).contains(where: { $0.can.devices }) {
-            if !isVisible, now - (elsewhereEpoch[tool] ?? 0) < Self.elsewhereHidden { continue }
+            if now - (elsewhereEpoch[tool] ?? 0) < gap { continue }
             refreshElsewhere(tool)
         }
     }
@@ -2430,6 +2432,7 @@ final class AppModel {
         guard phase == .ready else { return }
         startDueCostSync()   // 刚看到金额（打开折合金额页、账号页）：上次统计过了 5 分钟就再统计一次
         if isVisible && !wasVisible {
+            pollElsewhere(since: 60)   // 刚打开窗口、面板（人回来了）：不等下一次定时
             if helloDirty {
                 helloDirty = false
                 dirty = false

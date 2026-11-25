@@ -140,6 +140,24 @@ try {
   await page('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   await until(`document.querySelector('.xterm-rows').innerText.includes('<你好，手机>')`, 15, '敲的字回来');
   step('typed');
+  // 剪贴板：会话里的程序写剪贴板（OSC 52，假客户端的 clip）时刚敲过键：放进这台设备的剪贴板；用鼠标选中的字马上放进去（选中即复制）。
+  // 真的剪贴板在无头的 Chrome 里要授权：换成记下写了什么的替身
+  await evaluate(`(() => { window.__clip = []; Object.defineProperty(navigator, 'clipboard', { configurable: true,
+    value: { writeText: async (t) => { window.__clip.push(t); }, readText: async () => '' } }); })()`);
+  await typeText('clip');
+  await page('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+  await page('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await until(`document.querySelector('.xterm-rows').innerText.includes('<clipped>')`, 15, '假客户端写了剪贴板');
+  await until(`window.__clip.includes('clip')`, 10, '会话写的剪贴板放进了这台设备的');
+  const [x0, y0, x1] = await evaluate(`(() => { const r = document.querySelector('.xterm-screen').getBoundingClientRect(); return [r.left + 3, r.top + 6, r.left + 90]; })()`);
+  await page('Input.dispatchMouseEvent', { type: 'mousePressed', x: x0, y: y0, button: 'left', clickCount: 1 });
+  await page('Input.dispatchMouseEvent', { type: 'mouseMoved', x: (x0 + x1) / 2, y: y0, button: 'left', buttons: 1 });
+  await page('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x1, y: y0, button: 'left', buttons: 1 });
+  await page('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x1, y: y0, button: 'left', clickCount: 1 });
+  await until(`window.__clip.some((t) => t !== 'clip' && t.trim().length > 0)`, 10, '选中即复制');
+  result.selected = await evaluate(`window.__clip.filter((t) => t !== 'clip').pop()`);
+  await evaluate(`document.querySelector('.xterm-helper-textarea').focus()`);
+  step('clip');
   // 按键条：Ctrl 粘住再按 d（^D：假客户端读到头，会话结束）之前，先用条上的键发一条命令
   for (const ch of 'say bar') await typeText(ch);
   await tap('.keys button', '⏎');

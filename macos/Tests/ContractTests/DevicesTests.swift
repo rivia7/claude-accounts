@@ -110,6 +110,10 @@ private final class DevicesSwitch: @unchecked Sendable {
     let got = await waitUntil { !m.elsewhereNames(bob.ref).isEmpty }
     check("连上 cca 就在后台查（只查有「设备」的工具）", m.scheduler.elsewherePollingRunning && got, "\(t.requests.map(\.arguments))")
     check("只算别的设备里在用的", m.elsewhereNames(bob.ref) == ["alice-mini"])
+    let n = asked()
+    m.setMainVisible(true)
+    try? await Task.sleep(nanoseconds: 300_000_000)
+    check("刚查过（不到 1 分钟）：打开窗口不再查", asked() == n)
     check("过了一阵没再查成：不标了", m.elsewhereNames(bob.ref, now: Date().timeIntervalSince1970 + AppModel.elsewhereFresh + 1).isEmpty)
     let e = m.office(now: Date().timeIntervalSince1970).people.first { $0.account.ref == bob.ref }
     check("总览：这台 Mac 上没在用也是在用，说是哪台", e?.mood == .working && e?.isWorking == bob.isWorking
@@ -120,7 +124,7 @@ private final class DevicesSwitch: @unchecked Sendable {
     let acct = m.accounts(.claude).first { !$0.isWorking && !$0.isAPI } ?? bob
     let two = Employee.make(acct, usage: nil, live: nil, now: 0, elsewhere: ["一个很长很长很长很长的设备名字", "b"])
     check("几台：说第一台和一共几台，短写法截短", Texts.mood(two, appLabel: "", now: 0).hasPrefix("在「一个很长很长很长很长的设备名字」等 2 台设备上在用")
-          && Texts.mood(two, appLabel: "", now: 0, brief: true).hasPrefix("在「一个很长很长很长很长的设备…」等 2 台设备上在用"))
+          && Texts.mood(two, appLabel: "", now: 0, brief: true).hasPrefix("在用（一个很长很长很长很长的设备… 等 2 台）"))
     let none = Employee.make(acct, usage: nil, live: nil, now: 0)
     check("别的设备上没在用：照旧", none.elsewhere.isEmpty && (acct.isWorking || none.mood != .working))
 }

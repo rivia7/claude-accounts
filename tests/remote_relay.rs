@@ -634,6 +634,26 @@ fn pair_list_attach(t: &mut Ctx) {
     v.expect("<typed-on-the-laptop>");
     h.send("say typed-on-the-box\n");
     v.expect("<typed-on-the-box>");
+    // 会话里的程序写剪贴板（OSC 52）：刚在 laptop 上按过键，laptop 是主的那一处，laptop 自己也放进它的剪贴板（pbcopy，macOS 上）
+    let clip = b.home.join("pbcopied");
+    fsx::write_script(
+        b.home.join("bin/pbcopy"),
+        &format!("#!/bin/sh\ncat > '{}.tmp' && mv '{}.tmp' '{}'\n", clip.display(), clip.display(), clip.display()),
+    );
+    v.send("clip\n");
+    v.expect("<clipped>");
+    if cfg!(target_os = "macos") {
+        assert_eq!(wait_for("laptop 的剪贴板", WAIT, || fsx::try_read_text(&clip)), "clip");
+        fsx::write(&clip, "");
+        // 在 box 上按的键：box 成了主的那一处，laptop 收不到这条，剪贴板不动
+        h.send("clip\n");
+        h.expect("<clipped>");
+        v.expect("<clipped>");
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(fsx::read_text(&clip), "", "不是正在操作的那一处：不写剪贴板");
+    }
+    v.send("say typed-on-the-laptop-again\n");
+    h.expect("<typed-on-the-laptop-again>");
     assert!(a.run(&["remote-list", "--local"]).out.contains("1 处接入"));
     wait_for("列表里看得到有人接着", WAIT, || asked.far(&b).concat().contains("，1 处接入"));
     // 会话里的钩子推一条通知（cca remote notify）：别的机器上接着的那一端写成 OSC 777 弹出来；这台机器上的终端不给

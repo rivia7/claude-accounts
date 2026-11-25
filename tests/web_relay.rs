@@ -1705,7 +1705,10 @@ fn the_page_in_a_browser(t: &mut Ctx) {
     };
     let shown = |key: &str| j.get(key).map_or("None".to_string(), Value::to_string);
     assert!(truthy(&j["ok"]), "{}\n页面上：{}\n控制台：{}", shown("error"), shown("dom"), shown("logs"));
-    assert_eq!(j["steps"], list!["welcome", "paired", "typed", "keybar", "compose", "menu", "reattach", "ended", "settings"]);
+    assert_eq!(
+        j["steps"],
+        list!["welcome", "paired", "typed", "clip", "keybar", "compose", "menu", "reattach", "ended", "settings"]
+    );
     assert_eq!(j["logs"], list![], "页面的控制台里不该有报错（被内容安全策略拦下的也算）");
     assert_eq!(j["codeShown"].str(), code, "输入的配对码自动分成四个一组");
     assert!(j["home"].str().contains("alice"), "{}", j["home"]);
