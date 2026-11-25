@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.2", title: "折合金额算上 Antigravity", points: [
+            .init(symbol: "dollarsign.circle",
+                  text: "用 cca 启动的 Antigravity 会话也折合成金额：Gemini 模型按 Gemini API 的标价，Claude 模型按 Anthropic 的价格。"),
+            .init(symbol: "person.crop.circle.badge.questionmark",
+                  text: "直接运行 agy 的会话、这一版以前的会话认不出是哪个账号的，算进「认不出账号」。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "Team 给的 Antigravity 账号也在各台设备之间同步；别的设备更新到这一版后，才算得上它们那边的。"),
+        ]),
         ReleaseNote(version: "3.7.1", title: "Team 的配置马上生效，服务器要更新会提示", points: [
             .init(symbol: "arrow.triangle.2.circlepath",
                   text: "后台同步到 Team 的新配置后，马上改账号表、同步路由器和内置代理；只是换了节点时直接切过去，正在用的连接不断。"),
