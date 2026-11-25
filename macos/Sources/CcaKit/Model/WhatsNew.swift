@@ -20,6 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.16", title: "远程会话更好用，Team 可以有几位管理员", points: [
+            .init(symbol: "person.2.badge.key",
+                  text: "Team 可以有几位管理员：在 Team 的设备列表里「设为管理员」，每位用自己的密钥，随时能收回。"),
+            .init(symbol: "list.bullet.rectangle",
+                  text: "远程会话列表标出会话属于哪个 Team；账号名按这台机器上的别名显示。"),
+            .init(symbol: "bell.badge",
+                  text: "远程会话里的通知也推到接着它的那台机器上。"),
+            .init(symbol: "doc.on.clipboard",
+                  text: "在终端、手机网页里接远程会话时，会话里复制的字也进这台设备的剪贴板；网页里选中即复制。"),
+            .init(symbol: "desktopcomputer",
+                  text: "总览里别的设备正在用的账号也显示在用，写出是哪台。"),
+        ]),
         ReleaseNote(version: "3.6.15", title: "Codex、Antigravity 的账号也有这些功能了", points: [
             .init(symbol: "calendar.badge.clock",
                   text: "Antigravity 也有周结算提醒：本周额度快重置、还剩不少时，提醒先用这个账号。"),
