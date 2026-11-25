@@ -809,6 +809,10 @@ ok "两个可选节点地址一样、其中一个没了：不当成改名合到�
 rm -f "$RC"; r0=$(restarts)
 out=$(run cca router sync 2>&1); rc=$?
 ok "运行配置文件被删了、账号的节点 OpenClash 的配置里也没有：重启也没用，不提重启，同步判失败" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "切换到 US-D 失败" && ! printf "%s" "$out" | grep -q "重启一次 OpenClash" && [ "$(restarts)" = "$r0" ]'
+# 节点新写进了 OpenClash 自己的配置、内核还没加载（3.7.0 的 Team 服务器更新时真实路由器上遇到的）：说清楚是新节点、要重启
+perl -pi -e 'print "  - {name: US-D, type: ss, server: 192.0.2.4, port: 8388, cipher: aes-128-gcm, password: x}\n" if /\{name: US-B, type: ss,/' "$SRC"
+out=$(run cca router sync 2>&1); rc=$?
+ok "运行配置文件被删了、账号的节点刚写进 OpenClash 的配置、内核里还没有：说是新写进去的节点、要重启才用得上，先 REJECT；非交互不重启，返回 3" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "US-D 是新写进 OpenClash 配置文件的节点，在跑的内核里还没有（重启 OpenClash 后才用得上），先改为 REJECT" && ! printf "%s" "$out" | grep -q "未能核实目标节点" && printf "%s" "$out" | grep -q "要等 OpenClash 下次重启" && [ "$(sel CCA-1)" = REJECT ] && [ "$(restarts)" = "$r0" ]'
 rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 
 fi

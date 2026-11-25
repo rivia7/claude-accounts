@@ -812,6 +812,11 @@ select_all() {
 			FAILED="${FAILED}${node}${TAB}"
 			ctl PUT "/proxies/$g" '{"name":"REJECT"}'
 			rc=2
+		elif [ "$sa_put" = 400 ] && in_source "$node"; then   # 运行配置文件不见了时 in_group 没得比：看生成它的那份配置
+			echo "${g} 切换到 ${node} 失败：${node} 是新写进 ${NAME} 配置文件的节点，在跑的内核里还没有（重启 ${NAME} 后才用得上），先改为 REJECT"
+			FAILED="${FAILED}${node}${TAB}"
+			ctl PUT "/proxies/$g" '{"name":"REJECT"}'
+			[ $rc -eq 0 ] && rc=1
 		else
 			echo "${g} 切换到 ${node} 失败（HTTP ${CODE}，未能核实目标节点），改为 REJECT"
 			FAILED="${FAILED}${node}${TAB}"
@@ -1048,7 +1053,11 @@ apply_now() {
 				1) in_source "$FAILED" || return 1 ;;   # 切不过去的节点生成运行配置的那份配置里也没有：重启也没用
 			esac
 		fi
-		restart_now "${NAME} 的运行配置文件不见了，要建立或调整账号端口池"
+		if fill_waiting; then   # 原因是新写进去的节点：照它说（运行配置文件不见了只是没法热加载）
+			restart_now "${NAME} 的配置文件里新写了$(fill_who)，要用上"
+		else
+			restart_now "${NAME} 的运行配置文件不见了，要建立或调整账号端口池"
+		fi
 		return $?
 	fi
 	if ! running; then
@@ -7211,12 +7220,12 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	# 这个 Team 的账号的远程会话（cca remote）经它中转：数据端口是另一个；手机的网页端又是一个，证书机构验证时连 80 端口。云服务商的安全组里都要放行
 	wport=${web%/}; wport=${wport##*:}
 	if [ -n "$web" ]; then
-		say "  「${name}」的账号的远程会话经这台服务器中转（数据端口 ${relay}），手机在浏览器里接入用网页端（端口 ${wport}）：云服务商的安全组里要放行 TCP ${port}、${relay}、${wport} 和 80（证书机构验证用）"
+		say "  「${name}」的账号的远程会话经这台服务器中转（数据端口 ${relay}，iPhone 上的 cca App 也走它），以前配的手机在浏览器里接入用网页端（端口 ${wport}）：云服务商的安全组里要放行 TCP ${port}、${relay}、${wport} 和 80（证书机构验证用）"
 	elif [ -n "${relay:-}" ]; then
-		say "  「${name}」的账号的远程会话经这台服务器中转（数据端口 ${relay}）：云服务商的安全组里要放行 TCP ${port} 和 ${relay}"
+		say "  「${name}」的账号的远程会话经这台服务器中转（数据端口 ${relay}，iPhone 上的 cca App 也走它）：云服务商的安全组里要放行 TCP ${port} 和 ${relay}"
 	fi
 	if [ -n "$web" ] && [ "$web_cert" = ok ]; then
-		say "  手机的网页端：${web}（证书是 Let's Encrypt 签的，到期前自己续；手机配对：cca remote pair --web）"
+		say "  手机的网页端：${web}（证书是 Let's Encrypt 签的，到期前自己续；以前配的手机用它。新配手机用 iPhone 上的 cca App：cca remote pair --web）"
 		webmsg="；手机的网页端：${web}"
 	elif [ -n "$web" ]; then
 		warn "手机的网页端（${web}）的证书还没拿到：证书机构要从公网连这台服务器的 80 端口（安全组里放行 TCP 80）；服务器上的证书助手过一会儿自己再试，拿到了就能用"
