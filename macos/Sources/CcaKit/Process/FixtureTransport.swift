@@ -195,6 +195,8 @@ struct FixtureTransport: Transport {
             return json("update.json")
         case ("clients", "status"), ("clients", "check"):
             return json("client_updates.json")
+        case ("devices", "--json"):   // 不写账号：全部（演示数据只有一个账号）
+            return json("devices.json")
         case ("devices", let key):
             guard let d = read("devices.json") else { return missing("devices.json") }
             return CcaResponse(exitCode: 0, stdout: Self.devicesFor(key, d), stderr: Data(), events: [])

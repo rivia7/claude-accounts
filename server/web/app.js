@@ -308,6 +308,9 @@ function press(el, fn, repeat) {
   return el;
 }
 
+/** 敲键、点屏幕以后多久里会话写剪贴板（OSC 52）算数（毫秒；和 cca remote attach 的 CLIP_AFTER_INPUT 一样） */
+const CLIP_AFTER_INPUT = 5000;
+
 const CLOSED = {
   gone: '这个会话不在了：它结束了，或者那台电脑不再让这台设备接入。',
   unpaired: '配对没有了：电脑那边取消了。要用得重新配对。',
@@ -361,6 +364,21 @@ function terminal(peer, session) {
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(screen);
+
+  // 剪贴板：用户选中的字马上放进这台设备的剪贴板（选中即复制）；会话里的程序写剪贴板（OSC 52，Claude Code 的「复制」用它）也放进来，
+  // 但只在刚敲过键、点过屏幕的几秒里算数——不然那台电脑的输出能在背后把这边的剪贴板换掉。读剪贴板（?）不给。浏览器不让写就算了
+  let typed = 0;
+  const toClipboard = (text) => { if (text) navigator.clipboard?.writeText(text).catch(() => {}); };
+  term.onSelectionChange(() => toClipboard(term.getSelection()));
+  term.parser.registerOscHandler(52, (data) => {
+    const b64 = data.slice(data.indexOf(';') + 1);
+    if (data.indexOf(';') < 0 || !b64 || b64 === '?' || Date.now() - typed > CLIP_AFTER_INPUT) return true;
+    try {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      if (bytes.length <= 1 << 20) toClipboard(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    } catch { /* 不是 base64、不是 UTF-8：不要 */ }
+    return true;
+  });
 
   // 键盘出来时页面看得见的那一块变矮（visualViewport）：整屏跟着它，按键条贴在键盘上面，终端重新算行数
   let fitting = 0;
@@ -436,9 +454,10 @@ function terminal(peer, session) {
       else if (d === ' ') d = '\0';
       arm(false);
     }
+    typed = Date.now();
     att.input(d);
   });
-  term.onBinary((d) => att.input(Uint8Array.from(d, (ch) => ch.charCodeAt(0) & 0xff)));
+  term.onBinary((d) => (typed = Date.now(), att.input(Uint8Array.from(d, (ch) => ch.charCodeAt(0) & 0xff))));
   term.onResize(({ cols, rows }) => att.resize(cols, rows));
 
   if (!readOnly) {

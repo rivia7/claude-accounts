@@ -47,6 +47,7 @@ if fullMode {
     await sharingPageTests()
     await teamModelTests()
     await devicesTests()
+    await elsewhereTests()
     remoteProtocolTests()
     await remoteFlowTests()
     await remoteModelTests()

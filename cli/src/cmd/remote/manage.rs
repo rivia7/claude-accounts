@@ -242,7 +242,8 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
             let team = all.iter().find(|p| p.pid == f.pid).map_or(V::None, |p| V::from(p.hub.team()));
             sessions.push(dict! {
                 "id" => f.sid.as_str(), "short" => &f.sid[..8], "where" => "peer", "peer" => f.pid.as_str(),
-                "machine" => f.peer.as_str(), "tool" => f.tool.as_str(), "name" => f.name.as_str(), "cwd" => f.cwd.as_str(),
+                "machine" => f.peer.as_str(), "tool" => f.tool.as_str(), "name" => f.name.as_str(), "host_name" => f.host_name.as_str(),
+                "cwd" => f.cwd.as_str(),
                 "since_epoch" => if f.since > 0.0 { V::from(f.since) } else { V::None }, "viewers" => f.viewers,
                 "local_terminal" => V::None,
                 "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" },

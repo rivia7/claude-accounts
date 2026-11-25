@@ -74,8 +74,10 @@ struct RemoteSession: Decodable, Sendable, Equatable, Identifiable {
     var peer: String?
     var machine: String?
     var tool: ToolID?
-    /// 账号的名字（别名；没起别名的是邮箱）
+    /// 账号的名字（别名；没起别名的是邮箱）。别的机器上的会话：这台 Mac 上也有这个账号时是这台 Mac 上的别名（3.6.16 起）
     var name: String
+    /// 别的机器上的会话：那台机器说的名字（它那里的别名）。这台 Mac 上的、旧版 cca 给的是 nil
+    var hostName: String?
     var cwd: String
     var sinceEpoch: Double?
     /// 现在有几处接着（不算启动它的那个终端）
@@ -94,6 +96,7 @@ struct RemoteSession: Decodable, Sendable, Equatable, Identifiable {
         case place = "where"
         case sinceEpoch = "since_epoch"
         case localTerminal = "local_terminal"
+        case hostName = "host_name"
     }
 
     init(from decoder: Decoder) throws {
@@ -108,6 +111,7 @@ struct RemoteSession: Decodable, Sendable, Equatable, Identifiable {
         machine = c.string(.machine)
         tool = c.lossy(ToolID.self, .tool)
         name = c.string(.name) ?? ""
+        hostName = c.string(.hostName).flatMap { $0.isEmpty ? nil : $0 }
         cwd = c.string(.cwd) ?? ""
         sinceEpoch = c.double(.sinceEpoch)
         viewers = max(c.int(.viewers) ?? 0, 0)

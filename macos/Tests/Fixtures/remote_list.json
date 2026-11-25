@@ -42,6 +42,7 @@
       "machine": "office-linux",
       "tool": "claude",
       "name": "工作",
+      "host_name": "主力",
       "cwd": "~/srv/api",
       "since_epoch": 1794034020,
       "viewers": 1,

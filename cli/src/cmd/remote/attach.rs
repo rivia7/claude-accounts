@@ -243,6 +243,86 @@ struct Side {
 /// 一次最多攒几条还没写出去的通知
 const NOTES_HELD: usize = 4;
 
+/// 会话里的程序写剪贴板（OSC 52，Claude Code 的「复制」、选中即复制用它）：别的机器上的会话，这边自己也放进这台机器的剪贴板
+/// （pbcopy），不靠终端认不认 OSC 52（系统自带的“终端”不认）。宿主只把它给主的那个终端（最后按过键的）；这边再要求刚按过键、点过鼠标
+/// （`CLIP_AFTER_INPUT` 秒内）——不然那台机器上的输出能在背后把这台机器的剪贴板换掉（换成一条等着被粘贴的命令）。读剪贴板（`?`）不给
+#[derive(Default)]
+struct Clip {
+    /// 正在攒的那一条（还没结束）
+    buf: Option<Vec<u8>>,
+    /// 上一次往会话里送按键的时候
+    typed: f64,
+}
+
+/// 按键、点鼠标以后多久里会话写的剪贴板算数
+const CLIP_AFTER_INPUT: f64 = 5.0;
+/// 写进剪贴板的最多多少（解出来的字节）
+const CLIP_MAX: usize = 1 << 20;
+
+impl Clip {
+    /// 会话的输出里的一段（`Scanner` 分好的）；一条写剪贴板的序列完了、算数时给出要放进剪贴板的字
+    fn seg(&mut self, class: Class, part: Part, bytes: &[u8], now: f64) -> Option<String> {
+        if class != Class::Clip {
+            // 自己没带结束符的那一条，是被这一段开头的 ESC 结束的
+            let b = self.buf.take()?;
+            return self.done(&b, now);
+        }
+        if part != Part::More {
+            self.buf = Some(Vec::new());
+        }
+        let b = self.buf.as_mut()?;
+        if b.len() + bytes.len() > CLIP_MAX * 4 / 3 + 64 {
+            self.buf = None; // 太长：不要了
+            return None;
+        }
+        b.extend_from_slice(bytes);
+        if b.ends_with(b"\x07") || b.ends_with(b"\x1b\\") || b.ends_with(b"\x9c") {
+            let b = self.buf.take()?;
+            return self.done(&b, now);
+        }
+        None
+    }
+
+    fn done(&self, seq: &[u8], now: f64) -> Option<String> {
+        if now - self.typed > CLIP_AFTER_INPUT {
+            return None;
+        }
+        clip_text(seq)
+    }
+}
+
+/// 放进这台机器的剪贴板（macOS 的 pbcopy；别的系统靠终端自己认 OSC 52）。另起一个线程：不让会话的输出等它
+fn copy_here(text: String) {
+    if cfg!(target_os = "macos") {
+        std::thread::spawn(move || {
+            use crate::py::proc::{Cmd, Out};
+            let _ = Cmd::new(["pbcopy"]).input(text.into_bytes()).stdout(Out::Null).stderr(Out::Null).timeout(10.0).run();
+        });
+    }
+}
+
+/// 一条 OSC 52 里要写进剪贴板的字：`ESC ] 52 ; 哪个剪贴板 ; base64 结束符`。问剪贴板里有什么（`?`）、解不开、不是 UTF-8、空的、太长的都不算
+fn clip_text(seq: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(seq).ok()?;
+    let s = s.strip_prefix("\x1b]")?;
+    let s = s.strip_suffix('\x07').or_else(|| s.strip_suffix("\x1b\\")).unwrap_or(s);
+    let mut it = s.splitn(3, ';');
+    let num = it.next()?;
+    if num.trim_start_matches('0') != "52" {
+        return None;
+    }
+    let _which = it.next()?;
+    let data = it.next()?;
+    if data == "?" || data.is_empty() {
+        return None;
+    }
+    let raw = crate::py::base64::b64decode(data, true).ok()?;
+    if raw.is_empty() || raw.len() > CLIP_MAX {
+        return None;
+    }
+    String::from_utf8(raw).ok()
+}
+
 /// 通知写成终端认的序列：iTerm2 认 OSC 9（只有一段字），别的（Ghostty、WezTerm、kitty 的新版、cca App 里的终端……）
 /// 认 OSC 777 的 notify（标题、正文两段）。字已经过了 `Note::parse`（没有控制字符）；分号是 OSC 777 的分隔，标题里的换成全角的
 pub fn note_seq(n: &Note, term_program: &str) -> Vec<u8> {
@@ -589,6 +669,7 @@ fn attached(side: &mut Side, wire: &mut Wire) -> End {
     let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     let (tty_fd, wake, read_only) = (*tty_fd, *wake, *read_only);
     let mut buf = vec![0u8; 4096];
+    let mut clip = Clip::default();
     'run: loop {
         let mut fds = [
             libc::pollfd { fd: wake, events: libc::POLLIN, revents: 0 },
@@ -637,6 +718,7 @@ fn attached(side: &mut Side, wire: &mut Wire) -> End {
                     }
                     if !send.is_empty() && !read_only {
                         wire.send(&local::frame(local::INPUT, &send));
+                        clip.typed = monotonic();
                     }
                 }
                 None => {}
@@ -654,6 +736,11 @@ fn attached(side: &mut Side, wire: &mut Wire) -> End {
                         scan.feed(&payload, &mut |seg, bytes| {
                             if seg.class == Class::Seq && seg.part == Part::Whole {
                                 modes.observe(bytes);
+                            }
+                            if far {
+                                if let Some(t) = clip.seg(seg.class, seg.part, bytes, monotonic()) {
+                                    copy_here(t);
+                                }
                             }
                         });
                         to_tty.extend(payload);
@@ -734,6 +821,29 @@ mod note_tests {
         assert!(!mid_char(&q(b"")) && !mid_char(&q(b"abc")) && !mid_char(&q("中".as_bytes())));
         assert!(mid_char(&q(&"中".as_bytes()[..2])) && mid_char(&q(&"中".as_bytes()[..1])));
         assert!(mid_char(&q(&"😀".as_bytes()[..3])) && !mid_char(&q("a😀".as_bytes())));
+    }
+
+    #[test]
+    fn clipboard_writes_from_the_session() {
+        use super::{clip_text, Clip, CLIP_AFTER_INPUT};
+        use crate::cmd::remote::vt::{Class, Part};
+        assert_eq!(clip_text(b"\x1b]52;c;aGk=\x07").as_deref(), Some("hi"));
+        assert_eq!(clip_text("\x1b]52;c;5L2g5aW9\x1b\\".as_bytes()).as_deref(), Some("你好"));
+        assert_eq!(clip_text(b"\x1b]052;;aGk=\x07").as_deref(), Some("hi"));
+        assert_eq!(clip_text(b"\x1b]52;c;aGk="), Some("hi".into()), "没带结束符（被下一个 ESC 结束）的也认");
+        for bad in [&b"\x1b]52;c;?\x07"[..], b"\x1b]52;c;\x07", b"\x1b]52;c;!!!\x07", b"\x1b]53;c;aGk=\x07", b"\x1b]52;c;/w==\x07"]
+        {
+            assert_eq!(clip_text(bad), None, "{:?}", String::from_utf8_lossy(bad));
+        }
+        // 刚按过键：给；很久没按：不给（那台机器在背后写的）
+        let mut c = Clip { typed: 100.0, ..Default::default() };
+        assert_eq!(c.seg(Class::Clip, Part::Whole, b"\x1b]52;c;aGk=\x07", 101.0).as_deref(), Some("hi"));
+        assert_eq!(c.seg(Class::Clip, Part::Whole, b"\x1b]52;c;aGk=\x07", 100.0 + CLIP_AFTER_INPUT + 1.0), None);
+        // 分成几截来的、没带结束符被下一段结束的
+        assert_eq!(c.seg(Class::Clip, Part::Head, b"\x1b]52;c;5L2", 101.0), None);
+        assert_eq!(c.seg(Class::Clip, Part::More, b"g5aW9", 101.0), None);
+        assert_eq!(c.seg(Class::Text, Part::Whole, b"x", 101.0).as_deref(), Some("你好"));
+        assert_eq!(c.seg(Class::Text, Part::Whole, b"x", 101.0), None, "只给一次");
     }
 
     #[test]

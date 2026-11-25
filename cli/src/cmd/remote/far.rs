@@ -6,12 +6,16 @@ use super::local::Meta;
 use super::peers::{self, Incoming, Peer};
 use super::relay::{self, Fault, Server};
 use crate::cmd::hub::HubKind;
+use crate::cmd::presence::presence_aid;
 use crate::cmd::settings::home_tilde;
+use crate::core::model::parse_key;
+use crate::core::tool::tools;
 use crate::dict;
+use crate::py::fs::load_quiet;
 use crate::py::obj::{Dict, List};
 use crate::py::time::strftime_local;
 use crate::py::R;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// 别的机器上的一个会话
 #[derive(Clone, Debug)]
@@ -22,7 +26,12 @@ pub struct Far {
     /// 那台机器的名字（配对时记下的）
     pub peer: String,
     pub tool: String,
+    /// 账号的名字：这台机器上也有这个账号（`aid` 对得上）时是这台机器上的别名，否则是那台机器说的
     pub name: String,
+    /// 那台机器说的名字（它那里的别名）
+    pub host_name: String,
+    /// 那台机器给的账号摘要（`presence_aid`，用这个配对的 Team 的盐算的；旧版的 cca 不给：空的）
+    pub aid: String,
     pub cwd: String,
     pub since: f64,
     pub viewers: i64,
@@ -60,13 +69,47 @@ fn sane_time(t: f64) -> f64 {
     }
 }
 
-/// 这台机器上的会话给一个配对看的说明。账号只给短名字（别名；没起别名的给邮箱 @ 前面那一截），不给邮箱；各项和显示时一样限制长度
-/// （封好的密文太长的话服务器不收，整条说明都发不出去）
-pub fn dir_doc(meta: &Meta, access: Incoming) -> Dict {
-    dict! {
+/// 一个 Team 的盐（设备统计里认账号用的那个，Team 里的设备都有）；这台设备没在这个 Team 里、还没同步到配置时没有
+pub fn team_salt(hub: HubKind) -> Option<String> {
+    let id = hub.team();
+    crate::cmd::team::hub_cfgs().into_iter().find(|(t, _)| *t == id).map(|(_, c)| c.at("salt").py_str()).filter(|s| !s.is_empty())
+}
+
+/// 账号摘要（和设备统计的一样：同一个 Team 里的设备各自算得出来，不知道邮箱的算不出邮箱）；没有邮箱的账号没有
+fn aid_of(salt: &str, tool: &str, key: &str) -> Option<String> {
+    let email = parse_key(key).1;
+    if email.is_empty() {
+        return None;
+    }
+    presence_aid(salt, tool, &email).ok()
+}
+
+/// 这台机器上的账号：(工具, 账号摘要) → 名字（别名；没起别名的是邮箱 @ 前面那一截，和 dir_doc 给的一样短）
+fn local_names(salt: &str) -> HashMap<(String, String), String> {
+    let mut out = HashMap::new();
+    for t in tools() {
+        let Some(table) = load_quiet(&t.table).and_then(|v| v.as_dict()) else { continue };
+        for (key, _) in table.items() {
+            let key = key.to_string();
+            if let Some(aid) = aid_of(salt, t.name, &key) {
+                out.insert((t.name.to_string(), aid), short_name(&crate::core::model::name_of(&key)).to_string());
+            }
+        }
+    }
+    out
+}
+
+/// 这台机器上的会话给一个配对看的说明。账号只给短名字（别名；没起别名的给邮箱 @ 前面那一截）和账号摘要（`salt`：这个配对的 Team 的盐；
+/// 接入方用它认出自己那里的同一个账号、显示自己起的别名），不给邮箱；各项和显示时一样限制长度（封好的密文太长的话服务器不收，整条说明都发不出去）
+pub fn dir_doc(meta: &Meta, access: Incoming, salt: Option<&str>) -> Dict {
+    let d = dict! {
         "v" => 1, "machine" => peers::machine_name(), "tool" => clean(&meta.tool, 16), "name" => clean(short_name(&meta.name), 64),
         "cwd" => clean(&home_tilde(&meta.cwd), 200), "since" => meta.since, "access" => access.word()
+    };
+    if let Some(aid) = salt.and_then(|s| aid_of(s, &meta.tool, &meta.key)) {
+        d.set("aid", aid);
     }
+    d
 }
 
 /// 列表里的一行（和这台机器上的会话一个样子，最后说在哪台机器上）
@@ -116,12 +159,15 @@ pub fn fetch(srv: &Server, peers: &[Peer], timeout: i64) -> R<Result<Listing, Fa
             let Some(sid) = r.str("sid").filter(|s| peers::hex32(s)) else { continue };
             let Some(doc) = r.get("blob").and_then(|b| crypto::dir_open(&secret, &peer.pid, &sid, &b)) else { continue };
             let text = |k: &str, max: usize| doc.str(k).map(|s| clean(&s, max)).unwrap_or_default();
+            let name = text("name", 64);
             sessions.push(Far {
                 sid: sid.to_string(),
                 pid: peer.pid.clone(),
                 peer: peer.name.clone(),
                 tool: text("tool", 16),
-                name: text("name", 64),
+                host_name: name.clone(),
+                name,
+                aid: doc.str("aid").filter(|a| peers::hex32(a)).map(|a| a.to_string()).unwrap_or_default(),
                 cwd: text("cwd", 200),
                 since: sane_time(doc.at("since").as_num().unwrap_or(0.0)),
                 viewers: r.at("viewers").as_int().unwrap_or(0).clamp(0, 99),
@@ -164,7 +210,13 @@ pub fn fetch_all(peers: &[Peer], timeout: i64) -> R<Seen> {
             }
         };
         match fetch(&srv, &group, timeout)? {
-            Ok(l) => {
+            Ok(mut l) => {
+                // 账号的名字以这台机器为准：这台机器上也有这个账号（同一个 Team 的盐算出来的摘要对得上）就用这里的别名
+                if l.sessions.iter().any(|f| !f.aid.is_empty()) {
+                    if let Some(salt) = team_salt(hub) {
+                        rename(&mut l.sessions, &local_names(&salt));
+                    }
+                }
                 seen.sessions.extend(l.sessions);
                 seen.known.extend(l.known);
                 seen.asked.extend(group.iter().map(|p| p.pid.clone()));
@@ -174,6 +226,15 @@ pub fn fetch_all(peers: &[Peer], timeout: i64) -> R<Seen> {
     }
     seen.sessions.sort_by(|a, b| a.since.total_cmp(&b.since));
     Ok(seen)
+}
+
+/// 认得出账号的会话换成这台机器上的名字
+fn rename(sessions: &mut [Far], names: &HashMap<(String, String), String>) {
+    for f in sessions {
+        if let Some(n) = names.get(&(f.tool.clone(), f.aid.clone())) {
+            f.name = n.clone();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -192,6 +253,8 @@ mod tests {
             peer: "服务器".into(),
             tool: "claude".into(),
             name: "工作".into(),
+            host_name: "工作".into(),
+            aid: String::new(),
             cwd: "~/项目".into(),
             since: 0.0,
             viewers: 2,
@@ -226,14 +289,61 @@ mod tests {
             cwd: format!("{}/proj", crate::core::base::HOME.as_str()),
             since: 1794000000.0,
         };
-        let d = dir_doc(&meta, Incoming::View);
+        let d = dir_doc(&meta, Incoming::View, None);
         assert_eq!(d.str("cwd").as_deref(), Some("~/proj"));
+        assert!(d.get("aid").is_none(), "没有 Team 的盐：不给摘要");
         assert_eq!(d.str("access").as_deref(), Some("view"));
         assert!(!crate::py::json::dumps(&crate::py::obj::V::Dict(d), crate::py::json::LINE).contains("example.com"));
         // 没起别名的账号，名字就是邮箱：只给 @ 前面那一截
-        let d = dir_doc(&Meta { name: "alice@example.com".into(), key: "alice@example.com".into(), ..meta }, Incoming::Control);
+        let d = dir_doc(
+            &Meta { name: "alice@example.com".into(), key: "alice@example.com".into(), ..meta.clone() },
+            Incoming::Control,
+            None,
+        );
         assert_eq!(d.str("name").as_deref(), Some("alice"));
         assert!(!crate::py::json::dumps(&crate::py::obj::V::Dict(d), crate::py::json::LINE).contains("example.com"));
+        // 有 Team 的盐：给账号摘要（和设备统计的一样），还是不给邮箱
+        let salt = "ab".repeat(16);
+        let d = dir_doc(&meta, Incoming::Control, Some(&salt));
+        let aid = presence_aid(&salt, "codex", "alice@example.com").unwrap();
+        assert_eq!(d.str("aid").as_deref(), Some(aid.as_str()));
+        assert!(!crate::py::json::dumps(&crate::py::obj::V::Dict(d), crate::py::json::LINE).contains("example.com"));
         assert_eq!((short_name("工作"), short_name("@x"), short_name("")), ("工作", "@x", ""));
+    }
+
+    #[test]
+    fn the_name_on_this_machine_wins() {
+        let salt = "cd".repeat(16);
+        let aid = aid_of(&salt, "claude", "主力(alice@example.com)").unwrap();
+        assert_eq!(aid_of(&salt, "claude", "ALICE@example.com"), Some(aid.clone()), "邮箱不分大小写");
+        assert_eq!(aid_of(&salt, "claude", "只有别名"), None);
+        let far = |aid: &str, tool: &str| Far {
+            sid: "0123456789abcdef0123456789abcdef".into(),
+            pid: "ab".repeat(16),
+            peer: "Mac mini".into(),
+            tool: tool.into(),
+            name: "那边的名字".into(),
+            host_name: "那边的名字".into(),
+            aid: aid.into(),
+            cwd: "~".into(),
+            since: 0.0,
+            viewers: 0,
+            online: true,
+            view_only: false,
+        };
+        let names = HashMap::from([(("claude".to_string(), aid.clone()), "这边的名字".to_string())]);
+        let mut s = vec![far(&aid, "claude"), far(&aid, "codex"), far("", "claude"), far(&"0".repeat(32), "claude")];
+        rename(&mut s, &names);
+        let got: Vec<(&str, &str)> = s.iter().map(|f| (f.name.as_str(), f.host_name.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                ("这边的名字", "那边的名字"),
+                ("那边的名字", "那边的名字"),
+                ("那边的名字", "那边的名字"),
+                ("那边的名字", "那边的名字")
+            ],
+            "只有同一个工具、摘要对得上的才换"
+        );
     }
 }

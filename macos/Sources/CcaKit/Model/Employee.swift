@@ -70,8 +70,10 @@ struct Employee: Equatable, Sendable, Identifiable {
     var sessions: Int { account.cliSessions }
     /// 最早那个命令行会话开始的时间
     var since: Double? { account.cliSince }
-    /// 在用（App 开着或者命令行里有会话；生病、休息时也照样记得）
+    /// 在用（App 开着或者命令行里有会话；生病、休息时也照样记得）：这台 Mac 上的
     var isWorking: Bool { account.isWorking }
+    /// 别的设备上在用（它们的名字，cca 排好的先后）：这台 Mac 上没在用、别的设备上在用时头条也是在用，说是哪台（「在「Mac-mini」上在用」）
+    var elsewhere: [String] = []
     /// 犯困（工位上的人头一点一点、头顶一个快没电的电池在闪）：额度快用完了（小标记里的 nearLimit）、头条是在用或空闲；
     /// 或者额度用完了、桌面 App / 命令行还开着（在用，额度用完跟在后面：不然从 92% 到用完，人反倒精神了）。
     /// 头条是别的（没登录、登错号、线路有问题、用完了趴着睡）时照那件事画
@@ -89,7 +91,8 @@ struct Employee: Equatable, Sendable, Identifiable {
         a.isAPI ? .contractors : .official(a.tool)
     }
 
-    static func make(_ a: Account, usage: UsageEntry?, live: LiveSlot?, now: Double) -> Employee {
+    /// elsewhere：别的设备上在用（`cca devices --json`，PROTOCOL 3.4：别的设备的 `state` 是 `in_use`），AppModel.elsewhere 给的
+    static func make(_ a: Account, usage: UsageEntry?, live: LiveSlot?, now: Double, elsewhere: [String] = []) -> Employee {
         var mood: Mood?   // 有问题时是哪一个（trouble）
         var flags: [Flag] = []
         var useFirst: UseFirst?
@@ -116,7 +119,10 @@ struct Employee: Equatable, Sendable, Identifiable {
             }
         }
         // 在用就是在用（桌面 App 开着、命令行里有会话）：有问题也不改，问题跟在后面
-        return Employee(account: a, mood: a.isWorking ? .working : mood ?? .idle, flags: flags, useFirst: useFirst, trouble: mood)
+        var e = Employee(account: a, mood: a.isWorking || !elsewhere.isEmpty ? .working : mood ?? .idle, flags: flags, useFirst: useFirst,
+                         trouble: mood)
+        e.elsewhere = elsewhere
+        return e
     }
 }
 
@@ -186,12 +192,12 @@ struct Office: Equatable, Sendable {
 
     /// Claude 组一直有（空的也画出来，好让人知道从哪里添加）；ChatGPT、Antigravity 组在启用了这个工具时有；外包有人才有。
     static func make(tools: [ToolState], enabled: [ToolID], usage: (Account) -> UsageEntry?,
-                     live: (AccountRef) -> LiveSlot?, now: Double,
+                     live: (AccountRef) -> LiveSlot?, now: Double, elsewhere: (AccountRef) -> [String] = { _ in [] },
                      arrange: (Employee.Department, [Employee]) -> [Employee] = { $1 }) -> Office {
         let on = Set(enabled).union([.claude])
         let people = tools.filter { on.contains($0.id) }
             .flatMap(\.accounts)
-            .map { Employee.make($0, usage: usage($0), live: live($0.ref), now: now) }
+            .map { Employee.make($0, usage: usage($0), live: live($0.ref), now: now, elsewhere: elsewhere($0.ref)) }
         let byDept = Dictionary(grouping: people, by: \.department)
         var rooms = [Room(department: .claude, people: arrange(.claude, byDept[.claude] ?? []))]
         for t in ToolID.allKnown where t != .claude && on.contains(t) {

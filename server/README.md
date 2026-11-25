@@ -295,7 +295,8 @@ Team 的安装脚本默认开着（见「Team 的同步服务器 → 部署」�
 ### 会话的说明
 
 宿主把每个会话的说明封给各个允许接入的配对：`{"v":1,"machine":机器名,"tool":工具,"name":账号的短名字,"cwd":文件夹,"since":开始的时间,
-"access":"control" | "view"}`（没有邮箱），空格补齐到 256 字节的整数倍，密钥 `Kd = HMAC(P, "cca-remote/v1/dir")`、`HMAC(Kd, "enc")`、
+"access":"control" | "view","aid":账号摘要}`（没有邮箱；`aid` 是 3.6.16 起加的，可以没有：和设备统计里的一样，`HMAC(这个配对的 Team 的盐, 工具 "\0" 小写的邮箱)` 的前 32 个十六进制字符，
+接入方用同一个 Team 的盐算自己的账号，对得上的显示自己那里的别名），空格补齐到 256 字节的整数倍，密钥 `Kd = HMAC(P, "cca-remote/v1/dir")`、`HMAC(Kd, "enc")`、
 `HMAC(Kd, "mac")`，认证 `HMAC(mac, "cca-remote-dir\0" pid "\0" sid "\0" nonce 密文)`（挪不到别的会话、别的配对上）。
 
 ### 数据端口

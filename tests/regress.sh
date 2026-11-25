@@ -3036,8 +3036,10 @@ waitmark "$AD"; m1=$(marks "$AD")
 dwait "$ME:in_use:1"; rc=$?; a1=$(apid)
 mkdir -p "$T/guifx3"; cp "$T/dv.json" "$T/guifx3/devices.json"   # 契约测试解码的是 dwait 看到在用的那一份
 out=$(run cca devices 2>&1)   # 看到在用就马上问：过了 STTL 秒（下一次心跳之前）服务器就算离线了
+dvall=$(run cca devices --json 2>/dev/null); dvrc=$?   # App 的总览不写账号问全部（标出别的设备上在用的）
 ok "Team 给的账号开着会话：后台的上报进程马上报给服务器（在用、1 个会话、这台 Mac 排第一）；上报进程只有一个，后台优先级" '[ $rc -eq 0 ] && alive "$a1" && ps -o command= -p "$a1" | grep -q presence-agent && [ "$(ps -o pri= -p "$a1" | tr -d " ")" -le 20 ] && dv | jok "(lambda x: x[\"me\"] is True and x[\"since_epoch\"] and x[\"last_used_epoch\"] and x[\"last_active_epoch\"])(d[\"accounts\"][0][\"devices\"][0])"'
 ok "cca devices（给人看的）：每个 Team 给的账号连着哪些设备，这台 Mac 标出来" 'printf "%s" "$out" | grep -q "Claude 账号连着的设备" && printf "%s" "$out" | grep -qF "${ME}（这台 Mac）  在用 · 命令行里 1 个会话"'
+ok "cca devices --json 不写账号（App 的总览用它）：经服务器同步的账号都在，这台 Mac 在用" '[ $dvrc -eq 0 ] && printf "%s" "$dvall" | jok "d[\"kind\"] == \"devices\" and any(a[\"key\"] == \"alice@example.com\" and a[\"devices\"][0][\"me\"] is True and a[\"devices\"][0][\"state\"] == \"in_use\" for a in d[\"accounts\"])"'
 touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS2=$!
 waitmark "$AD" 2
 dwait "$ME:in_use:2"; rc=$?

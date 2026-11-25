@@ -113,6 +113,8 @@ func remoteProtocolTests() {
     check("3.6.0 以前的 cca：维护者的那台中转服务器去掉（不在它上面配对、不写 --maintainer）；经它配的配对照样列出来，不标是哪个 Team 的",
           before?.relayHubs.map(\.id) == [lab] && before?.relayHubs.map(\.arguments) == [["--team", lab]] && before?.peers.map(\.team) == [nil, lab])
     check("按 id 找会话", doc.session(far[0].id)?.machine == "office-linux" && doc.session("nope") == nil)
+    check("别的机器上的会话：名字以这台 Mac 为准，那台机器说的另给", far[0].name == "工作" && far[0].hostName == "主力"
+          && doc.sessions.filter(\.isLocal).allSatisfy { $0.hostName == nil })
 
     let problem = #"{"version":1,"kind":"remote","generated_epoch":1,"enabled":false,"relay":{"available":false,"message":"先加入或者新建一个 Team：远程会话经 Team 的服务器中转"},"sessions":[{"id":"aa","where":"zz_new","state":"zz","access":"zz"},{"short":"没有 id"}],"peers":[{"id":"bb","incoming":"zz"}],"errors":[{"code":"relay_off","message":"先加入或者新建一个 Team：远程会话经 Team 的服务器中转"},{"code":"zz_new","message":"别的"}]}"#
     let pd = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(problem.utf8))

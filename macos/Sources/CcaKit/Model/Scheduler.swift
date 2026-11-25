@@ -101,6 +101,7 @@ enum CostPolling {
 /// - 用量、网络出口和折合金额：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling、CostPolling）；
 /// - 分流页打开时每 60 秒查一次 live；
 /// - 账号页的「设备」看得见时马上查一次，之后每 60 秒一次（问 Team 的服务器，很轻）；
+/// - 总览里别的设备上在用的账号：每 2 分钟看一眼，看不见时 10 分钟查一次，走开了不查（问 Team 的服务器，很轻）；
 /// - 「远程会话」一页看得见时马上查一次，之后每 15 秒一次（配对过别的机器时要问 Team 的服务器；服务器给每台设备限了流）；
 /// - 客户端更新：睡到 cca 说的下一次检查时间（App 隐藏时也一样），不空转；定时器自己不发安装命令（允许自动更新时由 cca 在检查里顺带装上）。
 @MainActor
@@ -120,6 +121,25 @@ final class Scheduler {
     /// 「远程会话」一页看得见时隔多久查一次
     var remoteInterval: TimeInterval = 15
     var onRemoteTick: (() -> Void)?
+    /// 总览标出别的设备上在用的账号：隔多久看一眼（到没到该查由 AppModel 定：看不见时放慢、走开了不查）
+    var elsewhereInterval: TimeInterval = 120
+    var onElsewhereTick: (() -> Void)?
+    private var elsewhereLoop: Task<Void, Never>?
+    var elsewherePollingRunning: Bool { elsewhereLoop != nil }
+
+    /// 连上 cca 以后一直开着：马上看一次，之后每 elsewhereInterval 秒一次
+    func updateElsewherePolling(enabled: Bool) {
+        if enabled {
+            if elsewhereLoop == nil {
+                elsewhereLoop = loop(every: { [weak self] in self?.elsewhereInterval ?? 120 }, immediately: true) { [weak self] in
+                    self?.onElsewhereTick?()
+                }
+            }
+        } else {
+            elsewhereLoop?.cancel()
+            elsewhereLoop = nil
+        }
+    }
 
     private var remoteLoop: Task<Void, Never>?
     private var usageLoop: Task<Void, Never>?

@@ -735,11 +735,24 @@ enum Texts {
 
     /// 工位下面那一行：现在怎么样。brief：工位上的短写法（在忙什么看左上角的小图标，整句在悬停提示和读屏里）。
     /// 在用时有问题，问题跟在后面：“在用 · 端口连不上”（整句：“Claude App 开着 · 端口连不上”）。
+    /// 这台 Mac 上没在用、别的设备上在用时说是哪台：「在「Mac-mini」上在用」「在「Mac-mini」等 2 台设备上在用」
     static func mood(_ e: Employee, appLabel: String, now: Double, brief: Bool = false) -> String {
         guard e.mood == .working else { return problem(e.mood, now: now, brief: brief) ?? "空闲" }
+        if !e.isWorking, !e.elsewhere.isEmpty {
+            let doing = elsewhere(e.elsewhere, brief: brief)
+            if let t = e.trouble, let p = problem(t, now: now, brief: brief) { return doing + " · " + p }
+            return doing
+        }
         let doing = working(app: e.app, appLabel: appLabel, sessions: e.sessions, since: e.since, now: now)
         if let t = e.trouble, let p = problem(t, now: now, brief: brief) { return (brief ? "在用" : doing) + " · " + p }
         return brief ? "在用" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "") : doing
+    }
+
+    /// 别的设备上在用：设备的名字是 Team 的管理员起的（cca 去掉了控制字符）；工位上的短写法把太长的名字截短
+    static func elsewhere(_ names: [String], brief: Bool = false) -> String {
+        guard let first = names.first else { return "在用" }
+        let name = brief && first.count > 14 ? String(first.prefix(13)) + "…" : first
+        return names.count == 1 ? "在「\(name)」上在用" : "在「\(name)」等 \(names.count) 台设备上在用"
     }
 
     /// 有问题时的那一句；在用、空闲是 nil

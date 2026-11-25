@@ -58,7 +58,7 @@ struct ClientUpdatesPage: View {
                 }
                 if model.clientUpdates != nil && installed.isEmpty {
                     ContentUnavailableView("这台 Mac 上还没有客户端", systemImage: "shippingbox",
-                                           description: Text("装好 Claude、ChatGPT 桌面 App，或者 Claude Code、Codex 命令后，这里会显示它们的版本和更新。"))
+                                           description: Text("装好 Claude、ChatGPT 桌面 App，或者 Claude Code、Codex、Antigravity（agy）命令后，这里会显示它们的版本和更新。"))
                 }
                 Text("安装桌面 App 的更新前，先保存工作、退出它的全部窗口；更新只换程序，账号资料不动。终端里的 Claude Code、Codex 更新后，开着的会话还是旧版本，新开的才是新版本。")
                     .font(.caption).foregroundStyle(.secondary)

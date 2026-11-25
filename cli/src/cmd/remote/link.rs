@@ -92,8 +92,10 @@ fn shape(a: &[Allowed]) -> Vec<(String, Incoming)> {
 
 fn announce(meta: &Meta, allowed: &[Allowed]) -> Vec<u8> {
     let blobs = Dict::new();
+    // 这几个配对都在同一台服务器（同一个 Team）上：盐只要找一次
+    let salt = allowed.first().and_then(|a| far::team_salt(a.peer.hub));
     for a in allowed {
-        if let Ok(b) = crypto::dir_seal(&a.secret, &a.peer.pid, &meta.sid, &far::dir_doc(meta, a.peer.incoming)) {
+        if let Ok(b) = crypto::dir_seal(&a.secret, &a.peer.pid, &meta.sid, &far::dir_doc(meta, a.peer.incoming, salt.as_deref())) {
             blobs.set(a.peer.pid.as_str(), b);
         }
     }

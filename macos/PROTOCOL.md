@@ -707,6 +707,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 ### 3.4 `cca [codex] devices KEY --json`：账号连着的设备
 
 `can.devices` 为真的账号，账号页看得见时 App 马上运行一次，之后每分钟一次（低优先级；用户 15 分钟没碰电脑时不查），点「刷新」时不降优先级。
+3.6.16 起 App 还不写账号定时问一次（`cca [codex|agy] devices --json`，这个工具里有 `can.devices` 的账号时；低优先级、超时 60 秒，看得见时每 2 分钟、看不见时 10 分钟，走开了不查）：
+总览里这台 Mac 上没在用、别的设备上在用（别的设备的 `state` 是 `in_use`）的账号也是在用，写出是哪台（「在「Mac-mini」上在用」）；查成以后 15 分钟还没再查成就不标了。
 cca 问这个账号走的那台服务器（账号的 `hub`：给它的那个 Team 的同步服务器——钉住邀请里的证书公钥，用这台设备加入时的设备密钥签名；
 直连），把服务器给的相对秒数换成这台 Mac 的时钟：
 
@@ -1037,6 +1039,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |
 | `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
+| `[codex\|agy] devices --json` | 总览：别的设备上在用的账号（每 2 分钟，看不见时 10 分钟；3.6.16 起） | 无交互命令（3.4） |
 | `team new`、`team join`、`team deploy <Team>`、`team leave <Team>`（管理员） | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」「删掉这个 Team…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`；`consent.team_delete`、`hub.password`、`hub.pubkey`、`team.keep_server`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` / `team_left` |
 | `team export <Team> <文件> --force`、`team import <Team> <文件>`、`team edit <Team>` | 管理员的「更多」里的「导出配置…」（保存面板选文件：面板问过覆盖，所以带 `--force`）、「导入配置…」（打开面板选文件）、「在终端里修改配置…」（要 `hello.team_config`） | `export` 是无交互命令（`result` 的 `team_exported`）；`import` 是无交互命令 + 同意重跑（`consent.team_config`），做完 `result` 的 `team_imported`；`edit` 交给终端（6；提问会话里是 `terminal` 事件的 `team_edit`） |
 | `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team admin`（3.6.15 起）、`team leave`（成员） | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」、建 Team 的设备的「设为管理员…」「收回管理员…」）；「更多」里的「退出这个 Team…」 | 无交互命令（`revoke`、`admin`、`leave` 先同意：`consent.team_revoke`、`consent.team_admin_add` / `team_admin_remove`、`consent.team_leave`；`invite` 的 stdout 只经内存里的管道读，4.14） |
@@ -1369,7 +1372,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
      "tool": "claude", "name": "工作", "cwd": "~/projects/site", "since_epoch": 1794040500.0, "viewers": 0,
      "local_terminal": true, "state": "ok", "access": "control", "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"},
     {"id": "5c5c…", "short": "5c5c5c5c", "where": "peer", "peer": "b1b1…（32 个十六进制字符）", "machine": "office-linux",
-     "tool": "claude", "name": "工作", "cwd": "~/srv/api", "since_epoch": 1794034020.0, "viewers": 1,
+     "tool": "claude", "name": "工作", "host_name": "主力", "cwd": "~/srv/api", "since_epoch": 1794034020.0, "viewers": 1,
      "local_terminal": null, "state": "ok", "access": "view", "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"}
   ],
   "peers": [
@@ -1395,7 +1398,8 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 - `sessions[]`：一个可以接入的会话。`id` 是 `cca remote attach` 的参数，`short` 是给人看的前 8 位。
   - `where`：`local`（这台 Mac 上的）| `peer`（配对过的机器上的：`peer` 是 `peers[].id`，`machine` 是那台机器的名字）。
   - `tool`：`claude` | `codex` | `agy`；`name`：账号的名字（这台 Mac 上的：别名，没起别名的是邮箱；别的机器上的只有短名字：别名，
-    没起别名的是邮箱 @ 前面那一截）；`cwd`：启动时的文件夹（主目录写成 `~`）；`since_epoch`：什么时候启动的（那台机器没说、说的不像
+    没起别名的是邮箱 @ 前面那一截；3.6.16 起，这台 Mac 上也有这个账号时是这台 Mac 上的别名：以接入的这一头为准）；`host_name`（3.6.16 起，只有别的机器上的有）：
+    那台机器说的名字（它那里的别名）；`cwd`：启动时的文件夹（主目录写成 `~`）；`since_epoch`：什么时候启动的（那台机器没说、说的不像
     个时间时是 null）；`viewers`：现在有几处接着（不算启动它的那个终端）。别的机器上的这几样是那台机器说的，cca 去掉了控制字符和
     看不见的排版字符、截短了、数字核对过，App 当普通文字显示。
   - `local_terminal`：启动它的那个终端还开着吗（只有这台 Mac 上的知道；别的机器上的是 null）。
@@ -1472,7 +1476,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
     （OSC 1337）都不处理、不回话，问“是什么终端”时也不说支持 sixel。
   - 终端里的链接只开 `http` / `https`（别的协议、看着像本机路径的都不开）。
   - 会话里的程序往剪贴板放东西（OSC 52）：只在用户正看着这块终端时照办（主窗口在最前面、键盘焦点在终端上；几处接着时宿主只给主的
-    那一处），别的时候丢掉；读剪贴板不给。
+    那一处），别的时候丢掉；读剪贴板不给。（App 外面的 `cca remote attach`、网页端 3.6.16 起也把它放进控制端的剪贴板，条件是刚送过按键、鼠标，见 docs/dev/remote.md）
   - 用户自己的操作照终端的习惯来：用鼠标选中的字马上放进剪贴板（选中即复制）；右键粘贴剪贴板里的字（和 ⌘V 一样，程序开着括号粘贴模式时
     带上标记；只看的、没在运行的终端不粘）。会话里的程序开着鼠标模式时点击、拖动、滚轮照常交给它，按住 Option 或 Shift 拖才是选字。
   - 终端的标题显示之前去掉控制字符和看不见的排版字符；不响铃；改窗口大小、位置这类请求不理。

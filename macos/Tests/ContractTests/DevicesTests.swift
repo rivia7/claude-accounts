@@ -18,6 +18,10 @@ private final class DevicesSwitch: @unchecked Sendable {
     check("命令：cca devices KEY --json；定时刷新低优先级，点「刷新」的不降", auto.arguments == ["devices", "工作(bob@example.com)", "--json"]
           && auto.isBackground && !CcaCommand.devices(.claude, key: "k", auto: false).isBackground && !auto.runsToCompletion && auto.timeout == 30)
     check("ChatGPT 账号带前缀", CcaCommand.devices(.codex, key: "x", auto: false).arguments == ["codex", "devices", "x", "--json"])
+    let all = CcaCommand.devicesAll(.agy)
+    check("总览问全部账号的：不写账号、低优先级、不用跑完、一个工具一次一个", all.arguments == ["agy", "devices", "--json"]
+          && CcaCommand.devicesAll(.claude).arguments == ["devices", "--json"] && all.isBackground && !all.runsToCompletion
+          && all.timeout == 60 && all.gate == "devices-all:agy" && all.key == nil && all.tool == .agy)
 
     guard let hello = fixture("hello.json").map({ String(decoding: $0, as: UTF8.self) }),
           let state = fixture("state.json").map({ String(decoding: $0, as: UTF8.self) }),
@@ -39,7 +43,8 @@ private final class DevicesSwitch: @unchecked Sendable {
     }
     let m = makeModel(t, scheduler: Scheduler(devicesInterval: 3600))
     await m.start()
-    func asked() -> [[String]] { t.requests.map(\.arguments).filter { $0.first == "devices" } }
+    // 总览一直在后台问全部账号的（devices --json，见 elsewhereTests）：这里只看账号页问的
+    func asked() -> [[String]] { t.requests.map(\.arguments).filter { $0.first == "devices" && $0 != ["devices", "--json"] } }
     guard let bob = m.accounts(.claude).first(where: { $0.can.devices }), let carol = m.accounts(.claude).first(where: { !$0.can.devices && !$0.isAPI }) else {
         check("夹具里有 Team 给的、经它的服务器同步的账号（can.devices）", false)
         return
@@ -75,4 +80,47 @@ private final class DevicesSwitch: @unchecked Sendable {
     m.setMainVisible(true)
     check("别的页：不查", !m.scheduler.devicesPollingRunning)
     m.shutdown()
+}
+
+/// 总览：别的设备上在用的账号（cca devices --json 不写账号）也是在用，说是哪台；这台 Mac 自己的、闲置的、离线的不算；走开了不查
+@MainActor func elsewhereTests() async {
+    section("别的设备上在用")
+    guard let hello = fixture("hello.json").map({ String(decoding: $0, as: UTF8.self) }),
+          let state = fixture("state.json").map({ String(decoding: $0, as: UTF8.self) }),
+          let raw = fixture("devices.json").map({ String(decoding: $0, as: UTF8.self) }) else {
+        check("夹具", false)
+        return
+    }
+    // alice-mini 从闲置改成在用
+    let devices = raw.replacingOccurrences(of: #""state": "idle""#, with: #""state": "in_use""#)   // 夹具里只有 alice-mini 是闲置的
+    check("夹具改好了", devices != raw)
+    let t = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: state) }
+        if request.arguments == ["devices", "--json"] { return response(0, stdout: devices) }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let m = makeModel(t, scheduler: Scheduler(devicesInterval: 3600))
+    await m.start()
+    func asked() -> Int { t.requests.filter { $0.arguments.suffix(2) == ["devices", "--json"] }.count }
+    guard let bob = m.accounts(.claude).first(where: { $0.can.devices }) else {
+        check("夹具里有经 Team 的服务器同步的账号", false)
+        return
+    }
+    let got = await waitUntil { !m.elsewhereNames(bob.ref).isEmpty }
+    check("连上 cca 就在后台查（只查有「设备」的工具）", m.scheduler.elsewherePollingRunning && got, "\(t.requests.map(\.arguments))")
+    check("只算别的设备里在用的", m.elsewhereNames(bob.ref) == ["alice-mini"])
+    check("过了一阵没再查成：不标了", m.elsewhereNames(bob.ref, now: Date().timeIntervalSince1970 + AppModel.elsewhereFresh + 1).isEmpty)
+    let e = m.office(now: Date().timeIntervalSince1970).people.first { $0.account.ref == bob.ref }
+    check("总览：这台 Mac 上没在用也是在用，说是哪台", e?.mood == .working && e?.isWorking == bob.isWorking
+          && (bob.isWorking || Texts.mood(e!, appLabel: "Claude App", now: 0) == "在「alice-mini」上在用"),
+          "\(String(describing: e.map { Texts.mood($0, appLabel: "Claude App", now: 0) }))")
+    m.shutdown()
+
+    let acct = m.accounts(.claude).first { !$0.isWorking && !$0.isAPI } ?? bob
+    let two = Employee.make(acct, usage: nil, live: nil, now: 0, elsewhere: ["一个很长很长很长很长的设备名字", "b"])
+    check("几台：说第一台和一共几台，短写法截短", Texts.mood(two, appLabel: "", now: 0).hasPrefix("在「一个很长很长很长很长的设备名字」等 2 台设备上在用")
+          && Texts.mood(two, appLabel: "", now: 0, brief: true).hasPrefix("在「一个很长很长很长很长的设备…」等 2 台设备上在用"))
+    let none = Employee.make(acct, usage: nil, live: nil, now: 0)
+    check("别的设备上没在用：照旧", none.elsewhere.isEmpty && (acct.isWorking || none.mood != .working))
 }

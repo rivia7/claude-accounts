@@ -175,6 +175,11 @@ final class AppModel {
     /// 账号页「设备」一节（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号页看得见时一分钟查一次，只记在内存里
     private(set) var devices: [AccountRef: DevicesSnapshot] = [:]
     private(set) var devicesLoading: Set<AccountRef> = []
+    /// 别的设备上在用的账号（`cca [codex|agy] devices --json` 不写账号，PROTOCOL 3.4）：账号 → 在用的那几台的名字。总览用它，只记在内存里
+    private(set) var elsewhere: [AccountRef: [String]] = [:]
+    /// 每个工具上次查成的时候（这台 Mac 的时钟）、正在查的
+    private(set) var elsewhereEpoch: [ToolID: Double] = [:]
+    private var elsewhereLoading: Set<ToolID> = []
     /// 账号页「邮箱」一节的登录邮件列表（`cca _gui mail-list`，PROTOCOL 2.4、4.11）：按需拉（展开 / 刷新），只记在内存里
     private(set) var mailLists: [AccountRef: MailListSnapshot] = [:]
     private(set) var mailLoading: Set<AccountRef> = []
@@ -403,6 +408,7 @@ final class AppModel {
         self.scheduler.onClientCheckTick = { [weak self] in self?.checkClientUpdates(manual: false) }
         self.scheduler.onDevicesTick = { [weak self] in self?.pollDevices() }
         self.scheduler.onRemoteTick = { [weak self] in self?.pollRemote() }
+        self.scheduler.onElsewhereTick = { [weak self] in self?.pollElsewhere() }
     }
 
     // MARK: 启动和连接
@@ -1477,6 +1483,7 @@ final class AppModel {
     /// 连上 cca 之后才开始定时。App 隐藏时也检查客户端更新；默认检查不安装（允许自动更新时由 cca 在检查里顺带装上），开发和演示模式不自动运行。
     private func reconcileBackgroundPolling() {
         scheduler.updateUsagePolling(enabled: phase == .ready)
+        scheduler.updateElsewherePolling(enabled: phase == .ready)
         scheduler.updateClientChecks(enabled: phase == .ready && !isFixtureMode && hello?.devMode != true)
     }
 
@@ -1508,6 +1515,56 @@ final class AppModel {
                 s.error = nonEmpty(r.failure?.message) ?? "没能查到这个账号连着的设备"
                 self.devices[ref] = s
             }
+        }
+    }
+
+    // MARK: 别的设备上在用（总览）
+
+    /// 查成以后多久还算数：过了就当不知道（不标在用）
+    static let elsewhereFresh: TimeInterval = 15 * 60
+    /// 窗口、面板都看不见时多久查一次
+    static let elsewhereHidden: TimeInterval = 10 * 60
+
+    /// 这个账号在别的设备上在用：那几台的名字。账号页的「设备」刚查过（更新）时用它的
+    func elsewhereNames(_ ref: AccountRef, now: Double = Date().timeIntervalSince1970) -> [String] {
+        var names = elsewhere[ref] ?? []
+        var at = elsewhereEpoch[ref.tool] ?? 0
+        if let s = devices[ref], let a = s.account, let f = s.fetchedEpoch, f > at {
+            names = Self.inUseElsewhere(a)
+            at = f
+        }
+        return now - at < Self.elsewhereFresh ? names : []
+    }
+
+    /// 别的设备里在用的（这台 Mac 自己不算）
+    static func inUseElsewhere(_ a: DevicesAccount) -> [String] {
+        a.devices.filter { !$0.isMe && $0.state == .inUse }.map(\.name)
+    }
+
+    private func pollElsewhere() {
+        guard phase == .ready, hooks.systemConditions().idleSeconds < UsagePolling.awayAfter else { return }   // 走开了：不查
+        let now = Date().timeIntervalSince1970
+        for tool in visibleTools where accounts(tool).contains(where: { $0.can.devices }) {
+            if !isVisible, now - (elsewhereEpoch[tool] ?? 0) < Self.elsewhereHidden { continue }
+            refreshElsewhere(tool)
+        }
+    }
+
+    /// 问一次这个工具里经服务器同步的账号都连着哪些设备。查不成时留着上次的（过了 elsewhereFresh 就不标了）
+    func refreshElsewhere(_ tool: ToolID) {
+        guard phase == .ready, let client, !elsewhereLoading.contains(tool) else { return }
+        elsewhereLoading.insert(tool)
+        track { [weak self] in
+            let (doc, _) = await client.document(.devicesAll(tool), as: DevicesDoc.self, prompter: nil)
+            guard let self else { return }
+            self.elsewhereLoading.remove(tool)
+            guard let doc else { return }
+            for ref in self.elsewhere.keys where ref.tool == tool { self.elsewhere[ref] = nil }
+            for a in doc.accounts {
+                let names = Self.inUseElsewhere(a)
+                if !names.isEmpty { self.elsewhere[AccountRef(tool: tool, key: a.key)] = names }
+            }
+            self.elsewhereEpoch[tool] = Date().timeIntervalSince1970
         }
     }
 
@@ -2526,7 +2583,7 @@ final class AppModel {
             return t
         }
         return Office.make(tools: tools, enabled: visibleTools, usage: { self.usage(for: $0) },
-                    live: { self.liveSlot(for: $0) }, now: now,
+                    live: { self.liveSlot(for: $0) }, now: now, elsewhere: { self.elsewhereNames($0, now: now) },
                     arrange: { d, people in self.arrangement.arranged(people, group: d.key, id: \.account.stableID) })
     }
 
