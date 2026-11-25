@@ -110,6 +110,7 @@ final class Requester: @unchecked Sendable {
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         cfg.timeoutIntervalForRequest = 25   // 服务器替 pair_get 最多等 10 秒：给得比它长；手机的网络半死不活时不一直挂着
         cfg.connectionProxyDictionary = [:]   // 和 cca 的 --noproxy 一样：不经系统设置的代理（中转是端到端加密的，代理也看不到）
+        cfg.tlsMinimumSupportedProtocolVersion = .TLSv12   // App 为了钉住自签证书关了 ATS（Info.plist）：TLS 的下限照 ATS 的
         session = URLSession(configuration: cfg, delegate: delegate, delegateQueue: nil)
     }
 

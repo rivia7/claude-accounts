@@ -53,7 +53,7 @@ plist() { plutil -extract "$2" raw "$1"; }   # 文件 键
 [ "$(plist "$APP/Info.plist" CFBundleIdentifier)" = "$BUNDLE" ] || fail "套装 ID 不是 ${BUNDLE}"
 [ "$(plist "$APP/Info.plist" CFBundleVersion)" = "$BUILD" ] || fail "构建号没换上（${BUILD}）"
 VERSION=$(plist "$APP/Info.plist" CFBundleShortVersionString)
-# 归档是另编的：test.sh 查正式版的那两项（SwiftTerm 编的是换过的那一份、没有 TestDriver）在它上面再查一遍
+# 归档是另编的：test.sh 查正式版的那三项（SwiftTerm 编的是换过的那一份、没有 TestDriver、关了 ATS）在它上面再查一遍
 bash "$HERE/test.sh" --check "$DD" "$APP"
 ok "归档好了：${VERSION}（${BUILD}），团队 ${TEAM}"
 

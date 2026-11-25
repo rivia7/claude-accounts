@@ -3,7 +3,7 @@
 #   bash ios/test.sh               编（模拟器、调试版）、查 SwiftTerm 编进去的是去掉了图形协议的那一份、在模拟器里跑 SwiftTerm 的自检、
 #                                  演示模式各页浅色 / 深色截图（ios/build/shots/）
 #   bash ios/test.sh --build       只编（模拟器的调试版 + 真机的正式版，不签名），不开模拟器
-#   bash ios/test.sh --check 派生数据目录 cca.app   不编，只查编好的正式版（SwiftTerm、TestDriver 那两项）：testflight.sh 拿它查归档
+#   bash ios/test.sh --check 派生数据目录 cca.app   不编，只查编好的正式版（SwiftTerm、TestDriver、ATS 那三项）：testflight.sh 拿它查归档
 # 端到端（真的服务器、真的 cca、模拟器里的 App 配对、接入、敲键）在 tests/ios_kit.rs 的 in_the_simulator：它先跑这里的编译那一步
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -15,7 +15,7 @@ BUNDLE=com.cca.remote
 fail() { echo "✗ $*" >&2; exit 1; }
 ok() { echo "✓ $*"; }
 
-# 查正式版的两项，testflight.sh 拿它们（--check）再查一遍归档：
+# 查正式版的三项，testflight.sh 拿它们（--check）再查一遍归档：
 # SwiftTerm 编进去的是 swiftterm-parser.sh 换过那两行的那一份，不是上游原样的（macos/Vendor/SwiftTerm/README.md「不要的功能」）
 swiftterm_patched() {   # 派生数据目录
 	local lists list
@@ -30,7 +30,13 @@ swiftterm_patched() {   # 派生数据目录
 no_test_driver() {   # cca.app
 	if grep -rqa "cca-test: " "$1"; then fail "正式版里带着测试用的 TestDriver（${1}）"; fi
 }
-if [ "${1:-}" = --check ]; then swiftterm_patched "$2"; no_test_driver "$3"; exit 0; fi
+# Info.plist 关了 ATS（NSAllowsArbitraryLoads）：不然钉住的自签证书在 delegate 认了以后还被 ATS 照系统的规则拒掉，公网上的服务器
+# 全都连不上（-1200 / -9802，App 说「连不上服务器」）。本机地址 ATS 不管：模拟器里连 127.0.0.1 的端到端测不出来，只能在这里查
+ats_lets_us_pin() {   # cca.app
+	[ "$(plutil -extract NSAppTransportSecurity.NSAllowsArbitraryLoads raw -o - "$1/Info.plist" 2>/dev/null)" = true ] ||
+		fail "Info.plist 里没有 NSAppTransportSecurity.NSAllowsArbitraryLoads：钉住的自签证书会被 ATS 拒掉（${1}）"
+}
+if [ "${1:-}" = --check ]; then swiftterm_patched "$2"; no_test_driver "$3"; ats_lets_us_pin "$3"; exit 0; fi
 
 command -v xcodebuild >/dev/null && xcodebuild -version >/dev/null 2>&1 || fail "要 Xcode（只有命令行工具编不了 iOS App）"
 mkdir -p "$OUT"
@@ -55,6 +61,9 @@ ok "SwiftTerm 编的是去掉了图形协议的那一份"
 grep -rqa "cca-test: " "$DD/Build/Products/Debug-iphonesimulator/cca.app" || fail "调试版里没找到 TestDriver：这一条查不出什么了，改一改"
 no_test_driver "$DD/Build/Products/Release-iphoneos/cca.app"
 ok "正式版里没有测试用的 TestDriver"
+ats_lets_us_pin "$DD/Build/Products/Debug-iphonesimulator/cca.app"
+ats_lets_us_pin "$DD/Build/Products/Release-iphoneos/cca.app"
+ok "两个版本的 Info.plist 都关了 ATS（钉住自签证书要它）"
 [ "${1:-}" = "--build" ] && exit 0
 
 # ---- 模拟器 ----

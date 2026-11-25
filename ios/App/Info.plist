@@ -3,6 +3,15 @@
 <plist version="1.0">
 <dict>
 	<!-- 和 Xcode 生成的那一份合在一起（GENERATE_INFOPLIST_FILE）：这里只放生成不了的 -->
+	<!-- 服务器是自签证书，按二维码里的指纹钉住（CcaRemoteKit 的 PinnedDelegate）。ATS 开着时 delegate 认了也不算：CFNetwork 照系统的规则
+	     再验一遍（不是证书机构签的、有效期太长、没有 SAN 和 serverAuth），断开（-1200 / -9802），公网上的服务器一台都连不上；
+	     本机地址 ATS 不管，所以连 127.0.0.1 的测试测不出来（ios/test.sh 查编好的 Info.plist 里有这一项）。
+	     只关 ATS，不关验证：只发 https（ServerRef）、TLS 至少 1.2（Requester），有指纹时只认指纹对得上的，没有时照系统的证书机构验 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
