@@ -6851,7 +6851,7 @@ team_role_say() {   # team_role_say 角色：给人看的角色（py team-list �
 }
 
 team_ls() {   # cca team [ls] [--json]：这台设备在哪些 Team 里（只看本机记着的，不联网）
-	local out id name role host state seq n why
+	local out id name role host state seq n why upd
 	case "$*" in
 		'') ;;
 		--json) py team-list --json; return ;;
@@ -6862,13 +6862,18 @@ team_ls() {   # cca team [ls] [--json]：这台设备在哪些 Team 里（只看
 		say "这台设备还不在任何 Team 里。有管理员给的邀请链接时运行 cca team join；自己建一个是 cca team new 名字"
 		return 0
 	fi
-	while IFS=$'\t' read -r id name role host state seq n why; do   # 没有的栏是 -（空的栏按制表符读会被并掉）
+	while IFS=$'\t' read -r id name role host state seq n why upd; do   # 没有的栏是 -（空的栏按制表符读会被并掉）
 		[ "$host" != - ] || host=没有服务器
 		[ "$seq" != - ] || seq=""
 		[ "$n" != - ] || n=0
 		[ "$why" != - ] || why=""
 		say "${name}（${id:0:8}）：$(team_role_say "$role")，${host}，$(team_state_say "$state")${seq:+，这台设备能用 ${n} 个账号}${why:+
     ${why}}"
+		# 服务器比这一版 cca 要的旧（上次同步时问到的）：建 Team 的设备能更新，别的设备只能请它更新
+		if [ -n "$upd" ] && [ "$upd" != - ]; then
+			if [ "$role" = admin ]; then warn "「${name}」的服务器要更新：${upd}。在 cca App 的「共享与同步」里点「更新服务器…」，或者运行 cca team deploy ${id:0:8} 用户@主机"
+			else warn "「${name}」的服务器要更新：${upd}。请建这个 Team 的管理员更新服务器"; fi
+		fi
 	done <<< "$out"
 }
 

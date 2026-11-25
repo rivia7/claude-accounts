@@ -302,7 +302,10 @@ fn get_health_and_not_found() {
         )
     );
     assert_eq!(get("/v1/health?x=1&y"), health);
+    // 服务端的级别（3.7.1 起）
+    assert_eq!(get("/v1/version"), (200, r#"{"v":1,"level":1}"#.to_string()));
     for target in [
+        "/v1/version/",
         "/",
         "/index.html",
         "/v1/health/",

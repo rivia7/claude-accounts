@@ -108,6 +108,16 @@ private struct TeamBlock: View {
                       : "退出：这个 Team 给的账号移出账号表，登录都留着（先问一句）")
             }
             InfoRow(Text(Texts.teamState(team)), systemImage: Self.symbol(team.state), tint: Self.tint(team.state)) { EmptyView() }
+            if let u = team.serverUpdate {
+                // 服务器比这一版 cca 要的旧（cca 同步时问到的）：建 Team 的设备就地更新，别的设备只说一声
+                InfoRow(Text(Texts.teamServerUpdate(team, u)), systemImage: "arrow.up.circle", tint: .orange) {
+                    if team.isOwner {
+                        RowAction("更新服务器…", systemImage: "server.rack") { model.deployTeam(team) }
+                            .disabled(model.flow != nil || model.teamBusy)
+                            .help("经 SSH 照上次部署的那台更新这个 Team 的同步服务器：数据、端口、证书都不变，更新时它停几秒")
+                    }
+                }
+            }
             InfoRow(Text(Texts.teamSummary(team)), systemImage: "person.crop.circle") { EmptyView() }
             if expanded { TeamAdminSection(team: team) }
         }

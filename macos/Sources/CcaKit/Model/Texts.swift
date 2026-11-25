@@ -268,6 +268,12 @@ enum Texts {
         }
     }
 
+    /// Team 的服务器要更新：少了什么（cca 给的），谁来更新
+    static func teamServerUpdate(_ t: TeamEntry, _ u: TeamServerUpdate) -> String {
+        let why = nonEmpty(u.why).map { "：\($0)" } ?? ""
+        return t.isOwner ? "服务器要更新\(why)。数据不变，更新时服务器停几秒" : "服务器要更新\(why)。请建这个 Team 的管理员更新服务器"
+    }
+
     /// Team 的第二行：这台设备在里面叫什么、给了它几个账号、服务器
     static func teamSummary(_ t: TeamEntry) -> String {
         var parts: [String] = []

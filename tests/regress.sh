@@ -74,7 +74,8 @@ unit_stop() {   # 退出时还没跑完（被打断、前面就退出了）：�
 # 和 tests/linux.sh 的 suite_run 一个标准：结果文件里它那一行（名字 pass|fail 通过 失败 跳过 秒）是 pass、通过的用例不止 0 个、没有失败的——
 # 用例全跳过了的模块 suite 自己记的是 pass，这里不算过（一个用例都没跑成，等于没测）
 suite_ok() {
-	SUITE_SEEN="$SUITE_SEEN $1"
+	# 只记一次：DEBUG_OUT 时没过的断言会再算一遍（ok_why），同一个模块记两次的话后面那条「每个模块都有一行」也跟着不过
+	case " $SUITE_SEEN " in *" $1 "*) ;; *) SUITE_SEEN="$SUITE_SEEN $1" ;; esac
 	out=$(tail -n 40 "$UNITD/logs/$1.log" 2>/dev/null || tail -n 40 "$UNITD/suite.log" 2>/dev/null)
 	[ "$(awk -F'\t' -v m="$1" '$1 == m { if ($2 == "pass" && $3 + 0 > 0 && $4 + 0 == 0) print "ok"; else print "no" }' "$UNITD/results.tsv" 2>/dev/null)" = ok ]
 }
@@ -2717,6 +2718,18 @@ ok "手里的配置换了、账号表还没跟上：启动前照它改账号表�
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-B"}}}'; run cca _team-sync >/dev/null 2>&1
 out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.sh" CCA_TEST_EDIT='j["alice@example.com"] = "US-D"' cca edit 2>&1)
 ok "cca edit 把 Team 给的账号改成别的节点：改回 Team 的配置定的节点并说明" 'tblok "t[\"alice@example.com\"] == \"US-B\"" && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-B（账号表里写的是 US-D，已改回）"'
+# 服务器要更新（3.7.1 起）：同步成了顺便问服务器的级别（GET /v1/version），记进 sync.json；比这一版 cca 要的低（假装记着的是旧服务器的 0）时
+# team ls 说一声、--json 给 server_update；再同步一次问到这台服务器的（真的服务器：这一版），提示就没了。服务器怎么回、旧服务器照 health
+# 认是不是 3.7.0：tests/team.rs 的 server_level。取值放在断言外面（断言里的命令替换套转义引号，bash 3.2 解析不对）
+glsync="$H/.cca/teams/$GLTID/sync.json"
+run cca team sync >/dev/null 2>&1; lv1=$("$TESTBIN" val -f "j=$glsync" 'j["level"]' 2>/dev/null)
+svjs=$(run cca team ls --json 2>/dev/null); sv1=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 1 and j["teams"][0]["server_update"] is None' 2>/dev/null)
+perl -0pi -e 's/("level":\s*)1/${1}0/' "$glsync"
+out=$(run cca team ls 2>&1)
+svjs=$(run cca team ls --json 2>/dev/null); sv2=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 0 and j["teams"][0]["server_update"]["level"] == 0 and j["teams"][0]["server_update"]["need"] == 1 and "iPhone" in j["teams"][0]["server_update"]["why"]' 2>/dev/null)
+run cca team sync >/dev/null 2>&1
+svjs=$(run cca team ls --json 2>/dev/null); sv3=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 1 and j["teams"][0]["server_update"] is None' 2>/dev/null)
+ok "服务器要更新：同步时记下服务器的级别；记着的是旧服务器的（级别 0）时 cca team ls 说请管理员更新、--json 给 server_update（级别、要的、原因）；再同步问到这台服务器的就没了" '[ "$lv1" = 1 ] && [ "$sv1" = True ] && [ "$sv2" = True ] && printf "%s" "$out" | grep -q "「阁楼组」的服务器要更新：3.7.0 以前的服务器不认 iPhone 上的 cca App，手机配对不了。请建这个 Team 的管理员更新服务器" && [ "$sv3" = True ]'
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-D"}}}' "$GLD/evil"; out=$(run cca team sync 2>&1); rc=$?
 gl_put '{"accounts": {"claude": {"Not-An-Email": "US-D", "alice@example.com": "US-D"}}}'; out2=$(run cca team sync 2>&1); rc2=$?
 gl_down; out3=$(run cca team sync 2>&1); rc3=$?; gl_up

@@ -71,7 +71,7 @@ pub fn now() -> f64 {
 }
 
 /// 设备上的 curl：请求照发（真的 curl、真的服务器），顺手记下来——~/curl.argv 是每次的命令行（查凭证从不出现在命令行里），
-/// ~/sent/<第几个>.json 是签过名的请求，.op 是哪个接口，.reply 是服务器回的内容，.code 是它回的状态码（回来了才有：没发出去是 0）。
+/// ~/sent/<第几个>.json 是签过名的请求（不用签名的 GET 是空的），.op 是哪个接口，.reply 是服务器回的内容，.code 是它回的状态码（回来了才有：没发出去是 0）。
 /// ~/reply/<接口> 在时不发，照它回（第一行是状态码，后面是回的内容）：扮演还不认这个接口的旧服务器
 pub const CURL: &str = r#"printf '%s\n' "$*" >> "$HOME/curl.argv"
 mkdir -p "$HOME/sent"
@@ -1015,7 +1015,8 @@ impl Device {
     // --- 发给服务器的 ---
 
     /// 这台设备发过、服务器回过了（或者没发出去）的请求，按先后：请求里的各项，加上 op 哪个接口、code 服务器回的状态码
-    /// （没发出去是 0）、reply 它回的内容（没有是 {}）、done 什么时候回来的。op 不是 None 时只要这个接口的
+    /// （没发出去是 0）、reply 它回的内容（没有是 {}）、done 什么时候回来的。op 不是 None 时只要这个接口的。不用签名的 GET
+    /// （同步配置时顺便问服务器的级别：`/v1/version`、`/v1/health`）没有请求体，不算在里面
     pub fn sent(&self, op: Option<&str>) -> Vec<Value> {
         let dir = self.home.join("sent");
         let mut codes: Vec<(u64, PathBuf)> = Vec::new();
@@ -1033,7 +1034,7 @@ impl Device {
         let mut out = Vec::new();
         for (_, code) in codes {
             let this_op = fsx::read_text(code.with_extension("op"));
-            if op.is_some_and(|want| want != this_op) {
+            if op.is_some_and(|want| want != this_op) || fsx::read_text(code.with_extension("json")).trim().is_empty() {
                 continue;
             }
             let mut r = fsx::read_json(code.with_extension("json"));

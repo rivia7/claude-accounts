@@ -1120,7 +1120,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
 
 - **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", coadmin（3.6.15 起：这台设备是成员、建 Team 的设备给了它管理员身份；以前的 cca 没有这一项：false）, url, host, device,
   state: "local"（管理员还没接上服务器）| "pending"（还没同步过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
-  error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
+  error, seq, accounts, joined_epoch, server_level, server_update}]}`，只看本机记着的、不联网。`server_level`（3.7.1 起，以前的 cca 没有）：上次同步配置时问到的服务端级别（服务器的 `GET /v1/version`；没有这个地址的旧服务器照 `/v1/health`：认手机的 3.7.0 是 1，更早的是 0），没问到过是 null；`server_update`（3.7.1 起）：这个级别比这一版 cca 要的低时是 `{level, need, why}`（`why` 是 cca 给的一句话：旧服务器少了什么），不用更新、不知道是 null。App 在「共享与同步」的 Team 下面提示：建 Team 的设备给「更新服务器…」（同「更新服务器、搬到别的服务器…」），别的设备只说请管理员更新；更新后 cca 同步一次就没了。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
   "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "alias_lock": 别名锁定着没有,
   "nodes": [配置里带着定义的节点的名字…],
   "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked"（`left`、`revoked` 3.6.6 起不再有：

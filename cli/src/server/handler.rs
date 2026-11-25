@@ -32,7 +32,8 @@ use super::http::{Method, Request};
 use super::store::{say, Invite};
 use super::{remote, sshsig, wire, ws, Ctx};
 use super::{
-    API, MAX_BODY, MAX_SIG, MAX_SYNC_BODY, NS_REPORT, RELAY_OPS, SYNC_OPS, TEAM_ADMIN_OPS, TEAM_OPS, TEAM_ROOT_OPS, TS_WINDOW,
+    API, LEVEL, MAX_BODY, MAX_SIG, MAX_SYNC_BODY, NS_REPORT, RELAY_OPS, SYNC_OPS, TEAM_ADMIN_OPS, TEAM_OPS, TEAM_ROOT_OPS,
+    TS_WINDOW,
 };
 use crate::dict;
 use crate::py::obj::V;
@@ -184,6 +185,10 @@ fn get(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f6
             d.set("web", web.url.as_str());
         }
         return Outcome::Json(200, health);
+    }
+    // 服务端的级别（3.7.1 起）：cca 看它知道这台服务器要不要更新；不是 Python 那一份有的，health 的内容照旧一个字不改
+    if path == "/v1/version" {
+        return Outcome::Json(200, V::Dict(dict! { "v" => API, "level" => LEVEL }));
     }
     if let Some(web) = &ctx.web {
         // 用到时才算是哪个 IP、才扣它的配额（Py:1834、1863-1864：都在别的检查后面）

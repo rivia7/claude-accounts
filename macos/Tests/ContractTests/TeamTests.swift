@@ -60,6 +60,13 @@ func teamFixtureTests() {
     check("别的管理员（3.6.15 起 coadmin）：能管理、不是建 Team 的那台；旧版 cca 没有这一项是成员",
           co?.isAdmin == true && co?.isOwner == false && loadFixture(StateDoc.self, "state.json")?.config?.teams.first?.isOwner == true
           && loadFixture(StateDoc.self, "state.json")?.config?.teams.last?.isAdmin == false)
+    let fxTeams = loadFixture(StateDoc.self, "state.json")?.config?.teams
+    let odd = try? JSONDecoder().decode(TeamEntry.self, from: Data(#"{"id":"ab","name":"x","role":"member","state":"ok","server_update":"x"}"#.utf8))
+    check("服务器要更新（3.7.1 起 server_update）：有时带着级别和原因；没有、旧版 cca、样子不对是 nil",
+          fxTeams?.first?.serverUpdate?.need == 1 && fxTeams?.first?.serverUpdate?.level == 0 && fxTeams?.first?.serverUpdate?.why.isEmpty == false
+          && fxTeams?.last?.serverUpdate == nil && odd != nil && odd?.serverUpdate == nil && co?.serverUpdate == nil
+          && Texts.teamServerUpdate(fxTeams!.first!, fxTeams!.first!.serverUpdate!).hasPrefix("服务器要更新：")
+          && Texts.teamServerUpdate(odd!, fxTeams!.first!.serverUpdate!).hasSuffix("请建这个 Team 的管理员更新服务器"))
     check("命令：授予、收回管理员身份；同意项、结果码",
           CcaCommand.teamAdmin(team: teamA, device: "0a1b", add: true).arguments == ["team", "admin", teamA, "add", "0a1b"]
           && CcaCommand.teamAdmin(team: teamA, device: "0a1b", add: false).arguments == ["team", "admin", teamA, "remove", "0a1b"]

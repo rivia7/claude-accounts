@@ -59,6 +59,8 @@ struct TeamEntry: Decodable, Sendable, Equatable, Identifiable {
     /// 别的管理员（cca 3.6.15 起）：这台设备是成员，建 Team 的设备给了它管理员身份。能管设备、账号、节点；不能删除 Team、部署服务器、
     /// 授予别人管理员身份（以前的 cca 没有这一项：false）
     var coadmin: Bool
+    /// 服务器要更新（cca 3.7.1 起：上次同步时问到的服务端级别比这一版 cca 要的低）；不用更新、不知道、旧版 cca 是 nil
+    var serverUpdate: TeamServerUpdate?
 
     /// 能管理这个 Team（建 Team 的设备，和别的管理员）
     var isAdmin: Bool { role == .admin || coadmin }
@@ -67,6 +69,7 @@ struct TeamEntry: Decodable, Sendable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, role, host, device, state, error, seq, accounts, coadmin
+        case serverUpdate = "server_update"
         case joinedEpoch = "joined_epoch"
     }
 
@@ -83,6 +86,7 @@ struct TeamEntry: Decodable, Sendable, Equatable, Identifiable {
         accounts = c.int(.accounts) ?? 0
         joinedEpoch = c.double(.joinedEpoch)
         coadmin = c.bool(.coadmin) ?? false
+        serverUpdate = try? c.decodeIfPresent(TeamServerUpdate.self, forKey: .serverUpdate)
     }
 }
 
@@ -313,5 +317,21 @@ enum TeamFilter: Equatable, Hashable, Sendable {
         case .team(let id): return a.team == id
         case .outside: return a.team == nil
         }
+    }
+}
+
+/// Team 的服务器要更新（`config.teams[].server_update`，PROTOCOL 4.14）：服务器的级别、这一版 cca 要的级别、少了什么（cca 给的一句话）
+struct TeamServerUpdate: Decodable, Sendable, Equatable {
+    var level: Int
+    var need: Int
+    var why: String
+
+    enum CodingKeys: String, CodingKey { case level, need, why }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        level = c.int(.level) ?? 0
+        need = c.int(.need) ?? 0
+        why = c.string(.why) ?? ""
     }
 }

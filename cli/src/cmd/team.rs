@@ -8,7 +8,7 @@
 use super::cost::COST_DIR;
 use super::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
 use super::keyshare::is_num;
-use super::presence::{flock, key_at, presence_post, PRESENCE_DIR};
+use super::presence::{flock, key_at, presence_get, presence_post, PRESENCE_DIR};
 use super::router::device_id;
 use super::{arity, Cmd};
 use crate::core::base::Lock;
@@ -274,10 +274,39 @@ fn sync_state(tid: &str) -> Option<(String, String)> {
     Some((j.str("state")?.to_string(), j.str("error").map(|e| e.to_string()).unwrap_or_default()))
 }
 
-/// 记下同步配置的结果；只在变了时写（界面盯着这个文件）
-fn sync_note(tid: &str, state: &str, error: &str) -> R<()> {
-    if sync_state(tid).as_ref().map(|(s, e)| (s.as_str(), e.as_str())) != Some((state, error)) {
+/// 这一版 cca 要的服务端级别（服务端的 `server::LEVEL`，`GET /v1/version` 回的）：比它低的 Team 的服务器要更新（界面里提示管理员）。
+/// 服务端加了 cca 要靠的东西时两边一起加一，SERVER_WHY 改成这一级带来的
+pub const SERVER_NEED: i64 = 1;
+/// 服务器比 SERVER_NEED 旧时少了什么（给人看的，接在「要更新服务器：」后面）
+pub const SERVER_WHY: &str = "3.7.0 以前的服务器不认 iPhone 上的 cca App，手机配对不了";
+
+/// sync.json 里记着的服务端级别（上次同步时问到的；没问到过是 None）
+fn server_level(tid: &str) -> Option<i64> {
+    load_quiet(&team_path(tid, "sync.json"))?.as_dict()?.get("level")?.as_int()
+}
+
+/// 问服务器它的级别（`GET /v1/version`，3.7.1 起有）。没有这个地址（404）的看 `GET /v1/health`：中转那一项里有 guests 的是 3.7.0
+/// （认 iPhone 上的 App，算 1），没有的更早（0）；没问到（连不上、回的不对）是 None
+fn ask_level(t: &Team) -> R<Option<i64>> {
+    let Ok(cfg) = device_cfg(t)? else { return Ok(None) };
+    let (code, j) = presence_get(&cfg, "v1/version", 8)?;
+    match code {
+        200 => return Ok(j.get("level").and_then(|l| l.as_int()).filter(|l| *l >= 0)),
+        404 => {}
+        _ => return Ok(None),
+    }
+    let (code, h) = presence_get(&cfg, "v1/health", 8)?;
+    Ok((code == 200).then(|| if h.dict("relay").is_some_and(|r| r.get("guests").is_some()) { 1 } else { 0 }))
+}
+
+/// 记下同步配置的结果和服务端的级别（level 是 None：这次没问到，照记着的）；只在变了时写（界面盯着这个文件）
+fn sync_note(tid: &str, state: &str, error: &str, level: Option<i64>) -> R<()> {
+    let level = level.or_else(|| server_level(tid));
+    if sync_state(tid).as_ref().map(|(s, e)| (s.as_str(), e.as_str())) != Some((state, error)) || level != server_level(tid) {
         let j = dict! { "v" => 1, "state" => state, "error" => error, "at" => now() };
+        if let Some(l) = level {
+            j.set("level", l);
+        }
         save_json(&team_path(tid, "sync.json"), &V::Dict(j), Some(0o600), true)?;
         forget_grants();
         if state == "removed" {
@@ -308,7 +337,9 @@ pub fn sync_one(t: &Team) -> R<Synced> {
 fn sync_locked(t: &Team) -> R<Synced> {
     let have = team_doc(&t.id).map_or(0, |d| d.0);
     let r = sync_fetch(t, have)?;
-    sync_note(&t.id, r.state, &r.why)?;
+    // 同步成了（连得上这台服务器）顺便问它的级别：要不要更新服务器
+    let level = if r.state == "ok" { ask_level(t)? } else { None };
+    sync_note(&t.id, r.state, &r.why, level)?;
     Ok(r)
 }
 
@@ -743,6 +774,16 @@ fn team_row(t: &Team) -> Dict {
         "seq" => doc.as_ref().map_or(0, |d| d.0), "accounts" => doc.as_ref().map_or(0, |d| doc_accounts(&d.1) as i64),
         "joined_epoch" => t.raw.get("joined_at").filter(is_num).unwrap_or(V::None),
         "coadmin" => t.coadmin(),
+        "server_level" => server_level(&t.id).map_or(V::None, V::from),
+        "server_update" => server_update(&t.id),
+    }
+}
+
+/// 这个 Team 的服务器要不要更新（3.7.1 起）：上次同步问到的级别比这一版 cca 要的低是 {"level", "need", "why"}，不用、不知道是 null
+fn server_update(tid: &str) -> V {
+    match server_level(tid) {
+        Some(l) if l < SERVER_NEED => V::Dict(dict! { "level" => l, "need" => SERVER_NEED, "why" => SERVER_WHY }),
+        _ => V::None,
     }
 }
 
@@ -751,7 +792,8 @@ fn t_coadmin(r: &Dict) -> bool {
 }
 
 /// py team-list [--json]：这台设备在哪些 Team 里（只看本机记着的，不联网）。--json：{"version": 1, "kind": "team_list",
-/// "teams": [team_row…]}；不带时一个 Team 一行：编号\t名字\t角色（admin | member | coadmin：别的管理员）\t地址:端口\t状态\t序号\t几个账号\t原因
+/// "teams": [team_row…]}；不带时一个 Team 一行：编号\t名字\t角色（admin | member | coadmin：别的管理员）\t地址:端口\t状态\t序号\t几个账号\t原因\t
+/// 服务器要更新的原因（不用是 -）
 pub fn cmd_team_list(args: &[String]) -> R<()> {
     let as_json = match args {
         [] => false,
@@ -768,7 +810,7 @@ pub fn cmd_team_list(args: &[String]) -> R<()> {
         // 没有的写 -：bash 按制表符读，空的栏会被并掉；还没有配置时序号、账号数是 0，也写 -
         let s = |k: &str| r.get(k).filter(|v| !v.is_none() && v.py_str() != "0").map_or("-".to_string(), |v| v.py_str());
         out!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             s("id"),
             s("name"),
             if t_coadmin(&r) { "coadmin".to_string() } else { s("role") },
@@ -776,7 +818,8 @@ pub fn cmd_team_list(args: &[String]) -> R<()> {
             s("state"),
             s("seq"),
             s("accounts"),
-            s("error")
+            s("error"),
+            r.dict("server_update").map_or("-".to_string(), |u| u.at("why").py_str())
         );
     }
     Ok(())

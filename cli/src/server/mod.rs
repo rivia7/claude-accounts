@@ -65,6 +65,9 @@ use std::sync::{Arc, Mutex};
 
 /// 接口的版本（请求和回的内容里的 v）（Py:67）
 pub const API: i64 = 1;
+/// 服务端的级别（GET /v1/version 回的 level）：服务器加了这一版 cca 要靠的东西时加一，cca 的 `team::SERVER_NEED` 跟着改（cca 同步配置时
+/// 问一次，比它低的 Team 在界面里提示管理员更新服务器）。这个地址 3.7.1 起有；1：3.7.0 起（认 iPhone 上的 cca App：pair_open 的 guest）
+pub const LEVEL: i64 = 1;
 /// 设备给请求签名用的命名空间（Py:68）
 pub const NS_REPORT: &str = "cca-presence";
 /// 一个请求的内容最多这么大（Py:69）

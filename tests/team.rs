@@ -36,6 +36,7 @@ pub const MODULE: Module = Module {
     tests: &[
         case!(admin_local),
         case!(lifecycle),
+        case!(server_level),
         case!(rename),
         case!(aliases),
         case!(alias_per_tool),
@@ -524,7 +525,7 @@ fn admin_local(t: &mut Ctx) {
         list![&rows["kind"], teams],
         list!["team_list", list![list![tid, "测试组", "admin", "local", Value::Null, "studio"]]]
     );
-    assert_eq!(lines(&admin, &["team-list"]), [format!("{tid}\t测试组\tadmin\t-\tlocal\t-\t-\t-")], "没有的栏写 -");
+    assert_eq!(lines(&admin, &["team-list"]), [format!("{tid}\t测试组\tadmin\t-\tlocal\t-\t-\t-\t-")], "没有的栏写 -");
     // 建到一半被打断（目录有了、还没记进 index.json）的也认得出来
     fs::remove_file(&index).expect("删 index.json");
     let ids: Vec<Value> = jl(&admin, &["team-list", "--json"])["teams"].list().iter().map(|r| r["id"].clone()).collect();
@@ -744,7 +745,7 @@ fn lifecycle(t: &mut Ctx) {
             "spec" => list!["joined", "spec", false, 1],
         }
     );
-    assert_eq!(lines(&admin, &["team-list"]), [format!("{tid}\t测试组\tadmin\t{host}\tok\t2\t3\t-")]);
+    assert_eq!(lines(&admin, &["team-list"]), [format!("{tid}\t测试组\tadmin\t{host}\tok\t2\t3\t-\t-")]);
     assert_eq!(
         list![&rows["bob-mini"]["have"], &rows["bob-mini"]["grants"], &rows["studio"]["grants"]],
         list![Value::Null, obj! { "claude" => list!["alice@example.com"] }, "all"]
@@ -872,6 +873,55 @@ fn lifecycle(t: &mut Ctx) {
     assert!(td.exists());
     assert_eq!(lines(&admin, &["team-leave", "apply", tid])[..2], ["测试组", host.as_str()]);
     assert!(!td.exists());
+}
+
+/// 服务器要不要更新（3.7.1 起）：同步成了顺便问服务器的级别（GET /v1/version，不用签名），记进 sync.json，team-list 给出来。
+/// 没有这个地址的旧服务器（~/reply/version 扮演）照 GET /v1/health：中转那一项里有 guests 的是 3.7.0，算 1；没有的算 0，要更新，
+/// 原因在 team-list 的最后一栏；问不到时照记着的；同步没成时不问
+fn server_level(t: &mut Ctx) {
+    let fx = fx(t);
+    let (admin, _tid, _root, _srv, _url, _pin) = fx.new_team();
+    let reply = admin.home.join("reply");
+    let row = || -> Value {
+        let r = &jl(&admin, &["team-list", "--json"])["teams"][0];
+        list![&r["server_level"], &r["server_update"]]
+    };
+    let last = || lines(&admin, &["team-list"])[0].rsplit('\t').next().unwrap_or_default().to_string();
+    let gets = || fsx::read_text(admin.home.join("curl.argv")).lines().filter(|l| l.ends_with("/v1/version")).count();
+    let old = obj! { "level" => 0, "need" => 1, "why" => "3.7.0 以前的服务器不认 iPhone 上的 cca App，手机配对不了" };
+    // 这一版的服务器：1，不用更新
+    assert_eq!(sync_fields(&admin)[2], "ok");
+    assert_eq!(row(), list![1, Value::Null]);
+    assert_eq!(last(), "-");
+    assert_eq!(admin.sent(Some("version")).len(), 0, "不用签名的 GET 不算在签过名的请求里");
+    // 3.7.0 以前的：没有 /v1/version，health 里的中转没有 guests
+    fsx::write(reply.join("version"), "404\n{\"error\":\"not_found\"}");
+    fsx::write(reply.join("health"), "200\n{\"v\":1,\"ok\":true,\"mode\":\"team\",\"relay\":{\"port\":18447}}");
+    assert_eq!(sync_fields(&admin)[2], "ok");
+    assert_eq!(row(), list![0, old.clone()]);
+    assert_eq!(last(), old["why"].str());
+    // 问不到（服务器回 503）：照记着的
+    fsx::write(reply.join("version"), "503\n{}");
+    assert_eq!(sync_fields(&admin)[2], "ok");
+    assert_eq!(row(), list![0, old.clone()], "没问到：照记着的");
+    // 同步没成：不问
+    fsx::write(reply.join("team_get"), "500\n{}");
+    let n = gets();
+    assert_eq!(sync_fields(&admin)[2], "error");
+    assert_eq!(gets(), n, "同步没成时不问服务器的级别");
+    fs::remove_file(reply.join("team_get")).expect("删掉 reply/team_get");
+    // 3.7.0：health 的中转里有 guests，算 1
+    fsx::write(reply.join("version"), "404\n{\"error\":\"not_found\"}");
+    fsx::write(reply.join("health"), "200\n{\"v\":1,\"ok\":true,\"mode\":\"team\",\"relay\":{\"port\":18447,\"guests\":true}}");
+    assert_eq!(sync_fields(&admin)[2], "ok");
+    assert_eq!(row(), list![1, Value::Null]);
+    // 更新了：问到真的服务器的，提示没了
+    fsx::write(reply.join("health"), "200\n{\"v\":1,\"ok\":true,\"mode\":\"team\",\"relay\":{\"port\":18447}}");
+    assert_eq!(sync_fields(&admin)[2], "ok");
+    assert_eq!(row(), list![0, old]);
+    fs::remove_dir_all(&reply).expect("删掉 reply");
+    assert_eq!(sync_fields(&admin)[2], "ok");
+    assert_eq!(row(), list![1, Value::Null], "更新以后同步一次，提示就没了");
 }
 
 /// 管理员给设备改名字：这边记着的、服务器上的一起改（同一把公钥再登记：加入的时间、认证码、配对认的指纹都不变），设备下次同步配置时

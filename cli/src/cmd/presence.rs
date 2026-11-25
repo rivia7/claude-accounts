@@ -483,6 +483,28 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
     if sig.is_empty() {
         return Ok((0, dict! { "error" => "sign" }));
     }
+    let extra: Vec<String> = [
+        "-H".to_string(),
+        "Content-Type: application/json".into(),
+        "-H".into(),
+        format!("X-Cca-Sig: {}", b64encode(&sig)),
+        // Expect: 不等 100 Continue（服务器是 HTTP/1.0 的，大一点的请求 curl 会白等一秒）
+        "-H".into(),
+        "Expect:".into(),
+        "--data-binary".into(),
+        "@-".into(),
+    ]
+    .to_vec();
+    hub_curl(cfg, &format!("v1/{op}"), &extra, Some(body.as_bytes()), timeout)
+}
+
+/// 经 HTTPS GET 一个不用签名的地址（`/v1/version` 这种），和 `presence_post` 一样直连、钉住证书。返回的也一样
+pub fn presence_get(cfg: &Dict, path: &str, timeout: i64) -> R<(i64, Dict)> {
+    hub_curl(cfg, path, &[], None, timeout)
+}
+
+/// presence_post、presence_get 共用：curl 连服务器的 `地址/路径`，extra 是请求头这些（插在 -w 前面），有 body 时经 stdin 发
+fn hub_curl(cfg: &Dict, path: &str, extra: &[String], body: Option<&[u8]>, timeout: i64) -> R<(i64, Dict)> {
     let pins: Vec<String> = cfg.list("pins").map(|p| p.items().iter().map(|x| x.py_str()).collect()).unwrap_or_default();
     // 钉住公钥时不看证书机构（自签的证书）；没有指纹时照系统的证书机构验（-k、--pinnedpubkey 都不带，别的参数先后照旧）
     let pinned = !pins.is_empty();
@@ -498,16 +520,14 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
     if pinned {
         args.extend(["--pinnedpubkey".to_string(), pins.join(";")]);
     }
-    args.extend([
-        "-H".to_string(),
-        "Content-Type: application/json".into(),
-        "-H".into(),
-        format!("X-Cca-Sig: {}", b64encode(&sig)),
-    ]);
-    // Expect: 不等 100 Continue（服务器是 HTTP/1.0 的，大一点的请求 curl 会白等一秒）
-    args.extend(["-H", "Expect:", "--data-binary", "@-", "-w", "\n%{http_code}"].map(String::from));
-    args.push(format!("{}/v1/{}", cfg.at("url").py_str(), op));
-    let sent = Proc::new(args).input(body.as_bytes()).stdout(Out::Capture).stderr(Out::Null).timeout((timeout + 5) as f64).run();
+    args.extend(extra.iter().cloned());
+    args.extend(["-w", "\n%{http_code}"].map(String::from));
+    args.push(format!("{}/{path}", cfg.at("url").py_str()));
+    let mut p = Proc::new(args).stdout(Out::Capture).stderr(Out::Null).timeout((timeout + 5) as f64);
+    if let Some(b) = body {
+        p = p.input(b);
+    }
+    let sent = p.run();
     signal::check()?;
     let Ok(r) = sent else {
         return Ok((0, dict! { "error" => "unreachable" }));

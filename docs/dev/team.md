@@ -533,6 +533,15 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   「更新服务器、搬到别的服务器…」（`Handoff.teamDeploy`）。托管平台在 App 里还没有页面（卡片下面那句话说在终端里运行 `cca team hosted`）。
   截图场景 `flow-team-deploy`、`flow-team-password`（夹具 `flow_team_deploy.flow`）。
 
+### 服务器要更新（3.7.1 起）
+
+新版 cca 要靠服务器新加的东西时（3.7.0：认 iPhone 上的 cca App），旧服务器要重新部署一次。服务端有一个级别（`server::LEVEL`，
+`GET /v1/version` 回 `{"v":1,"level":N}`，不用签名，3.7.1 起有；没有这个地址、回 404 的看 `GET /v1/health`：中转那一项里有 `guests`
+的是 3.7.0，算 1，没有的算 0——手动关掉了手机（`--no-guests`）的 3.7.0 也算 0，更新一次就好了），cca 这一版要的是 `team::SERVER_NEED`、少了什么是
+`SERVER_WHY`（服务端加了 cca 要靠的东西时两边一起加一、改这句话）。同步配置成功时（`sync_locked`）顺便问一次，记进 `sync.json` 的 `level`
+（没问到照记着的；测试用的记录 curl（`tests/kit/fleet.rs` 的 `CURL`）把这两个 GET 也记下，请求体是空的，`sent` 不算它们），`team ls --json` / `config.teams[]` 给 `server_level`、`server_update`（PROTOCOL 4.14）。App 在 Team 下面多一行橙色的提示：
+建 Team 的设备带「更新服务器…」（同「更多」里的那一项），别的设备说请管理员更新；终端里 `cca team ls` 也说一句。部署完 cca 会同步一次，提示就没了。
+
 ### 删除 Team（卸载它的同步服务器，3.6.3 起）
 
 管理员的 `cca team leave` 就是删除这个 Team：以前只删这台设备上的（根密钥没了），服务器上的服务一直留着、没人管。现在先经 SSH 卸掉它，卸好了
