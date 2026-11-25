@@ -990,7 +990,8 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `team.join` | `team join` | `secret` | Team 的邀请链接（`cca-team1.` 开头的一行：管理员发给这台设备的，一个邀请只能加入一台设备）。链接不对（少了一截、不是邀请链接）、服务器不认、过期了、用过了（`team_link`、`team_denied`、`team_expired`、`team_used`）时带着原因（`error`）重问。配置向导、终端里的安装（`onboard.team`、`install.team` 答有）问的这一页是可选的（`optional`）：留空交上来是先不加入，接着往下做 |
 | `install.team` | `install`（终端，服务器上直连不通时） | `confirm`（默认否） | 有没有 Team 的邀请链接：有就加入（接着 `team.join`，可以留空：先不加入），节点用 Team 的配置带的；没有就粘贴一条自己的代理当出口（`node add` 那一套）。只在终端里问 |
 | `onboard.net` | `_onboard`（配置向导的「网络出口」，一般是第 2 步） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理）/ 先跳过。路由器或本机的客户端已经配好时不问。加入了 Team 时 `message` 说网络出口配好后 Team 给的账号自动加进来 |
-| `onboard.add` | `_onboard`（配置向导的「添加账号」，一般是第 3 步） | `confirm` | 还没有账号：现在添加第一个账号吗（默认是）；Team 给的账号这次加进来了：还要再添加一个吗（默认否，`message` 说加了谁）。开始时已经有账号的不问。接着走 `add.basic` / `add.node`，不要求配置了路由器 |
+| `onboard.add` | `_onboard`（配置向导的「添加账号」，一般是第 3 步） | `confirm` | 还没有账号：现在添加第一个账号吗（默认是）；Team 给的账号这次加进来了：还要再添加一个吗（默认否，`message` 说加了谁）。开始时已经有账号的不问。接着走 `onboard.tool`（装了 codex / agy 时）、`add.basic` / `add.node`，不要求配置了路由器 |
+| `onboard.tool` | `_onboard`（`onboard.add` 答是以后，3.6.15 起） | `choice` | 添加哪种账号：`claude` / `codex` / `agy`（默认 `claude`；只列这台 Mac 上装了命令的，两个都没装时不问）。选了的工具的账号走 `add.basic` / `add.node`，结果事件 `added` 的 `tool` 是它 |
 | `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
 | `add.node` | `[codex] add` | `choice` | 出口节点。Team 的配置锁定了这个邮箱的节点时不问。能用内置代理时末尾有一项「自定义代理…」，选它接着问 `node.custom`；没有路由器、还没有可选节点时只有这一项（`message` 说明） |
 | `node.custom` | `[codex] add`（选节点时「自定义代理…」）/ `[codex\|agy] node use 账号` | `text` | 粘贴一条代理链接当出口节点：分享链接（vmess/vless/ss/trojan/hysteria2/tuic）、`socks5://用户:密码@主机:端口`、`http(s)://用户:密码@主机:端口`；cca 拿内置代理的内核校验，不合格带着原因重问；多行 Clash 配置在终端 `cca node add`。配置了路由器的，节点随后写进路由器的配置文件（要重启时接着问 `consent.router_restart`） |

@@ -2215,21 +2215,28 @@ out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"router"}]}' --eof-a
 ok "配置向导：选「路由器」→ 接着走配置路由器表单（router.basic）；在那页取消就不记 onboarded" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net router.basic" ] && gj state | jok "not cfg.get(\"onboarded\")"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"
-out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"claude"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
 cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
+ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是、装了 codex / agy 时再问加哪种（choice，默认 Claude Code），选 Claude Code 接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.add onboard.tool add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\"" && evq "e.get(\"q\") == \"onboard.tool\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"default\"] == \"claude\" and [o[\"value\"] for o in e[\"fields\"][0][\"options\"]] == [\"claude\", \"codex\", \"agy\"] and e[\"title\"].endswith(\"添加账号\")" && evq "e.get(\"q\") == \"add.basic\" and \"Codex\" not in e.get(\"title\", \"\")"'
+# 选 Codex：在 Codex 的账号表里加（还没有 codex.json 时建出来），结果事件带 tool=codex；没装 agy 时不列它
+cp "$H/.cca/codex.json" "$T/cdx.onb.bak" 2>/dev/null; rm -f "$H/.cca/codex.json"; mv "$T/bin/agy" "$T/agy.off"
+printf '{}' > "$H/.cca/accounts.json"
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"codex"}],"add.basic":[{"email":"onbcx@example.com","alias":""}],"add.node":[{"v":"1"}]}' -- cca _onboard 2>&1); rc=$?
+mv "$T/agy.off" "$T/bin/agy"
+ok "配置向导：选 Codex → 在 Codex 的账号表里加（没有 codex.json 时建出来），结果带 tool=codex；没装 agy 时选项里没有它；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.add onboard.tool add.basic add.node" ] && evq "e.get(\"q\") == \"onboard.tool\" and [o[\"value\"] for o in e[\"fields\"][0][\"options\"]] == [\"claude\", \"codex\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"added\" and e[\"tool\"] == \"codex\"" && [ "$(lastres)" = onboarded ] && "$TESTBIN" check -f "j=$H/.cca/codex.json" "any(k.endswith(\"(onbcx@example.com)\") or k == \"onbcx@example.com\" for k in j)" && [ "$(cat "$H/.cca/accounts.json")" = "{}" ]'
+cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"; rm -f "$H/.cca/codex.json"; [ -f "$T/cdx.onb.bak" ] && cp "$T/cdx.onb.bak" "$H/.cca/codex.json"
 # 没有路由器笔记本：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没有可选节点 → 加账号时粘贴自定义代理（下面）
 cp "$H/.cca/config.json" "$T/cfg.b2.bak"; cp "$H/.cca/accounts.json" "$T/tbl.b2.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.b2.bak"
 "$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"   # 端口池清空(Claude+Codex)→ LOCAL_SLOTS=0,core_setup 早返回不下载/不起内核
-out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
-ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"claude"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add onboard.tool add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
 # 没有路由器、没有可选节点、不在 Team 里：加账号不要求先配置路由器（以前会接着走配置路由器的表单），选节点那步可以粘贴自定义代理
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
 "$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None)'
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
-out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
-ok "没有路由器、没有可选节点、不在 Team 里：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"claude"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
+ok "没有路由器、没有可选节点、不在 Team 里：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add onboard.tool add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
 # 三步都问（还没有账号、没配过路由器、不在 Team 里）：各页标题写第几步（共 3 步）
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
 "$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'

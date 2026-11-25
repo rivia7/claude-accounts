@@ -7736,6 +7736,25 @@ onboard_builtin() {   # 向导第 2 步选了「没有路由器（内置代理�
 	return 0
 }
 
+ONB_TOOL=claude
+onboard_add_one() {   # 向导第 3 步添加一个账号：这台 Mac 上装了 codex / agy 命令时先问加哪种（onboard.tool，默认 Claude Code；没装的不列），
+	                   # 选了 Codex / Antigravity 就在子 shell 里切到那个工具（use_tool；还没有它的账号表时 py init 建出来，Team 给的随即加进来）
+	                   # 再走 cmd_add。记下选的是哪种（ONB_TOOL：别的工具的账号不在 py keys 里，向导结束时照它判断要不要同步路由器）
+	local opts=()
+	ONB_TOOL=claude
+	if [ -n "$CODEX_BIN" ] || [ -n "$AGY_BIN" ]; then
+		opts=("opt=claude"$'\t'"Claude Code"$'\t'"Anthropic 的账号（Claude Pro、Max 这些套餐）")
+		[ -z "$CODEX_BIN" ] || opts+=("opt=codex"$'\t'"Codex"$'\t'"OpenAI 的账号（ChatGPT Plus、Pro 这些套餐）")
+		[ -z "$AGY_BIN" ] || opts+=("opt=agy"$'\t'"Antigravity"$'\t'"Google 账号（Google AI Pro、Ultra 这些套餐）")
+		ONB_TOOL=$(gui_ask choice "添加哪种账号？" claude "q=onboard.tool" "title=${ONB_TITLE}" \
+			"message=先加一个，别的工具的账号以后在侧栏里切到那个工具再添加。" "${opts[@]}") || return 1
+	fi
+	case "$ONB_TOOL" in
+		codex|agy) ( use_tool "$ONB_TOOL"; [ -f "$TABLE" ] || py init; cmd_add ) ;;
+		*) ONB_TOOL=claude; cmd_add ;;
+	esac
+}
+
 onboard_title() {   # onboard_title 这一步的名字：向导的页标题 ONB_TITLE（第几步、共几步；只有一步时不写）。n 和要问哪几步（ask…）是 cmd_onboard 的
 	local total=0 s
 	n=$((n + 1))
@@ -7794,18 +7813,18 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 		if [ -z "$keys1" ]; then
 			if confirm "现在添加第一个账号？" y "q=onboard.add" "title=${ONB_TITLE}" \
 				"detail=填登录邮箱、选一个出口节点；第一次使用时会在它专属的浏览器窗口里登录。"; then
-				cmd_add || true
+				onboard_add_one || true
 			fi
 		else   # Team 给的账号这次加进来了（开始时一个都没有）：问要不要再加一个自己的
 			while IFS= read -r k; do [ -z "$k" ] || added="${added:+${added}、}${k%%(*}"; done <<< "$keys1"
 			if confirm "还要再添加一个账号吗？" n "q=onboard.add" "title=${ONB_TITLE}" "message=已按 Team 的配置添加了 ${added}。" \
 				"detail=Team 里没有的账号在这里添加：填登录邮箱、选一个出口节点。"; then
-				cmd_add || true
+				onboard_add_one || true
 			fi
 		fi
 	fi
 	# Team 给的账号这次加进来了、还没同步到路由器（刚配好路由器时还没有账号，配置路由器那一步不同步）：现在同步，要重载时当场问
-	if [ "$(py keys)" != "$keys0" ] && router_ready && [ "$(digest)" != "$(py get synced)" ]; then
+	if { [ "$(py keys)" != "$keys0" ] || [ "$ONB_TOOL" != claude ]; } && router_ready && [ "$(digest)" != "$(py get synced)" ]; then
 		router_sync_soon
 		case $? in 0|3) ;; *) fail_warn sync_failed "账号还没同步到路由器：修好后在节点分流页点「同步」（或者运行 cca router sync）" ;; esac
 	fi
