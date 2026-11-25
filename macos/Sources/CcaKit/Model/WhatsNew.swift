@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.1-beta.1", title: "Team 的配置更新后，节点分流马上跟上", points: [
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "后台同步到 Team 的新配置后，马上照它改账号表、同步路由器和内置代理，不用等下次启动账号。"),
+            .init(symbol: "arrow.triangle.branch",
+                  text: "只是账号换了节点时，内置代理的端口直接切到新节点，不重新加载，正在用的连接不断。"),
+        ]),
         ReleaseNote(version: "3.7.0", title: "在 iPhone 上接入远程会话", points: [
             .init(symbol: "iphone",
                   text: "「和手机配对」显示的二维码改给 iPhone 上的 cca App 扫，扫了就配好，不用再输入配对码。"),
