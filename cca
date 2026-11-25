@@ -3861,7 +3861,7 @@ codex_app_path() {   # ChatGPT App 装在哪（CCA_CODEX_APP 可指定）：认 
 	return 1
 }
 claude_app_missing() { printf '%s' "没找到 Claude App：先从 https://claude.ai/download 下载安装"; }
-codex_app_missing() { printf '%s' "没找到 ChatGPT App（Codex 的桌面版）：运行 codex app 会打开它的安装页"; }
+codex_app_missing() { printf '%s' "没找到 ChatGPT App（Codex 的桌面版）：先从 https://persistent.oaistatic.com/codex-app-prod/Codex.dmg 下载安装（codex app 没装 App 时下载的也是它）"; }
 # agy 没有能按账号多开的桌面 App（Antigravity 编辑器不认资料目录参数）：cca agy app 说清楚，删账号、还原时当作没开着
 agy_app_path() { return 1; }
 agy_app_missing() { printf '%s' "Antigravity 账号没有桌面 App 可开：用 cca agy @账号 在终端里用"; }

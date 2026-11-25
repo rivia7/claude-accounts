@@ -110,8 +110,8 @@ import Foundation
     check("node_missing 的补救：编辑 Codex 账号表",
           m2.remedy(for: failure(.nodeMissing, .codex)) == .handoff(.edit(prefix: ["codex"])))
     check("table_invalid 的补救：cca edit", m2.remedy(for: failure(.tableInvalid)) == .handoff(.edit(prefix: [])))
-    check("app_missing 的补救：Claude App 给下载页，ChatGPT App 没有", m2.remedy(for: failure(.appMissing)) == .openURL(Remedy.claudeDownload)
-          && m2.remedy(for: failure(.appMissing, .codex)) == Remedy.none)
+    check("app_missing 的补救：Claude App 给下载页，ChatGPT App 给官方安装包", m2.remedy(for: failure(.appMissing)) == .openURL(Remedy.claudeDownload)
+          && m2.remedy(for: failure(.appMissing, .codex)) == .openURL(Remedy.chatgptDownload))
     check("tool_missing 的补救：cca 有辅助安装（hello.install_cli）时在终端里装（cca codex install-cli）", m2.installCLISupported
           && m2.remedy(for: failure(.toolMissing, .codex)) == .handoff(.installCLI(prefix: ["codex"], tool: .codex)))
     if var bob = m2.account(bobRef) {

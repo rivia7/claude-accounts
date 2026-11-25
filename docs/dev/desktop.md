@@ -4,6 +4,8 @@
 - Claude App 多开只认 `--user-data-dir`（签名版忽略 `CLAUDE_USER_DATA_DIR`）；App 不加单实例锁，同一个资料目录绝不能开两份。`cmd_app` 先用 `app_pid` 查，真正启动时再持有账号 `app-launch.lock`（fd 9，不传给 App）复查；新实例须由进程树 + lsof 证明打开了账号资料文件，旧 Local State 不足以证明。`app_open` 也必须使用 `child_env` 的环境清理。
 - 启动器图标的轮廓必须和原图标一样：标识伸出圆角方形，macOS 26 起会把整个图标缩小、关进灰框。看效果要导出 `NSWorkspace.iconForFile`（系统实际显示的样子），只看 icns 本身发现不了
 
+- 没装桌面 App 时（`app_missing`）：Claude App 给下载页（`https://claude.ai/download`），ChatGPT App 给官方安装包 `https://persistent.oaistatic.com/codex-app-prod/Codex.dmg`（`codex app` 没装 App 时自己下载的就是它，从 codex 0.172 里取出来的；3.6.15 起，以前 App 里没有补救、终端里说用 `codex app`）：bash 的 `codex_app_missing` ↔ App 的 `Remedy.chatgptDownload`。官方换了地址时两边一起换
+
 ## 测试
 - 程序坞（regress.sh 11d）：`run` 带着 `CCA_DOCK_PREFS="$T/dock/dock.plist"`、`CCA_DOCK_SETTLE=0`（等待都换成这么久），回归绝不能碰真的程序坞；`dk set 最近使用的 [固定的] [show-recents] | get | add App` 改、读这份设置（`cca-test dockpl`，`tests/tool/fake/dock.rs`；App 名写成 `A:nobid` 是不带 bundle id 的图标），`dkapp 名字 bundle-id [真程序]` 建假 App（要“开着”就拷一份 /bin/sleep 当主程序、按路径运行）。假 `killall` 记 `killall.log`（`$T/dock_readd` 里写 App 名：重启后把它加回来一次，第二行写 keep 每次都加），假 `lsappinfo` 回 `$T/lsappinfo.txt`（每次调用记 `lsappinfo.log`），假 `open` 在后台跑 `cca-dock.app`，跑完在 open.log 记 `DOCK-APP-DONE 进程号`（`dkwait` 等它，不干等）
 - Claude App：`run` 里的 `CCA_CLAUDE_APP` 指向假的 Claude.app；假 `open` 遇到 `--user-data-dir` 会建 `Local State`（有 `open_noprofile` 时不建）

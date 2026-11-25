@@ -25,6 +25,8 @@ enum Remedy: Sendable, Equatable {
     case openURL(String)
 
     static let claudeDownload = "https://claude.ai/download"
+    /// ChatGPT App（Codex 的桌面版）的官方安装包：`codex app` 没装 App 时自己下载的就是它（codex 0.172 里写着的地址）
+    static let chatgptDownload = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
 
     /// 按 fail 的 code 给补救（prefix 默认用工具的前缀；AppModel.remedy(for:) 传 state 里的 cli_prefix）。
     static func forCode(_ code: FailCode, tool: ToolID, key: String?, prefix: [String]? = nil) -> Remedy {
@@ -42,8 +44,9 @@ enum Remedy: Sendable, Equatable {
             guard let key else { return .none }
             return .handoff(.login(prefix: p, key: key, name: key))
         case .appMissing:
-            // ChatGPT App（Codex 的桌面版）没有固定的下载地址：cca 的说明里写着用 codex app 打开它的安装页；Antigravity 没有桌面 App
-            return tool == .claude ? .openURL(claudeDownload) : .none
+            // Claude App 给下载页，ChatGPT App 给官方安装包（codex app 用的那一个）；Antigravity 没有桌面 App
+            if tool == .claude { return .openURL(claudeDownload) }
+            return tool == .codex ? .openURL(chatgptDownload) : .none
         case .toolMissing:
             // 辅助安装（cca 够新时才有，AppModel.remedy(for:) 按 hello.install_cli 把关）
             return .handoff(.installCLI(prefix: p, tool: tool))

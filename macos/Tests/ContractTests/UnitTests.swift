@@ -97,9 +97,9 @@ func textTests() {
     } else {
         check("login_mismatch → cca login KEY", false)
     }
-    check("app_missing → 下载页（ChatGPT App 没有固定的下载地址：不给按钮，照 cca 的说明来）",
+    check("app_missing → 下载页（ChatGPT App 是 codex app 用的那个官方安装包）",
           Remedy.forCode(.appMissing, tool: .claude, key: nil) == .openURL("https://claude.ai/download")
-          && Remedy.forCode(.appMissing, tool: .codex, key: nil) == .none)
+          && Remedy.forCode(.appMissing, tool: .codex, key: nil) == .openURL("https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"))
     check("其它没有补救", Remedy.forCode(.lowPurity, tool: .claude, key: nil) == Remedy.none
           && Remedy.forCode(FailCode(rawValue: "zz"), tool: .claude, key: nil) == Remedy.none)
 
