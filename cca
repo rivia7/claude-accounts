@@ -4894,14 +4894,20 @@ udp_why() {   # 系统服务没在运行的原因（接在提示后面）
 		[ -z "$l" ] || printf '（日志 %s 的最后一行：%s）' "$UDP_LOG" "$l"
 	fi
 }
-core_follow() {   # 内置代理的端口池跟上现在的账号表、节点定义、路由（开着 TUN 时绑定的网卡）：内核在跑、它加载的配置旧了就重新加载一次。
+core_follow() {   # 内置代理的端口池跟上现在的账号表、节点定义、路由（开着 TUN 时绑定的网卡）：内核在跑、它加载的配置旧了就重新加载一次，
+	              # 再把每个槽位切到分给它的账号的节点（local_select_all）——只是账号换了节点（Team 的配置改了、cca edit）时端口池的结构不变，
+	              # 不重新加载，只走控制接口切过去；以前这种改动要等在外面启动账号（core_ensure）才切，在跑的内核一直经旧的节点出去。
 	              # 在家时账号走路由器、不经它，以前要等在外面启动账号才更新，「节点分流」页一直说本机的端口还没更新。内核没在跑的不用管：
-	              # 起它时用的就是最新的配置（cmd_core 记下）。返回 0：重新加载了
+	              # 起它时用的就是最新的配置（cmd_core 记下），启动账号时 core_ensure 再切。返回 0：重新加载了
+	local rc=1 sel
 	load_local
-	[ "$LOCAL_CLIENT" = builtin ] && [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || return 1
+	[ "$LOCAL_CLIENT" = builtin ] || return 1
 	lctl GET /version
 	[ "$LCODE" = 200 ] || return 1
-	core_reload
+	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ]; then core_reload || return 1; rc=0; fi
+	local_select_all; sel=$?
+	if [ $sel -eq 2 ] && [ $rc -ne 0 ]; then core_reload && local_select_all && rc=0; fi   # 有策略组不在在跑的内核里：配置旧了，重新加载再切
+	return $rc
 }
 udp_core_follow() {   # 开关 TUN 之后：内置代理的内核在跑的话照现在的路由重新加载一次（开着 TUN 时它绑定物理网卡连节点，见 bind_note）
 	core_follow && [ -n "${LOCAL_BIND:-}" ] && info "$(bind_note)"
@@ -5551,6 +5557,7 @@ sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路�
 		st=$({ router_sh; router_rb; } | py sync-state) || FAIL_CODE=table_invalid die "账号表有错误：运行 ${CMD} edit 修正"
 	fi
 	if [ "${st%%	*}" != "${st#*	}" ]; then
+		core_follow   # 本机的端口池：内置代理的内核在跑就马上跟上（和 router_sync_soon 一样；直接改了账号表文件、后台同步没做完时）
 		router_needed || return 0   # 只有直连的第三方 API 账号、也没配置路由器：没有要同步的
 		# 从来没配置过路由器，或者只用本机的客户端（cca 内置的代理）：没有路由器要同步，本机的端口池启动时配好
 		if ! router_ready && { [ -z "$ROUTER_HOST" ] || [ -n "$LOCAL_SET" ]; }; then return 0; fi
@@ -6247,11 +6254,25 @@ cmd_gui_fetch() {   # 后台任务：下载校验好和 cca 同版本的 App；A
 }
 
 # ---------------------------------------------------------------------------
-team_hook() {   # 启动时：这台设备在 Team 里、距上次同步配置超过一个小时，就在后台同步一次（只换本机存的那一份：账号表在下一条命令读它时照新的改）
+team_hook() {   # 启动时：这台设备在 Team 里、距上次同步配置超过一个小时，就在后台同步一次（team_bg_sync：拿到新的一版就马上照它改账号表、同步路由器、
+                # 让内置代理跟上）。后台的那一个不带这条命令的提问会话、授权、只读（App 起的命令也会走到这里）
 	[ -f "$CCA_HOME/teams/index.json" ] || return 0
 	[ -z "$(find "$CCA_HOME/teams/checked" -mmin -60 2>/dev/null)" ] || return 0
 	touch "$CCA_HOME/teams/checked"
-	( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _team-sync </dev/null >/dev/null 2>&1 3<&- & )
+	( unset CCA_EVENTS CCA_GRANT CCA_RO CCA_TTY; perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _team-sync </dev/null >/dev/null 2>&1 3<&- & )
+}
+
+team_bg_sync() {   # cca _team-sync（team_hook 在后台起的）：各个 Team 同步一次配置。手里的那一份变了（新的一版、被移除、记录没了）就马上 team_settle：
+	                 # 账号表照它改、同步路由器（在家时；要重载 OpenClash 的不问、不重载，等下次启动问）、内置代理的端口池跟上、改启动器。
+	                 # 以前只换本机存的那一份，路由器和内置代理的分流要等下次启动账号才跟上（App 的「节点分流」页一直是旧的）
+	local before after
+	[ -f "$CFG" ] || { py team-sync >/dev/null 2>&1; return 0; }
+	before=$(py team-list 2>/dev/null | cut -f1,5,6)
+	py team-sync >/dev/null 2>&1 || return 0
+	after=$(py team-list 2>/dev/null | cut -f1,5,6)
+	[ "$after" != "$before" ] || return 0
+	team_settle
+	return 0
 }
 
 cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增的会话记录、和别的设备同步），两个工具一起；--json 给 App（PROTOCOL 3.5）。
@@ -8363,7 +8384,7 @@ main() {
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
 		_update-fetch) cmd_update_fetch ;;
 		_policy-fetch) ;;   # 3.6.0 去掉了维护者的映射：以前的版本在后台起的（起的时候还是旧版、跑到这里已经换成新版）什么都不做
-		_team-sync) CCA_SELF="$SELF" exec "$HELPER" team-sync ;;   # 后台：各个 Team 同步一次配置（team_hook 起的）
+		_team-sync) team_bg_sync ;;   # 后台：各个 Team 同步一次配置，变了马上照它改账号表、同步路由器和内置代理（team_hook 起的）
 		_policy-check|_fill-check|_policy-lock|_team-handoff) die "这条命令 3.6.0 起去掉了：维护者的映射（连同 policy.sh）改用 Team" ;;   # 以前 policy.sh 调的
 		_gui) shift; cmd_gui_api "$@" ;;   # 图形界面的只读接口（macos/PROTOCOL.md）
 		_gui-fetch) cmd_gui_fetch ;;

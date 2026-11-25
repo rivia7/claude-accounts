@@ -231,9 +231,11 @@
   3.6.0 以前关掉维护者的共享时收起来的（没有 `team`）没有谁再放回来，`unpark` 照样放。
 - 账号走哪一类同步服务器（`cmd/hub.rs` 的 `route`）看是谁定的：Team 给的是 `HubKind::Team(编号)`，别的（这台设备自己的官方账号、第三方 API 账号）
   哪台都不去（见下一节）。
-- 配置什么时候同步：`cca team join`、`cca team sync`；启动时 `team_hook`（在 Team 里、距上次超过一个小时就在后台 `cca _team-sync`，只换本机存的那一份）。
+- 配置什么时候同步：`cca team join`、`cca team sync`；启动时 `team_hook`（在 Team 里、距上次超过一个小时就在后台 `cca _team-sync`：`team_bg_sync`，
+  手里的那一份变了——各个 Team 的状态、序号和同步前不一样——就马上 `team_settle`；以前只换本机存的那一份，路由器和内置代理的分流要等下次启动账号才跟上。
+  后台的那一个不带提问会话、授权、只读的环境变量：要重载 OpenClash 的不问、不重载，等下次启动时问）。
   换了版本以后的第一条命令不等这一个小时（`update_after` 删掉 `teams/checked`，见 release.md）：一更新就和 Team 对一次，拿到最新的那一版，管理员看到的「手里那一份」也跟着新。
-  账号表在下一条读它的命令里照新的改；`cca team join / sync / leave`、管理员的 `import / map / alias / publish / attach` 之后马上做完（`team_settle`：
+  只换了本机存的那一份、还没对账的（后台那一个还没做完）账号表在下一条读它的命令里照新的改；`cca team join / sync / leave`、管理员的 `import / map / alias / publish / attach` 之后马上做完（`team_settle`：
   没配置过路由器的把配置带的节点导入可选节点，`py team-apply` 对一遍，同步路由器，改启动器）。
 - 管理员自己这台设备默认拿全部账号（`grants` 是 `all`）：Team 里的账号都会加进它的账号表。不要的话 `cca team grant Team 自己这台 none`
   （或者只留几个）。

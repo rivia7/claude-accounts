@@ -2703,9 +2703,14 @@ out=$(run CCA_TTY="$(ans "$GLLINK")" cca team join --name alice-mbp 2>&1); rc=$?
 GLTID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$')
 touch "$H/.cca/teams/checked"   # 这几节不让启动时的后台同步（team_hook，一个小时一次）插进来：同步都是测试自己做的
 ok "加入「阁楼组」：马上照它的配置改账号表（alice 的节点由它定，说一声），同步到路由器（只换节点、不重载）；本机存的配置只有自己能读" '[ $rc -eq 0 ] && [ ${#GLTID} -eq 32 ] && printf "%s" "$out" | grep -q "已加入「阁楼组」（127.0.0.1:${GLPORT}）：这台设备叫 alice-mbp" && printf "%s" "$out" | grep -q "alice@example.com 的出口按「阁楼组」的配置固定为 US-C（账号表里写的是 US-A，已改回）" && tblok "t[\"alice@example.com\"] == \"US-C\"" && [ "$(sel CCA-1)" = US-C ] && [ "$(reloads)" = "$n0" ] && [ "$(stat -f %Lp "$H/.cca/teams/$GLTID/doc.json")" = 600 ]'
-gl_put '{"accounts": {"claude": {"alice@example.com": "US-B"}}}'; run cca _team-sync >/dev/null 2>&1   # 后台同步到了新的一版（_team-sync 就是 team_hook 在后台起的那一个）
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-B"}}}'; n0=$(reloads); run cca _team-sync >/dev/null 2>&1   # 后台同步到了新的一版（_team-sync 就是 team_hook 在后台起的那一个）
+ok "后台同步到了新的一版（alice 换了节点）：马上照它改账号表、同步到路由器（只换节点，不重载），不等下次启动账号" '[ "$(gl_have)" = "$GLSEQ" ] && tblok "t[\"alice@example.com\"] == \"US-B\"" && [ "$(sel CCA-1)" = US-B ] && [ "$(reloads)" = "$n0" ] && cfgok "c[\"synced\"]" '
+: > ssh.log; out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "之后启动照常：路由器已经跟上了，不再同步" '[ $rc -eq 3 ] && [ "$(sel CCA-1)" = US-B ] && ! printf "%s" "$out" | grep -q "先同步到路由器"'
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-C"}}}'; run "${HELPERWRAP:-$HELPER_BIN}" team-sync >/dev/null 2>&1   # 只换了手里的那一份、还没对账（后台同步正做到一半）
 n0=$(reloads); out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "后台同步到了新的一版（alice 换了节点）：启动前照它改账号表（说一声）、同步到路由器（只换节点，不重载），照常启动" '[ $rc -eq 3 ] && [ "$(gl_have)" = "$GLSEQ" ] && tblok "t[\"alice@example.com\"] == \"US-B\"" && [ "$(sel CCA-1)" = US-B ] && [ "$(reloads)" = "$n0" ] && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-B（账号表里写的是 US-C，已改回）"'
+ok "手里的配置换了、账号表还没跟上：启动前照它改账号表（说一声）、同步到路由器，照常启动" '[ $rc -eq 3 ] && tblok "t[\"alice@example.com\"] == \"US-C\"" && [ "$(sel CCA-1)" = US-C ] && [ "$(reloads)" = "$n0" ] && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-C（账号表里写的是 US-B，已改回）"'
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-B"}}}'; run cca _team-sync >/dev/null 2>&1
 out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.sh" CCA_TEST_EDIT='j["alice@example.com"] = "US-D"' cca edit 2>&1)
 ok "cca edit 把 Team 给的账号改成别的节点：改回 Team 的配置定的节点并说明" 'tblok "t[\"alice@example.com\"] == \"US-B\"" && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-B（账号表里写的是 US-D，已改回）"'
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-D"}}}' "$GLD/evil"; out=$(run cca team sync 2>&1); rc=$?
@@ -2729,7 +2734,7 @@ out=$(run cca team sync 2>&1); rc=$?
 ok "合并：Team 给的、这台机器上还没有的账号加进账号表、分到端口（别名用 Team 给的；frank 的 kimi 和这台机器上的第三方 API 账号撞了，换成「阁楼组-kimi」）；这台机器自己的账号不动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "阁楼组：配置已同步" && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\" and t.get(\"阁楼组-kimi(frank@example.com)\") == \"US-B\" and t.get(\"自己(own@example.com)\") == \"US-A\" and \"kimi\" in t" && cfgok "\"Erin(erin@example.com)\" in c[\"ports\"] and \"阁楼组-kimi(frank@example.com)\" in c[\"ports\"]" && printf "%s" "$out" | grep -q "按「阁楼组」的配置添加了 Claude 账号 Erin（erin@example.com），出口 US-D"'
 ok "Team 要的节点不在这台机器的可选节点里（也不是它的配置带的节点）：先不加（加进来整张表就校验不过）" '! grep -q gina "$H/.cca/accounts.json"'
 gl_put '{"accounts": {"claude": {'"$GLA"', "frank@example.com": "US-B", "gina@example.com": "HK-A", "hank@example.com": "US-B"}}, "aliases": {"erin@example.com": "Erin", "frank@example.com": "kimi"}}'
-run cca _team-sync >/dev/null 2>&1; cp -p "$H/.cca/accounts.json" "$T/gl.tbl"; cp -p "$H/.cca/config.json" "$T/gl.cfg"   # 后台同步到了：账号表在下一条命令里才改
+run "${HELPERWRAP:-$HELPER_BIN}" team-sync >/dev/null 2>&1; cp -p "$H/.cca/accounts.json" "$T/gl.tbl"; cp -p "$H/.cca/config.json" "$T/gl.cfg"   # 只换了手里的那一份（后台同步正做到一半）：账号表还没改
 out=$(gj state)
 ok "_gui state（只读）：后台同步到的那一版里新给的账号算进快照，notices 里说本来会加（policy_added），账号表和 config.json 都不改" 'printf "%s" "$out" | jok "any(n[\"code\"] == \"policy_added\" and n[\"key\"] == \"hank@example.com\" and n[\"node\"] == \"US-B\" for n in d[\"notices\"]) and \"hank@example.com\" in [a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]]" && cmp -s "$H/.cca/accounts.json" "$T/gl.tbl" && cmp -s "$H/.cca/config.json" "$T/gl.cfg"'
 gl_put '{"accounts": {"claude": {'"$GLA"', "frank@example.com": "US-B", "gina@example.com": "HK-A"}}, "aliases": {"erin@example.com": "Erin", "frank@example.com": "kimi"}}'; run cca _team-sync >/dev/null 2>&1
@@ -2782,8 +2787,10 @@ ok "后台同步到了新的一版之后，cca web、cca check 先把路由器�
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-A", "erin@example.com": "US-D", "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
 run cca update off >/dev/null 2>&1; touch -t "$(date -v-2H +%Y%m%d%H%M.%S)" "$H/.cca/teams/checked"; run cca ls >/dev/null 2>&1
 for i in $(seq 1 50); do [ "$(gl_have)" = "$GLSEQ" ] && break; sleep 0.2; done
+for i in $(seq 1 100); do pgrep -f "$H/.* _team-sync" >/dev/null 2>&1 || pgrep -f "cca _team-sync" >/dev/null 2>&1 || break; sleep 0.1; done   # 后台那一个做完（对账、同步路由器）
+s1=$(sel CCA-1)
 run cca update auto >/dev/null 2>&1; run cca ls >/dev/null 2>&1
-ok "距上次同步配置超过一个小时：启动时在后台同步一次（关了自动更新也同步），账号表在下一条命令里照新的一版改" '[ "$(gl_have)" = "$GLSEQ" ] && [ -n "$(find "$H/.cca/teams/checked" -mmin -1)" ] && tblok "t[\"alice@example.com\"] == \"US-A\""'
+ok "距上次同步配置超过一个小时：启动时在后台同步一次（关了自动更新也同步），拿到新的一版就在后台照它改账号表、同步到路由器" '[ "$(gl_have)" = "$GLSEQ" ] && [ -n "$(find "$H/.cca/teams/checked" -mmin -1)" ] && tblok "t[\"alice@example.com\"] == \"US-A\"" && [ "$s1" = US-A ]'
 # Team 要的节点不在这台机器的可选节点里（路由器上有 HK-A，装的时候只选了 US-A…US-D）
 gl_put '{"accounts": {"claude": {"alice@example.com": "HK-A", "erin@example.com": "US-D", "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
 run cca team sync >/dev/null 2>&1
@@ -3817,6 +3824,12 @@ ok "在家启动账号、内置代理在跑、端口池旧了：照常走路由�
 n0=$(creloads)
 run cca @alice --version >/dev/null 2>&1; sleep 0.5
 ok "端口池已经是最新的：在家启动账号不再重新加载" '[ "$(creloads)" = "$n0" ] && [ ! -d "$H/.cca/core-nodes.lock" ]'
+# 只是账号换了节点（Team 的配置改了、直接改了账号表）：端口池的结构没变，不重新加载，在家时也马上经控制接口切过去（以前等到在外面启动账号才切）
+cf0=$(csel CCA-1); [ "$cf0" = US-B ] && cf1=US-C || cf1=US-B
+edit_table 'j["alice@example.com"] = "'"$cf1"'"'
+n0=$(creloads); run cca @alice --version >/dev/null 2>&1; rc=$?
+ok "在家、内置代理在跑，账号换了节点：同步路由器时内置代理的槽位也经控制接口切过去，不重新加载" '[ $rc -eq 3 ] && [ "$(csel CCA-1)" = "$cf1" ] && [ "$(creloads)" = "$n0" ] && [ "$(sel CCA-1)" = "$cf1" ]'
+edit_table 'j["alice@example.com"] = "'"$cf0"'"'; run cca @alice --version >/dev/null 2>&1
 # 内核由界面 App 起（cca _core run）：照刚写好的配置起，记下端口池已同步（不然 App 刚起好内核时分流页也说本机的端口还没更新）
 "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['local']['applied'] = 'stale'"
 core_stop; n0=$(creloads)
