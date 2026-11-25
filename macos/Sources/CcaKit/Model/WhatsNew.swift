@@ -20,6 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.14", title: "Team 的配置能导出、导入、修改", points: [
+            .init(symbol: "square.and.arrow.up.on.square",
+                  text: "管理员能把 Team 的配置导出成文件、改好再导入，也能直接在终端里改（App 里在 Team 的「更多」菜单）；导入前先列出会改什么，同意了才换。"),
+            .init(symbol: "chart.bar.xaxis",
+                  text: "折合金额：新模型还没有价格时按同系列上一个版本估算（带「≈」），不再漏算。"),
+            .init(symbol: "battery.25",
+                  text: "总览里额度快用完的账号，卡片上的人会犯困：点头，头顶的电池一闪一闪。"),
+            .init(symbol: "doc.on.clipboard",
+                  text: "远程会话的终端里选中文字就复制，右键粘贴。"),
+            .init(symbol: "arrow.triangle.branch",
+                  text: "在家改了账号表、Team 的配置，内置代理也马上更新本机 Clash 的端口，「节点分流」不再一直提示还没更新。"),
+        ]),
         ReleaseNote(version: "3.6.13", title: "Team 的同步服务器不再需要 Python", points: [
             .init(symbol: "shippingbox",
                   text: "部署到自己服务器上的同步服务器换成 cca 自带的程序：systemd 方式不再要 python3，Docker 方式也不再拉 python 镜像，部署时传过去约 10 MB。"),
