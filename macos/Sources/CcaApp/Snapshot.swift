@@ -9,7 +9,7 @@ import SwiftUI
 ///     CCA_GUI_FIXTURES=macos/Tests/Fixtures CCA_GUI_SNAPSHOT=/tmp/shots macos/build/cca.app/Contents/MacOS/cca
 ///
 /// 只截自己的窗口（SCShareableContent.currentProcess），不用录屏权限；窗口放到别的窗口后面，不抢焦点。
-/// CCA_GUI_SNAPSHOT_SCENES=claude,routing 只截这几个场景。
+/// CCA_GUI_SNAPSHOT_SCENES=claude,routing 只截这几个场景；CCA_GUI_SNAPSHOT_TIPS=0 把页面上的提示卡片都关掉（像点过“知道了”）。
 @MainActor
 enum Snapshot {
     static var directory: URL? {
@@ -41,6 +41,9 @@ enum Snapshot {
         model.refreshLive()
         // 第一次打开时的卡片教程先关掉（它自己有场景 tutorial）
         guide.finishTutorial()
+        if ProcessInfo.processInfo.environment["CCA_GUI_SNAPSHOT_TIPS"] == "0" {
+            for tip in TipCard.ID.allCases { guide.dismiss(tip) }
+        }
         try? await Task.sleep(nanoseconds: 2_500_000_000)
 
         func first(_ t: ToolID, _ match: (Account) -> Bool) -> AccountRef? {
@@ -417,12 +420,25 @@ enum Snapshot {
                 FileHandle.standardError.write(Data("snapshot: 截不到窗口 \(window.windowNumber)\n".utf8))
                 return
             }
-            let filter = SCContentFilter(desktopIndependentWindow: sw)
+            let filter: SCContentFilter
             let cfg = SCStreamConfiguration()
-            cfg.width = Int(filter.contentRect.width * CGFloat(filter.pointPixelScale))
-            cfg.height = Int(filter.contentRect.height * CGFloat(filter.pointPixelScale))
+            if let parent = window.sheetParent,
+               let ps = content.windows.first(where: { $0.windowID == CGWindowID(parent.windowNumber) }),
+               let display = content.displays.first(where: { $0.frame.intersects(ps.frame) }) {
+                // 弹层：单截弹层的窗口，macOS 27 给的是主窗口连同弹层、缩成弹层那么大（约 0.75 倍，字是糊的）。改成截屏幕上
+                // 弹层四周各多 24 点的那一块，只合成这个 App 的这两个窗口（别的 App 的窗口挡着也不碍事），屏幕原样的分辨率
+                let rect = sw.frame.insetBy(dx: -24, dy: -24).intersection(ps.frame)
+                filter = SCContentFilter(display: display, including: [ps, sw])
+                cfg.sourceRect = rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+                cfg.width = Int(rect.width * CGFloat(filter.pointPixelScale))
+                cfg.height = Int(rect.height * CGFloat(filter.pointPixelScale))
+            } else {
+                filter = SCContentFilter(desktopIndependentWindow: sw)
+                cfg.width = Int(filter.contentRect.width * CGFloat(filter.pointPixelScale))
+                cfg.height = Int(filter.contentRect.height * CGFloat(filter.pointPixelScale))
+                cfg.ignoreShadowsSingleWindow = true
+            }
             cfg.showsCursor = false
-            cfg.ignoreShadowsSingleWindow = true
             let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
             let rep = NSBitmapImageRep(cgImage: img)
             try rep.representation(using: .png, properties: [:])?.write(to: url)

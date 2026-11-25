@@ -78,7 +78,13 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 检查更新找到新版本时顶上的提示条 update、插画画廊 gallery：每种状态 × 几种档位，不依赖演示数据，调插画用；office 是总览页），每个截浅色、深色两张 PNG 后退出。截图时窗口不在前台，插画是静止的那一帧。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
 不要“屏幕录制”权限；窗口放在别的窗口后面、不抢焦点，所以截出来是窗口不在前台时的样子（主按钮是灰的）。菜单栏面板是近似的
-（真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。
+（真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。弹层（flow-*、tutorial、whatsnew）截的是弹层
+四周各多 24 点的那一块（连着后面变暗的主窗口），和主窗口一样是屏幕原样的分辨率。`CCA_GUI_SNAPSHOT_TIPS=0` 把页面上的提示卡片都关掉（像点过“知道了”）。
+
+README 的图（`docs/images/`）：带上 `CCA_GUI_SNAPSHOT_TIPS=0`；夹具拷一份，`hello.json` 的 `cca_version` 改成和 App 一样（不然顶上有
+“cca 已经更新到 …”的提示条）；窗口 `1100x760`，截好用 `sips --resampleWidth 1600` 缩小。`welcome.png` 用一份没配置过的 state
+（`config.onboarded` 是 false，没有账号、路由器和 Team），`CCA_GUI_SNAPSHOT_SIZE=1100x420`（窗口停在最矮）；`network.png` 是原样的
+`flow-onboard-net-light.png`，夹具里第 2 步的 `message` 换成没加入 Team 时 cca 说的那句。
 
 ## 界面的规矩
 

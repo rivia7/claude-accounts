@@ -68,6 +68,9 @@ Setup takes three steps. You can stop at any point and continue later from the o
    - **「路由器」 (Router)**: enter the router's address and its root password once (used only to install a login key, never saved), then tick the nodes your accounts may use. The first time, OpenClash / ShellCrash has to reload its configuration, which takes about 20 seconds and briefly drops new connections on your local network; cca asks before doing it;
    - **「没有路由器」 (No router)**: use cca's built-in proxy. In the next step, when you pick the account's exit node, choose the last item, 「自定义代理…」 (Custom proxy…), and paste your proxy;
    - **「先跳过」 (Skip for now)**: set it up later from the 「＋」 button in the toolbar. Without a router or a Team, you'll still need to paste a proxy when you add an account.
+
+   <img src="docs/images/network.png" width="528" alt="Step 2: how this Mac gets your accounts online (demo data)">
+
 3. **Add an account**: enter its email, an optional alias, and pick an exit node.
 
 A newly added account isn't signed in yet: click its card in the overview to open the account page, then click 「登录…」 (Sign in…). cca opens a terminal window and the sign-in page in a Chrome window just for that account, with the email already filled in; follow the prompts. Once signed in, the account page shows usage and the network exit, and buttons such as 「打开 Claude App」 (Open Claude App), 「网页版」 (Web) and 「终端」 (Terminal) get you going:

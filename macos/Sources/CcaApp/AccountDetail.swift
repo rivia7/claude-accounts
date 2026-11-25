@@ -13,7 +13,7 @@ struct AccountDetail: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 32) {
-                        TipCard(id: "account-page", title: "这一页怎么看",
+                        TipCard(id: .account, title: "这一页怎么看",
                                 message: "名字下面那句话说这个账号现在能不能用、下一步点什么。"
                                     + (a.isAPI ? "往下是它的 API key 和网络出口。"
                                        : "往下是用量和网络出口；Team 给的账号，最下面还有它在哪些设备上用。")

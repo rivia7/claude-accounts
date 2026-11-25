@@ -83,7 +83,7 @@ struct CostStatsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
-            TipCard(id: "cost-stats-page", title: "这一页怎么看",
+            TipCard(id: .costStats, title: "这一页怎么看",
                     message: "按 Anthropic、OpenAI、Google 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
                         + "右上角选看哪台设备（所有设备、本机，或者另一台）、按周还是按天看。"
                         + "每个账号一行，一根竖条是一周（或一天），颜色淡的那一项开始时还没有记录；看所有设备时，有好几台设备的账号下面分台列出。"

@@ -17,7 +17,7 @@ struct UsageStatsPage: View {
                 let scale = StatsScale(domain: WeeklyChart.domain(lists, now: now), top: WeeklyChart.scaleTop(lists))
                 VStack(alignment: .leading, spacing: 26) {
                     header(accounts, now: now)
-                    TipCard(id: "usage-stats-page", title: "这一页怎么看",
+                    TipCard(id: .usageStats, title: "这一页怎么看",
                             message: "每个账号一行，一根竖条是一周：填得越满用得越多，填满就是这一周的额度用完了；填成灰色的那一周结束前一天没查到，实际可能更多。"
                                 + "右边是平均每周用到多少、几周用完、几周没用到一半，和本周到现在。点一行看这个账号的详情。")
                     if model.state == nil {

@@ -97,10 +97,10 @@ final class Guide {
         if sheet == .tutorial { finishTutorial() } else { sheet = nil }
     }
 
-    func isDismissed(_ tip: String) -> Bool { dismissedTips.contains(tip) }
+    func isDismissed(_ tip: TipCard.ID) -> Bool { dismissedTips.contains(tip.rawValue) }
 
-    func dismiss(_ tip: String) {
-        dismissedTips.insert(tip)
+    func dismiss(_ tip: TipCard.ID) {
+        dismissedTips.insert(tip.rawValue)
         prefs.set(dismissedTips.sorted().joined(separator: ","), forKey: Keys.tips)
     }
 
@@ -876,8 +876,14 @@ struct TutorialArt: View {
 
 /// 提示卡片：给新手讲一句这一页怎么看；点“知道了”就不再显示（“帮助”菜单里可以重新显示）。
 struct TipCard: View {
+    /// 哪一张。值记在 App 的设置里（关掉了哪几张），不能改：改了，点过“知道了”的又会出来
+    enum ID: String, CaseIterable {
+        case office = "office-page", account = "account-page", routing = "routing-map"
+        case usageStats = "usage-stats-page", costStats = "cost-stats-page"
+    }
+
     @Environment(Guide.self) private var guide
-    let id: String
+    let id: ID
     var systemImage = "lightbulb"
     let title: String
     let message: String

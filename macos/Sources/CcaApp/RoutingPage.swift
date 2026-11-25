@@ -33,7 +33,7 @@ struct RoutingPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 RoutingHeader()
-                TipCard(id: "routing-map", title: "这张图怎么看",
+                TipCard(id: .routing, title: "这张图怎么看",
                         message: "左边是账号，中间是给每个账号留的端口，右边是它走的节点。每条彩色的线是一个账号的流量走向：实线正常，虚线有问题（节点选错了，或者端口连不上），点「同步路由器」通常就能修好。点账号看详情。")
                 RoutingBanners()
                 let rows = slotRows()
