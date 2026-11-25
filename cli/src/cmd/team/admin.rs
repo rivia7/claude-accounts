@@ -21,8 +21,8 @@ pub mod config;
 pub mod nodes;
 
 use super::doc::{
-    doc_digest, doc_problems, envelope_seal, invite_encode, invite_parts, pub_proof, root_line, team_id, team_name_ok, token_hash,
-    Invite, SEQ_MAX,
+    admins_sign, admins_text, astate_keys, astate_open, astate_seal, doc_digest, doc_problems, envelope_seal, invite_encode,
+    invite_parts, pub_proof, root_line, team_id, team_name_ok, token_hash, Invite, Signer, SEQ_MAX,
 };
 use super::{cfg_of, fail, fault, find_team, index_add, now, pub_line, save_team, sync_locked, team_lock};
 use crate::cmd::hub::deploy::{team_install, team_uninstall, url_parts};
@@ -62,14 +62,191 @@ fn admin_load(t: &Team) -> Result<Dict, String> {
             && j.dict("devices").is_some()
             && j.dict("config").is_some()
     };
-    match j.filter(|j| t.role == Role::Admin && ok(j)) {
+    match j.filter(|j| (t.role == Role::Admin || t.coadmin()) && ok(j)) {
         Some(j) => Ok(j),
-        None => Err(format!("这台设备不是「{}」的管理员（只有建这个 Team 的设备能管理它）", t.name)),
+        None => Err(format!("这台设备不是「{}」的管理员（建这个 Team 的设备，和它授予了管理员身份的设备才能管理它）", t.name)),
     }
 }
 
+/// 存 admin.json；几位管理员共用着（有管理员的密钥 akey）时也存到服务器上（内容变了才存）
 fn admin_save(tid: &str, a: &Dict) -> R<()> {
-    save_json(&admin_path(tid), &V::Dict(a.copy()), Some(0o600), true)
+    save_json(&admin_path(tid), &V::Dict(a.copy()), Some(0o600), true)?;
+    if a.str("akey").is_some() {
+        shared_push(tid, a)?;
+    }
+    Ok(())
+}
+
+// --- 几位管理员共用的状态（3.6.15 起） ---------------------------------------------------------------------------------------
+//
+// 建 Team 的设备（拿着根密钥）给别的设备管理员身份时，admin.json 除了下面这几项都封好存到服务器上（team_astate_put，密钥由 akey 派生，
+// 服务器只存密文和版本号）：每条管理员的命令开头取回来（版本号比记着的新就换上），改了就存回去（照着改的那一版要还是服务器上的那一版，
+// 不然是别的管理员刚改过：这一次不算，重新运行）。akey 经根密钥签的配置（admin.key）交给别的管理员的设备
+
+/// 只在这台设备上的：部署记下的 SSH 登录（只有建 Team 的设备部署、删除）、管理员的密钥、服务器上的版本号、上次存上去的内容的摘要
+const LOCAL_KEYS: [&str; 4] = ["deploy", "akey", "arev", "asha"];
+
+/// 共用的那一份：admin.json 去掉只在这台设备上的
+fn shared_doc(a: &Dict) -> Dict {
+    let d = a.copy();
+    for k in LOCAL_KEYS {
+        d.pop(k);
+    }
+    d
+}
+
+fn shared_sha(d: &Dict) -> String {
+    to_hex(&crate::py::hash::sha256(json::dumps(&V::Dict(d.copy()), json::Fmt::new().utf8().compact())))
+}
+
+/// 存到服务器上：照着改的是 arev 那一版，存上了记下新的版本号；别的管理员刚改过（409 stale）是 fail busy
+fn shared_push(tid: &str, a: &Dict) -> R<()> {
+    let doc = shared_doc(a);
+    let sha = shared_sha(&doc);
+    if a.str("asha").as_deref() == Some(sha.as_str()) {
+        return Ok(());
+    }
+    let Some(t) = load_team(tid) else { return Ok(()) };
+    let Some(keys) = a.str("akey").and_then(|k| astate_keys(&k)) else { return fail("server", "管理员的密钥不对") };
+    let cfg = match admin_cfg(&t)? {
+        Ok(c) => c,
+        Err(why) => return fail("not_attached", &why),
+    };
+    let base = a.get("arev").and_then(|r| r.as_int()).unwrap_or(0);
+    let ct = astate_seal(&keys, tid, base + 1, &doc)?;
+    let (code, j) = presence_post(&cfg, "team_astate_put", &dict! { "base" => base, "ct" => ct }, 30)?;
+    match (code, j.str("error").as_deref()) {
+        (200, _) => {
+            a.set("arev", j.get("rev").and_then(|r| r.as_int()).unwrap_or(base + 1));
+            a.set("asha", sha);
+            save_json(&admin_path(tid), &V::Dict(a.copy()), Some(0o600), true)
+        }
+        (409, Some("stale")) => fail(
+            "busy",
+            &format!("另一位管理员刚改过「{}」的设置：这一次的改动没存上（服务器上照旧是他改的那一版），重新运行这条命令", t.name),
+        ),
+        _ => {
+            let (c, why) = admin_fault(&t, code, &j);
+            fail(c, &why)
+        }
+    }
+}
+
+/// 这台设备上管理员的密钥：建 Team 的设备记在 admin.json 的 akey，别的管理员的在 admin_key（同步配置时记下的）
+fn akey_of(t: &Team, local: Option<&Dict>) -> Option<String> {
+    if t.coadmin() {
+        return fs::read_text(&t.path("admin_key")).ok().map(|s| s.trim().to_string()).filter(|k| astate_keys(k).is_some());
+    }
+    local.and_then(|a| a.str("akey")).map(|k| k.to_string())
+}
+
+/// 取回服务器上共用的那一份：比这台设备上记着的新就换上（只在这台设备上的几项照旧）。不用共用的（还没给过别的设备管理员身份）什么都不做
+fn shared_pull(t: &Team) -> R<Result<(), String>> {
+    let local = load_quiet(&admin_path(&t.id)).and_then(|j| j.as_dict());
+    let Some(akey) = akey_of(t, local.as_ref()) else {
+        return Ok(if t.coadmin() {
+            Err(format!("这台设备上没有「{}」的管理员密钥：先 cca team sync", t.name))
+        } else {
+            Ok(())
+        });
+    };
+    let cfg = match admin_cfg(t)? {
+        Ok(c) => c,
+        Err(why) => return Ok(Err(why)),
+    };
+    let (code, j) = presence_post(&cfg, "team_astate_get", &dict! {}, 20)?;
+    if code != 200 {
+        return Ok(Err(admin_fault(t, code, &j).1));
+    }
+    let rev = j.get("rev").and_then(|r| r.as_int()).unwrap_or(0);
+    let mine = local.as_ref().and_then(|a| a.get("arev")).and_then(|r| r.as_int()).unwrap_or(0);
+    if let Some(a) = local.as_ref().filter(|a| t.coadmin() && a.str("akey").as_deref() != Some(akey.as_str())) {
+        a.set("akey", akey.as_str());
+        save_json(&admin_path(&t.id), &V::Dict(a.copy()), Some(0o600), true)?;
+    }
+    if rev == 0 || rev <= mine {
+        if rev == 0 && t.coadmin() {
+            return Ok(Err(format!(
+                "建「{}」的设备还没把管理员的设置传到服务器上：请它运行一次 cca team devices {}",
+                t.name, t.name
+            )));
+        }
+        // 服务器上的比记着的旧（记录回退了）：照这台设备的，下次存的时候照服务器的版本号接着往上加
+        if let Some(a) = local.filter(|_| rev < mine) {
+            a.set("arev", rev);
+            a.pop("asha");
+            save_json(&admin_path(&t.id), &V::Dict(a), Some(0o600), true)?;
+        }
+        return Ok(Ok(()));
+    }
+    let keys = astate_keys(&akey).expect("akey_of 查过样子");
+    let Some(doc) = astate_open(&keys, &t.id, rev, &j.at("ct")) else {
+        return Ok(Err(format!("服务器上「{}」的管理员设置解不开（管理员的密钥换了？先 cca team sync）", t.name)));
+    };
+    if !doc.str("master").is_some_and(|m| m.len() == 64 && from_hex(&m).is_some()) || doc.dict("devices").is_none() {
+        return Ok(Err(format!("服务器上「{}」的管理员设置样子不对", t.name)));
+    }
+    let sha = shared_sha(&doc);
+    for k in LOCAL_KEYS {
+        if let Some(v) = local.as_ref().and_then(|a| a.get(k)) {
+            doc.set(k, v);
+        }
+    }
+    // 别的管理员的密钥以 admin_key 为准（同步配置时记下的），admin.json 里也记一份：admin_save 照它存回服务器
+    doc.set("akey", akey.as_str());
+    doc.set("arev", rev);
+    doc.set("asha", sha);
+    save_json(&admin_path(&t.id), &V::Dict(doc), Some(0o600), true)?;
+    Ok(Ok(()))
+}
+
+/// 签配置的那一把：建 Team 的设备是根密钥，别的管理员是它自己这台设备的密钥（配置里带着它的公钥：by）
+fn signer(t: &Team) -> R<Signer> {
+    if t.coadmin() {
+        let key = t.path("id_ed25519");
+        return Ok(Signer { by: Some(pub_line(&key)?), key });
+    }
+    Ok(Signer { key: t.path("root_ed25519"), by: None })
+}
+
+/// 管理员名单（admin.json 的 admins、admins_epoch）照根密钥签好放到服务器上。服务器上已经是这一版或者更新的（409 stale）也算放好了
+fn admins_post(t: &Team, a: &Dict) -> R<Result<(), (&'static str, String)>> {
+    let cfg = match admin_cfg(t)? {
+        Ok(c) => c,
+        Err(why) => return Ok(Err(("not_attached", why))),
+    };
+    let epoch = a.get("admins_epoch").and_then(|e| e.as_int()).unwrap_or(0);
+    let Some(text) = admins_list(t, a, epoch) else { return Ok(Err(("server", "管理员名单的样子不对".into()))) };
+    let Some(body) = admins_sign(&t.path("root_ed25519"), &text)? else {
+        return Ok(Err(("sign", "没法用 Team 的根密钥签名（ssh-keygen）".into())));
+    };
+    let (code, j) = presence_post(&cfg, "team_admins", &body, 20)?;
+    match (code, j.str("error").as_deref()) {
+        (200, _) => Ok(Ok(())),
+        (409, Some("stale")) if j.get("epoch").and_then(|e| e.as_int()).is_some_and(|e| e >= epoch) => Ok(Ok(())),
+        _ => Ok(Err(admin_fault(t, code, &j))),
+    }
+}
+
+/// 名单的文字：admins 里各台设备的公钥和名字（照设备编号的先后）
+fn admins_list(t: &Team, a: &Dict, epoch: i64) -> Option<String> {
+    let devs = a.dict("devices").unwrap_or_default();
+    let mut rows: Vec<(String, String)> = Vec::new();
+    for dev in a.dict("admins").unwrap_or_default().keys() {
+        let d = devs.dict(&dev)?;
+        let line = root_line(&d.str("pub")?)?;
+        let name = d.str("label").filter(|n| team_name_ok(n)).map_or_else(|| "device".to_string(), |n| n.to_string());
+        rows.push((line, name));
+    }
+    Some(admins_text(&t.id, epoch, &rows))
+}
+
+/// 只有建 Team 的设备（拿着根密钥）能做的：别的管理员是 fail owner
+fn owner_only(t: &Team, what: &str) -> R<()> {
+    if t.coadmin() {
+        return fail("owner", &format!("只有建「{}」的设备（拿着根密钥）能{what}", t.name));
+    }
+    Ok(())
 }
 
 /// 第 n 台设备那串随机数（邀请里的 k）：HMAC(主密钥, "cca-team-k-v1\0" n) 的前 16 个字节
@@ -78,10 +255,17 @@ fn device_secret(master: &str, n: i64) -> String {
     to_hex(&hmac_sha256(&key, format!("cca-team-k-v1\0{n}").as_bytes())[..16])
 }
 
-/// 拿根密钥签名的配置（presence_post 用）；没接上服务器、根密钥不见了是给人看的原因
-fn root_cfg(t: &Team) -> R<Result<Dict, String>> {
+/// 管理员的请求用的配置（presence_post 用）：建 Team 的设备拿根密钥签名，别的管理员拿它自己这台设备的密钥（服务器照管理员名单认）；
+/// 没接上服务器、密钥不见了是给人看的原因
+fn admin_cfg(t: &Team) -> R<Result<Dict, String>> {
     if !t.attached() {
         return Ok(Err(format!("「{}」还没有接上同步服务器：先 cca team attach {} https://服务器:端口", t.name, &t.id[..8])));
+    }
+    if t.coadmin() {
+        return Ok(match key_at(&t.path("id_ed25519"))? {
+            Some((key, fp)) => Ok(cfg_of(&t.url, &t.pins, key, fp)),
+            None => Err(format!("这台设备在「{}」里的密钥不见了（~/.cca/teams/{}/id_ed25519）", t.name, t.id)),
+        });
     }
     Ok(match key_at(&t.path("root_ed25519"))? {
         Some((key, fp)) => Ok(cfg_of(&t.url, &t.pins, key, fp)),
@@ -92,9 +276,17 @@ fn root_cfg(t: &Team) -> R<Result<Dict, String>> {
 /// 管理员的请求没成的原因
 fn admin_fault(t: &Team, code: i64, j: &Dict) -> (&'static str, String) {
     match code {
+        403 if t.coadmin() => (
+            "denied",
+            format!("{} 不认这台设备是「{}」的管理员（管理员身份被收回了？服务器不是这个 Team 的？）", host_of(&t.url), t.name),
+        ),
         403 => {
             ("denied", format!("{} 配置的不是这个 Team 的根公钥（服务器要用 --team-root 这个 Team 的根公钥运行）", host_of(&t.url)))
         }
+        404 if j.str("error").as_deref() == Some("not_found") => (
+            "old",
+            format!("{} 上的服务器版本太旧，不支持几位管理员：先更新服务器（cca team deploy {} …）", host_of(&t.url), t.name),
+        ),
         _ => fault(&t.url, code, j),
     }
 }
@@ -265,7 +457,7 @@ fn needed_nodes(nodes: Option<Dict>, used: &BTreeSet<String>) -> V {
 }
 
 /// 给一台设备的配置的明文（格式见 doc.rs 的 doc_problems）
-fn build_doc(t: &Team, a: &Dict, dev: &Dict) -> Dict {
+fn build_doc(t: &Team, a: &Dict, id: &str, dev: &Dict) -> Dict {
     let config = a.dict("config").unwrap_or_default();
     // 拿别的密钥用了这个邀请的（reconcile 记的 mismatch）：一个账号都不给
     let grants = if dev.get("mismatch").is_some_and(|m| m.truthy()) { V::Dict(Dict::new()) } else { dev.at("grants") };
@@ -306,6 +498,14 @@ fn build_doc(t: &Team, a: &Dict, dev: &Dict) -> Dict {
     // 锁定了别名才有这一项（没锁定的 Team 的配置和以前一样，不用重新发布）
     if alias_locked(a) {
         doc.set("alias_lock", true);
+    }
+    // 给过别的设备管理员身份才有这两项（3.6.15 起）：管理员名单到第几版了（设备照它不认更旧的名单），给管理员的那几台带着管理员的
+    // 密钥（只认根密钥签的这一项：别的管理员签的那一份也带着同一把，免得内容变来变去）
+    if let Some(e) = a.get("admins_epoch").and_then(|e| e.as_int()).filter(|e| *e > 0) {
+        doc.set("admins_epoch", e);
+    }
+    if let Some(k) = a.str("akey").filter(|_| a.dict("admins").is_some_and(|m| m.has(id))) {
+        doc.set("admin", dict! { "key" => &*k });
     }
     doc
 }
@@ -381,13 +581,13 @@ fn label_of(d: &Dict, dev: &str) -> String {
 /// 备份里恢复的）就接着它的往上加再存一次——它说的数要像话（不比记着的小、没到上限），不然不信；服务器不认得的编号：加入过的（和服务器
 /// 对过以后才退出的）不再记，别的（邀请过期很久了）记成 expired。改了 admin.json
 fn publish(t: &Team, a: &Dict, only: Option<&str>) -> R<Result<Published, String>> {
-    let cfg = match root_cfg(t)? {
+    let cfg = match admin_cfg(t)? {
         Ok(c) => c,
         Err(why) => return Ok(Err(why)),
     };
     default_aliases(a); // 以前加进来、还没有别名的账号（3.5.3-beta.5 以前的 Team）也编上
     let devs = a.dict("devices").unwrap_or_default();
-    let (master, root_key) = (a.at("master").py_str(), t.path("root_ed25519"));
+    let (master, sign) = (a.at("master").py_str(), signer(t)?);
     let seq_of = |d: &Dict| d.get("seq").and_then(|s| s.as_int()).filter(|s| *s >= 0).unwrap_or(0);
     let mut out = Published::default();
     let mut again: Vec<String> = Vec::new(); // 第二轮：服务器说序号不够大的那些
@@ -400,7 +600,7 @@ fn publish(t: &Team, a: &Dict, only: Option<&str>) -> R<Result<Published, String
             if !live || only.is_some_and(|o| o != &*dev) || (round == 1 && !again.iter().any(|x| **x == *dev)) {
                 continue;
             }
-            let doc = build_doc(t, a, &d);
+            let doc = build_doc(t, a, &dev, &d);
             let sha = doc_digest(&doc);
             if round == 0 && d.str("sha").as_deref() == Some(sha.as_str()) {
                 continue;
@@ -418,7 +618,7 @@ fn publish(t: &Team, a: &Dict, only: Option<&str>) -> R<Result<Published, String
                 out.problems.push(format!("{label}：配置的序号用完了"));
                 continue;
             }
-            match envelope_seal(&root_key, &parts.keys, &t.id, &dev, seq, &doc)? {
+            match envelope_seal(&sign, &parts.keys, &t.id, &dev, seq, &doc)? {
                 Ok(env) => {
                     shas.set(&*dev, sha);
                     todo.push((dev.to_string(), env));
@@ -486,7 +686,7 @@ fn finish_move(t: &Team, a: &Dict) -> R<String> {
 }
 
 fn forward(old: &Team, t: &Team, a: &Dict, pending: &List) -> R<String> {
-    let cfg = match root_cfg(old)? {
+    let cfg = match admin_cfg(old)? {
         Ok(c) => c,
         Err(why) => return Ok(why),
     };
@@ -496,13 +696,13 @@ fn forward(old: &Team, t: &Team, a: &Dict, pending: &List) -> R<String> {
             return Ok(admin_fault(old, code, &j).1);
         }
     }
-    let (master, root_key) = (a.at("master").py_str(), t.path("root_ed25519"));
+    let (master, sign) = (a.at("master").py_str(), signer(t)?);
     let mut envs: Vec<(String, Dict)> = Vec::new();
     for (dev, d) in a.dict("devices").unwrap_or_default().items() {
         let Some(d) = d.as_dict().filter(|d| d.str("state").as_deref() == Some("joined")) else { continue };
         let (n, seq) = (d.get("n").and_then(|n| n.as_int()).unwrap_or(0), d.get("seq").and_then(|s| s.as_int()).unwrap_or(0));
         let Some(parts) = invite_parts(&device_secret(&master, n)).filter(|_| (1..SEQ_MAX).contains(&seq)) else { continue };
-        if let Ok(env) = envelope_seal(&root_key, &parts.keys, &t.id, &dev, seq, &build_doc(t, a, &d))? {
+        if let Ok(env) = envelope_seal(&sign, &parts.keys, &t.id, &dev, seq, &build_doc(t, a, &dev, &d))? {
             envs.push((dev.to_string(), env));
         }
     }
@@ -525,7 +725,7 @@ fn forward(old: &Team, t: &Team, a: &Dict, pending: &List) -> R<String> {
 /// 返回 {"gen", "by_dev": {设备编号: 服务器的那一行}, "pending": {设备编号: 邀请的那一行}, "problems": {设备编号: 要告诉管理员的}}；
 /// 没成是给人看的原因。改了 admin.json
 fn reconcile(t: &Team, a: &Dict) -> R<Result<Dict, String>> {
-    let cfg = match root_cfg(t)? {
+    let cfg = match admin_cfg(t)? {
         Ok(c) => c,
         Err(why) => return Ok(Err(why)),
     };
@@ -766,12 +966,24 @@ fn admin_of(sel: &str) -> R<(Team, Dict, std::fs::File)> {
         Ok(t) => t,
         Err(why) => return fail("no_team", &why),
     };
-    if let Err(why) = admin_load(&t) {
-        return fail("not_admin", &why);
+    if !(t.role == Role::Admin || t.coadmin()) {
+        return fail("not_admin", &admin_load(&t).err().unwrap_or_default());
     }
     let lock = team_lock(&t.id)?;
     // 等锁的时候别的命令可能改过：拿到以后现读
-    let t = load_team(&t.id).ok_or_else(|| Fail::Die("这个 Team 在本机的记录不见了".into()))?;
+    let reload = |id: &str| load_team(id).ok_or_else(|| Fail::Die("这个 Team 在本机的记录不见了".into()));
+    let mut t = reload(&t.id)?;
+    if t.coadmin() {
+        // 别的管理员：先同步一次自己的配置（管理员的密钥换了、身份被收回了都在这里知道）
+        sync_locked(&t)?;
+        t = reload(&t.id)?;
+        if !t.coadmin() {
+            return fail("not_admin", &format!("这台设备在「{}」里的管理员身份被收回了", t.name));
+        }
+    }
+    if let Err(why) = shared_pull(&t)? {
+        return fail("server", &why);
+    }
     match admin_load(&t) {
         Ok(a) => Ok((t, a, lock)),
         Err(why) => fail("not_admin", &why),
@@ -811,7 +1023,8 @@ fn team_picks() -> Vec<Pick> {
     let admins: HashMap<String, (String, Option<Dict>)> = teams()
         .into_iter()
         .filter_map(|t| {
-            let nodes = admin_load(&t).ok()?.dict("config").and_then(|c| c.dict("nodes"));
+            // 别的管理员（3.6.15 起）不算：那个 Team 的账号不是这台设备的人的
+            let nodes = admin_load(&t).ok().filter(|_| t.role == Role::Admin)?.dict("config").and_then(|c| c.dict("nodes"));
             Some((t.id, (t.name, nodes)))
         })
         .collect();
@@ -1029,6 +1242,7 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
         return Err(Fail::Die("用法: py team-attach Team https://服务器:端口 [证书公钥的指纹…]".into()));
     };
     let (t, a, _lk) = admin_of(sel)?;
+    owner_only(&t, "换同步服务器")?;
     let url = with_https_port(url);
     if !url_ok(&url) {
         return fail("url", "服务器的地址要写成 https://地址:端口（托管平台给的 https://名字.平台的域名 不用写端口）");
@@ -1081,7 +1295,7 @@ fn attach(t: Team, a: &Dict, url: String, pins: &[String]) -> R<Result<Attached,
     raw.set("url", url.as_str());
     raw.set("pins", str_list(pins));
     let t = Team { url, pins: pins.to_vec(), raw: raw.copy(), ..t };
-    let cfg = match root_cfg(&t)? {
+    let cfg = match admin_cfg(&t)? {
         Ok(c) => c,
         Err(why) => return Ok(Err(("key".into(), why))),
     };
@@ -1101,6 +1315,23 @@ fn attach(t: Team, a: &Dict, url: String, pins: &[String]) -> R<Result<Attached,
     let device = j.dict("names").and_then(|n| n.str(&t.dev)).filter(|n| name_ok(n)).map_or(t.device.clone(), |n| n.to_string());
     raw.set("device", device.as_str());
     save_team(&t.id, &raw)?;
+    // 给过别的设备管理员身份的（3.6.15 起）：管理员名单、共用的状态也放到这一台上（换了一台的话它上面还没有；从头存一份）
+    if a.get("admins_epoch").and_then(|e| e.as_int()).is_some_and(|e| e > 0) {
+        if let Some(cur) = load_team(&t.id) {
+            if let Err((c, why)) = admins_post(&cur, a)? {
+                return Ok(Err((c.to_string(), why)));
+            }
+        }
+        // 共用的状态：照这一台上的版本号接着存（换了一台的话它上面还没有，是 0），下面的 admin_save 就存上去了
+        if let Some(cfg) = load_team(&t.id).and_then(|cur| admin_cfg(&cur).ok()?.ok()) {
+            let (code, j) = presence_post(&cfg, "team_astate_get", &dict! {}, 20)?;
+            let rev = j.get("rev").and_then(|r| r.as_int()).filter(|_| code == 200);
+            if let Some(rev) = rev.filter(|r| a.get("arev").and_then(|x| x.as_int()) != Some(*r)) {
+                a.set("arev", rev);
+                a.pop("asha");
+            }
+        }
+    }
     me.set("state", "joined");
     me.set("name", device.as_str());
     me.set("pub", my_pub);
@@ -1129,6 +1360,7 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
     // 装的那一段经 SSH，网慢时要一会儿（要把约 10 MB 的安装脚本传过去：里面带着服务端程序）：这段时间不拿着这个 Team 的锁（不然这台设备上同步配置、别的管理命令
     // 都卡着等）。装好了再取锁、重新读一遍（等的时候可能被别的命令改过），接上
     let (t, _a, lk) = admin_of(sel)?;
+    owner_only(&t, "部署同步服务器")?;
     let (tid, root, svc, name) = (t.id.clone(), t.root.clone(), format!("cca-team-{}", &t.id[..8]), t.name.clone());
     let old = t.attached().then(|| (t.url.clone(), t.pins.clone()));
     drop(lk);
@@ -1191,6 +1423,7 @@ pub fn cmd_team_undeploy(args: &[String]) -> R<()> {
     };
     // 经 SSH 可能要一会儿：不拿着这个 Team 的锁
     let (t, _a, lk) = admin_of(sel)?;
+    owner_only(&t, "卸载同步服务器")?;
     let (root, svc) = (t.root.clone(), format!("cca-team-{}", &t.id[..8]));
     drop(lk);
     if let Some(dir) = team_uninstall(rest, &root, &svc)? {
@@ -1265,6 +1498,7 @@ pub fn cmd_team_hosted(args: &[String]) -> R<()> {
         _ => return Err(Fail::Die(USAGE.into())),
     };
     let (t, _a, _lk) = admin_of(sel)?;
+    owner_only(&t, "部署同步服务器")?;
     let Some(key) = t.root.split(' ').nth(1) else { return fail("key", "这个 Team 的根公钥读不出来") };
     let svc = format!("cca-team-{}", &t.id[..8]);
     let update = t.attached() && t.pins.is_empty();
@@ -1338,7 +1572,7 @@ pub fn cmd_team_invite(args: &[String]) -> R<()> {
     if name_taken(&a, "", &label) {
         return fail("name", &format!("这个 Team 里已经有一台设备叫「{label}」：换一个名字"));
     }
-    let cfg = match root_cfg(&t)? {
+    let cfg = match admin_cfg(&t)? {
         Ok(c) => c,
         Err(why) => return fail("not_attached", &why),
     };
@@ -1412,8 +1646,9 @@ fn grants_text(g: &V) -> String {
 
 /// py team-devices Team [--json]：这个 Team 的设备（先和服务器对一遍，见 reconcile）。--json：{"version": 1, "kind": "team_devices",
 /// "team": 编号, "alias_lock": 别名锁定着没有, "devices": [{dev, label, name, state, me, grants, seq, have: 它手里是第几版（没说过是 null）,
-/// seen_age, expires_epoch: 邀请什么时候过期, problem: 对一遍时发现的、要告诉管理员的（没有是 null）}]}；不带时第一行是别名锁定着没有
-/// （1 | 0），后面一台一行：设备编号\t名字\t状态\t授权\t发布到第几版\t它手里第几版\t要告诉管理员的（没有的写 -）
+/// seen_age, expires_epoch: 邀请什么时候过期, problem: 对一遍时发现的、要告诉管理员的（没有是 null）, role: owner（建 Team 的那台）|
+/// admin（别的管理员，3.6.15 起）| member}]}；不带时第一行是别名锁定着没有（1 | 0），后面一台一行：设备编号\t名字\t状态\t授权\t
+/// 发布到第几版\t它手里第几版\t要告诉管理员的\t角色（没有的写 -）
 pub fn cmd_team_devices(args: &[String]) -> R<()> {
     let (sel, as_json) = match args {
         [s] => (s, false),
@@ -1437,6 +1672,11 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
             "have" => r.get("have").unwrap_or(V::None), "seen_age" => r.get("seen_age").unwrap_or(V::None),
             "expires_epoch" => if state == "invited" { d.get("exp").filter(is_num).unwrap_or(V::None) } else { V::None },
             "problem" => problems.get(&dev).unwrap_or(V::None),
+            "role" => match d.get("n").and_then(|n| n.as_int()) {
+                Some(0) => "owner",
+                _ if a.dict("admins").is_some_and(|m| m.has(&dev)) => "admin",
+                _ => "member",
+            },
         };
         list.push(V::Dict(row));
     }
@@ -1464,7 +1704,16 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
         // 没有的写 -：bash 按制表符读，空的栏会被并掉
         let s = |k: &str| r.get(k).filter(|v| !v.is_none()).map_or("-".to_string(), |v| v.py_str());
         let grants = grants_text(&r.at("grants"));
-        out!("{}\t{}\t{}\t{grants}\t{}\t{}\t{}", s("dev"), s("label"), s("state"), s("seq"), s("have"), s("problem"));
+        out!(
+            "{}\t{}\t{}\t{grants}\t{}\t{}\t{}\t{}",
+            s("dev"),
+            s("label"),
+            s("state"),
+            s("seq"),
+            s("have"),
+            s("problem"),
+            s("role")
+        );
     }
     Ok(())
 }
@@ -1488,11 +1737,21 @@ pub fn cmd_team_revoke(args: &[String]) -> R<()> {
         return fail("self", "这是管理员自己的这台设备：移除不了（不要这个 Team 了用 cca team leave）");
     }
     let d = a.dict("devices").and_then(|ds| ds.dict(&dev)).unwrap_or_default();
+    // 几位管理员（3.6.15 起）：建 Team 的那台谁也移除不了；别的管理员的设备先收回它的管理员身份（只有建 Team 的设备能）
+    if d.get("n").and_then(|n| n.as_int()) == Some(0) {
+        return fail("owner", "这是建这个 Team 的设备：移除不了");
+    }
+    if a.dict("admins").is_some_and(|m| m.has(&dev)) {
+        return fail(
+            "admin_dev",
+            &format!("「{}」是这个 Team 的管理员：先收回它的管理员身份（cca team admin {} remove …）", label_of(&d, &dev), t.name),
+        );
+    }
     if mode == "plan" {
         out!("{}\t{dev}\t{}\t{}", t.id, d.at("label").py_str(), d.at("state").py_str());
         return Ok(());
     }
-    let cfg = match root_cfg(&t)? {
+    let cfg = match admin_cfg(&t)? {
         Ok(c) => c,
         Err(why) => return fail("not_attached", &why),
     };
@@ -1621,7 +1880,7 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
         match key {
             None => "服务器报的公钥和这台设备加入时的不一样：服务器上的名字没改（cca team devices 看看）".to_string(),
             Some(key) => {
-                let cfg = match root_cfg(&t)? {
+                let cfg = match admin_cfg(&t)? {
                     Ok(c) => c,
                     Err(why) => return fail("not_attached", &why),
                 };
@@ -1839,5 +2098,96 @@ pub fn cmd_team_publish(args: &[String]) -> R<()> {
     sync_locked(&t)?;
     let note = finish_move(&t, &a)?; // 上次换服务器没做完的收尾
     out!("{stored}\n{note}");
+    Ok(())
+}
+
+/// py team-admin ls | plan | add | remove Team [设备]：几位管理员（3.6.15 起；docs/dev/team.md「几位管理员」）。
+/// - ls：一行一位：设备编号\t名字\towner | admin（owner 是建 Team 的那台，拿着根密钥；别的管理员也能看）
+/// - plan add | remove Team 设备（只读）：「Team 的编号\t设备编号\t名字」（bash 据此问同意）
+/// - add：给一台加入了的设备管理员身份：管理员名单换成新的一版（根密钥签），这个 Team 的管理员设置存到服务器上，配置里带上
+///   管理员的密钥发布给它（它下次同步配置就是管理员了：能邀请、移除设备，改账号、节点，发布）
+/// - remove：收回：名单换成新的一版，管理员的密钥换一把（它手里那把解不开以后的设置），各台设备的配置重新发布
+///
+/// add、remove 的 stdout：存上了几台的配置。只有建 Team 的设备能 add、remove。原因码：no_team、not_admin、owner、no_device、
+/// state（还没加入、公钥没核对过的设备）、self、already、not_admin_dev、old（服务器太旧）、sign、busy、server、publish
+pub fn cmd_team_admin(args: &[String]) -> R<()> {
+    const USAGE: &str = "用法: py team-admin ls Team | plan add|remove Team 设备 | add|remove Team 设备";
+    let (mode, plan, sel, device) = match args {
+        [m, s] if m == "ls" => ("ls", false, s, None),
+        [p, m, s, d] if p == "plan" && matches!(m.as_str(), "add" | "remove") => (m.as_str(), true, s, Some(d)),
+        [m, s, d] if matches!(m.as_str(), "add" | "remove") => (m.as_str(), false, s, Some(d)),
+        _ => return Err(Fail::Die(USAGE.into())),
+    };
+    let (t, a, _lk) = admin_of(sel)?;
+    let devs = a.dict("devices").unwrap_or_default();
+    let admins = a.dict("admins").unwrap_or_default();
+    let Some(device) = device else {
+        for (dev, d) in devs.items() {
+            let Some(d) = d.as_dict() else { continue };
+            let role = match d.get("n").and_then(|n| n.as_int()) {
+                Some(0) => "owner",
+                _ if admins.has(&dev) => "admin",
+                _ => continue,
+            };
+            out!("{dev}\t{}\t{role}", label_of(&d, &dev));
+        }
+        return Ok(());
+    };
+    owner_only(&t, if mode == "add" { "授予管理员身份" } else { "收回管理员身份" })?;
+    let dev = match find_device(&a, device) {
+        Ok(d) => d,
+        Err(why) => return fail("no_device", &why),
+    };
+    let d = devs.dict(&dev).unwrap_or_default();
+    let label = label_of(&d, &dev);
+    if dev == t.dev {
+        return fail("self", "这是建这个 Team 的设备：它本来就是管理员（拿着根密钥）");
+    }
+    match mode {
+        "add" if admins.has(&dev) => return fail("already", &format!("「{label}」已经是管理员了")),
+        "add" if d.str("state").as_deref() != Some("joined") || d.str("pub").and_then(|p| root_line(&p)).is_none() => {
+            return fail(
+                "state",
+                &format!("「{label}」还没加入，或者它的公钥还没核对过（旧版本的 cca 加入的）：等它加入、更新到 3.6.15 以后再试（cca team devices 看）"),
+            );
+        }
+        "remove" if !admins.has(&dev) => return fail("not_admin_dev", &format!("「{label}」不是管理员")),
+        _ => {}
+    }
+    if plan {
+        out!("{}\t{dev}\t{label}", t.id);
+        return Ok(());
+    }
+    if !t.attached() {
+        return fail("not_attached", &admin_cfg(&t)?.err().unwrap_or_default());
+    }
+    // 先和服务器对一遍（公钥、加入了没有照它核对过的）
+    if let Err(why) = reconcile(&t, &a)? {
+        return fail("server", &why);
+    }
+    let admins = a.dict("admins").unwrap_or_default();
+    if mode == "add" {
+        admins.set(dev.as_str(), dict! { "at" => now() });
+        if a.str("akey").is_none() {
+            a.set("akey", token_hex(32));
+            a.set("arev", 0);
+        }
+    } else {
+        admins.pop(&dev);
+        // 换一把管理员的密钥：收回了的那台手里的那一把解不开以后存上去的设置（它已经看过的收不回来：见 docs/dev/team.md）
+        a.set("akey", token_hex(32));
+        a.pop("asha");
+    }
+    a.set("admins", admins);
+    let epoch = a.get("admins_epoch").and_then(|e| e.as_int()).unwrap_or(0) + 1;
+    a.set("admins_epoch", epoch);
+    // 先放名单（服务器从此认它 / 不再认它），再存共用的设置（新的密钥封的），最后发布：拿到管理员密钥的设备取得到设置
+    match admins_post(&t, &a)? {
+        Ok(()) => {}
+        Err((c, why)) => return fail(c, &why),
+    }
+    admin_save(&t.id, &a)?;
+    let stored = settle(&t, &a, None)?;
+    out!("{stored}");
     Ok(())
 }

@@ -220,9 +220,9 @@ struct FixtureTransport: Transport {
             // 演示用的假邀请：运行时拼出来（仓库里不放长得像真邀请的字符串）
             return CcaResponse(exitCode: 0, stdout: Data(("cca-team1.demo-" + String(repeating: "0", count: 24) + ".0000").utf8), stderr: Data(), events: [])
         case ("team", "sync"), ("team", "leave"), ("team", "revoke"), ("team", "grant"), ("team", "rename"), ("team", "map"), ("team", "alias"),
-             ("team", "export"), ("team", "import"):
+             ("team", "export"), ("team", "import"), ("team", "admin"):
             let code: ResultCode = sub == "leave" ? .teamLeft : sub == "revoke" ? .teamRevoked : sub == "export" ? .teamExported
-                : sub == "import" ? .teamImported : .opened
+                : sub == "import" ? .teamImported : sub == "admin" ? (request.arguments.contains("add") ? .teamAdminAdded : .teamAdminRemoved) : .opened
             let e = CcaEvent.result(ResultEvent(code: code, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: nil, key: nil))
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])
         default:

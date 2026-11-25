@@ -6348,6 +6348,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key '公钥']   给一台设备发邀请（--key：只认这把公钥）
       cca team devices Team [--json]               有哪些设备
       cca team revoke Team 设备                    移除一台设备、撤回邀请
+      cca team admin Team [ls] | add 设备 | remove 设备   几位管理员：给一台加入了的设备管理员身份 / 收回（只有建 Team 的设备能）
       cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
       cca team rename Team 设备 新名字             给一台设备改名字（它在服务器上的名字跟着改）
       cca team name Team 新名字                    改这个 Team 的名字（各台设备下次同步配置时跟着改）
@@ -6411,6 +6412,7 @@ cmd_team() {
 		invite) team_invite "$@" ;;
 		devices) team_devices "$@" ;;
 		revoke) team_revoke "$@" ;;
+		admin) team_admin "$@" ;;
 		grant)
 			out=$(py team-grant "$@") || team_fail "$out" "没改成"
 			okay "改好了：现在给这台设备的是${out}" ;;
@@ -6810,6 +6812,14 @@ team_state_say() {   # team_state_say 状态：给人看的说法
 	esac
 }
 
+team_role_say() {   # team_role_say 角色：给人看的角色（py team-list 的 admin | coadmin | member）
+	case "$1" in
+		admin) printf '管理员' ;;
+		coadmin) printf '管理员（建 Team 的设备授予的）' ;;
+		*) printf '成员' ;;
+	esac
+}
+
 team_ls() {   # cca team [ls] [--json]：这台设备在哪些 Team 里（只看本机记着的，不联网）
 	local out id name role host state seq n why
 	case "$*" in
@@ -6827,7 +6837,7 @@ team_ls() {   # cca team [ls] [--json]：这台设备在哪些 Team 里（只看
 		[ "$seq" != - ] || seq=""
 		[ "$n" != - ] || n=0
 		[ "$why" != - ] || why=""
-		say "${name}（${id:0:8}）：$([ "$role" = admin ] && printf '管理员' || printf '成员')，${host}，$(team_state_say "$state")${seq:+，这台设备能用 ${n} 个账号}${why:+
+		say "${name}（${id:0:8}）：$(team_role_say "$role")，${host}，$(team_state_say "$state")${seq:+，这台设备能用 ${n} 个账号}${why:+
     ${why}}"
 	done <<< "$out"
 }
@@ -7267,7 +7277,7 @@ team_devices() {   # cca team devices Team [--json]：先和服务器对一遍�
 	out=$(py team-devices "$1") || team_fail "$out" "没问到"
 	{
 		IFS= read -r lock   # 第一行：账号的别名锁定着没有（1 | 0）
-		while IFS=$'\t' read -r dev label state grants seq have problem; do   # 没有的栏是 -
+		while IFS=$'\t' read -r dev label state grants seq have problem role; do   # 没有的栏是 -
 			cfg=""
 			case "$state" in   # 配置是不是最新的：只说还在的设备（不说第几版：序号只是用来比新旧的）
 				local|invited|joined)
@@ -7277,11 +7287,52 @@ team_devices() {   # cca team devices Team [--json]：先和服务器对一遍�
 						*) if [ "$have" -ge "$seq" ] 2>/dev/null; then cfg="配置是最新的"; else cfg="还没同步到最新的配置"; fi ;;
 					esac ;;
 			esac
-			say "${label}（${dev:0:8}）：${state}，${grants}${cfg:+，${cfg}}"
+			case "$role" in owner) role="，建 Team 的设备" ;; admin) role="，管理员" ;; *) role="" ;; esac
+			say "${label}（${dev:0:8}）：${state}${role}，${grants}${cfg:+，${cfg}}"
 			[ "$problem" = - ] || warn "${label}：${problem}"
 		done
 	} <<< "$out"
 	[ "$lock" != 1 ] || say "账号的别名锁定着：各台设备上不能自己改（cca team alias ${1} --unlock 解开）"
+}
+
+team_admin() {   # cca team admin Team [ls] | add 设备 | remove 设备：几位管理员（docs/dev/team.md「几位管理员」）。add、remove 先问同意
+	local out tid dev label role why item title question n
+	case "$#:${2:-ls}" in
+		1:ls|2:ls)
+			out=$(py team-admin ls "$1") || team_fail "$out" "没问到"
+			while IFS=$'\t' read -r dev label role; do
+				[ -n "$dev" ] || continue
+				case "$role" in owner) say "${label}（${dev:0:8}）：建 Team 的设备（拿着根密钥）" ;; *) say "${label}（${dev:0:8}）：管理员" ;; esac
+			done <<< "$out"
+			return ;;
+		3:add|3:remove) ;;
+		*) FAIL_CODE=team_usage die "用法: cca team admin Team [ls] | add 设备 | remove 设备" ;;
+	esac
+	out=$(py team-admin plan "$2" "$1" "$3") || team_fail "$out" "没改成"
+	IFS=$'\t' read -r tid dev label <<< "$out"
+	if [ "$2" = add ]; then
+		item=team_admin_add title="授予管理员身份" question="让「${label}」也成为这个 Team 的管理员吗？"
+		why="它会拿到这个 Team 的全部设置：主密钥（能算出每台设备的配置的密钥）、所有账号走哪个节点、节点的密码。它能邀请、移除设备，改账号、节点并发布给各台设备；不能删除 Team、换服务器，也不能再授予别人。以后收回，它已经看过的收不回来。各台设备要更新到 3.6.15 以后，才认它发布的配置"
+	else
+		item=team_admin_remove title="收回管理员身份" question="收回「${label}」的管理员身份吗？"
+		why="服务器就此不认它的管理员操作，管理员的密钥换一把、各台设备的配置重新发布。它已经看过的主密钥和节点的密码收不回来：要紧的话换掉节点的密码，必要时移除它、给各台设备重新发邀请"
+	fi
+	[ -n "$PROMPT_GUI" ] || say "  ${why}"
+	consent "$item" "$dev" "$title" "$question" "$why" n
+	case $? in
+		0) ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 cca team admin（会先问你）" ;;
+	esac
+	out=$(py team-admin "$2" "$1" "$3") || team_fail "$out" "没改成"
+	n=$(team_stored "$out")
+	if [ "$2" = add ]; then
+		okay "「${label}」现在是管理员了；${n}（它下次同步配置时拿到管理员的身份）"
+		gui_done team_admin_added "「${label}」现在是管理员了"
+	else
+		okay "收回了「${label}」的管理员身份；${n}"
+		gui_done team_admin_removed "收回了「${label}」的管理员身份"
+	fi
 }
 
 team_revoke() {   # cca team revoke Team 设备：移除一台设备（或者撤回还没用掉的邀请）。先问

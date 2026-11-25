@@ -56,6 +56,16 @@ func teamFixtureTests() {
     check("team devices：账号先照工具、再照别名排（team-2 在 team-10 前面），没有别名的在后",
           (try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data(mixed.utf8)))?.accountList.map(\.spec)
             == ["claude:e@example.com", "claude:b@example.com", "claude:a@example.com", "claude:d@example.com", "claude:c@example.com", "codex:z@example.com"])
+    let co = try? JSONDecoder().decode(TeamEntry.self, from: Data(#"{"id":"ab","name":"x","role":"member","coadmin":true,"state":"ok"}"#.utf8))
+    check("别的管理员（3.6.15 起 coadmin）：能管理、不是建 Team 的那台；旧版 cca 没有这一项是成员",
+          co?.isAdmin == true && co?.isOwner == false && loadFixture(StateDoc.self, "state.json")?.config?.teams.first?.isOwner == true
+          && loadFixture(StateDoc.self, "state.json")?.config?.teams.last?.isAdmin == false)
+    check("命令：授予、收回管理员身份；同意项、结果码",
+          CcaCommand.teamAdmin(team: teamA, device: "0a1b", add: true).arguments == ["team", "admin", teamA, "add", "0a1b"]
+          && CcaCommand.teamAdmin(team: teamA, device: "0a1b", add: false).arguments == ["team", "admin", teamA, "remove", "0a1b"]
+          && !CcaCommand.teamAdmin(team: teamA, device: "0a1b", add: true).runsToCompletion
+          && ConsentItem.allKnown.contains(.teamAdminAdd) && ConsentItem.allKnown.contains(.teamAdminRemove)
+          && ResultCode.allKnown.contains(.teamAdminAdded) && ResultCode.allKnown.contains(.teamAdminRemoved))
     let unknown = try? JSONDecoder().decode(TeamEntry.self, from: Data(#"{"id":"ab","name":"x","role":"later-role","state":"later-state"}"#.utf8))
     check("不认识的角色当成员，不认识的状态当出了问题", unknown?.isAdmin == false && unknown?.state.failing == true && unknown?.seq == 0 && unknown?.accounts == 0)
     if let doc = loadFixture(TeamDevicesDoc.self, "team_devices.json") {
@@ -66,6 +76,8 @@ func teamFixtureTests() {
         let d = doc.devices
         check("team devices：这台在前；设备编号、管理员起的名字、它在服务器上的名字；别名锁定着", d.count == 6 && d[0].me && d[0].id == "0a1b2c3d4e5f6071"
               && d[1].label == "小王的 MacBook" && d[1].name == "wang-mbp" && d[2].name == nil && doc.aliasLock == true)
+        check("team devices：角色（3.6.15 起）：建 Team 的那台、别的管理员、成员；旧版 cca 没有是 nil", d[0].isOwnerDevice && d[1].isAdminDevice
+              && d[2].role == "member" && !d[2].isAdminDevice && d[3].role == nil)
         check("team devices：授权：全部 / 只给几个 / 一个都不给", d[0].grantsAll && d[0].has(doc.accountList[2]) && !d[1].grantsAll && d[1].has(doc.accountList[1])
               && !d[1].has(doc.accountList[0]) && d[1].grantCount(of: 3) == 1 && d[0].grantCount(of: 3) == 3 && !d[4].grantsAll && d[4].grantCount(of: 3) == 0)
         check("team devices：状态；不认识的状态不算还在的；移除了的（以前的 cca 还给）不列", d[2].state == .invited && d[2].state.active

@@ -310,6 +310,9 @@ struct ResultCode: KnownValues {
     static let teamJoined = ResultCode(rawValue: "team_joined")
     static let teamLeft = ResultCode(rawValue: "team_left")
     static let teamRevoked = ResultCode(rawValue: "team_revoked")
+    /// 授予、收回了一台设备的管理员身份（`cca team admin add` / `remove`，cca 3.6.15 起）
+    static let teamAdminAdded = ResultCode(rawValue: "team_admin_added")
+    static let teamAdminRemoved = ResultCode(rawValue: "team_admin_removed")
     /// 新建了一个 Team（还没接上同步服务器）；部署好了、更新了它的同步服务器（PROTOCOL 4.14）
     static let teamCreated = ResultCode(rawValue: "team_created")
     static let teamDeployed = ResultCode(rawValue: "team_deployed")
@@ -320,7 +323,8 @@ struct ResultCode: KnownValues {
     static let costHook = ResultCode(rawValue: "cost_hook")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .teamJoined, .teamLeft, .teamRevoked, .teamCreated, .teamDeployed, .teamExported, .teamImported, .costHook]
+                                         .teamJoined, .teamLeft, .teamRevoked, .teamAdminAdded, .teamAdminRemoved, .teamCreated, .teamDeployed,
+                                         .teamExported, .teamImported, .costHook]
 }
 
 struct FailCode: KnownValues {
@@ -435,6 +439,9 @@ struct ConsentItem: KnownValues {
     static let teamDelete = ConsentItem(rawValue: "team_delete")
     /// `cca team revoke`：管理员从 Team 里移除一台设备（范围是设备在 Team 里的编号，默认不同意）。
     static let teamRevoke = ConsentItem(rawValue: "team_revoke")
+    /// `cca team admin add` / `remove`（cca 3.6.15 起）：授予一台设备管理员身份（它拿到这个 Team 的全部设置）/ 收回（范围是设备编号，默认不同意）。
+    static let teamAdminAdd = ConsentItem(rawValue: "team_admin_add")
+    static let teamAdminRemove = ConsentItem(rawValue: "team_admin_remove")
     /// `cca team import` / `edit`：照文件整份换掉一个 Team 的配置，再发布（范围是 Team 的编号和文件的摘要：同意以后文件又改过就对不上，cca 重问；
     /// detail 一项一句、提醒在最后，要去掉账号时默认不同意）。
     static let teamConfig = ConsentItem(rawValue: "team_config")
@@ -443,7 +450,7 @@ struct ConsentItem: KnownValues {
     static let costHook = ConsentItem(rawValue: "cost_hook")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd,
-                                          .teamLeave, .teamDelete, .teamRevoke, .teamConfig, .costHook]
+                                          .teamLeave, .teamDelete, .teamRevoke, .teamAdminAdd, .teamAdminRemove, .teamConfig, .costHook]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

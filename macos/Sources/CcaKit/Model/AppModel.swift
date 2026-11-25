@@ -1670,7 +1670,7 @@ final class AppModel {
     /// 退出一个 Team（cca 先问同意：`consent.team_leave`）。管理员是删除：提问会话（`Handoff.teamDelete`，`consent.team_delete`——先经 SSH 卸掉
     /// 它的同步服务器，登录不了时问密码、卸不掉时问要不要照样删，这台设备上的根密钥跟着没了）
     func leaveTeam(_ t: TeamEntry) {
-        if t.isAdmin {
+        if t.isOwner {
             guard phase == .ready, teamAvailable, !teamBusy else { return }
             run(.teamDelete(team: t.id))
             return
@@ -1681,6 +1681,13 @@ final class AppModel {
     /// 移除一台设备、撤回还没用的邀请（cca 先问同意：`consent.team_revoke`）
     func revokeTeamDevice(_ t: TeamEntry, _ d: TeamDevice) {
         runTeam(.teamRevoke(team: t.id, device: d.id), failureTitle: "没能移除「\(d.label)」", success: "移除了", refresh: t)
+    }
+
+    /// 授予 / 收回一台设备的管理员身份（只有建 Team 的设备能；cca 先问同意：`consent.team_admin_add` / `team_admin_remove`）
+    func setTeamAdmin(_ t: TeamEntry, _ d: TeamDevice, add: Bool) {
+        guard t.isOwner else { return }
+        runTeam(.teamAdmin(team: t.id, device: d.id, add: add), failureTitle: add ? "没能授予「\(d.label)」管理员身份" : "没能收回「\(d.label)」的管理员身份",
+                success: add ? "授予了" : "收回了", refresh: t)
     }
 
     /// 给 / 不给一台设备某个账号。全部都给的设备去掉一个：改成只给剩下的那些

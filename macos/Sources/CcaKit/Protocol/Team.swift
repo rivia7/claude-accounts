@@ -56,11 +56,17 @@ struct TeamEntry: Decodable, Sendable, Equatable, Identifiable {
     /// 这一份配置给了这台设备几个账号
     var accounts: Int
     var joinedEpoch: Double?
+    /// 别的管理员（cca 3.6.15 起）：这台设备是成员，建 Team 的设备给了它管理员身份。能管设备、账号、节点；不能删除 Team、部署服务器、
+    /// 授予别人管理员身份（以前的 cca 没有这一项：false）
+    var coadmin: Bool
 
-    var isAdmin: Bool { role == .admin }
+    /// 能管理这个 Team（建 Team 的设备，和别的管理员）
+    var isAdmin: Bool { role == .admin || coadmin }
+    /// 建这个 Team 的设备（拿着根密钥）：只有它能删除 Team、部署服务器、授予和收回管理员身份
+    var isOwner: Bool { role == .admin }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, role, host, device, state, error, seq, accounts
+        case id, name, role, host, device, state, error, seq, accounts, coadmin
         case joinedEpoch = "joined_epoch"
     }
 
@@ -76,6 +82,7 @@ struct TeamEntry: Decodable, Sendable, Equatable, Identifiable {
         seq = c.int(.seq) ?? 0
         accounts = c.int(.accounts) ?? 0
         joinedEpoch = c.double(.joinedEpoch)
+        coadmin = c.bool(.coadmin) ?? false
     }
 }
 
@@ -204,10 +211,15 @@ struct TeamDevice: Decodable, Sendable, Equatable, Identifiable {
     var expiresEpoch: Double?
     /// 要告诉管理员的（公钥对不上、配置没存上……）
     var problem: String?
+    /// 它在 Team 里是什么（cca 3.6.15 起）：`owner`（建 Team 的那台）| `admin`（别的管理员）| `member`；以前的 cca 没有这一项：nil
+    var role: String?
+
+    var isOwnerDevice: Bool { role == "owner" }
+    var isAdminDevice: Bool { role == "admin" }
 
     enum CodingKeys: String, CodingKey {
         case id = "dev"
-        case label, name, state, me, grants, seq, have, problem
+        case label, name, state, me, grants, seq, have, problem, role
         case seenAge = "seen_age"
         case expiresEpoch = "expires_epoch"
     }
@@ -226,6 +238,7 @@ struct TeamDevice: Decodable, Sendable, Equatable, Identifiable {
         seenAge = c.double(.seenAge)
         expiresEpoch = c.double(.expiresEpoch)
         problem = c.string(.problem)
+        role = c.string(.role)
     }
 
     /// 这个账号给不给它

@@ -34,6 +34,10 @@ pub const B32: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 pub const TEAM_LINK: &str = "cca-team1.";
 /// 设备的配置的标签
 pub const TEAM_DOC: &str = "cca-team-doc-v1";
+/// 管理员名单签名时前面的标签（3.6.15 起）
+pub const TEAM_ADMINS: &str = "cca-team-admins-v1";
+/// 几位管理员共用的状态的标签（3.6.15 起）
+pub const TEAM_ASTATE: &str = "cca-team-astate-v1";
 /// 配对时放到服务器上的那一份的标签
 pub const PAIR: &str = "cca-remote-pair";
 /// 会话的说明的标签
@@ -620,6 +624,40 @@ pub fn team_doc_sign(rootkey: impl AsRef<Path>, tid: &str, dev: &str, seq: i64, 
 /// 是不是这把根公钥签的（`ssh-keygen -Y verify`；allowed_signers 里只有它）
 pub fn team_doc_verify(root_pub: &str, tid: &str, dev: &str, seq: i64, ct: &Value, sig: &str) -> bool {
     ssh_verify(root_pub, "cca-team", &team_doc_signed(tid, dev, seq, ct), &unb64(sig))
+}
+
+/// 管理员名单的文字：`{"v": 1, "team", "epoch", "admins": [{"pub", "name"}…]}`，紧凑的 JSON（非 ASCII 原样写）
+pub fn team_admins_text(tid: &str, epoch: i64, admins: &[(&str, &str)]) -> String {
+    let rows: Vec<Value> = admins.iter().map(|(p, n)| crate::obj! { "pub" => pub_line(p), "name" => *n }).collect();
+    crate::obj! { "v" => 1, "team" => tid, "epoch" => epoch, "admins" => Value::List(rows) }.compact()
+}
+
+/// 根密钥给名单签名（命名空间 cca-team，签的是 `"cca-team-admins-v1\0"` 接着名单的文字）：armored 签名的 base64
+pub fn team_admins_sign(rootkey: impl AsRef<Path>, list: &str) -> String {
+    let data = [format!("{TEAM_ADMINS}\0").as_bytes(), list.as_bytes()].concat();
+    b64(&ssh_sign(rootkey.as_ref(), "cca-team", &data, true).unwrap_or_else(|e| panic!("{e}")))
+}
+
+/// 名单是不是这把根公钥签的
+pub fn team_admins_verify(root_pub: &str, list: &str, sig: &str) -> bool {
+    let data = [format!("{TEAM_ADMINS}\0").as_bytes(), list.as_bytes()].concat();
+    ssh_verify(root_pub, "cca-team", &data, &unb64(sig))
+}
+
+/// 共用的状态的两把密钥：root = HMAC(管理员密钥（64 个十六进制字符解出来的 32 个字节）, "cca-team-astate-v1")，再各 HMAC 一次 enc、mac
+pub fn astate_keys(akey: &str) -> Keys {
+    let root = h(&fromhex(akey), TEAM_ASTATE.as_bytes());
+    (h(&root, b"enc"), h(&root, b"mac"))
+}
+
+/// 封共用的状态：明文是紧凑的 JSON，空格补齐到 1024 字节的整数倍；认证带着 Team 的编号、版本号（十进制）
+pub fn astate_seal(keys: &Keys, tid: &str, rev: i64, doc: &Value) -> Value {
+    seal(TEAM_ASTATE, keys, &[tid, &rev.to_string()], &pad(doc.compact().into_bytes(), 1024, b' '))
+}
+
+/// 认证过的共用的状态；认证不过（别的 Team、别的版本号、改过的、密钥换了）是 None
+pub fn astate_open(keys: &Keys, tid: &str, rev: i64, ct: &Value) -> Option<Value> {
+    unseal(TEAM_ASTATE, keys, &[tid, &rev.to_string()], ct).map(|pt| loads(&pt))
 }
 
 /// 签过名的请求的 body：extra（put / get 这些）后面接上 v、op、key（签名的那把密钥的指纹）、ts、nonce——extra 里已经有的键

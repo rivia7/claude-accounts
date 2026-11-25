@@ -213,8 +213,8 @@ pub fn doc_sign(root_key: &str, msg: &[u8]) -> R<Option<String>> {
     Ok(done.ok().filter(|d| d.rc == 0 && !d.stdout.is_empty()).map(|d| b64encode(&d.stdout)))
 }
 
-/// 是不是这把根公钥签的（ssh-keygen -Y verify：allowed_signers 里只有它，命名空间 cca-team）。None：验不了（ssh-keygen 起不来、
-/// 超时）——和验不过分开说，免得把“这台设备的 ssh-keygen 用不了”说成有人冒充服务器；两种都不用这份配置
+/// 是不是这把公钥（根公钥，或者管理员名单里的一把）签的（ssh-keygen -Y verify：allowed_signers 里只有它，命名空间 cca-team）。
+/// None：验不了（ssh-keygen 起不来、超时）——和验不过分开说，免得把“这台设备的 ssh-keygen 用不了”说成有人冒充服务器；两种都不用这份配置
 pub fn doc_verify(root: &str, msg: &[u8], sig: &str) -> R<Option<bool>> {
     let (Some(root), Ok(raw)) = (root_line(root), b64decode(sig, true)) else { return Ok(Some(false)) };
     let tmp = TempDir::new()?;
@@ -232,38 +232,195 @@ pub fn doc_verify(root: &str, msg: &[u8], sig: &str) -> R<Option<bool>> {
     Ok(done.ok().map(|d| d.rc == 0))
 }
 
-/// 设备取回来的那一份（{"seq", "ct", "sig"}）：序号、验过签名和认证、解开的配置；不对是给人看的原因
-pub fn envelope_open(root: &str, keys: &Keys, tid: &str, dev: &str, env: &Dict) -> R<Result<(i64, Dict), String>> {
+/// 解开的一份配置：序号、配置，和签名的是不是根密钥（不是的话是哪一把：管理员名单里的）
+pub struct Opened {
+    pub seq: i64,
+    pub doc: Dict,
+    /// 签名的那把公钥那一行；None 是根密钥签的
+    pub by: Option<String>,
+}
+
+/// 设备取回来的那一份（{"seq", "ct", "sig", "by"}）：验过签名和认证、解开的配置；不对是给人看的原因。by（3.6.15 起）是签名的管理员的
+/// 公钥：要在 admins（验过根密钥签名的管理员名单，调用方给）里，名单的纪元不比配置里说的 admins_epoch 小
+pub fn envelope_open(
+    root: &str,
+    keys: &Keys,
+    tid: &str,
+    dev: &str,
+    env: &Dict,
+    admins: Option<&AdminList>,
+) -> R<Result<Opened, String>> {
     let Some(seq) = env.get("seq").and_then(|s| s.as_int()).filter(|s| (1..SEQ_MAX).contains(s)) else {
         return Ok(Err("服务器给的配置样子不对".into()));
     };
     let (ct, sig) = (env.at("ct"), env.at("sig").py_str());
     let Some(msg) = doc_signed(tid, dev, seq, &ct) else { return Ok(Err("服务器给的配置样子不对".into())) };
-    match doc_verify(root, &msg, &sig)? {
+    let by = match env.get("by") {
+        None | Some(V::None) => None,
+        Some(b) => match b.as_str().and_then(root_line) {
+            Some(line) if root_line(root).as_deref() == Some(line.as_str()) => None,
+            Some(line) => Some(line),
+            None => return Ok(Err("服务器给的配置样子不对".into())),
+        },
+    };
+    let signer = match &by {
+        None => root.to_string(),
+        Some(line) => match admins {
+            Some(list) if list.has(line) => line.clone(),
+            Some(_) => {
+                return Ok(Err("配置不是这个 Team 现在的管理员签的（管理员身份被收回了？可能有人冒充服务器）：不用它".into()))
+            }
+            None => return Ok(Err("配置是另一位管理员签的，服务器却没给根密钥签过的管理员名单：不用它".into())),
+        },
+    };
+    match doc_verify(&signer, &msg, &sig)? {
         Some(true) => {}
-        Some(false) => return Ok(Err("配置的签名不是这个 Team 的根密钥签的（可能有人冒充服务器）：不用它".into())),
+        Some(false) if by.is_none() => {
+            return Ok(Err("配置的签名不是这个 Team 的根密钥签的（可能有人冒充服务器）：不用它".into()));
+        }
+        Some(false) => return Ok(Err("配置的签名不对（可能有人冒充服务器）：不用它".into())),
         None => return Ok(Err("验不了配置的签名（这台设备上的 ssh-keygen 用不了：要 OpenSSH 8.0 以上）：先不用它".into())),
     }
     let Some(doc) = doc_open(keys, tid, dev, seq, &ct) else {
         return Ok(Err("配置解不开（不是给这台设备的这一份）：不用它".into()));
     };
-    match doc_problems(&doc).into_iter().next() {
-        Some(why) => Ok(Err(format!("配置的内容不对（{why}）：不用它"))),
-        None => Ok(Ok((seq, doc))),
+    if let Some(why) = doc_problems(&doc).into_iter().next() {
+        return Ok(Err(format!("配置的内容不对（{why}）：不用它")));
     }
+    // 别的管理员签的：照的名单不能比配置里说的旧（服务器拿旧的名单配一份被收回了的管理员签的配置）
+    if by.is_some() && admins.is_some_and(|l| doc_admins_epoch(&doc) > l.epoch) {
+        return Ok(Err("服务器给的管理员名单比配置说的旧（可能有人冒充服务器）：不用它".into()));
+    }
+    Ok(Ok(Opened { seq, doc, by }))
 }
 
-/// 管理员给一台设备封好、签好的那一份（{"seq", "ct", "sig"}）；太大、签不了是给人看的原因
-pub fn envelope_seal(root_key: &str, keys: &Keys, tid: &str, dev: &str, seq: i64, doc: &Dict) -> R<Result<Dict, String>> {
+/// 配置里说的管理员名单的纪元（admins_epoch，3.6.15 起；没有是 0）
+pub fn doc_admins_epoch(doc: &Dict) -> i64 {
+    doc.get("admins_epoch").and_then(|e| e.as_int()).unwrap_or(0)
+}
+
+/// 签名的那一把：私钥文件，和不是根密钥时它的公钥那一行（放进配置的 by）
+pub struct Signer {
+    pub key: String,
+    pub by: Option<String>,
+}
+
+/// 管理员给一台设备封好、签好的那一份（{"seq", "ct", "sig"}，别的管理员签的另有 "by"）；太大、签不了是给人看的原因
+pub fn envelope_seal(signer: &Signer, keys: &Keys, tid: &str, dev: &str, seq: i64, doc: &Dict) -> R<Result<Dict, String>> {
     let ct = V::Dict(doc_seal(keys, tid, dev, seq, doc)?);
     if ct.as_dict().is_some_and(|c| c.at("c").py_str().len() > DOC_MAX) {
         return Ok(Err("配置太大了（节点太多？一台设备的配置加密后最多 128 KB）".into()));
     }
     let msg = doc_signed(tid, dev, seq, &ct).expect("刚封好的密文样子是对的");
-    match doc_sign(root_key, &msg)? {
-        Some(sig) => Ok(Ok(dict! { "seq" => seq, "ct" => ct, "sig" => sig })),
-        None => Ok(Err("没法用 Team 的根密钥签名（ssh-keygen）".into())),
+    match doc_sign(&signer.key, &msg)? {
+        Some(sig) => {
+            let env = dict! { "seq" => seq, "ct" => ct, "sig" => sig };
+            if let Some(by) = &signer.by {
+                env.set("by", by.as_str());
+            }
+            Ok(Ok(env))
+        }
+        None if signer.by.is_none() => Ok(Err("没法用 Team 的根密钥签名（ssh-keygen）".into())),
+        None => Ok(Err("没法用这台设备的密钥签名（ssh-keygen）".into())),
     }
+}
+
+// --- 管理员名单、几位管理员共用的状态（3.6.15 起） ------------------------------------------------------------------------
+
+/// 管理员名单签名时前面的标签
+const ADMINS_LABEL: &str = "cca-team-admins-v1";
+/// 共用的状态的密文的标签
+const ASTATE_LABEL: &str = "cca-team-astate-v1";
+
+/// 验过根密钥签名的管理员名单
+#[derive(Clone, Debug)]
+pub struct AdminList {
+    /// 名单原样（紧凑的 JSON 文字）和根密钥的签名
+    pub list: String,
+    pub sig: String,
+    pub epoch: i64,
+    /// (公钥那一行, 名字)
+    pub admins: Vec<(String, String)>,
+}
+
+impl AdminList {
+    pub fn has(&self, line: &str) -> bool {
+        self.admins.iter().any(|(p, _)| p == line)
+    }
+}
+
+/// 根密钥签的那一段：标签 \0 名单的文字
+fn admins_signed(list: &str) -> Vec<u8> {
+    let mut msg = format!("{ADMINS_LABEL}\0").into_bytes();
+    msg.extend_from_slice(list.as_bytes());
+    msg
+}
+
+/// 名单的文字：{"v": 1, "team", "epoch", "admins": [{"pub", "name"}…]}，紧凑的 JSON
+pub fn admins_text(tid: &str, epoch: i64, admins: &[(String, String)]) -> String {
+    let rows: Vec<V> = admins.iter().map(|(p, n)| V::Dict(dict! { "pub" => p.as_str(), "name" => n.as_str() })).collect();
+    let doc = dict! { "v" => 1, "team" => tid, "epoch" => epoch, "admins" => rows };
+    json::dumps(&V::Dict(doc), json::Fmt::new().utf8().compact())
+}
+
+/// 拿根密钥签一份名单：{"list", "sig"}；签不了是 None
+pub fn admins_sign(root_key: &str, list: &str) -> R<Option<Dict>> {
+    Ok(doc_sign(root_key, &admins_signed(list))?.map(|sig| dict! { "list" => list, "sig" => sig }))
+}
+
+/// 名单的文字里的纪元、各位管理员（不验签名：先看要不要验）；样子不对是 None
+fn admins_parse(tid: &str, list: &str) -> Option<(i64, Vec<(String, String)>)> {
+    let d = json::loads(list).ok()?.as_dict()?;
+    let epoch = d.get("epoch")?.as_int().filter(|e| (1..SEQ_MAX).contains(e))?;
+    if !d.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) || d.str("team").as_deref() != Some(tid) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for a in d.list("admins")?.items() {
+        let a = a.as_dict()?;
+        out.push((root_line(&a.str("pub")?)?, a.str("name").filter(|n| team_name_ok(n))?.to_string()));
+    }
+    Some((epoch, out))
+}
+
+/// 服务器给的 {"list", "sig"}：纪元比 at_least 小的不要（None，不验）；别的照根公钥验过签名。Err 是给人看的原因
+pub fn admins_open(root: &str, tid: &str, v: &Dict, at_least: i64) -> R<Result<Option<AdminList>, String>> {
+    let (list, sig) = (v.at("list").py_str(), v.at("sig").py_str());
+    let Some((epoch, admins)) = admins_parse(tid, &list) else {
+        return Ok(Err("服务器给的管理员名单样子不对".into()));
+    };
+    if epoch < at_least {
+        return Ok(Ok(None));
+    }
+    match doc_verify(root, &admins_signed(&list), &sig)? {
+        Some(true) => Ok(Ok(Some(AdminList { list, sig, epoch, admins }))),
+        Some(false) => Ok(Err("管理员名单不是这个 Team 的根密钥签的（可能有人冒充服务器）".into())),
+        None => Ok(Err("验不了管理员名单的签名（这台设备上的 ssh-keygen 用不了：要 OpenSSH 8.0 以上）".into())),
+    }
+}
+
+/// 共用的状态的两把密钥：由管理员密钥（64 个十六进制字符）派生，root = HMAC(它解出来的 32 个字节, "cca-team-astate-v1")
+pub fn astate_keys(akey: &str) -> Option<Keys> {
+    let k = from_hex(akey).filter(|k| k.len() == 32)?;
+    let root = hmac_sha256(&k, ASTATE_LABEL.as_bytes());
+    Some((hmac_sha256(&root, b"enc"), hmac_sha256(&root, b"mac")))
+}
+
+fn astate_ad(tid: &str, rev: i64) -> R<Vec<u8>> {
+    blob_ad(&[ASTATE_LABEL, tid, &rev.to_string()])
+}
+
+/// 共用的状态 → 服务器存的密文：明文是紧凑的 JSON，空格补齐到 1024 字节的整数倍；认证带着 Team、版本号
+pub fn astate_seal(keys: &Keys, tid: &str, rev: i64, doc: &Dict) -> R<Dict> {
+    let mut pt = json::dumps(&V::Dict(doc.copy()), json::Fmt::new().utf8().compact()).into_bytes();
+    pt.resize(pt.len().div_ceil(DOC_PAD) * DOC_PAD, b' ');
+    Ok(blob_seal(keys, &astate_ad(tid, rev)?, &pt))
+}
+
+/// astate_seal 反过来；认证不过、不是 JSON 对象是 None
+pub fn astate_open(keys: &Keys, tid: &str, rev: i64, ct: &V) -> Option<Dict> {
+    let pt = blob_open(keys, &astate_ad(tid, rev).ok()?, ct)?;
+    json::loads(std::str::from_utf8(&pt).ok()?.trim_end_matches(' ')).ok()?.as_dict()
 }
 
 /// 配置的明文哪里不对（管理员发布前、设备用之前都查；不认得的项不管：以后加的旧版本照样用）：
@@ -320,6 +477,12 @@ pub fn doc_problems(doc: &Dict) -> Vec<String> {
     }
     if doc.get("install_node").is_some_and(|n| !n.is_str()) {
         out.push("install_node 不对".into());
+    }
+    if doc.get("admins_epoch").is_some_and(|e| !e.as_int().is_some_and(|e| (0..SEQ_MAX).contains(&e))) {
+        out.push("admins_epoch 不对".into());
+    }
+    if doc.get("admin").is_some_and(|a| !a.as_dict().is_some_and(|a| a.str("key").is_some_and(|k| astate_keys(&k).is_some()))) {
+        out.push("admin 不对".into());
     }
     if let Some(n) = doc.get("nodes").filter(|n| !n.is_none()) {
         let shaped = n.as_dict().map(|n| V::Dict(dict! { "version" => 1, "group" => n.at("group"), "proxies" => n.at("proxies") }));

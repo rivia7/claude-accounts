@@ -53,6 +53,7 @@ pub const MODULE: Module = Module {
         case!(config_file),
         case!(new_with_accounts),
         case!(server_lies),
+        case!(co_admins),
     ],
 };
 
@@ -772,8 +773,8 @@ fn lifecycle(t: &mut Ctx) {
     let listing: Vec<&str> = out.split('\n').collect();
     assert_eq!(
         (listing[0], &listing[4].split('\t').collect::<Vec<_>>()[2..]),
-        ("0", &["joined", "0 个账号", "1", "-", row["problem"].str()][..]),
-        "第一行是别名锁定着没有"
+        ("0", &["joined", "0 个账号", "1", "-", row["problem"].str(), "member"][..]),
+        "第一行是别名锁定着没有；最后一栏是角色（3.6.15 起）"
     );
     assert_eq!(lines(&admin, &["team-revoke", "apply", tid, "no-proof"]), ["no-proof"]);
     // 改授权、改映射：发布以后设备同步到新的一版
@@ -2298,4 +2299,155 @@ fn server_lies(t: &mut Ctx) {
     let (_srv, _, _) = fx.server_on(root, port, "srv");
     let rows = keyed(&devices(&admin, tid)["devices"], "dev");
     assert!(aj()["devices"].obj().contains_key(&me) && truthy(&rows[me.as_str()]["me"]), "{rows}");
+}
+
+/// 几位管理员（3.6.15 起）：建 Team 的设备授予、收回管理员身份；别的管理员邀请、授权、发布（拿它自己的密钥签，配置里带着 by），
+/// 管理员的设置经服务器共用（密文，服务器看不到主密钥）；成员照根密钥签的管理员名单验它签的配置；收回以后服务器不认它、管理员的密钥换了，
+/// 服务器拿旧的名单配被收回的管理员签的配置，见过新名单的设备不认
+fn co_admins(t: &mut Ctx) {
+    let fx = fx(t);
+    let (admin, tid, root, srv, _url, _pin) = fx.new_team();
+    let (tid, root) = (tid.as_str(), root.as_str());
+    let rk = tdir(&admin, tid).join("root_ed25519");
+    assert_eq!(load(&admin, tid), ["1"]);
+    let (link_b, dev_b) = invite(&admin, tid, "bob-mini", &[]);
+    let bob = fx.device("bob");
+    lines_in(&bob, &["team-join"], &link_b);
+    let (link_c, dev_c) = invite(&admin, tid, "carol-pc", &["--accounts", "claude:alice@example.com"]);
+    let carol = fx.device("carol");
+    lines_in(&carol, &["team-join"], &link_c);
+    devices(&admin, tid); // 对一遍：记下两台的公钥（认证码核对过的）
+    let (tb, tc) = (tdir(&bob, tid), tdir(&carol, tid));
+    let bob_key = tb.join("id_ed25519");
+    let bob_pub = pub_of(&bob_key);
+
+    // 成员不是管理员；建 Team 的设备自己、不是管理员的不能收回
+    assert_eq!(code(&bob, &["team-devices", tid]), "not_admin");
+    assert_eq!(code(&bob, &["team-admin", "ls", tid]), "not_admin");
+    assert_eq!(code(&admin, &["team-admin", "add", tid, "studio"]), "self");
+    assert_eq!(code(&admin, &["team-admin", "remove", tid, "bob-mini"]), "not_admin_dev");
+    assert_eq!(lines(&admin, &["team-admin", "plan", "add", tid, "bob-mini"]), [format!("{tid}\t{dev_b}\tbob-mini")]);
+    let (st, _) = spec::post(&bob_key, srv.port, "team_members", &obj! {});
+    assert_eq!(st, 403, "授予以前服务器不认 bob 的管理员请求");
+
+    // 授予：名单（根密钥签的）和共用的设置（密文）放到服务器上，各台的配置带上名单的纪元重新发布
+    assert_eq!(lines(&admin, &["team-admin", "add", tid, "bob-mini"]), ["3"]);
+    assert_eq!(code(&admin, &["team-admin", "add", tid, "bob-mini"]), "already");
+    let a = fsx::read_json(tdir(&admin, tid).join("admin.json"));
+    let (master, akey) = (a["master"].str().to_string(), a["akey"].str().to_string());
+    let state = fsx::read_json(fx.d.join("srv").join("state.json"));
+    let listed = &state["team"]["admins"];
+    assert!(spec::team_admins_verify(root, listed["list"].str(), listed["sig"].str()), "名单是根密钥签的");
+    assert_eq!(listed["list"].str(), spec::team_admins_text(tid, 1, &[(&bob_pub, "bob-mini")]), "照文档的样子");
+    let astate = &state["team"]["astate"];
+    let shared = spec::astate_open(&spec::astate_keys(&akey), tid, astate["rev"].i64(), &astate["ct"]).expect("照文档解得开");
+    assert_eq!(
+        list![&shared["master"], shared.get("akey").is_some(), shared.get("deploy").is_some()],
+        list![&master, false, false]
+    );
+    let on_server = all_text(&fx.d.join("srv"));
+    assert!(!on_server.contains(&master) && !on_server.contains(&akey), "服务器上没有主密钥、管理员的密钥的明文");
+    assert_eq!(doc(&carol, tid).1.get("admin"), None, "只有给管理员的那一份带着管理员的密钥");
+
+    // bob 同步配置：拿到管理员的密钥，是别的管理员了
+    assert_eq!(sync_fields(&bob)[2], "ok");
+    assert_eq!(doc(&bob, tid).1["admin"]["key"].str(), akey);
+    assert_eq!(fsx::mode(tb.join("admin_key")), 0o600);
+    let row = &jl(&bob, &["team-list", "--json"])["teams"][0];
+    assert_eq!(pick(row, &["role", "coadmin"]), list!["member", true]);
+    assert_eq!(split_lines(&bob.ok(&["team-list"]))[0].split('\t').nth(2), Some("coadmin"));
+    let (st, _) = spec::post(&bob_key, srv.port, "team_members", &obj! {});
+    assert_eq!(st, 200, "服务器照名单认 bob 的管理员请求");
+    let (st, j) =
+        spec::post(&bob_key, srv.port, "team_admins", &obj! { "list" => listed["list"].str(), "sig" => listed["sig"].str() });
+    assert_eq!((st, j["error"].str()), (403, "denied"), "换名单只认根密钥");
+    let same = obj! { "list" => listed["list"].str(), "sig" => listed["sig"].str() };
+    let (st, j) = spec::post(&rk, srv.port, "team_admins", &same);
+    assert_eq!((st, j["error"].str(), j["epoch"].i64()), (409, "stale", 1), "纪元不比存着的大：不换");
+    let next = spec::team_admins_text(tid, 2, &[(&bob_pub, "bob-mini")]);
+    let by_bob = obj! { "list" => next.as_str(), "sig" => spec::team_admins_sign(&bob_key, &next) };
+    let (st, _) = spec::post(&rk, srv.port, "team_admins", &by_bob);
+    assert_eq!(st, 400, "名单不是根密钥签的：不收");
+    let rev = astate["rev"].i64();
+    let (st, j) = spec::post(&rk, srv.port, "team_astate_put", &obj! { "base" => rev - 1, "ct" => &astate["ct"] });
+    assert_eq!((st, j["error"].str(), j["rev"].i64()), (409, "stale", rev), "照着改的不是存着的那一版：不存");
+
+    // bob 当管理员：看名单、授权、发布（它签的）；只有建 Team 的设备能做的不行
+    let ls = lines(&bob, &["team-admin", "ls", tid]);
+    assert_eq!(ls.len(), 2);
+    assert!(ls[0].ends_with("\tstudio\towner") && ls[1] == format!("{dev_b}\tbob-mini\tadmin"), "{ls:?}");
+    let roles = mapped(&keyed(&devices(&bob, tid)["devices"], "label"), |r| r["role"].clone());
+    assert_eq!(roles, obj! { "studio" => "owner", "bob-mini" => "admin", "carol-pc" => "member" });
+    assert_eq!(code(&bob, &["team-admin", "add", tid, "carol-pc"]), "owner");
+    assert_eq!(code(&bob, &["team-revoke", "apply", tid, "studio"]), "owner");
+    assert_eq!(code(&admin, &["team-revoke", "apply", tid, "bob-mini"]), "admin_dev", "管理员的设备先收回身份才能移除");
+    assert_eq!(code(&bob, &["team-undeploy", tid, "root@192.0.2.10"]), "owner");
+    lines(&bob, &["team-grant", tid, "carol-pc", "all"]);
+    let docs = fsx::read_json(fx.d.join("srv").join("team-docs.json"));
+    assert_eq!(docs["docs"][dev_c.as_str()]["by"].str(), spec::pub_line(&bob_pub), "bob 签的配置带着它的公钥");
+    assert!(docs["docs"][dev_c.as_str()].get("by").is_some());
+    assert_eq!(sync_fields(&carol)[2], "ok", "carol 照名单验过 bob 签的配置");
+    assert_eq!(sorted_items(&doc(&carol, tid).1["accounts"]["claude"]), ["alice@example.com", "bob@example.com"]);
+    assert_eq!(fsx::read_json(tc.join("admins.json"))["epoch"].i64(), 1, "记下了验过的名单");
+    // 建 Team 的设备看得到 bob 改的（共用的设置）
+    let grants = mapped(&keyed(&devices(&admin, tid)["devices"], "label"), |r| r["grants"].clone());
+    assert_eq!(grants["carol-pc"].str(), "all");
+
+    // 不在名单里的密钥签的、带着 by 的配置：不认
+    let port = srv.port;
+    let evil = fx.d.join("evil");
+    let evil_pub = pki::keygen(&evil);
+    let (_, _, keys_c) = spec::invite_parts(&fsx::read_text(tc.join("secret")).trim().to_string()).expect("carol 的那串随机数");
+    let forged = |signer: &Path, by: &str, seq: i64, name: &str| {
+        let content = with(&doc(&carol, tid).1, "name", name);
+        let ct = spec::team_doc_seal(&keys_c, tid, &dev_c, seq, &content);
+        let env = obj! { "seq" => seq, "ct" => &ct, "sig" => spec::team_doc_sign(signer, tid, &dev_c, seq, &ct), "by" => by };
+        let (st, j) = spec::post(&rk, port, "team_put", &obj! { "docs" => obj! { dev_c.as_str() => env } });
+        assert_eq!(st, 200, "{j}");
+    };
+    let seq_c = doc(&carol, tid).0;
+    forged(&evil, &evil_pub, seq_c + 1, "伪造的");
+    let f = sync_fields(&carol);
+    assert_eq!(f[2], "error");
+    assert_in("管理员", &f[4]);
+
+    // 收回：名单换成第 2 版，管理员的密钥换一把，各台重新发布；bob 同步以后不是管理员了，服务器也不认它
+    let old_list = listed.clone();
+    assert_eq!(lines(&admin, &["team-admin", "remove", tid, "bob-mini"]).len(), 1);
+    let a2 = fsx::read_json(tdir(&admin, tid).join("admin.json"));
+    assert_ne!(a2["akey"].str(), akey, "换了一把管理员的密钥");
+    assert_eq!(a2["admins_epoch"].i64(), 2);
+    assert_eq!(code(&bob, &["team-devices", tid]), "not_admin");
+    assert!(!tb.join("admin_key").exists() && !tb.join("admin.json").exists(), "管理员的密钥、取回来的设置删掉了");
+    assert_eq!(jl(&bob, &["team-list", "--json"])["teams"][0]["coadmin"], Value::Bool(false));
+    let (st, _) = spec::post(&bob_key, srv.port, "team_members", &obj! {});
+    assert_eq!(st, 403, "收回以后服务器不认 bob 的管理员请求");
+    let state = fsx::read_json(fx.d.join("srv").join("state.json"));
+    let shared = &state["team"]["astate"];
+    assert!(
+        spec::astate_open(&spec::astate_keys(&akey), tid, shared["rev"].i64(), &shared["ct"]).is_none(),
+        "旧的密钥解不开新存的设置"
+    );
+    assert_eq!(sync_fields(&carol)[2], "ok");
+    assert_eq!(fsx::read_json(tc.join("admins.json"))["floor"].i64(), 2, "根密钥签的配置说名单到第 2 版了");
+
+    // 服务器作恶：换回旧的名单，配一份 bob 签的配置。carol 见过第 2 版：不认
+    drop(srv);
+    let mut s = fsx::read_json(fx.d.join("srv").join("state.json"));
+    sub(&mut s, &["team"]).insert("admins", old_list);
+    put(fx.d.join("srv").join("state.json"), &s);
+    let (srv, _, _) = fx.server_on(root, port, "srv");
+    let seq_c = doc(&carol, tid).0;
+    forged(&bob_key, &bob_pub, seq_c + 1, "被收回的管理员签的");
+    let f = sync_fields(&carol);
+    assert_eq!((f[2].as_str(), f[3].parse::<i64>().unwrap_or(0)), ("error", seq_c), "{f:?}");
+    assert_ne!(doc(&carol, tid).1["name"].str(), "被收回的管理员签的");
+    drop(srv);
+}
+
+/// 公钥文件（私钥旁边的 .pub）的前两段
+fn pub_of(key: &Path) -> String {
+    let mut p = key.as_os_str().to_os_string();
+    p.push(".pub");
+    spec::pub_line(&fsx::read_text(PathBuf::from(p)))
 }

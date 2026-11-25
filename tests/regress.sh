@@ -3301,7 +3301,7 @@ ssh-keygen -q -t ed25519 -N '' -C dan -f "$T/tm-dan" </dev/null >/dev/null 2>&1
 out=$(tm_spec join "$TMLINK" "$T/tm-dan" "$TMAPORT" 2>&1)
 ok "照文档独立实现的那一头拿这个邀请加入、验过根密钥的签名、解开：只有给它的账号和这个账号要的节点" '[ "$out" = "{\"accounts\": {\"claude\": {\"alice@example.com\": \"JP-A\"}}, \"nodes\": [\"JP-A\"], \"seq\": 1}" ]'
 out=$(run cca team devices 书房组 2>&1); rc=$?
-ok "cca team devices：和服务器对一遍，两台都加入了（不说第几版）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -Eq "书房的Mac（.*）：joined，0 个账号，配置(是最新的|发布了)$" && printf "%s" "$out" | grep -Eq "dan-air（.*）：joined，1 个账号，配置(是最新的|发布了)$" && ! printf "%s" "$out" | grep -q "第 [0-9]* 版" && run cca team devices 书房组 --json | jok "d[\"kind\"] == \"team_devices\" and [x[\"state\"] for x in d[\"devices\"]] == [\"joined\", \"joined\"]"'
+ok "cca team devices：和服务器对一遍，两台都加入了（不说第几版）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -Eq "书房的Mac（.*）：joined，建 Team 的设备，0 个账号，配置(是最新的|发布了)$" && printf "%s" "$out" | grep -Eq "dan-air（.*）：joined，1 个账号，配置(是最新的|发布了)$" && ! printf "%s" "$out" | grep -q "第 [0-9]* 版" && run cca team devices 书房组 --json | jok "d[\"kind\"] == \"team_devices\" and [x[\"state\"] for x in d[\"devices\"]] == [\"joined\", \"joined\"]"'
 out=$(run cca team grant 书房组 dan-air +claude:bob@example.com 2>&1); rc=$?
 ok "cca team grant：多给一个账号，发布；那一头同步到新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是2 个账号" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  2" ]'
 out=$(run cca team map 书房组 claude alice@example.com JP-B 2>&1); rc=$?
@@ -3354,6 +3354,21 @@ ok "cca team node install：指定安装客户端用的节点，每台设备的�
 out=$(run cca team node 书房组 install - 2>&1); rc=$?
 TMDOC='{"install_node": "", "nodes": ["JP-B"], "seq": 10}'
 ok "cca team node install -：不再指定（说原来是哪个），再发布一版：那一头的配置不再带它" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "不再指定安装客户端用的节点（原来是「JP-A」）；2 台设备的配置发布了新的一版" && [ "$(tm_spec doc "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "$TMDOC" ] && run cca team node 书房组 ls --json | jok "d[\"install_node\"] == \"\""'
+# cca team admin（3.6.15 起）：建 Team 的设备给一台加入了的设备管理员身份、收回；先问同意（范围是设备编号）
+out=$(runev cca team admin 书房组 add dan-air 2>&1); rc=$?
+TMADEV=$("$TESTBIN" val -s "a1=$T/ev.jsonl" 'next(e["scope"] for e in map(json.loads, open(a1)) if e.get("ev") == "consent")' 2>/dev/null)
+ok "cca team admin add：App 里先发同意事件（team_admin_add，范围是设备编号，说它拿到全部设置、收不回来），不授予" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_admin_add\" and \"收不回来\" in e[\"detail\"]" && [ ${#TMADEV} -eq 16 ] && run cca team devices 书房组 --json | jok "[x[\"role\"] for x in d[\"devices\"]] == [\"owner\", \"member\"]"'
+out=$(runev CCA_GRANT="team_admin_add:$TMADEV" cca team admin 书房组 add dan-air 2>&1); rc=$?
+out2=$(run cca team admin 书房组 2>&1); rc2=$?
+ok "同意以后授予了（result 的 team_admin_added）：cca team admin 列出它，cca team devices 的 role 是 admin" '[ $rc -eq 0 ] && [ "$(lastres)" = team_admin_added ] && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "dan-air（.*）：管理员" && printf "%s" "$out2" | grep -q "建 Team 的设备" && run cca team devices 书房组 --json | jok "[x[\"role\"] for x in d[\"devices\"]] == [\"owner\", \"admin\"]" && run cca team devices 书房组 2>&1 | grep -q "dan-air（.*）：joined，管理员，"'
+out=$(runev cca team admin 书房组 add dan-air 2>&1); rc=$?
+ok "已经是管理员的再授予：fail 事件 team_already，不问同意" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_already\"" && ! evq "e[\"ev\"] == \"consent\""'
+out=$(runev CCA_GRANT="team_revoke:$TMADEV" cca team revoke 书房组 dan-air 2>&1); rc=$?
+ok "管理员的设备不能直接移除（fail 事件 team_admin_dev）：先收回" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_admin_dev\"" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
+out=$(runev cca team admin 书房组 remove dan-air 2>&1); rc=$?
+ok "cca team admin remove：先发同意事件（team_admin_remove），不收回" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_admin_remove\" and e[\"scope\"] == \"$TMADEV\"" && run cca team devices 书房组 --json | jok "d[\"devices\"][1][\"role\"] == \"admin\""'
+out=$(runev CCA_GRANT="team_admin_remove:$TMADEV" cca team admin 书房组 remove dan-air 2>&1); rc=$?
+ok "同意以后收回了（result 的 team_admin_removed）：role 回到 member" '[ $rc -eq 0 ] && [ "$(lastres)" = team_admin_removed ] && run cca team devices 书房组 --json | jok "[x[\"role\"] for x in d[\"devices\"]] == [\"owner\", \"member\"]"'
 out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
 TMDEV=$("$TESTBIN" val -s "a1=$T/ev.jsonl" 'next(e["scope"] for e in map(json.loads, open(a1)) if e.get("ev") == "consent")' 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'

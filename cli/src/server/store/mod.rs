@@ -34,7 +34,7 @@ use super::limits::Limits;
 use super::omap::OMap;
 use super::sshsig;
 use super::wire::{self, Blob, Num};
-use super::{API, MAX_ACCOUNTS, MAX_COST_BLOB, MAX_TEAM_DOC, RELAY_OPS, SYNC_OPS, TEAM_DOCS_BYTES, TEAM_OPS};
+use super::{API, MAX_ACCOUNTS, MAX_COST_BLOB, MAX_TEAM_DOC, RELAY_OPS, SYNC_OPS, TEAM_DOCS_BYTES, TEAM_OPS, TEAM_ROOT_OPS};
 use crate::dict;
 use crate::py::json::{self, Fmt};
 use crate::py::obj::{Dict, List, V};
@@ -151,6 +151,8 @@ struct DocEntry {
     seq: i64,
     ct: Blob,
     sig: String,
+    /// 不是根密钥签的：签名的那把公钥那一行（3.6.15 起）
+    by: Option<String>,
     at: Option<Num>,
 }
 
@@ -170,6 +172,10 @@ enum TeamKey {
     Gen,
     Invites,
     Spent,
+    /// 根密钥签过的管理员名单（3.6.15 起；没有时不写）
+    Admins,
+    /// 几位管理员共用的状态（3.6.15 起；没有时不写）
+    AState,
     /// 不认识的键：原样留着（值是紧凑的 JSON 文字）
     Other(String, String),
 }
@@ -260,6 +266,10 @@ pub struct Store {
     keys: Side<KeyEntry>,
     cost: Side<OMap<CostEntry>>,
     docs: Side<DocEntry>,
+
+    /// team.admins：根密钥签过的管理员名单；team.astate：几位管理员共用的状态（版本号, 密文）
+    admins: Option<wire::Admins>,
+    astate: Option<(i64, Blob)>,
 
     // ---- 只在内存里的
     /// 各台设备最近一次验过签的请求（不为它每个请求都重写状态文件）
@@ -545,12 +555,16 @@ impl DocEntry {
             seq: e.get("seq").filter(wire::is_count)?.as_int()?,
             ct: wire::parse_blob(&e.get("ct")?, MAX_TEAM_DOC)?,
             sig: e.str("sig")?.to_string(),
+            by: e.str("by").filter(|b| wire::key_re().matches(b)).map(|b| b.to_string()),
             at: e.get("at").as_ref().and_then(Num::of),
         })
     }
 
     fn v(&self) -> V {
         let d = dict! { "seq" => self.seq, "ct" => self.ct.to_v(), "sig" => &self.sig };
+        if let Some(by) = &self.by {
+            d.set("by", by.as_str());
+        }
         if let Some(at) = self.at {
             d.set("at", at.v());
         }
@@ -602,6 +616,8 @@ impl Store {
             keys: Side::new(),
             cost: Side::new(),
             docs: Side::new(),
+            admins: None,
+            astate: None,
             seen: HashMap::new(),
             have: HashMap::new(),
         };
@@ -724,9 +740,24 @@ impl Store {
                 "gen" => TeamKey::Gen,
                 "invites" => TeamKey::Invites,
                 "spent" => TeamKey::Spent,
+                "admins" => TeamKey::Admins,
+                "astate" => TeamKey::AState,
                 _ => TeamKey::Other(k.to_string(), text_of(v)),
             })
             .collect();
+        // 管理员名单照根公钥再验一遍（手改过、换了根公钥的不认），共用的状态的样子要对：不对的丢掉
+        if let Some(a) = team.dict("admins") {
+            let blob = sshsig::key_blob(&self.root_key).unwrap_or_default();
+            self.admins =
+                wire::parse_admins(&a.get("list").unwrap_or(V::None), &a.get("sig").unwrap_or(V::None), &blob, &self.team_id);
+            changed |= self.admins.is_none();
+        }
+        if let Some(s) = team.dict("astate") {
+            let rev = s.get("rev").filter(wire::seq_ok).and_then(|r| r.as_int());
+            let ct = s.get("ct").and_then(|c| wire::parse_blob(&c, super::MAX_ASTATE));
+            self.astate = rev.zip(ct);
+            changed |= self.astate.is_none();
+        }
         for key in [TeamKey::Invites, TeamKey::Spent] {
             if !self.team_keys.contains(&key) {
                 self.team_keys.push(key);
@@ -774,6 +805,8 @@ impl Store {
         self.invites.clear();
         self.spent.clear();
         self.team_keys = TeamKey::fresh();
+        self.admins = None;
+        self.astate = None;
         self.keys = Side::new();
         self.cost = Side::new();
         self.save_keys()?;
@@ -806,6 +839,16 @@ impl Store {
                             TeamKey::Gen => team.set("gen", &self.gen),
                             TeamKey::Invites => team.set("invites", self.invites.to_v(Inv::v)),
                             TeamKey::Spent => team.set("spent", self.spent.to_v(|t| t.v())),
+                            TeamKey::Admins => {
+                                if let Some(a) = &self.admins {
+                                    team.set("admins", a.to_v());
+                                }
+                            }
+                            TeamKey::AState => {
+                                if let Some((rev, ct)) = &self.astate {
+                                    team.set("astate", dict! { "rev" => *rev, "ct" => ct.to_v() });
+                                }
+                            }
                             TeamKey::Other(k, text) => team.set(k.as_str(), value_of(text)),
                         }
                     }
@@ -839,8 +882,9 @@ impl Store {
         for (op, _) in SYNC_OPS {
             ops.push(op);
         }
-        for op in TEAM_OPS {
-            ops.push(op);
+        // 3.6.15 起的几位管理员的 op 不列：/v1/health 和以前逐字节一样（客户端发了这台服务器不认的 op 会回 404 not_found，照它说服务器太旧）
+        for op in TEAM_OPS.iter().filter(|op| !op.starts_with("team_astate") && !TEAM_ROOT_OPS.contains(op)) {
+            ops.push(*op);
         }
         if relay_port.is_some() {
             for op in RELAY_OPS {
@@ -866,6 +910,11 @@ impl Store {
     /// 名单里这台设备的公钥那一行（验它的签名用）；不在名单里是 None（Py:499-501 的 machine(fp)['key']）
     pub fn machine_key(&self, fp: &str) -> Option<String> {
         self.machines.get(fp).map(|m| m.key.clone())
+    }
+
+    /// 管理员名单里这把密钥（指纹）的公钥那一行；不在名单里是 None
+    pub fn admin_key(&self, fp: &str) -> Option<String> {
+        self.admins.as_ref()?.keys.iter().find(|(f, _)| f == fp).map(|(_, line)| line.clone())
     }
 
     /// 名单里这台设备的名字；没有是 None（Py:516-519）

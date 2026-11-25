@@ -304,6 +304,7 @@ fn invites_members_and_a_broken_state_file() {
         seq: 1,
         ct: wire::parse_blob(&js(&blob(1024, 0)), MAX_TEAM_DOC).unwrap(),
         sig: "AAAA".into(),
+        by: None,
         at: Some(Num::Int(1)),
     };
     st.docs.items.insert(dev(3), left); // 移除设备时写了一半留下的

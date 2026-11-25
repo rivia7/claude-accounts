@@ -109,11 +109,31 @@ pub const MAX_TEAM_SIG: usize = 1024;
 pub const MAX_TEAM_BATCH: usize = 64;
 /// 所有设备的配置（密文，base64）加起来最多这么多个字符（Py:108）
 pub const TEAM_DOCS_BYTES: usize = 16 << 20;
-/// 要 Team 的根密钥签名的 op（Py:109）
-pub const TEAM_ADMIN_OPS: [&str; 5] = ["team_enroll", "team_invite", "team_put", "team_members", "team_revoke"];
-/// 只有 Team 的服务器有的 op：管理员的那几个加上设备的三个（Py:110）
-pub const TEAM_OPS: [&str; 8] =
-    ["team_enroll", "team_invite", "team_put", "team_members", "team_revoke", "team_join", "team_get", "team_leave"];
+/// 管理员的 op：Team 的根密钥，或者根密钥签过的管理员名单里的一把密钥签名（Py:109；后两个是 3.6.15 起的）
+pub const TEAM_ADMIN_OPS: [&str; 7] =
+    ["team_enroll", "team_invite", "team_put", "team_members", "team_revoke", "team_astate_get", "team_astate_put"];
+/// 只认根密钥签名的 op：换管理员名单（3.6.15 起）
+pub const TEAM_ROOT_OPS: [&str; 1] = ["team_admins"];
+/// 只有 Team 的服务器有的 op：管理员的那几个、只认根密钥的那一个，加上设备的三个（Py:110）
+pub const TEAM_OPS: [&str; 11] = [
+    "team_enroll",
+    "team_invite",
+    "team_put",
+    "team_members",
+    "team_revoke",
+    "team_astate_get",
+    "team_astate_put",
+    "team_admins",
+    "team_join",
+    "team_get",
+    "team_leave",
+];
+/// 管理员名单里最多几把密钥（根密钥不算）
+pub const MAX_TEAM_ADMINS: usize = 16;
+/// 管理员名单（紧凑的 JSON 文字）最长多少个字符
+pub const MAX_ADMIN_LIST: usize = 8192;
+/// 几位管理员共用的状态（密文，base64）最长多少个字符
+pub const MAX_ASTATE: usize = 524_288;
 
 // ---- 远程会话的中转、网页端（Py:901-941） ----
 
@@ -225,8 +245,9 @@ mod tests {
     /// 成组的常量和 Python 的一样：TEAM_OPS 是管理员的那几个加上设备的三个
     #[test]
     fn op_lists_match_python() {
-        assert_eq!(&TEAM_OPS[..5], &TEAM_ADMIN_OPS[..]);
-        assert_eq!(&TEAM_OPS[5..], &["team_join", "team_get", "team_leave"]);
+        assert_eq!(&TEAM_OPS[..7], &TEAM_ADMIN_OPS[..]);
+        assert_eq!(&TEAM_OPS[7..8], &TEAM_ROOT_OPS[..]);
+        assert_eq!(&TEAM_OPS[8..], &["team_join", "team_get", "team_leave"]);
         assert!(GUEST_OPS.iter().all(|op| RELAY_OPS.contains(op)));
         assert!(!GUEST_OPS.contains(&"pair_open") && !GUEST_OPS.contains(&"relay_host"));
         assert_eq!((MAX_AGE, SEQ_MAX, INVITE_TTL), (315_360_000, 9_007_199_254_740_992, (60, 2_592_000)));

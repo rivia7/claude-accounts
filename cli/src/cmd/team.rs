@@ -23,7 +23,7 @@ use crate::py::obj::{str_list, Dict, V};
 use crate::py::time::time;
 use crate::py::{exit, json, path, text, Fail, R};
 use crate::{dict, out};
-use doc::{envelope_open, invite_decode, invite_parts, pub_proof, team_id, Invite};
+use doc::{admins_open, doc_admins_epoch, envelope_open, invite_decode, invite_parts, pub_proof, team_id, AdminList, Invite};
 
 mod admin;
 pub mod doc;
@@ -60,6 +60,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-alias-lock", admin::cmd_team_alias_lock),
     Cmd::all("team-name", admin::cmd_team_name),
     Cmd::all("team-publish", admin::cmd_team_publish),
+    Cmd::all("team-admin", admin::cmd_team_admin),
 ];
 
 /// 没成：stdout 是「原因码\t原因」，退出码 1（bash 里成了 FAIL_CODE=team_原因码）
@@ -348,23 +349,48 @@ fn sync_fetch(t: &Team, have: i64) -> R<Synced> {
     if j.str("dev").as_deref() != Some(t.dev.as_str()) {
         return bad("error", "服务器说的设备编号和这台设备的对不上：不用它给的配置".into());
     }
+    // 管理员名单（3.6.15 起）：比记着的新才验（一次 ssh-keygen），旧的不要（照记着的）
+    let (kept, mut floor) = admins_stored(&t.id);
+    let mut list = kept.clone();
+    if let Some(a) = j.dict("admins") {
+        match admins_open(&t.root, &t.id, &a, list.as_ref().map_or(1, |l| l.epoch + 1))? {
+            Ok(Some(l)) => list = Some(l),
+            Ok(None) => {}
+            Err(why) => return bad("error", why),
+        }
+    }
     let mut seq = have;
-    let mut newer: Option<Dict> = None;
+    let mut newer: Option<doc::Opened> = None;
     if let Some(env) = j.dict("doc") {
-        let (got, doc) = match envelope_open(&t.root, &parts.keys, &t.id, &t.dev, &env)? {
+        let opened = match envelope_open(&t.root, &parts.keys, &t.id, &t.dev, &env, list.as_ref())? {
             Ok(x) => x,
             Err(why) => return bad("error", why),
         };
-        if got < have {
+        // 别的管理员签的：照的名单不能比根密钥签的配置说过的旧（被收回了的管理员拿服务器上的旧名单签）
+        if opened.by.is_some() && list.as_ref().is_some_and(|l| l.epoch < floor) {
+            return bad("error", "服务器给的管理员名单比这台设备见过的旧（可能有人冒充服务器）：不用这份配置".to_string());
+        }
+        if opened.seq < have {
             return bad("error", "服务器给的配置比这台设备手里的旧（服务器的记录回退了？）：不用它，接着用手里的".to_string());
         }
         // 一样的序号：手里的就是它，什么都不动（同一个序号的另一份内容——换服务器时原来那台上存的——也不照它改）
-        if got > have {
-            seq = got;
-            newer = Some(doc);
+        if opened.seq > have {
+            seq = opened.seq;
+            if opened.by.is_none() {
+                floor = floor.max(doc_admins_epoch(&opened.doc));
+            }
+            newer = Some(opened);
         }
     }
-    // 先照配置改 team.json（名字、服务器在哪），再写 doc.json：中间断了，下次手里还是旧的序号，服务器再给一次、接着做完
+    if list.as_ref().map(|l| l.epoch) != kept.as_ref().map(|l| l.epoch) || floor != admins_stored(&t.id).1 {
+        admins_keep(&t.id, list.as_ref(), floor)?;
+    }
+    // 先照配置改 team.json（名字、服务器在哪、是不是别的管理员），再写 doc.json：中间断了，下次手里还是旧的序号，服务器再给一次、接着做完
+    if let Some(o) = newer.as_ref().filter(|o| o.by.is_none()) {
+        coadmin_follow(t, &o.doc)?;
+    }
+    let t = &load_team(&t.id).unwrap_or_else(|| t.clone());
+    let newer = newer.map(|o| o.doc);
     follow(t, newer.as_ref(), &j)?;
     if let Some(doc) = newer {
         let saved = dict! { "v" => 1, "seq" => seq, "at" => now(), "doc" => doc };
@@ -404,6 +430,78 @@ fn follow(t: &Team, doc: Option<&Dict>, reply: &Dict) -> R<()> {
     }
     if changed {
         save_team(&t.id, &raw)?;
+    }
+    Ok(())
+}
+
+/// 记着的管理员名单（验过签名才记的）和根密钥签的配置里说过的最大纪元；没有是 (None, 0)
+fn admins_stored(tid: &str) -> (Option<AdminList>, i64) {
+    let Some(j) = load_quiet(&team_path(tid, "admins.json")).and_then(|j| j.as_dict()) else { return (None, 0) };
+    let floor = j.get("floor").and_then(|f| f.as_int()).unwrap_or(0);
+    let list = j.str("list").and_then(|list| {
+        // 自己写下的：不再验签名，只取出各位管理员
+        let d = json::loads(&list).ok()?.as_dict()?;
+        let admins = d
+            .list("admins")?
+            .items()
+            .iter()
+            .filter_map(|a| {
+                let a = a.as_dict()?;
+                Some((doc::root_line(&a.str("pub")?)?, a.str("name")?.to_string()))
+            })
+            .collect();
+        Some(AdminList { list: list.to_string(), sig: j.at("sig").py_str(), epoch: j.get("epoch")?.as_int()?, admins })
+    });
+    (list, floor)
+}
+
+fn admins_keep(tid: &str, list: Option<&AdminList>, floor: i64) -> R<()> {
+    let j = dict! { "v" => 1, "floor" => floor };
+    if let Some(l) = list {
+        j.set("list", l.list.as_str());
+        j.set("sig", l.sig.as_str());
+        j.set("epoch", l.epoch);
+    }
+    save_json(&team_path(tid, "admins.json"), &V::Dict(j), Some(0o600), true)
+}
+
+/// 根密钥签的新一版配置里给没给这台设备管理员的密钥（admin.key）：给了就记下（admin_key），是别的管理员了；没给而原来是的，就此不是了：
+/// 密钥和从服务器上取回来的共用的状态（里面有主密钥）都删掉。建 Team 的设备自己不管这个
+fn coadmin_follow(t: &Team, doc: &Dict) -> R<()> {
+    if t.role != Role::Member {
+        return Ok(());
+    }
+    let key = doc.dict("admin").and_then(|a| a.str("key")).map(|k| k.to_string());
+    let raw = t.raw.copy();
+    match key {
+        Some(k) => {
+            let had = fs::read_text(&t.path("admin_key")).ok().map(|s| s.trim().to_string());
+            if had.as_deref() != Some(k.as_str()) {
+                fs::put(
+                    &t.path("admin_key"),
+                    format!(
+                        "{k}
+"
+                    )
+                    .as_bytes(),
+                    0o600,
+                )?;
+            }
+            if !t.coadmin() {
+                raw.set("coadmin", true);
+                save_team(&t.id, &raw)?;
+            }
+        }
+        None if t.coadmin() || path::exists(&t.path("admin_key")) => {
+            for f in ["admin_key", "admin.json"] {
+                if path::exists(&t.path(f)) {
+                    std::fs::remove_file(t.path(f))?;
+                }
+            }
+            raw.pop("coadmin");
+            save_team(&t.id, &raw)?;
+        }
+        None => {}
     }
     Ok(())
 }
@@ -644,11 +742,16 @@ fn team_row(t: &Team) -> Dict {
         "state" => state, "error" => if error.is_empty() { V::None } else { V::from(error) },
         "seq" => doc.as_ref().map_or(0, |d| d.0), "accounts" => doc.as_ref().map_or(0, |d| doc_accounts(&d.1) as i64),
         "joined_epoch" => t.raw.get("joined_at").filter(is_num).unwrap_or(V::None),
+        "coadmin" => t.coadmin(),
     }
 }
 
+fn t_coadmin(r: &Dict) -> bool {
+    matches!(r.get("coadmin"), Some(V::Bool(true)))
+}
+
 /// py team-list [--json]：这台设备在哪些 Team 里（只看本机记着的，不联网）。--json：{"version": 1, "kind": "team_list",
-/// "teams": [team_row…]}；不带时一个 Team 一行：编号\t名字\t角色\t地址:端口\t状态\t序号\t几个账号\t原因
+/// "teams": [team_row…]}；不带时一个 Team 一行：编号\t名字\t角色（admin | member | coadmin：别的管理员）\t地址:端口\t状态\t序号\t几个账号\t原因
 pub fn cmd_team_list(args: &[String]) -> R<()> {
     let as_json = match args {
         [] => false,
@@ -668,7 +771,7 @@ pub fn cmd_team_list(args: &[String]) -> R<()> {
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             s("id"),
             s("name"),
-            s("role"),
+            if t_coadmin(&r) { "coadmin".to_string() } else { s("role") },
             s("host"),
             s("state"),
             s("seq"),

@@ -72,7 +72,7 @@ private struct TeamBlock: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(nonEmpty(team.name) ?? String(team.id.prefix(8))).font(.body.weight(.medium)).textSelection(.enabled)
-                if team.isAdmin { Tag(text: "管理员") }
+                if team.isAdmin { Tag(text: team.isOwner ? "管理员" : "管理员（受托）") }
                 Spacer(minLength: 8)
                 if team.isAdmin, team.state != .local {
                     RowAction(expanded ? "收起" : "设备和账号", systemImage: expanded ? "chevron.up" : "person.2.badge.gearshape") {
@@ -80,13 +80,13 @@ private struct TeamBlock: View {
                     }
                     .help("这个 Team 里的设备（发邀请、定它能用哪些账号、移除）和各个账号走哪个节点")
                 }
-                if team.isAdmin, team.state == .local {
+                if team.isOwner, team.state == .local {
                     RowAction("部署到我的服务器…", systemImage: "server.rack") { model.deployTeam(team) }
                         .disabled(model.flow != nil || model.teamBusy)
                         .help("经 SSH 把这个 Team 的同步服务器装到你自己的 Linux 服务器上（root 登录；有 Docker 用 Docker，没有用 systemd），装好了自动接上")
                 }
                 Menu {
-                    if team.isAdmin, team.state != .local {
+                    if team.isOwner, team.state != .local {
                         Button("更新服务器、搬到别的服务器…") { model.deployTeam(team) }
                         Divider()
                     }
@@ -96,7 +96,7 @@ private struct TeamBlock: View {
                         Button("在终端里修改配置…") { model.editTeamConfig(team) }
                         Divider()
                     }
-                    Button(team.isAdmin ? "删掉这个 Team…" : "退出这个 Team…", role: .destructive) { model.leaveTeam(team) }
+                    Button(team.isOwner ? "删掉这个 Team…" : "退出这个 Team…", role: .destructive) { model.leaveTeam(team) }
                 } label: {
                     Label("更多", systemImage: "ellipsis.circle")
                 }
@@ -104,7 +104,7 @@ private struct TeamBlock: View {
                 .buttonStyle(.glass)
                 .fixedSize()
                 .disabled(model.flow != nil || model.teamBusy)
-                .help(team.isAdmin ? "删掉：部署过同步服务器的先经 SSH 卸掉它，这台设备上的根密钥跟着没了，这个 Team 再没有谁管得了（先问一句）"
+                .help(team.isOwner ? "删掉：部署过同步服务器的先经 SSH 卸掉它，这台设备上的根密钥跟着没了，这个 Team 再没有谁管得了（先问一句）"
                       : "退出：这个 Team 给的账号移出账号表，登录都留着（先问一句）")
             }
             InfoRow(Text(Texts.teamState(team)), systemImage: Self.symbol(team.state), tint: Self.tint(team.state)) { EmptyView() }
@@ -208,7 +208,7 @@ private struct TeamAdminSection: View {
 }
 
 /// 一台设备：名字（管理员起的：一台设备只有这一个名字，服务器上的 cca 对一遍时照它改）、状态、给了它几个账号；右边改它能用哪些账号、
-/// 改名字、移除（管理员自己这台不能移除）。「改名…」在这一行下面打开输入框（`AppModel.teamRename`）
+/// 改名字、移除（管理员自己这台、建 Team 的那台、别的管理员不能移除）；建 Team 的设备还能授予、收回管理员身份。「改名…」在这一行下面打开输入框（`AppModel.teamRename`）
 private struct TeamDeviceLine: View {
     @Environment(AppModel.self) private var model
     let team: TeamEntry
@@ -220,6 +220,8 @@ private struct TeamDeviceLine: View {
         VStack(alignment: .leading, spacing: 4) {
             MachineLine(name: device.label, detail: Texts.teamDeviceDetail(device, accounts: accounts.count, now: now)) {
                 if device.me { Tag(text: "这台 Mac") }
+                if device.isOwnerDevice { Tag(text: "建 Team 的设备") }
+                if device.isAdminDevice { Tag(text: "管理员") }
                 if device.problem != nil { Tag(text: "要处理", color: .orange) }
             } trailing: {
                 HStack(spacing: 8) {
@@ -241,7 +243,14 @@ private struct TeamDeviceLine: View {
                     RowAction("改名…", systemImage: "pencil") { model.startTeamRename(team, device) }
                         .disabled(renaming)
                         .help("给这台设备换个名字：加入了的，它在服务器上的名字跟着改")
-                    if !device.me {
+                    if team.isOwner, !device.me, device.state == .joined, device.role != nil {
+                        RowAction(device.isAdminDevice ? "收回管理员…" : "设为管理员…", systemImage: "person.badge.key") {
+                            model.setTeamAdmin(team, device, add: !device.isAdminDevice)
+                        }
+                        .help(device.isAdminDevice ? "收回它的管理员身份：服务器不再认它的管理员操作，管理员的密钥换一把；它已经看过的设置收不回来（先问一句）"
+                              : "让它也能管理这个 Team（邀请、移除设备，改账号、节点）：它会拿到这个 Team 的全部设置，包括节点的密码；不能删除 Team、部署服务器（先问一句）")
+                    }
+                    if !device.me, !device.isOwnerDevice, !device.isAdminDevice {
                         RowAction(device.state == .invited ? "撤回…" : "移除…", systemImage: "xmark.circle") { model.revokeTeamDevice(team, device) }
                             .help(device.state == .invited ? "撤回这个还没用的邀请（先问一句）"
                                   : "从这个 Team 里移除这台设备：它的密钥作废、给它的配置和它同步过的折合金额删掉，不再列出来；它已经拿到的节点凭证收不回来（先问一句）")

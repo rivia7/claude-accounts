@@ -11,10 +11,12 @@
 
 use super::omap::OMap;
 use super::sshsig;
-use super::{MAX_ACCOUNTS, MAX_AGE, MAX_TEAM_BATCH, MAX_TEAM_DOC, MAX_TEAM_SIG, MAX_UNITS, SEQ_MAX};
+use super::{
+    MAX_ACCOUNTS, MAX_ADMIN_LIST, MAX_AGE, MAX_TEAM_ADMINS, MAX_TEAM_BATCH, MAX_TEAM_DOC, MAX_TEAM_SIG, MAX_UNITS, SEQ_MAX,
+};
 use crate::py::obj::{Dict, List, V};
 use crate::py::re::Re;
-use crate::py::{base64, text};
+use crate::py::{base64, json, text};
 use crate::re;
 
 // ---------------------------------------------------------------- 游标
@@ -418,6 +420,8 @@ pub struct DocIn {
     pub ct: Blob,
     /// 根密钥的签名（armored 签名的 base64）
     pub sig: String,
+    /// 不是根密钥签的：签名的那把（管理员名单里的）公钥那一行（3.6.15 起）
+    pub by: Option<String>,
 }
 
 /// team_put 的 docs：`{设备编号: {"seq": 序号, "ct": 密文, "sig": 签名}}`；不合格是 None（Py:338-350）
@@ -429,7 +433,12 @@ pub fn parse_team_docs(docs: &V) -> Option<OMap<DocIn>> {
     let mut out = OMap::new();
     for (dev, x) in d.items() {
         let x = x.as_dict()?;
-        if !dev_re().matches(&dev) || x.len() != 3 {
+        // 签名的人（by）可以没有：根密钥签的
+        let by = match x.get("by") {
+            None => None,
+            Some(b) => Some(key_re().match_(b.as_str()?).map(|k| format!("ssh-ed25519 {}", k.g(1)))?),
+        };
+        if !dev_re().matches(&dev) || x.len() != 3 + usize::from(by.is_some()) {
             return None;
         }
         let seq = x.get("seq").filter(seq_ok)?.as_int()?;
@@ -439,9 +448,69 @@ pub fn parse_team_docs(docs: &V) -> Option<OMap<DocIn>> {
         if size == 0 || size > MAX_TEAM_SIG {
             return None;
         }
-        out.insert(&*dev, DocIn { seq, ct, sig: sig.to_string() });
+        out.insert(&*dev, DocIn { seq, ct, sig: sig.to_string(), by });
     }
     Some(out)
+}
+
+/// 管理员名单签名时前面的标签（命名空间是 cca-team，和配置的签名一样；配置签的那一段以 cca-team-doc-v1 开头，挪不过来）
+pub const ADMINS_LABEL: &str = "cca-team-admins-v1";
+/// 配置、管理员名单的签名的命名空间
+pub const NS_TEAM: &str = "cca-team";
+
+/// 根密钥签过的管理员名单（3.6.15 起）
+#[derive(Clone, Debug, PartialEq)]
+pub struct Admins {
+    /// 名单原样（紧凑的 JSON 文字：签的就是它）
+    pub list: String,
+    /// 根密钥的签名（armored 的 base64）
+    pub sig: String,
+    pub epoch: i64,
+    /// 名单里的 (指纹, 公钥那一行)
+    pub keys: Vec<(String, String)>,
+}
+
+impl Admins {
+    pub fn to_v(&self) -> V {
+        V::Dict(crate::dict! { "list" => &self.list, "sig" => &self.sig })
+    }
+}
+
+/// 管理员名单：list 是 `{"v": 1, "team": Team 的编号, "epoch": 纪元, "admins": [{"pub": "ssh-ed25519 …", "name": 名字}…]}`
+/// 的紧凑 JSON 文字，sig 是根密钥对 `"cca-team-admins-v1\0" list` 的签名（命名空间 cca-team）。签名不对、样子不对、
+/// 不是这个 Team 的、有根公钥、有重复的是 None
+pub fn parse_admins(list: &V, sig: &V, root_blob: &[u8], tid: &str) -> Option<Admins> {
+    let (list, sig) = (list.as_str()?, sig.as_str()?);
+    if text::len(list) > MAX_ADMIN_LIST || !b64_re().matches(sig) || sig.is_empty() || text::len(sig) > MAX_TEAM_SIG {
+        return None;
+    }
+    let mut data = format!("{ADMINS_LABEL}\0").into_bytes();
+    data.extend_from_slice(list.as_bytes());
+    if !sshsig::ssh_verify(root_blob, NS_TEAM, &data, &base64::b64decode(sig, false).ok()?) {
+        return None;
+    }
+    let d = json::loads(list).ok()?.as_dict()?;
+    let epoch = d.get("epoch").filter(seq_ok)?.as_int()?;
+    if !d.get("v").is_some_and(|v| matches!(v, V::Int(1))) || d.str("team").as_deref() != Some(tid) {
+        return None;
+    }
+    let admins = d.list("admins")?.items();
+    if admins.len() > MAX_TEAM_ADMINS {
+        return None;
+    }
+    let root_fp = sshsig::key_fp(root_blob);
+    let mut keys: Vec<(String, String)> = Vec::new();
+    for a in admins {
+        let a = a.as_dict()?;
+        let b64 = key_re().match_(&a.str("pub")?)?.g(1).to_string();
+        a.str("name").filter(|n| name_text_ok(n))?;
+        let fp = sshsig::key_fp(&base64::b64decode(&b64, false).ok()?);
+        if fp == root_fp || keys.iter().any(|(f, _)| *f == fp) {
+            return None;
+        }
+        keys.push((fp, format!("ssh-ed25519 {b64}")));
+    }
+    Some(Admins { list: list.to_string(), sig: sig.to_string(), epoch, keys })
 }
 
 #[cfg(test)]

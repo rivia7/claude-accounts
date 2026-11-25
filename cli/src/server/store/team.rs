@@ -1,6 +1,6 @@
 //! Team 的各个 op：管理员登记设备、发邀请、存各台设备的配置、看名单、移除设备，设备拿邀请加入、取自己的配置、退出
 //! （Py:651-675、690-871、1971-1975、1999-2026）。`impl Store` 的一部分，由 `Store::op` 调。
-//! 谁发的、签名对不对在调用方验过了（管理员的是根密钥签的，加入的是要加入的那把密钥签的）。
+//! 谁发的、签名对不对在调用方验过了（管理员的是根密钥或者管理员名单里的密钥签的，换名单的只认根密钥，加入的是要加入的那把密钥签的）。
 
 use super::view::ago;
 use super::{bad, error, say, DocEntry, Inv, Machine, Store};
@@ -8,8 +8,9 @@ use crate::dict;
 use crate::py::obj::{Dict, List, V};
 use crate::py::{hash, num, text, R};
 use crate::server::omap::OMap;
-use crate::server::wire::{self, DocIn, Enroll, Num};
-use crate::server::{API, INVITE_KEEP, INVITE_TTL};
+use crate::server::sshsig;
+use crate::server::wire::{self, Blob, DocIn, Enroll, Num};
+use crate::server::{API, INVITE_KEEP, INVITE_TTL, MAX_ASTATE, SEQ_MAX};
 use std::collections::HashSet;
 
 impl Store {
@@ -217,7 +218,8 @@ impl Store {
             return Ok(error(507, "full"));
         }
         for (dev, d) in &stored {
-            self.docs.items.insert(*dev, DocEntry { seq: d.seq, ct: d.ct.clone(), sig: d.sig.clone(), at: Some(Num::Float(now)) });
+            let e = DocEntry { seq: d.seq, ct: d.ct.clone(), sig: d.sig.clone(), by: d.by.clone(), at: Some(Num::Float(now)) };
+            self.docs.items.insert(*dev, e);
         }
         if !stored.is_empty() {
             self.save_docs()?;
@@ -243,7 +245,13 @@ impl Store {
             None => self.have.remove(fp),
         };
         let e = self.docs.items.get(&m.dev);
-        let doc = e.filter(|e| Some(e.seq) != have).map(|e| dict! { "seq" => e.seq, "ct" => e.ct.to_v(), "sig" => &e.sig });
+        let doc = e.filter(|e| Some(e.seq) != have).map(|e| {
+            let d = dict! { "seq" => e.seq, "ct" => e.ct.to_v(), "sig" => &e.sig };
+            if let Some(by) = &e.by {
+                d.set("by", by.as_str());
+            }
+            d
+        });
         Ok((
             200,
             V::Dict(dict! {
@@ -256,6 +264,55 @@ impl Store {
                 "gen" => &self.gen,
             }),
         ))
+        .map(|(code, v)| (code, self.with_admins(v)))
+    }
+
+    /// 有管理员名单（3.6.15 起）时回复里带上它（`admins`: {list, sig}；没有时不带这一项：和以前的回复逐字节一样）
+    fn with_admins(&self, v: V) -> V {
+        if let (Some(a), Some(d)) = (&self.admins, v.as_dict()) {
+            let gen = d.pop("gen");
+            d.set("admins", a.to_v());
+            if let Some(g) = gen {
+                d.set("gen", g);
+            }
+        }
+        v
+    }
+
+    /// 根密钥换管理员名单（parse_admins 验过签名的）：纪元要比存着的大，不然 409 stale（带着存着的纪元）
+    fn team_admins(&mut self, a: wire::Admins) -> R<(u16, V)> {
+        let cur = self.admins.as_ref().map_or(0, |a| a.epoch);
+        if a.epoch <= cur {
+            return Ok((409, V::Dict(dict! { "error" => "stale", "epoch" => cur })));
+        }
+        let (epoch, n) = (a.epoch, a.keys.len());
+        self.admins = Some(a);
+        if !self.team_keys.contains(&super::TeamKey::Admins) {
+            self.team_keys.push(super::TeamKey::Admins);
+        }
+        self.save()?;
+        say(format!("cca-presence: 管理员名单换成了第 {epoch} 版：除了根密钥还有 {n} 位"));
+        Ok((200, V::Dict(dict! { "v" => API, "ok" => true, "epoch" => epoch, "gen" => &self.gen })))
+    }
+
+    /// 几位管理员共用的状态（密文，服务器不懂）：rev 是版本号（还没有是 0，ct 是 null）
+    fn team_astate_get(&self) -> (u16, V) {
+        let (rev, ct) = self.astate.as_ref().map_or((0, V::None), |(r, c)| (*r, c.to_v()));
+        (200, V::Dict(dict! { "v" => API, "ok" => true, "rev" => rev, "ct" => ct, "gen" => &self.gen }))
+    }
+
+    /// 存共用的状态：base 是它照着改的那一版（还没有是 0），要和存着的一样，存成 base + 1；不一样是 409 stale（带着存着的版本号）
+    fn team_astate_put(&mut self, base: i64, ct: Blob) -> R<(u16, V)> {
+        let cur = self.astate.as_ref().map_or(0, |(r, _)| *r);
+        if base != cur || base + 1 >= SEQ_MAX {
+            return Ok((409, V::Dict(dict! { "error" => "stale", "rev" => cur })));
+        }
+        self.astate = Some((base + 1, ct));
+        if !self.team_keys.contains(&super::TeamKey::AState) {
+            self.team_keys.push(super::TeamKey::AState);
+        }
+        self.save()?;
+        Ok((200, V::Dict(dict! { "v" => API, "ok" => true, "rev" => base + 1, "gen" => &self.gen })))
     }
 
     /// 管理员看现在有哪些设备（公钥也带着：服务器的记录没了以后照它登记回去）、它们各自存着的配置的序号（seq）和设备同步配置时
@@ -277,7 +334,8 @@ impl Store {
         for i in self.invites.values().filter(|i| now < i.exp.f()) {
             invites.push(dict! { "dev" => &i.dev, "expires_in" => num::round(i.exp.f() - now), "seq" => seq(&i.dev) });
         }
-        Ok((200, V::Dict(dict! { "v" => API, "ok" => true, "members" => rows, "invites" => invites, "gen" => &self.gen })))
+        let reply = V::Dict(dict! { "v" => API, "ok" => true, "members" => rows, "invites" => invites, "gen" => &self.gen });
+        Ok((200, self.with_admins(reply)))
     }
 
     /// 管理员移除一台设备：它的密钥就此不认，给它的配置、还没用掉的邀请、它传过的折合金额一起删掉（Py:846-863）
@@ -340,6 +398,25 @@ impl Store {
                 None => Ok(bad()),
             },
             "team_leave" => self.team_leave(fp),
+            "team_admins" => {
+                let blob = sshsig::key_blob(&self.root_key).unwrap_or_default();
+                let list = j.get("list").unwrap_or(V::None);
+                match wire::parse_admins(&list, &j.get("sig").unwrap_or(V::None), &blob, &self.team_id) {
+                    Some(a) => self.team_admins(a),
+                    None => Ok(bad()),
+                }
+            }
+            "team_astate_get" => Ok(self.team_astate_get()),
+            "team_astate_put" => {
+                let base = j.get("base").and_then(|b| match b {
+                    V::Int(i) if (0..SEQ_MAX).contains(&i) => Some(i),
+                    _ => None,
+                });
+                match (base, j.get("ct").and_then(|c| wire::parse_blob(&c, MAX_ASTATE))) {
+                    (Some(base), Some(ct)) => self.team_astate_put(base, ct),
+                    _ => Ok(bad()),
+                }
+            }
             _ => Ok(bad()),
         }
     }

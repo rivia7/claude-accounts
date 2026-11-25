@@ -796,7 +796,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；Team（4.14）是 `team_created` / `team_deployed` / `team_joined` / `team_left` / `team_revoked`（`cca team new` / `deploy` / `join` / `leave` / `revoke`）/ `team_exported` / `team_imported`（3.6.14 起，`cca team export` / `import`），`message` 是给人看的那句话；`cost_hook`（3.6.9 起，`cost hook on|off` 改好了，3.5），`message` 是给人看的那句话，App 原样显示、再读一次 `state`（3.5.2 的 cca 还有自己的同步服务器的 `hub_joined`、`hub_removed`、`hub_left`、`hub_deployed`、`hub_hosted`，3.5.3 去掉了；3.6.0 以前还有
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；Team（4.14）是 `team_created` / `team_deployed` / `team_joined` / `team_left` / `team_revoked`（`cca team new` / `deploy` / `join` / `leave` / `revoke`）/ `team_exported` / `team_imported`（3.6.14 起，`cca team export` / `import`）/ `team_admin_added` / `team_admin_removed`（3.6.15 起，`cca team admin add` / `remove`），`message` 是给人看的那句话；`cost_hook`（3.6.9 起，`cost hook on|off` 改好了，3.5），`message` 是给人看的那句话，App 原样显示、再读一次 `state`（3.5.2 的 cca 还有自己的同步服务器的 `hub_joined`、`hub_removed`、`hub_left`、`hub_deployed`、`hub_hosted`，3.5.3 去掉了；3.6.0 以前还有
   维护者的共享的 `policy_on`、`policy_off`，3.6.0 去掉了，4.12）。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；`message` 说清楚是哪份文件、哪几项、怎么办（Codex、agy 的 3.6.15 起也说；以前只有一句笼统的话），Claude 共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
@@ -840,6 +840,8 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `remote_end` | 会话的 id（`remote list --json` 的 `sessions[].id`，32 个十六进制字符） | `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到通知（SIGHUP）后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。`detail` 开头是列表里这个会话的那一行（编号、工具、账号、文件夹）。同意只对这一个会话有效 | no |
 | `team_leave` | Team 的编号（32 个十六进制字符） | `cca team leave`（这台设备是成员）：服务器上移除这台设备，这台设备上这个 Team 的配置都删掉；以后要再加入要管理员重新发邀请 | no |
 | `team_delete` | Team 的编号 | `cca team leave`（这台设备是管理员）：删除这个 Team——部署过同步服务器的先经 SSH 卸掉它（`detail` 说登录哪台（端口、部署时写的私钥：App 里删除照它登录）、删掉哪个目录；没记下部署到哪的照部署的默认猜，也说怎么写清楚），这台设备上就没有这个 Team 的根密钥了，这个 Team 再没有谁能邀请、移除设备、改配置（别的设备照旧用着手里的配置）。App 里是提问会话（「删掉这个 Team…」，4.14），当场问 | no |
+| `team_admin_add` | 设备在 Team 里的编号 | `cca team admin add`（3.6.15 起，只有建 Team 的设备能）：让这台设备也当管理员：它拿到这个 Team 的全部设置（各台设备的配置的密钥、节点的密码），能邀请、移除设备、改账号和节点；收回以后它已经看过的收不回来 | no |
+| `team_admin_remove` | 设备在 Team 里的编号 | `cca team admin remove`（3.6.15 起）：收回它的管理员身份：服务器不再认它，管理员共用的密钥换一把、各台设备的配置重新发布；它已经看过的节点密码收不回来，要紧的话换掉 | no |
 | `team_revoke` | 设备在 Team 里的编号（16 个十六进制字符） | `cca team revoke`：管理员移除一台设备（或者撤回还没用掉的邀请）：服务器就此不认它的密钥，给它的配置、它同步过的折合金额删掉（3.6.6 起），管理员这边也不再列它；它已经拿到的节点凭证收不回来 | no |
 | `team_config` | Team 的编号和这份文件的摘要（`<编号>:<文件的 SHA-256 前 16 位>`） | `cca team import <Team> <文件>`、`cca team edit`（3.6.14 起）：照文件整份换掉这个 Team 的配置（账号走哪个节点、别名、锁定别名、安装客户端用的节点、节点的定义），再发布给各台设备。`detail` 是会改的几项，一项一句（「。」结尾），有提醒时最后是「注意：」和提醒（走的节点这份配置里没有定义、这台设备上也没有，新的定义和这台设备上已有的节点同名，`cca team edit` 打开以后配置在别处改过）。终端里问之前先一行一项打出来。同意以后、带着同意重跑之前文件又改过的话范围对不上，cca 照新的内容再发一次 consent（App 再问一次） | yes；要去掉账号时 no |
 | `cost_hook` | 空 | `cca cost hook on`（3.5）：在共享的 `~/.claude/settings.json` 里加一条 SessionStart hook，Claude App 里的 Code 会话开始时运行 cca，记下会话 id 和 App 登录的账号（不读对话的内容），折合金额按它算；命令行里的会话不受影响。`detail` 里说怎么去掉 | yes |
@@ -1037,7 +1039,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
 | `team new`、`team join`、`team deploy <Team>`、`team leave <Team>`（管理员） | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」「删掉这个 Team…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`；`consent.team_delete`、`hub.password`、`hub.pubkey`、`team.keep_server`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` / `team_left` |
 | `team export <Team> <文件> --force`、`team import <Team> <文件>`、`team edit <Team>` | 管理员的「更多」里的「导出配置…」（保存面板选文件：面板问过覆盖，所以带 `--force`）、「导入配置…」（打开面板选文件）、「在终端里修改配置…」（要 `hello.team_config`） | `export` 是无交互命令（`result` 的 `team_exported`）；`import` 是无交互命令 + 同意重跑（`consent.team_config`），做完 `result` 的 `team_imported`；`edit` 交给终端（6；提问会话里是 `terminal` 事件的 `team_edit`） |
-| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team leave`（成员） | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」）；「更多」里的「退出这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave`；`invite` 的 stdout 只经内存里的管道读，4.14） |
+| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team admin`（3.6.15 起）、`team leave`（成员） | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」、建 Team 的设备的「设为管理员…」「收回管理员…」）；「更多」里的「退出这个 Team…」 | 无交互命令（`revoke`、`admin`、`leave` 先同意：`consent.team_revoke`、`consent.team_admin_add` / `team_admin_remove`、`consent.team_leave`；`invite` 的 stdout 只经内存里的管道读，4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页（含端口池旧了时的「现在更新」）、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -1113,14 +1115,14 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   （当作 `[]`）。账号的 `team`（2.2）是哪个 Team 给的。App 按它筛选账号（侧栏、总览、菜单栏面板共用一个选择：全部 / 某个 Team / 不在 Team 里的；
   只管显示，不影响账号表、启动器和排序），在「共享与同步」页列出各个 Team。
 
-- **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", url, host, device,
+- **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", coadmin（3.6.15 起：这台设备是成员、建 Team 的设备给了它管理员身份；以前的 cca 没有这一项：false）, url, host, device,
   state: "local"（管理员还没接上服务器）| "pending"（还没同步过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
   error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
   "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "alias_lock": 别名锁定着没有,
   "nodes": [配置里带着定义的节点的名字…],
   "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked"（`left`、`revoked` 3.6.6 起不再有：
   退出了的、移除了的不再记，3.6.5 及以前的 cca 还给，App 不列它们）, me, grants: "all" | {工具: [邮箱…]},
-  seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
+  seq, have, seen_age, expires_epoch, problem, role（3.6.15 起：`owner` 建 Team 的那台 | `admin` 别的管理员 | `member`；以前的 cca 没有）}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
   没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
   别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
   `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。`alias_lock`（3.5.3-beta.7 起；没有这一项时 App 不给锁定的开关）
@@ -1144,6 +1146,11 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   （`hub.password`）、给出加公钥那一行（`hub.pubkey`），卸不掉时问要不要照样删、服务器留着（`team.keep_server`）；`result` 的 `message` 说卸掉了哪台上的
   哪个目录。命令行里没人能答时卸不掉就不删（`fail` 的 `team_ssh`、`team_install`、`team_taken`……，原因里说加 `--keep-server`）。成员退出照旧是无交互命令
   （先同意再重跑）。
+- **管理员**（3.6.15 起，`cca team admin <Team> [ls | add <设备> | remove <设备>]`）：建 Team 的设备（`role` 是 `admin`、`coadmin` 是 false）给一台加入了的设备
+  管理员身份 / 收回。要同意（`team_admin_add` / `team_admin_remove`，范围是设备编号，默认否），成了 `result` 的 `team_admin_added` / `team_admin_removed`。
+  别的管理员（`coadmin` 是 true）能做管理员的事（设备、账号、节点、别名、导入导出），不能删除 Team、部署 / 更新服务器、授予收回管理员身份（`fail` 的 `team_owner`）：
+  它的「更多」里只有「退出这个 Team…」（成员退出，`team_leave`）。建 Team 的那台、别的管理员的设备不能直接移除（`team_owner` / `team_admin_dev`：先收回）。
+  两位管理员同时改时后改的那位是 `team_busy`（重新运行）；服务器太旧是 `team_old`。
 - **移除设备**（`cca team revoke <Team> <设备>`）：要同意（`team_revoke`，范围是设备的编号，默认否），成了 `result` 的 `team_revoked`。
   3.6.6 起移除了的设备从 `team devices --json` 里去掉（自己退出了的，下次和服务器对一遍时也去掉），它同步过的折合金额服务器删掉。
 - **邀请**（`cca team invite <Team> <名字> [--accounts all|none|工具:邮箱,…]`；还在这个 Team 里的别的设备已经叫这个名字时是 `team_name`，
@@ -1176,7 +1183,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
-  `team_alias`、`team_no_account`、`team_accounts`（`cca team new --accounts` 写的账号这台设备上没有、不能放：什么都没建）、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
+  `team_alias`、`team_no_account`、`team_accounts`（`cca team new --accounts` 写的账号这台设备上没有、不能放：什么都没建）、几位管理员（3.6.15 起）的 `team_owner`（只有建 Team 的设备能做）、`team_already`（已经是管理员）、`team_not_admin_dev`（收回时：它本来就不是管理员）、`team_state`（还没加入、公钥没核对过的设备不能当管理员）、`team_admin_dev`（移除时：它还是管理员，先收回）、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
   别的节点、安装客户端用着它）、
   `team_usage`、`team_url`、`team_file`（导入、导出的文件不对、写不了，3.6.14 起也是导入的节点定义内核认不出）、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）、删除 Team 时卸载
   （`cca team leave`）那一步的

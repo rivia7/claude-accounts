@@ -8,6 +8,9 @@
 //! teams/<编号>/sync.json   {"v": 1, "state": ok | removed | lost | error, "error": 原因, "at"}：最近一次同步配置的结果（变了才写）
 //! teams/<编号>/id_ed25519  这台设备在这个 Team 里的密钥；secret 是邀请里那串随机数（配置的密钥由它派生）
 //! teams/<编号>/root_ed25519、admin.json  只有管理员的设备有：Team 的根密钥、管理员的状态（cmd/team/admin.rs）
+//! teams/<编号>/admins.json  验过根密钥签名的管理员名单（3.6.15 起）：{"v": 1, "list", "sig", "epoch", "floor": 根密钥签的配置里说过的最大纪元}
+//! teams/<编号>/admin_key   别的管理员（team.json 的 coadmin 是 true：建 Team 的设备给的）才有：几位管理员共用的状态的密钥；
+//!                          admin.json 是从服务器上取回来的共用的状态
 //! ```
 //! 整个目录在 CCA_DIR_PRIVATE 里（cca 启动的 Claude Code 读写不了），`cca restore` 的备份不带它。
 
@@ -79,6 +82,12 @@ impl Team {
     /// 接上服务器了没有（管理员刚建的 Team 还没有）
     pub fn attached(&self) -> bool {
         !self.url.is_empty()
+    }
+
+    /// 是别的管理员（3.6.15 起）：这台设备是成员，建 Team 的设备经根密钥签的配置给了它管理员的密钥。没有根密钥：换不了管理员名单，
+    /// 也删不了 Team、换不了服务器
+    pub fn coadmin(&self) -> bool {
+        self.role == Role::Member && self.raw.get("coadmin").is_some_and(|c| matches!(c, V::Bool(true)))
     }
 }
 

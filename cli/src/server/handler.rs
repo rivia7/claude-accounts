@@ -10,7 +10,7 @@
 //! 3. 不认识的 op（404 not_found；中转的那几个没开中转时也不认）
 //! 4. 正文不是 JSON、不是字典、v 不是 1、op 和地址里的不一样、key 不是指纹的样子（400 bad）
 //! 5. 验签名，三种：team_join 拿请求里要加入的那把公钥验（没有这个邀请和签名不对回一样的 403 denied；签名对了才说邀请是过期了
-//!    还是用过了）；管理员的 op 拿 Team 的根公钥验（403 denied）；别的拿名单里这台设备的公钥验（不在名单里：403 unknown_device
+//!    还是用过了）；管理员的 op 拿 Team 的根公钥或者管理员名单里的那一把验（403 denied；换名单的只认根公钥）；别的拿名单里这台设备的公钥验（不在名单里：403 unknown_device
 //!    带着 gen；发的是中转的请求时可能是访客，问 `Remote::guest_key`）
 //! 6. 按指纹限流（验了签名才扣；管理员的 op 另算）（429 rate）；ts 和服务器的时间差超过 300 秒（400 clock 带着 now）；
 //!    nonce 不是 32 个十六进制字符（400 bad）、用过了（409 replay）
@@ -31,7 +31,9 @@
 use super::http::{Method, Request};
 use super::store::{say, Invite};
 use super::{remote, sshsig, wire, ws, Ctx};
-use super::{API, MAX_BODY, MAX_SIG, MAX_SYNC_BODY, NS_REPORT, RELAY_OPS, SYNC_OPS, TEAM_ADMIN_OPS, TEAM_OPS, TS_WINDOW};
+use super::{
+    API, MAX_BODY, MAX_SIG, MAX_SYNC_BODY, NS_REPORT, RELAY_OPS, SYNC_OPS, TEAM_ADMIN_OPS, TEAM_OPS, TEAM_ROOT_OPS, TS_WINDOW,
+};
 use crate::dict;
 use crate::py::obj::V;
 use crate::py::{base64, ipaddr, json, text, time, uni, Fail, R};
@@ -86,7 +88,8 @@ fn admit_at(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, mono: f64) ->
         return Err(error(429, "rate"));
     }
     let op = op_of(req);
-    let big = SYNC_OPS.iter().any(|(name, _)| *name == op) || op == "team_put"; // 交换密文的、管理员存各台设备的配置的
+    // 交换密文的、管理员存各台设备的配置的、存几位管理员共用的状态的
+    let big = SYNC_OPS.iter().any(|(name, _)| *name == op) || op == "team_put" || op == "team_astate_put";
     match content_length(req.header("Content-Length").unwrap_or_default()) {
         Length::Invalid => Err(error(411, "bad")),
         Length::Bytes(n) if n <= if big { MAX_SYNC_BODY } else { MAX_BODY } => Ok(n),
@@ -229,7 +232,7 @@ fn post(ctx: &Ctx, req: &Request, n: usize, now: f64, mono: f64) -> Outcome {
 
     // 签名：公钥那一行（ssh-ed25519 AAAA…）→ 是不是它在 cca-presence 这个命名空间里对正文签的
     let signed_by = |line: &str| sshsig::key_blob(line).is_some_and(|blob| sshsig::ssh_verify(&blob, NS_REPORT, body, &sig));
-    let admin = TEAM_ADMIN_OPS.contains(&op);
+    let admin = TEAM_ADMIN_OPS.contains(&op) || TEAM_ROOT_OPS.contains(&op);
     let mut guest: Option<String> = None;
     if op == "team_join" {
         // 拿邀请加入：拿要加入的这把密钥签名；没有这个邀请和签名不对回一样的 403（不留判断口）。签名对了、邀请过期了或者用过了
@@ -253,10 +256,15 @@ fn post(ctx: &Ctx, req: &Request, n: usize, now: f64, mono: f64) -> Outcome {
             return error(403, why);
         }
     } else if admin {
-        // 管理员的：拿 Team 的根密钥签名（key 是根公钥的指纹）（Py:1945-1947）
+        // 管理员的：拿 Team 的根密钥签名（key 是根公钥的指纹）（Py:1945-1947）；3.6.15 起也认根密钥签过的管理员名单里的密钥
+        // （换名单的 team_admins 除外：只认根密钥）
         let root = {
             let st = lock(&ctx.store);
-            (st.root_fp() == fp).then(|| st.root_key().to_string())
+            match st.root_fp() == fp {
+                true => Some(st.root_key().to_string()),
+                false if TEAM_ROOT_OPS.contains(&op) => None,
+                false => st.admin_key(fp),
+            }
         };
         if !root.is_some_and(|line| signed_by(&line)) {
             return error(403, "denied");
