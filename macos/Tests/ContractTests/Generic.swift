@@ -1041,6 +1041,11 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
                   && !s.name.contains("@"))
         }
         check("\(name) \(s.short) 的 access 是 control 或 view", s.access == .control || s.access == .view)
+        if let t = r["team"], !isNull(t) {
+            // 会话属于哪个 Team：别的机器上的就是经它看到的那个配对记在的那一台
+            check("\(name) \(s.short) 的 team 是 Team 的编号\(s.isLocal ? "" : "，和它的配对记在同一台上")", s.team?.count == 32
+                  && (s.isLocal || doc.peers.first { $0.id == s.peer }?.team == nil || doc.peers.first { $0.id == s.peer }?.team == s.team))
+        }
     }
     for (i, p) in doc.peers.enumerated() {
         let r = i < rawPeers.count ? rawPeers[i] : [:]

@@ -65,9 +65,14 @@ fn build(kind: HubKind, cfg: Dict) -> Result<Server, String> {
 
 /// 给人看的：这是谁的服务器
 pub fn label(kind: HubKind) -> String {
+    format!("「{}」的服务器", team_name(kind))
+}
+
+/// 给人看的：这台中转服务器是哪个 Team 的（本机记着的名字；没有时是 `Team 编号的前 8 位`）
+pub fn team_name(kind: HubKind) -> String {
     let tid = kind.team();
     let name = teams().into_iter().find(|t| t.id == tid).map(|t| t.name).filter(|n| !n.is_empty());
-    format!("「{}」的服务器", name.unwrap_or_else(|| format!("Team {}", &tid[..8])))
+    name.unwrap_or_else(|| format!("Team {}", &tid[..8]))
 }
 
 /// 某一台中转服务器。用得了的话是 Ok；用不了是 Err(原因)：退出了这个 Team、还没同步到它的配置、它没接上服务器

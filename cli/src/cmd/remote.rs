@@ -36,6 +36,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("remote-list", manage::cmd_remote_list),
     Cmd::all("remote-set", manage::cmd_remote_set),
     Cmd::all("remote-end", manage::cmd_remote_end),
+    Cmd::all("remote-notify", manage::cmd_remote_notify),
     Cmd::all("remote-link", link::cmd_remote_link),
     Cmd::all("remote-pair-show", pair::cmd_remote_pair_show),
     Cmd::all("remote-pair-join", pair::cmd_remote_pair_join),

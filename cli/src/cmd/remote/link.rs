@@ -211,7 +211,7 @@ fn bridge(srv: &Server, ctl: &Ctl, token: &str, a: &Allowed, at: &Session, paren
                 }
             }
         }
-        // 宿主发来的：只转输出和“会话结束了”
+        // 宿主发来的：只转输出、“会话结束了”和通知（会话里的钩子推的，宿主清理过）
         if fds[1].revents & (libc::POLLIN | BAD) != 0 {
             match conn.recv() {
                 Ok(Some(data)) => from_host.push(&data),
@@ -219,7 +219,7 @@ fn bridge(srv: &Server, ctl: &Ctl, token: &str, a: &Allowed, at: &Session, paren
             }
             loop {
                 match from_host.next() {
-                    Ok(Some((kind @ (local::OUTPUT | local::EXIT), p))) => tun.send(&local::frame(kind, &p)),
+                    Ok(Some((kind @ (local::OUTPUT | local::EXIT | local::NOTIFY), p))) => tun.send(&local::frame(kind, &p)),
                     Ok(Some(_)) => {}
                     Ok(None) => break,
                     Err(()) => return host_gone(&mut tun),

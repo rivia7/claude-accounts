@@ -5456,6 +5456,11 @@ cmd_remote() {
 			shift
 			[ -x "$HELPER" ] || helper_find || exit 127
 			CCA_SELF="$SELF" exec "$HELPER" remote-attach "$@" 3<&- ;;
+		notify)   # 会话里的钩子（Claude Code 做完一轮、等着回答时）推一条通知给接着这个会话的别的机器：那边的终端、cca App 弹出来。
+			        # 不在哪个会话宿主里时退出码 65、什么都不说（钩子每次都调它）；直接换成辅助程序，钩子等的时间短
+			shift
+			[ -x "$HELPER" ] || helper_find || exit 65
+			exec "$HELPER" remote-notify "$@" 3<&- ;;
 		end)   # 结束这台机器上的一个会话：等于关掉它的终端（里面的程序收到 SIGHUP，几秒钟还不退出就被强行结束），没保存的会丢，所以先问。
 			     # 先让辅助程序找出是哪一个（只有一个时不用写编号；退出码 64 / 65 照 attach 的），同意是对着这一个会话的完整编号给的
 			[ $# -le 2 ] || die "用法：cca remote end [会话编号]"
@@ -5471,7 +5476,7 @@ cmd_remote() {
 			esac
 			out=$(py remote-end "$code" 2>&1) || die "${out:-没有结束成}"
 			okay "会话 ${code:0:8} 已经结束"; gui_done remote_updated "会话已经结束" ;;
-		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|pair [--web] [--team 名字]|join [--team 名字]|peers|allow 名字 control|view|none|unpair 名字]" ;;
+		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|notify [--title 标题] [--subtitle 副标题] 正文|pair [--web] [--team 名字]|join [--team 名字]|peers|allow 名字 control|view|none|unpair 名字]" ;;
 	esac
 }
 

@@ -21,6 +21,7 @@
 //!   flood      两万行，最后 <flooded>（一次 write）
 //!   dump       四万行（两兆多），最后 <dumped>，马上退出，退出码 6
 //!   closetty   回 <closing>，把 0/1/2 都关掉，过 1.5 秒退出，退出码 4
+//!   run 程序 参数…  起这个程序（会话里的钩子那样，是客户端的子进程；参数按空白分开），等它结束，回 <ran 退出码>
 //!
 //! 别的行不理。标准输入读到头：回 <eof>，退出码 9。窗口大小变了（SIGWINCH）：回 <size 行 列>。收到 SIGTERM：回 <term>，
 //! 退出码 5。每句话一次 write、以 \r\n 结尾（它的终端是行模式，到了外面是 \r\r\n）。
@@ -198,6 +199,19 @@ fn command(line: &[u8], pipe: libc::c_int) {
             die("UnicodeEncodeError: 'utf-8' codec can't encode character: surrogates not allowed");
         }
         say(format!("<{words}>\r\n"));
+    } else if let Some(rest) = cmd.strip_prefix("run ") {
+        // 在会话里起一个程序（会话里的钩子那样：它是这个客户端的子进程），等它结束，回它的退出码
+        let mut words = py::split(rest);
+        let code = words.next().map_or(-1, |prog| {
+            let st = std::process::Command::new(prog)
+                .args(words)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            st.ok().and_then(|s| s.code()).unwrap_or(-1)
+        });
+        say(format!("<ran {code}>\r\n"));
     } else if cmd == "query" {
         say("\x1b[6n\x1b]11;?\x07<asked>\r\n");
     } else if cmd == "evil" {

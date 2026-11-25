@@ -85,9 +85,12 @@ struct RemoteSession: Decodable, Sendable, Equatable, Identifiable {
     var state: RemoteSessionState
     /// 这台 Mac 接进去能做什么：`control` 看和操作，`view` 只能看（那台机器设的）
     var access: RemoteAccess
+    /// 这个会话属于哪个 Team（Team 的编号）：这台 Mac 上的是它走哪个 Team 的服务器中转（账号是哪个 Team 给的；别的走「家」），
+    /// 别的机器上的是经哪个 Team 的服务器上的配对看到的。没有中转、旧版 cca 没有这个字段时是 nil：不标
+    var team: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, short, peer, machine, tool, name, cwd, viewers, state, access
+        case id, short, peer, machine, tool, name, cwd, viewers, state, access, team
         case place = "where"
         case sinceEpoch = "since_epoch"
         case localTerminal = "local_terminal"
@@ -112,6 +115,7 @@ struct RemoteSession: Decodable, Sendable, Equatable, Identifiable {
         // 缺了、类型不对的往保守的方向取：不算接得上、只看（cca 一直都给这两项）
         state = c.lossy(RemoteSessionState.self, .state) ?? RemoteSessionState(rawValue: "")
         access = c.lossy(RemoteAccess.self, .access) ?? .view
+        team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     var isLocal: Bool { place == .local }

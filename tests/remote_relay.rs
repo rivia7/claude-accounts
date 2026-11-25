@@ -586,7 +586,7 @@ fn pair_list_attach(t: &mut Ctx) {
 
     // laptop 看得到 box 上的会话（box 看不到 laptop 的：没有，也不让）
     let row = asked.listed(&b, "laptop 列出 box 上的会话").remove(0);
-    assert!(matches(r"^[0-9a-f]{8}  claude  alice  ~/work  \d\d-\d\d \d\d:\d\d 开始  在「box」上$", &row), "{row:?}");
+    assert!(matches(r"^[0-9a-f]{8}  claude  alice  ~/work  \d\d-\d\d \d\d:\d\d 开始  在「box」上  「测试组」$", &row), "{row:?}");
     let sid = &row[..8];
     assert_eq!(asked.far(&a), no_rows());
     assert_eq!(b.run(&["remote-list", "--local"]).out, "");
@@ -636,6 +636,17 @@ fn pair_list_attach(t: &mut Ctx) {
     v.expect("<typed-on-the-box>");
     assert!(a.run(&["remote-list", "--local"]).out.contains("1 处接入"));
     wait_for("列表里看得到有人接着", WAIT, || asked.far(&b).concat().contains("，1 处接入"));
+    // 会话里的钩子推一条通知（cca remote notify）：别的机器上接着的那一端写成 OSC 777 弹出来；这台机器上的终端不给
+    // （它的钩子自己会弹）；会话外面调的不在哪个宿主里：65
+    let notify = format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复", relay::helper(&a).display());
+    let since = h.out().len();
+    h.send(&format!("{notify}\n"));
+    h.expect("<ran 0>");
+    v.expect(r"\x1b\]777;notify;做完了 · alice;第一行回复\x1b\\");
+    assert!(!has(&h.out()[since..], "777;notify"), "启动它的终端上没有");
+    let r = a.run(&["remote-notify", "--title", "外面", "正文"]);
+    assert_eq!(r.code, 65, "{}", r.err);
+    assert_eq!(a.run(&["remote-notify"]).code, 64, "什么字都没有");
     v.send(b"\x1cd");
     assert_eq!(v.wait(), 0);
     v.expect(&format!("已断开，会话还在运行（再接入：cca remote attach {sid}）"));

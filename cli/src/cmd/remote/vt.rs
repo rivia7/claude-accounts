@@ -121,6 +121,11 @@ fn whole(class: Class) -> Seg {
 }
 
 impl Scanner {
+    /// 不在一条序列的半中间：这时候往终端里插一条自己的序列不会打断会话的
+    pub fn idle(&self) -> bool {
+        matches!(self.st, St::Ground)
+    }
+
     pub fn feed(&mut self, data: &[u8], sink: &mut dyn FnMut(Seg, &[u8])) {
         let mut text_from = 0; // Ground 里还没交出去的普通字节从哪开始（只在 Ground 里有意义）
         let mut i = 0;

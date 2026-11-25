@@ -1,7 +1,7 @@
 //! 开关和列表：`remote-set on|off`（config.json 的 `remote`）、`remote-list`（这台机器上在宿主里运行的会话，
 //! 和配对过的机器上可以接入的会话）。
 
-use super::local::{self, Status};
+use super::local::{self, Note, Status};
 use super::{far, peers, relay};
 use crate::cmd::arity;
 use crate::cmd::settings::home_tilde;
@@ -36,8 +36,9 @@ pub fn cmd_remote_set(args: &[String]) -> R<()> {
     cfg_save(&c)
 }
 
-/// 列表里的一行：编号的前 8 位、工具、账号、文件夹、几点开始的、现在谁接着
+/// 列表里的一行：编号的前 8 位、工具、账号、文件夹、几点开始的、现在谁接着；会话走哪个 Team 的服务器中转时最后带上它的名字
 pub fn row(s: &Status) -> String {
+    let team = relay::session_hub(&s.meta.tool, &s.meta.key).map(|k| format!("  「{}」", relay::team_name(k))).unwrap_or_default();
     let cwd = home_tilde(&s.meta.cwd);
     let who = match (s.local, s.viewers) {
         _ if s.busy => "没有回应（可能被挂起了、正忙）".to_string(),
@@ -47,13 +48,14 @@ pub fn row(s: &Status) -> String {
         (false, n) => format!("{n} 处接入"),
     };
     format!(
-        "{}  {}  {}  {}  {} 开始  {}",
+        "{}  {}  {}  {}  {} 开始  {}{}",
         &s.meta.sid[..8],
         s.meta.tool,
         s.meta.name,
         cwd,
         strftime_local("%m-%d %H:%M", s.meta.since),
-        who
+        who,
+        team
     )
 }
 
@@ -135,6 +137,74 @@ pub fn cmd_remote_end(args: &[String]) -> R<()> {
     die("这个会话还没结束：宿主没有回应（被挂起了、机器正忙、接着的太多），或者里面的程序结束不掉（cca remote list --local 看它还在不在）")
 }
 
+/// 一个进程的父进程（macOS：proc_pidinfo；Linux：/proc/进程号/stat 的第 4 栏）；问不到是 None
+fn parent_of(pid: i64) -> Option<i64> {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: info 是够大的一块；proc_pidinfo 只往里写 size 个字节
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+        let got = unsafe {
+            libc::proc_pidinfo(pid as i32, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size)
+        };
+        (got == size).then_some(i64::from(info.pbi_ppid))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // 第 2 栏是括号里的命令名（里面可能有空格、括号）：从最后一个右括号往后数
+        stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
+    }
+}
+
+/// `remote-notify [--title 标题] [--subtitle 副标题] [--] 正文…`：从会话里（Claude Code 的钩子）推一条通知给接着这个会话的
+/// 别的机器——那边的终端、cca App 弹出来。这个进程往上找到它所在的会话宿主（会话说明里的进程号），在它的 socket 上说一声；
+/// 不在哪个会话宿主里（远程会话没开、不是经 cca 启动的）退出码 65，什么都不说（钩子每次都调它，不该在终端上留话）。
+/// 推不推得到看那边：只有接着的别的机器收得到，没人接着就没有；这台机器上的不给（钩子自己会弹）
+pub fn cmd_remote_notify(args: &[String]) -> R<()> {
+    let (mut title, mut subtitle, mut body) = (String::new(), String::new(), Vec::new());
+    let mut it = args.iter();
+    let mut rest = false;
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--title" if !rest => title = it.next().cloned().unwrap_or_default(),
+            "--subtitle" if !rest => subtitle = it.next().cloned().unwrap_or_default(),
+            "--" if !rest => rest = true,
+            _ => body.push(a.clone()),
+        }
+    }
+    let note = Note { title, subtitle, body: body.join(" ") };
+    let Some(note) = Note::parse(&note.to_json()) else {
+        crate::err!("用法：cca remote notify [--title 标题] [--subtitle 副标题] 正文");
+        return exit(64);
+    };
+    let hosts: std::collections::HashMap<i64, String> =
+        local::sessions(false).into_iter().map(|s| (s.meta.pid, s.meta.sid)).collect();
+    let mut pid = i64::from(std::process::id());
+    let mut sid = None;
+    for _ in 0..64 {
+        match parent_of(pid) {
+            Some(p) if p > 1 => pid = p,
+            _ => break,
+        }
+        if let Some(s) = hosts.get(&pid) {
+            sid = Some(s.clone());
+            break;
+        }
+    }
+    let Some(sid) = sid else { return exit(65) };
+    let Ok(mut s) = local::connect(&local::dir(), &format!("{}.sock", local::short(&sid))) else { return exit(65) };
+    let _ = s.set_write_timeout(Some(Duration::from_secs(1)));
+    if s.write_all(&local::frame(local::NOTIFY_REQ, &note.to_json())).is_err() {
+        return exit(1);
+    }
+    // 等宿主读完再关（它读到这一帧、再读到头）：不然连接一关，没读的就丢了
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    let _ = s.set_read_timeout(Some(Duration::from_secs(1)));
+    let _ = s.read(&mut [0u8; 64]);
+    Ok(())
+}
+
 /// 没问到服务器的原因归成这几种（给界面 App：PROTOCOL 9.1 的 `errors[].code`）
 fn relay_code(f: &relay::Fault) -> &'static str {
     match (f.code, f.error.as_str()) {
@@ -151,11 +221,13 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
     let sessions = List::new();
     if near {
         for s in local::sessions(!*RO) {
+            // team：这个会话走哪个 Team 的服务器中转（账号是哪个 Team 给的；别的走这台机器的家），没有中转时是 null
+            let team = relay::session_hub(&s.meta.tool, &s.meta.key).map_or(V::None, |k| V::from(k.team()));
             sessions.push(dict! {
                 "id" => s.meta.sid.as_str(), "short" => &s.meta.sid[..8], "where" => "local", "peer" => V::None, "machine" => V::None,
                 "tool" => s.meta.tool.as_str(), "name" => s.meta.name.as_str(), "cwd" => home_tilde(&s.meta.cwd),
                 "since_epoch" => s.meta.since, "viewers" => s.viewers, "local_terminal" => s.local,
-                "state" => if s.busy { "busy" } else { "ok" }, "access" => "control"
+                "state" => if s.busy { "busy" } else { "ok" }, "access" => "control", "team" => team
             });
         }
     }
@@ -166,12 +238,15 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
         // 配对记在哪台服务器上就问哪台；哪一台没问到，只是它上面的那几个配对这次不知道
         let got = far::fetch_all(&all, 8)?;
         for f in &got.sessions {
+            // 别的机器上的会话是经哪个配对看到的，就是哪个 Team 的服务器上的
+            let team = all.iter().find(|p| p.pid == f.pid).map_or(V::None, |p| V::from(p.hub.team()));
             sessions.push(dict! {
                 "id" => f.sid.as_str(), "short" => &f.sid[..8], "where" => "peer", "peer" => f.pid.as_str(),
                 "machine" => f.peer.as_str(), "tool" => f.tool.as_str(), "name" => f.name.as_str(), "cwd" => f.cwd.as_str(),
                 "since_epoch" => if f.since > 0.0 { V::from(f.since) } else { V::None }, "viewers" => f.viewers,
                 "local_terminal" => V::None,
-                "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" }
+                "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" },
+                "team" => team
             });
         }
         for (_, why, asked) in &got.errors {
@@ -240,7 +315,8 @@ pub fn cmd_remote_list(args: &[String]) -> R<()> {
     }
     let seen = far::fetch_all(&all, 8)?;
     for f in &seen.sessions {
-        crate::out!("{}", far::row(f));
+        let team = all.iter().find(|p| p.pid == f.pid).map(|p| format!("  「{}」", relay::team_name(p.hub))).unwrap_or_default();
+        crate::out!("{}{team}", far::row(f));
     }
     for (_, why, asked) in &seen.errors {
         crate::err!("别的机器上的会话{}：{why}", if asked.is_some() { "没查到" } else { "没查" });

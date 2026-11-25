@@ -244,6 +244,20 @@ fn each_teams_sessions_go_through_its_own_server(t: &mut Ctx) {
     let mut three = both(team_pid);
     three.push(("other".to_string(), other_pid.to_string()));
     assert_eq!(sorted_pairs(&doc["sessions"], "name", "peer"), three);
+    // 会话属于哪个 Team：别的机器上的照它的配对记在哪台服务器上；这台机器上的照它走哪台（Team 给的账号走那个 Team 的，自己的走家）
+    let mine = vec![
+        ("alice".to_string(), tid.to_string()),
+        ("mine".to_string(), tid.to_string()),
+        ("other".to_string(), other.to_string()),
+    ];
+    assert_eq!(sorted_pairs(&doc["sessions"], "name", "team"), mine);
+    let r = a.run(&["remote-list", "--local", "--json"]);
+    assert_eq!(r.code, 0, "{}", r.err);
+    let near = json::parse(&r.out).expect("remote-list --json");
+    assert_eq!(sorted_pairs(&near["sessions"], "name", "team"), mine);
+    let rows = a.ok(&["remote-list", "--local"]);
+    assert_eq!(rows.lines().filter(|l| l.ends_with("「研发组」")).count(), 2, "{rows}");
+    assert_eq!(rows.lines().filter(|l| l.ends_with("「测试组」")).count(), 1, "{rows}");
     assert_eq!(
         sorted_pairs(&doc["peers"], "id", "team"),
         sorted(vec![(team_pid.to_string(), tid.to_string()), (other_pid.to_string(), other.to_string())])

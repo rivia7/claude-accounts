@@ -12,7 +12,7 @@
 //! 把远处的接入方像这台机器上的接入方一样接到 socket 上；它退出了过一会儿再起，会话本身不受影响。
 
 use super::link;
-use super::local::{self, Decoder, Meta, Status};
+use super::local::{self, Decoder, Meta, Note, NoteBudget, Status};
 use super::peers;
 use super::pty::{self, Raw, Size};
 use super::sig;
@@ -43,6 +43,9 @@ const VIEWER_HIGH: usize = 2 * 1024 * 1024;
 /// 还没写进 pty 的输入最多攒这么多
 const INPUT_HIGH: usize = 1024 * 1024;
 const MAX_VIEWERS: usize = 8;
+/// 会话里的钩子推通知：一下子最多几条，之后每几秒一条（Claude Code 一轮做完、等你回答时各推一条，用不了更多）
+pub const NOTE_BURST: f64 = 5.0;
+pub const NOTE_GAP: f64 = 3.0;
 
 /// 最近一次输入是谁的（终端的回答也算输入：查询只发给它，免得每个接入方的终端都答一遍）
 #[derive(Clone, Copy, PartialEq)]
@@ -133,6 +136,8 @@ struct Host {
     last_output: f64,
     touched: f64,
     link: LinkProc,
+    /// 会话里的钩子推通知（`NOTIFY_REQ`）的限流
+    notes: NoteBudget,
 }
 
 fn push(q: &mut VecDeque<u8>, data: &[u8]) {
@@ -219,6 +224,7 @@ impl Host {
             last_output: now,
             touched: now,
             link: LinkProc::default(),
+            notes: NoteBudget::new(NOTE_BURST, NOTE_GAP),
         })
     }
 
@@ -531,6 +537,18 @@ impl Host {
                 }
                 // 这条 socket 上都是这台机器上的同一个用户（别的机器经转接进程来，它不转这一种）
                 local::END => self.end(),
+                // 会话里的钩子推一条通知（`cca remote notify`）：交给已经接上的各处（说过 HELLO 的），别的机器上的那边弹出来。
+                // 启动它的终端不给：这台机器上的钩子自己会弹
+                local::NOTIFY_REQ => {
+                    if let Some(n) = Note::parse(&payload) {
+                        if self.notes.take() {
+                            let f = local::frame(local::NOTIFY, &n.to_json());
+                            for v in self.viewers.iter_mut().filter(|v| v.size.is_some() && !v.dead) {
+                                push(&mut v.out, &f);
+                            }
+                        }
+                    }
+                }
                 _ => {} // 不认识的帧（以后加的）：不理
             }
         }

@@ -41,6 +41,17 @@ final class TerminalSurface {
         let engine = view.getTerminal()
         engine.options.enableSixelReported = false
         engine.registerOscHandler(code: 1337) { _ in }   // iTerm2 的内联图片、传文件：不要
+        // 通知：OSC 777 的 notify（标题;正文：接入端把别的机器推来的写成它）、OSC 9（只有一段字：iTerm2 的写法；数字开头的是进度条，不算）
+        engine.registerOscHandler(code: 777) { [weak self] data in
+            guard let text = String(bytes: data, encoding: .utf8) else { return }
+            let parts = text.components(separatedBy: ";")
+            guard parts.count >= 3, parts[0] == "notify" else { return }
+            self?.notified(title: parts[1], body: parts[2...].joined(separator: ";"))
+        }
+        engine.registerOscHandler(code: 9) { [weak self] data in
+            guard let text = String(bytes: data, encoding: .utf8), let first = text.first, !first.isNumber else { return }
+            self?.notified(title: "", body: text)
+        }
         view.terminalDelegate = bridge
         bridge.surface = self
         view.onLayout = { [weak self] in self?.measure() }
@@ -113,6 +124,14 @@ final class TerminalSurface {
         guard let w = view.window, w.isKeyWindow, w.firstResponder === view, NSApp.isActive else { return }
         guard !content.isEmpty, content.count <= 1 << 20, let s = String(data: content, encoding: .utf8) else { return }
         copy(s)
+    }
+
+    /// 会话推来一条通知：只认别的机器上的会话（这台 Mac 上的，那边的钩子、终端自己会弹），用户正看着这块终端时不弹
+    /// （窗口在最前面、键盘焦点在终端上）。弹出来、点它回到这个终端见 RemoteNotifier
+    fileprivate func notified(title: String, body: String) {
+        guard let t = terminal, !t.session.isLocal else { return }
+        if let w = view.window, w.isKeyWindow, w.firstResponder === view, NSApp.isActive { return }
+        RemoteNotifier.post(title: title, body: body, from: t)
     }
 
     /// 用户用鼠标选中了字：马上放进剪贴板（选中即复制）。是这边的人自己选的，不像 OSC 52 那样要看焦点

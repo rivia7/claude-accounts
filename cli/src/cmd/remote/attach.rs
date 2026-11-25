@@ -15,8 +15,9 @@
 //! 就断了；别的机器上的是试了一阵没重新接上），69 不在终端里。
 
 use super::far::{self, Far};
+use super::host::{NOTE_BURST, NOTE_GAP};
 use super::keys::Keys;
-use super::local::{self, Conn, Decoder, Status};
+use super::local::{self, Conn, Decoder, Note, NoteBudget, Status};
 use super::peers::{self, Peer};
 use super::pty::{self, Raw};
 use super::relay::{self, Server, Tunnel};
@@ -234,6 +235,51 @@ struct Side {
     /// 还没写到终端上的
     to_tty: VecDeque<u8>,
     read_only: bool,
+    /// 别的机器上的会话推来的通知（`NOTIFY`）：等终端上不在一条序列的半中间时写成通知的序列
+    notes: VecDeque<Note>,
+    note_budget: NoteBudget,
+}
+
+/// 一次最多攒几条还没写出去的通知
+const NOTES_HELD: usize = 4;
+
+/// 通知写成终端认的序列：iTerm2 认 OSC 9（只有一段字），别的（Ghostty、WezTerm、kitty 的新版、cca App 里的终端……）
+/// 认 OSC 777 的 notify（标题、正文两段）。字已经过了 `Note::parse`（没有控制字符）；分号是 OSC 777 的分隔，标题里的换成全角的
+pub fn note_seq(n: &Note, term_program: &str) -> Vec<u8> {
+    let title = if n.subtitle.is_empty() {
+        n.title.clone()
+    } else if n.title.is_empty() {
+        n.subtitle.clone()
+    } else {
+        format!("{} · {}", n.title, n.subtitle)
+    };
+    if term_program == "iTerm.app" {
+        let text = match (title.is_empty(), n.body.is_empty()) {
+            (false, false) => format!("{title}：{}", n.body),
+            (false, true) => title,
+            _ => n.body.clone(),
+        };
+        // OSC 9 后面是数字开头时有的终端当成进度条（9;4;…）：前面垫一个全角的空格
+        let text = if text.starts_with(|c: char| c.is_ascii_digit()) { format!("\u{3000}{text}") } else { text };
+        return format!("\x1b]9;{text}\x1b\\").into_bytes();
+    }
+    let title = title.replace(';', "；");
+    format!("\x1b]777;notify;{title};{}\x1b\\", n.body).into_bytes()
+}
+
+/// q 的最后是不是一个字的半截（UTF-8 的多字节字还没完）：这时候插一条序列进去会把这个字拆坏
+fn mid_char(q: &VecDeque<u8>) -> bool {
+    let tail: Vec<u8> = q.iter().rev().take(4).copied().collect(); // 倒着的最后几个字节
+    for (i, b) in tail.iter().enumerate() {
+        match b {
+            0x80..=0xbf => continue, // 字的后半截：再往前看
+            0xc0..=0xdf => return i < 1,
+            0xe0..=0xef => return i < 2,
+            0xf0..=0xf7 => return i < 3,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// 连接断了以后一共试多久（秒）；0 是不试
@@ -450,6 +496,8 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
         modes: Modes::default(),
         to_tty: VecDeque::new(),
         read_only,
+        notes: VecDeque::new(),
+        note_budget: NoteBudget::new(NOTE_BURST, NOTE_GAP),
     };
     let mut flaps = 0u32;
     let end = loop {
@@ -536,7 +584,9 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
 
 /// 接着的那一段：按键送过去、那边的输出写到终端上，到会话结束、自己断开、连接断了为止
 fn attached(side: &mut Side, wire: &mut Wire) -> End {
-    let Side { tty: tty_fd, wake, raw, keys, dec, scan, modes, to_tty, read_only } = side;
+    let Side { tty: tty_fd, wake, raw, keys, dec, scan, modes, to_tty, read_only, notes, note_budget } = side;
+    let far = matches!(wire, Wire::Far(_));
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     let (tty_fd, wake, read_only) = (*tty_fd, *wake, *read_only);
     let mut buf = vec![0u8; 4096];
     'run: loop {
@@ -612,10 +662,24 @@ fn attached(side: &mut Side, wire: &mut Wire) -> End {
                         let code = payload.get(..4).map_or(1, |b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]));
                         break 'run End::Exited(code);
                     }
+                    // 通知：只认别的机器上的会话推来的（这台机器上的，会话里的钩子自己已经弹过了）。那边写的字再过一遍、再限一次流
+                    Ok(Some((local::NOTIFY, payload))) if far => {
+                        if let Some(n) = Note::parse(&payload) {
+                            if notes.len() < NOTES_HELD && note_budget.take() {
+                                notes.push_back(n);
+                            }
+                        }
+                    }
                     Ok(Some(_)) => {} // WELCOME、以后加的帧：不用管
                     Ok(None) => break,
                     Err(()) => break 'run End::HostGone,
                 }
+            }
+        }
+        // 攒着的通知：会话的输出不在一条序列、一个字的半中间时才插进去（不然会把会话的那一条打断）
+        while !notes.is_empty() && scan.idle() && !mid_char(to_tty) {
+            if let Some(n) = notes.pop_front() {
+                to_tty.extend(note_seq(&n, &term_program));
             }
         }
         if wire.flush().is_err() {
@@ -630,5 +694,51 @@ fn attached(side: &mut Side, wire: &mut Wire) -> End {
                 Err(_) => break 'run End::Detached(false),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod note_tests {
+    use super::*;
+
+    fn note(title: &str, subtitle: &str, body: &str) -> Note {
+        Note { title: title.into(), subtitle: subtitle.into(), body: body.into() }
+    }
+
+    #[test]
+    fn notes_become_terminal_notifications() {
+        let n = note("做完了", "alice · site", "第一行");
+        assert_eq!(note_seq(&n, ""), "\x1b]777;notify;做完了 · alice · site;第一行\x1b\\".as_bytes());
+        assert_eq!(note_seq(&n, "iTerm.app"), "\x1b]9;做完了 · alice · site：第一行\x1b\\".as_bytes());
+        // 标题里的分号是 OSC 777 的分隔：换成全角的；OSC 9 数字开头的会被当成进度条：垫一个全角空格
+        assert_eq!(note_seq(&note("a;b", "", "c;d"), ""), "\x1b]777;notify;a；b;c;d\x1b\\".as_bytes());
+        assert_eq!(note_seq(&note("", "", "4;1"), "iTerm.app"), "\x1b]9;　4;1\x1b\\".as_bytes());
+    }
+
+    #[test]
+    fn what_a_note_may_say() {
+        // 别人写的字：控制字符（ESC、BEL、换行）、改文字方向的去掉，限长度；什么字都没有的不算
+        let raw = br#"{"title": "a\u001b]52;c;x\u0007b", "subtitle": "\u202eevil", "body": "line1\nline2"}"#;
+        let n = Note::parse(raw).expect("通知");
+        assert_eq!((n.title.as_str(), n.subtitle.as_str(), n.body.as_str()), ("a]52;c;xb", "evil", "line1line2"));
+        let long = format!(r#"{{"body": "{}"}}"#, "字".repeat(500));
+        assert_eq!(Note::parse(long.as_bytes()).expect("通知").body.chars().count(), Note::BODY_MAX);
+        assert_eq!(Note::parse(br#"{"title": " ", "body": ""}"#), None);
+        assert_eq!(Note::parse(b"not json"), None);
+        assert_eq!(Note::parse(&n.to_json()), Some(n));
+    }
+
+    #[test]
+    fn notes_wait_for_a_whole_character() {
+        let q = |b: &[u8]| b.iter().copied().collect::<VecDeque<u8>>();
+        assert!(!mid_char(&q(b"")) && !mid_char(&q(b"abc")) && !mid_char(&q("中".as_bytes())));
+        assert!(mid_char(&q(&"中".as_bytes()[..2])) && mid_char(&q(&"中".as_bytes()[..1])));
+        assert!(mid_char(&q(&"😀".as_bytes()[..3])) && !mid_char(&q("a😀".as_bytes())));
+    }
+
+    #[test]
+    fn the_budget() {
+        let mut b = NoteBudget::new(2.0, 3600.0);
+        assert!(b.take() && b.take() && !b.take());
     }
 }

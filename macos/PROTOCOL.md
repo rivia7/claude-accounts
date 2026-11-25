@@ -1360,10 +1360,10 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   "sessions": [
     {"id": "3a3a…（32 个十六进制字符）", "short": "3a3a3a3a", "where": "local", "peer": null, "machine": null,
      "tool": "claude", "name": "工作", "cwd": "~/projects/site", "since_epoch": 1794040500.0, "viewers": 0,
-     "local_terminal": true, "state": "ok", "access": "control"},
+     "local_terminal": true, "state": "ok", "access": "control", "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"},
     {"id": "5c5c…", "short": "5c5c5c5c", "where": "peer", "peer": "b1b1…（32 个十六进制字符）", "machine": "office-linux",
      "tool": "claude", "name": "工作", "cwd": "~/srv/api", "since_epoch": 1794034020.0, "viewers": 1,
-     "local_terminal": null, "state": "ok", "access": "view"}
+     "local_terminal": null, "state": "ok", "access": "view", "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"}
   ],
   "peers": [
     {"id": "b1b1…", "short": "b1b1b1b1", "name": "office-linux", "incoming": "none", "shown": false,
@@ -1395,6 +1395,9 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   - `state`：`ok`（接得上）| `busy`（这台 Mac 上的宿主没有回应：被挂起了、机器正忙）| `offline`（那台机器暂时没连着服务器）。不是 `ok` 的 App 不给「接入」。
   - `access`：这台 Mac 接进去能做什么。`control`（看和操作）| `view`（那台机器只让看：App 只给「只看」，起 `attach` 时带 `-r`）。
     不让接入的机器上的会话不在列表里。
+  - `team`（新加的，旧版 cca 没有）：这个会话属于哪个 Team（Team 的编号，名字照 `config.teams` 找）。这台 Mac 上的是它走哪个 Team 的服务器中转
+    （账号是哪个 Team 给的就是那个 Team，别的是「家」：`relay.hubs` 的第一项）；别的机器上的是经哪个配对看到的，就是那个配对的 `peers[].team`。
+    没有中转（一个 Team 都用不了）时是 null。App 在会话那一行、终端的标题下面标出 Team 的名字。
 - `peers[]`：配对过的机器。`id` 是 `cca remote allow|unpair` 的参数；`name` 是那台服务器上它的名字（Team 的管理员给它起的名字；
   没有时是它自己报的机器名）；
   `incoming`：它能对**这台 Mac** 的会话做什么，`control` | `view` | `none`（接不进来；这台 Mac 照样可以接入它的会话，看它那边怎么设）；
@@ -1465,4 +1468,8 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
     那一处），别的时候丢掉；读剪贴板不给。
   - 用户自己的操作照终端的习惯来：用鼠标选中的字马上放进剪贴板（选中即复制）；右键粘贴剪贴板里的字（和 ⌘V 一样，程序开着括号粘贴模式时
     带上标记；只看的、没在运行的终端不粘）。会话里的程序开着鼠标模式时点击、拖动、滚轮照常交给它，按住 Option 或 Shift 拖才是选字。
-  - 终端的标题显示之前去掉控制字符和看不见的排版字符；不响铃；改窗口大小、位置这类请求不理；不发通知。
+  - 终端的标题显示之前去掉控制字符和看不见的排版字符；不响铃；改窗口大小、位置这类请求不理。
+  - 通知：接入端把别的机器上的会话推来的通知（会话里的钩子运行 `cca remote notify`，Claude Code 做完一轮、等着回答时）写成
+    OSC 777 的 notify（`ESC ] 777 ; notify ; 标题 ; 正文 ESC \`）；会话里的程序自己写的 OSC 777、OSC 9（只有一段字；数字开头的是进度条，不算）
+    一样对待。App 只认 `where` 是 `peer` 的会话的（这台 Mac 上的，钩子自己会弹），用户正看着这块终端时不弹，同一个终端 3 秒最多一条；
+    标题、正文去掉控制字符、限长度，副标题是 App 自己写的「来自「机器名」 · 账号」。点通知回到这个终端。第一次弹的时候系统会问要不要允许 cca 发通知。

@@ -26,11 +26,15 @@ pub const DETACH: u8 = 0x04;
 pub const STATUS_REQ: u8 = 0x06;
 /// 结束这个会话（`cca remote end`）：只有这台机器上的 socket 上说得了，转接那头不替别的机器转
 pub const END: u8 = 0x07;
+/// 推一条通知给接着的各处（`cca remote notify`：会话里的钩子说的）。也只有这台机器上的 socket 上说得了，转接那头不转这一种
+pub const NOTIFY_REQ: u8 = 0x08;
 /// 宿主 → 接入方
 pub const WELCOME: u8 = 0x11;
 pub const OUTPUT: u8 = 0x12;
 pub const EXIT: u8 = 0x13;
 pub const STATUS: u8 = 0x15;
+/// 一条通知（`Note` 的 JSON，宿主清理过、限过长度）：转接那头转给别的机器上的接入方，那边弹出来
+pub const NOTIFY: u8 = 0x16;
 
 /// 这一版的帧格式
 pub const PROTO: u8 = 1;
@@ -50,6 +54,62 @@ pub fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(payload);
     out
+}
+
+/// 一条通知：标题、副标题、正文。哪一样都是别人写的字（会话里的程序、别的机器）：`parse` 去掉控制字符和看不见的排版字符、限长度
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub title: String,
+    pub subtitle: String,
+    pub body: String,
+}
+
+impl Note {
+    pub const TITLE_MAX: usize = 64;
+    pub const BODY_MAX: usize = 240;
+
+    pub fn to_json(&self) -> Vec<u8> {
+        let d = dict! { "title" => self.title.as_str(), "subtitle" => self.subtitle.as_str(), "body" => self.body.as_str() };
+        json::dumps(&V::Dict(d), json::LINE).into_bytes()
+    }
+
+    /// 帧里的 JSON → 通知；不是 JSON、什么字都没有的不算
+    pub fn parse(p: &[u8]) -> Option<Note> {
+        let d = json::loads(std::str::from_utf8(p).ok()?).ok()?.as_dict()?;
+        let get = |k: &str, max: usize| super::far::clean(&d.str(k).unwrap_or_default(), max).trim().to_string();
+        let n = Note {
+            title: get("title", Note::TITLE_MAX),
+            subtitle: get("subtitle", Note::TITLE_MAX),
+            body: get("body", Note::BODY_MAX),
+        };
+        (!n.title.is_empty() || !n.body.is_empty()).then_some(n)
+    }
+}
+
+/// 通知的限流：攒得下 `cap` 条、每 `gap` 秒回一条。会话里的程序、别的机器一个劲地发，也只弹这么多
+pub struct NoteBudget {
+    left: f64,
+    at: f64,
+    cap: f64,
+    gap: f64,
+}
+
+impl NoteBudget {
+    pub fn new(cap: f64, gap: f64) -> NoteBudget {
+        NoteBudget { left: cap, at: monotonic(), cap, gap }
+    }
+
+    pub fn take(&mut self) -> bool {
+        let now = monotonic();
+        self.left = (self.left + (now - self.at) / self.gap).min(self.cap);
+        self.at = now;
+        if self.left >= 1.0 {
+            self.left -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 pub fn hello(size: Size, read_only: bool) -> Vec<u8> {

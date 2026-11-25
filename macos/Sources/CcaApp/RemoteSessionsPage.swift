@@ -339,6 +339,7 @@ private struct RemoteSessionLine: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(nonEmpty(Texts.remoteTitle(session)) ?? session.short).fontWeight(.medium).lineLimit(1)
+                    if let team = session.team { Tag(text: model.teams.first { $0.id == team }?.name ?? "Team", color: .secondary) }
                     if session.access == .view { Tag(text: "只看", systemImage: "eye") }
                     if open?.isRunning == true { Tag(text: "已接入", color: .green) }
                 }
@@ -468,7 +469,8 @@ private struct RemoteTerminalPane: View {
 
     private var place: String {
         let s = terminal.session
-        return [s.isLocal ? "这台 Mac" : nonEmpty(s.machine) ?? "另一台机器", nonEmpty(s.cwd), nonEmpty(terminal.title)]
+        let team = s.team.map { t in model.teams.first { $0.id == t }.map { "「\($0.name)」" } ?? "Team" }
+        return [s.isLocal ? "这台 Mac" : nonEmpty(s.machine) ?? "另一台机器", team, nonEmpty(s.cwd), nonEmpty(terminal.title)]
             .compactMap { $0 }.joined(separator: " · ")
     }
 

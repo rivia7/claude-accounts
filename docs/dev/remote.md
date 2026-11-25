@@ -48,6 +48,16 @@
 - 列表、接入时怎么算一个会话还在（`local::sessions_in`）：socket 连得上、回了状态就是在；连上了却没回（宿主被挂起了、机器正忙）照说明文件列出来、标成没有回应，**它的文件不动**；只有确实没人在听（连接被拒、文件没了）才算不在了、清掉它留下的文件。`cca restore` 在还有会话时先停下（删掉 `~/.cca` 以后它们照样在跑，却再也接不上）
 - `cca codex remote …`、`cxa remote …` 不是这个命令：照旧当成给 codex 的参数（只有第一个参数是 `remote` 才是）
 - 终端的内容可能有密钥和源码：只在内存里转，不写文件、不进日志、不进任何进程的命令行和环境变量
+- 通知推到接着的别的机器（`cca remote notify [--title 标题] [--subtitle 副标题] 正文`，`manage.rs` 的 `remote-notify`）：给会话里的钩子用
+  （Claude Code 做完一轮、等着回答时，维护者本机的 `~/.claude/hooks/cca-notify-*.sh` 在 `osascript` 之后调它）。宿主不给客户端加环境变量，
+  所以它照进程往上找（`parent_of`：macOS 的 `proc_pidinfo`，Linux 的 `/proc/进程号/stat`），哪一个是某个会话说明里的宿主进程号，就在那个会话的
+  socket 上说一个 `NOTIFY_REQ`（0x08，JSON `{title, subtitle, body}`）；不在哪个宿主里（远程会话没开、不是 cca 启动的）退出码 65、什么都不说，
+  什么字都没有 64。宿主（`local::Note::parse`：去掉控制字符和看不见的排版字符，标题 64 个字、正文 240 个字；`NoteBudget`：一下子 5 条、之后每 3 秒一条）
+  把它变成 `NOTIFY`（0x16）发给说过 HELLO 的各个接入方，启动它的终端不给（这台机器上的钩子自己会弹）。转接进程只把 `NOTIFY` 往别的机器转
+  （`NOTIFY_REQ` 和 `END` 一样不转：别的机器推不了通知到这台的会话里）。接入端只认经中转接上的（`Wire::Far`；这台机器上接着的不弹，免得一条通知
+  弹两次），再清理、限流一遍，攒着等终端上不在一条序列、一个字的半中间（`Scanner::idle`、`mid_char`）时写成终端的通知序列（`note_seq`：
+  `TERM_PROGRAM` 是 iTerm2 时 OSC 9，别的 OSC 777 的 notify；标题里的分号换成全角的）。界面 App 的终端认 OSC 777 / OSC 9，弹成 macOS 通知（PROTOCOL 9.3，
+  `RemoteNotifier`）。网页端（手机）还不弹：页面不认这个帧，照旧
 
 ### 和直接运行不一样的地方
 
@@ -248,7 +258,8 @@
   （别的马上回“没有这个配对”）
 - 列表、接入、看对方取消了没有、取消配对：配对记在哪台就问哪台（`far::fetch_all`）。哪一台没问到，只是它上面的那几个配对这次
   不知道（`remote list --json` 里那几个的 `state` 是 `unknown`，`errors` 里一条），别的照常
-- 给界面的：`relay.hubs`（用得了哪几台）、`peers[].team`；App 在有好几台时把「显示配对码…」「和手机配对…」变成点开选在哪台上
+- 给界面的：`relay.hubs`（用得了哪几台）、`peers[].team`、`sessions[].team`（会话属于哪个 Team：这台机器上的照 `session_hub`，别的机器上的照它的配对记在哪台；
+  `cca remote list` 的每一行最后也带上「Team 的名字」）；App 在有好几台时把「显示配对码…」「和手机配对…」变成点开选在哪台上
 - Team 的服务器怎么带上中转：安装脚本（`server/hub-install.sh`）默认开着，数据端口没写时是 HTTPS 那个端口的下一个空着的（直接在服务器上
   运行时 `--relay-port` 指定、`--no-relay` 不开；`cca team deploy` 不带这两个，记在 `.env` 的 `CCA_HUB_RELAY` 里，再运行照旧）；
   `cca team deploy` 装完说要放行哪几个端口（开了网页端的还有它的端口和 80）。
@@ -356,7 +367,7 @@
     托管平台上的（Railway）不做中转，也没有网页端
   - 证书助手对着真的证书机构只跑过上面那一次（Let's Encrypt 的测试环境、正式环境各签了一张）；续期还没真的走过（短期证书约 80 小时
     以后才续）。平时的测试对着 `tests/kit/acmefake.rs`（照规范逐项核对的假证书机构）
-  - 终端里长按选字（xterm.js 在触摸屏上不支持）：菜单里有「复制屏幕上的字」；没有通知（会话等着你回答时手机不会响）
+  - 终端里长按选字（xterm.js 在触摸屏上不支持）：菜单里有「复制屏幕上的字」；没有通知（会话等着你回答时手机不会响：`NOTIFY` 帧页面不认，iPhone 上的网页要推送服务才能在后台响）
   - 终端里不画二维码（`cca remote pair --web` 只打印地址，App 里才有二维码）
 
 ## 测试
@@ -391,6 +402,9 @@
 - `cd cli && cargo run --profile kit -p cca-tests --bin cca-test -- web-demo [--port 端口] [-- 会话里跑的命令…]`（`tests/tool/web_demo.rs`；
   先 `cargo build --release`）：在本机把网页端跑起来自己看（真的服务器开在 `http://localhost`、一台临时的
   “电脑”、一个会话、一个配对码），在这台 Mac 的浏览器里打开。手机上试不了这个（手机要 HTTPS 和信得过的证书）
+- 通知：`pair_list_attach` 里会话中的程序（`cca-test fake-client` 的 `run`）运行 `remote-notify`，别的机器上接着的那一端收到 OSC 777，启动它的终端上没有；
+  会话外面调是 65、没有字是 64。`cargo test` 的 `remote::attach::note_tests`：序列的写法、别人写的字怎么清理、不拆开一个字、限流。App 里弹出来、点通知回到终端
+  没有自动的测试（要通知的权限和真人点）
 - `tests/remote_relay.rs`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：真的 Team 的服务器进程（开着中转）、每台设备一个临时 HOME 和
   登记在这个 Team 里的密钥（`team_enroll`）、会话在真的伪终端上。前五条（`pairing` 到 `pairings_survive_a_restart`）两头都照文档自己说话（配对的各种先后和拒绝、票据只能用一次、认证码不对的不算用掉、
   对接后大块的一个字节不丢、宿主说完就关时最后几个字节也到、宿主不来接时接入方等到 `nohost`、取消配对 / 撤销设备后正接着的被断开、

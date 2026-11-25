@@ -142,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guide = Guide(prefs: demo ? MemoryPrefs() : UserDefaults.standard, appVersion: version)
         appearance = AppearanceSetting(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
         super.init()
+        RemoteNotifier.model = model
         model.hooks.openInTerminal = { Platform.open($0, in: $1, done: $2) }
         model.hooks.openTerminalApp = { Platform.open($0, done: $1) }
         model.hooks.installedTerminals = { Platform.installedTerminals() }
