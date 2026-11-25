@@ -32,6 +32,19 @@ private func usage(five: Double?, week: Double? = 10, stale: Bool = false, fiveR
     return try! JSONDecoder().decode(UsageEntry.self, from: JSONSerialization.data(withJSONObject: d))
 }
 
+/// Antigravity 的用量：几组额度（quota_groups），每组一个 5 小时、一个本周（百分比是用了多少）
+private func agyUsage(_ groups: [(five: Double, week: Double)], stale: Bool = false, useFirst: Any? = nil) -> UsageEntry {
+    func bucket(_ slot: String, _ used: Double, _ resets: Double) -> [String: Any] {
+        ["window": slot == "five_hour" ? "5h" : "weekly", "slot": slot, "disabled": false, "utilization": used,
+         "remaining_fraction": 1 - used / 100, "resets_epoch": resets, "reset": false]
+    }
+    var d: [String: Any] = ["key": "g@example.com", "source": "cache", "stale": stale,
+                            "quota_groups": groups.enumerated().map { i, g in
+                                ["name": "组\(i)", "buckets": [bucket("five_hour", g.five, now0 + 3600), bucket("seven_day", g.week, now0 + 86400 * 3)]] }]
+    if let useFirst { d["use_first"] = useFirst }
+    return try! JSONDecoder().decode(UsageEntry.self, from: JSONSerialization.data(withJSONObject: d))
+}
+
 /// 周结算提醒的区间：本周还剩 59%，一小时前进了区间，20 小时后重置
 private let useFirstWindow: [String: Any] = ["left_percent": 59, "from_epoch": now0 - 3600, "until_epoch": now0 + 20 * 3600]
 
@@ -155,6 +168,21 @@ func officeTests() async {
     check("第三方 API 账号是外包，命令行里在用就在忙", contractor.department == .contractors && contractor.mood == .working
           && contractor.sessions == 1 && contractor.since == now0 - 120 && contractor.tier == .unknown)
     check("Codex 的账号在 ChatGPT 组", Employee.make(acct(tool: .codex), usage: nil, live: nil, now: now0).department == .chatgpt)
+
+    // Antigravity：几组额度，紧不紧看各组里用得最少的那个（pressureWindows）
+    let agy = acct(tool: .agy)
+    let agyNear = Employee.make(agy, usage: agyUsage([(92, 10), (95, 20)]), live: nil, now: now0)
+    check("Antigravity：各组的 5 小时都快用完了，犯困", agyNear.flags == [.nearLimit] && agyNear.drowsy && agyNear.mood == .idle, "\(agyNear.flags)")
+    check("Antigravity：只有一组快用完、别的组还多，不犯困",
+          !Employee.make(agy, usage: agyUsage([(95, 10), (20, 10)]), live: nil, now: now0).drowsy)
+    let agyTired = Employee.make(acct(["cli": ["running": true, "sessions": 1, "since_epoch": now0]], tool: .agy),
+                                 usage: agyUsage([(100, 10), (100, 30)]), live: nil, now: now0)
+    check("Antigravity：用完了、命令行还开着，照样犯困", agyTired.mood == .working && agyTired.trouble == .resting(until: now0 + 3600) && agyTired.drowsy)
+    check("Antigravity：数据旧了、没用完，不犯困", !Employee.make(agy, usage: agyUsage([(95, 10)], stale: true), live: nil, now: now0).drowsy)
+    check("Antigravity：本周快重置了、还剩不少，建议先用", Employee.make(agy, usage: agyUsage([(10, 41)], useFirst: useFirstWindow), live: nil, now: now0).useFirst != nil)
+    check("Antigravity：5 小时快用完时（数据旧了也算）不建议先用",
+          Employee.make(agy, usage: agyUsage([(92, 41), (95, 41)], stale: true, useFirst: useFirstWindow), live: nil, now: now0).useFirst == nil
+          && Employee.make(agy, usage: agyUsage([(92, 41), (20, 41)], stale: true, useFirst: useFirstWindow), live: nil, now: now0).useFirst != nil)
 
     // 文字
     var utc = Calendar(identifier: .gregorian)

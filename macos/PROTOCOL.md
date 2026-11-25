@@ -657,7 +657,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   Claude Code 只在登录时记套餐，之后升级、降级都不改（2.1.322 核实），所以它还按旧套餐显示（启动横幅、`/status` 里写 Claude Pro）、按旧套餐处理；
   额度由服务器按实际的套餐算，不受影响。重新登录（`cca login 账号`）才会更新：cca 经它登录之前把记下的作废，下一次查用量对上了就是 null。
   App 照它说一句、给「重新登录…」，不自己比（`plan` 是账号现在的套餐）。没有这个字段（旧版 cca）当作 null。
-- `use_first`（周结算提醒，不提示时为 null）：本周额度（`seven_day`）快重置了、还剩不少，建议先用这个账号，别浪费。`left_percent` 是本周还剩
+- `use_first`（周结算提醒，不提示时为 null）：本周额度（`seven_day`；Antigravity 是各组的本周额度里用得最少的那个，3.6.15 起，以前恒为 null）快重置了、还剩不少，建议先用这个账号，别浪费。`left_percent` 是本周还剩
   百分之几（整数：`100 - 四舍五入后的 utilization`，和显示的百分比一致）；`from_epoch` 是本周重置前 24 小时，`until_epoch` 是本周的重置时间。
   **App 拿当前时间和 `[from_epoch, until_epoch)` 比**（快照可能放了好几分钟），区间外当作没有；规则（24 小时、至少 20%）由 cca 定，App 不重算。
   cca 给 null 的情况：没有重置时间、本周窗口已经 `reset`、剩得不到 20%、这次查询说明账号现在用不了（`error_code` 是 `login` / `mismatch` /

@@ -270,6 +270,29 @@ pub fn quota_groups(rl: &Dict, now: f64) -> Option<V> {
     Some(V::from(groups))
 }
 
+/// 周结算提醒（usage.rs 的 use_first）看的「本周」：各组的本周额度里用得最少的那个（过了重置时间的算 0；一样多时先重置的那个）
+/// ——它也用完了这个窗口才算用完（App 的 `UsageEntry.quotaLeast` 是同一条规则），还剩不少、快重置了才值得先用这个账号。
+/// 写成和 Claude、Codex 的 seven_day 一样的 {utilization, resets_at}；没有认得出的本周额度是 None
+pub fn agy_week(rl: &Dict, now: f64) -> Option<Dict> {
+    let mut least: Option<(f64, f64, Dict)> = None;
+    for g in dicts(rl, "groups") {
+        for b in dicts(&g, "buckets") {
+            if b.truthy("disabled") || window_of(&b).map(|i| WINDOWS[i].3) != Some("seven_day") {
+                continue;
+            }
+            let v = bucket_view(&b, now);
+            let Some(used) = v.get("utilization").and_then(|u| u.as_num()) else { continue };
+            let at = v.get("resets_epoch").and_then(|x| x.as_num());
+            let used = if v.truthy("reset") { 0.0 } else { used };
+            let at_key = at.unwrap_or(f64::INFINITY);
+            if least.as_ref().is_none_or(|(u, a, _)| used < *u || (used == *u && at_key < *a)) {
+                least = Some((used, at_key, dict! { "utilization" => used, "resets_at" => v.at("resets_at") }));
+            }
+        }
+    }
+    least.map(|(_, _, d)| d)
+}
+
 /// 表格、菜单里一个桶的名字：组名和桶名（一样、一个包含另一个、只有一个时只写一个）
 fn label(group: &V, bucket: &V) -> String {
     let (g, b) = (text::strip(group.as_str().unwrap_or("")), text::strip(bucket.as_str().unwrap_or("")));
@@ -667,6 +690,34 @@ mod tests {
         assert!(!lines[0].contains("套餐") && lines[1].contains("Gemini Pro · 5 小时"), "{lines:?}");
         let lines = agy_table_lines(&[row("Google AI Pro")], now, "100", false).unwrap();
         assert!(lines[0].contains("套餐") && lines[1].contains("Google AI Pro"), "{lines:?}");
+    }
+
+    #[test]
+    fn week_for_use_first() {
+        let now = 1795508400.0; // 2026-11-24T08:20:00Z
+        let rl = |groups: &str| json::loads(&format!(r#"{{"groups": {groups}}}"#)).unwrap().as_dict().unwrap();
+        // 只有一组：就是它的本周
+        let w = agy_week(&quota(), now).unwrap();
+        assert_eq!((w.at("utilization").as_num(), w.at("resets_at").as_str()), (Some(95.0), Some("2026-11-28T00:00:00Z")));
+        // 几组：用得最少的那个（它也用完了才算用完）；5 小时、认不出窗口、不可用的不算
+        let two = rl(r#"[
+            {"name": "Gemini", "buckets": [{"window": "weekly", "remaining_fraction": 0.2, "reset_time": "2026-11-25T00:00:00Z"},
+                                          {"window": "5h", "remaining_fraction": 1}]},
+            {"name": "Claude", "buckets": [{"window": "weekly", "remaining_fraction": 0.6, "reset_time": "2026-11-25T02:00:00Z"},
+                                          {"window": "weekly", "disabled": true, "remaining_fraction": 1},
+                                          {"name": "x", "remaining_fraction": 1}]}]"#);
+        let w = agy_week(&two, now).unwrap();
+        assert_eq!((w.at("utilization").as_num(), w.at("resets_at").as_str()), (Some(40.0), Some("2026-11-25T02:00:00Z")));
+        // 一样多时先重置的那个；过了重置时间的算 0（use_first 看到重置时间过了就不提示）
+        let tie = rl(r#"[{"name": "A", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-26T00:00:00Z"}]},
+                        {"name": "B", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-25T00:00:00Z"}]}]"#);
+        assert_eq!(agy_week(&tie, now).unwrap().at("resets_at").as_str(), Some("2026-11-25T00:00:00Z"));
+        let old = rl(r#"[{"name": "A", "buckets": [{"window": "weekly", "remaining_fraction": 0.1, "reset_time": "2026-11-24T00:00:00Z"}]},
+                        {"name": "B", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-25T00:00:00Z"}]}]"#);
+        assert_eq!(agy_week(&old, now).unwrap().at("utilization").as_num(), Some(0.0));
+        // 没有本周额度：None
+        assert!(agy_week(&rl(r#"[{"name": "A", "buckets": [{"window": "5h", "remaining_fraction": 0.5}]}]"#), now).is_none());
+        assert!(agy_week(&Dict::new(), now).is_none());
     }
 
     #[test]

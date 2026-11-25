@@ -4,7 +4,7 @@
 //! 这一块的子命令都移植了。`Tool` 里按工具分派、和用量 / 套餐有关的几个方法（who、plan、plan_tier、outdated_login_plan、
 //! usage_query、usage_caches）也在这里；Codex 那一半（app-server、登录身份）在 codex.rs。
 
-use super::agy::{agy_cell, agy_table_lines, agy_usage_query, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups};
+use super::agy::{agy_cell, agy_table_lines, agy_week, agy_usage_query, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups};
 use super::codex::{
     agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query, json_loads_bytes, temp_file, Got, Piped,
 };
@@ -1397,7 +1397,15 @@ pub fn usage_entry(r: &Row, now: f64) -> R<Dict> {
     };
     a.set("model_scoped", scoped);
     a.set("extra_usage", rl.dict("extra_usage"));
-    a.set("use_first", use_first(rl, now, &r.why)?);
+    // agy 没有 seven_day：各组的本周额度里用得最少的那个（agy.rs 的 agy_week）
+    let week_rl;
+    let first_rl = if t().kind == Kind::Agy {
+        week_rl = agy_week(rl, now).map(|w| dict! { "seven_day" => w }).unwrap_or_default();
+        &week_rl
+    } else {
+        rl
+    };
+    a.set("use_first", use_first(first_rl, now, &r.why)?);
     match t().kind {
         // Claude Code 登录时记的套餐和账号现在的对不上（重新登录才会更新）：记的那个的叫法；对得上、不知道是 null
         Kind::Claude => {

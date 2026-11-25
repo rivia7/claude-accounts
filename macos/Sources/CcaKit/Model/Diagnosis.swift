@@ -82,8 +82,10 @@ enum Diagnosis: Equatable, Sendable {
     }
 
     /// 5 小时的额度快用完了（≥90%，不看数据新旧：没到重置时间不会降下来）：这时候不建议先用它。
+    /// Antigravity 看各组 5 小时额度里用得最少的那个（`UsageEntry.pressureWindows`，和判断用完一样）
     static func fiveHourPressed(_ u: UsageEntry?, now: Double) -> Bool {
-        guard let w = u?.fiveHour, let p = w.utilization, !w.isReset(now: now) else { return false }
+        guard let u, let w = u.pressureWindows(now: now).first(where: { $0.slot == .fiveHour })?.window,
+              let p = w.utilization, !w.isReset(now: now) else { return false }
         return UsageLevel(percent: p) == .critical
     }
 
