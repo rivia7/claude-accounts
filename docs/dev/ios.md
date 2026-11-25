@@ -10,7 +10,7 @@
 |---|---|---|
 | 1 | 服务器认手机不再要网页端（`guest`、`--no-guests`）；二维码改成给 App 的链接（带配对码）；协议核心 `ios/CcaRemoteKit`；测试用的手机 `ios/tools/ccaguest`；`tests/ios_kit.rs` | 做完了，还没提交、没发布 |
 | 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机还没试，见下面「App」 |
-| 3 | TestFlight、App Store 审核（隐私清单、出口合规：只用系统的加密） | 没开始 |
+| 3 | TestFlight（`ios/testflight.sh`，见下面「TestFlight」）、App Store 审核（隐私清单、出口合规） | 上传脚本做好了；第一次上传 2026-11-25（1.0，构建号 20261125.110017，在一台登录着付费开发者账号的测试 Mac 上）；App Store 审核没开始 |
 | 4 | 去掉网页端，服务器重新部署（每台都先问） | 等 App 上架 |
 
 定下来的（别重新讨论）：
@@ -66,8 +66,27 @@
 - `PrivacyInfo.xcprivacy`：不追踪、不收集；用到的要说明原因的接口只有 UserDefaults（CA92.1）
 
 bundle id 是 `com.cca.remote`（2026-11-23 用户定的；SwiftTerm 那个目标是 `com.cca.remote.swiftterm`）。
-还没定的（上 App Store 前要用户定）：开发者团队、版本号跟不跟 cca 走、出口合规怎么报
-（HTTPS 之外还有自己的端到端加密：HMAC-SHA256 做的流密码）。
+TestFlight 先用用户自己的付费个人团队（2026-11-25），版本号先和 cca 分开走（见「TestFlight」）。
+还没定的（要用户定）：出口合规怎么报（HTTPS 之外还有自己的端到端加密：HMAC-SHA256 做的流密码）；上 App Store 时用哪个团队。
+
+## TestFlight
+
+`bash ios/testflight.sh [--team 团队ID] [--upload]`：先跑 `test.sh --build` 的检查，再归档（Release、真机、自动签名、`-allowProvisioningUpdates`），
+导出成 .ipa 查签名（Apple Distribution 签的、App Store 的描述文件不带设备列表、`get-task-allow` 是 false）；`--upload` 时查过以后再导出一次、
+直接传到 App Store Connect（`ExportOptions.plist` 的 `destination` 是 `upload`）。东西都在 `ios/build/testflight/`（日志：`archive.log`、`export.log`、`upload.log`）。
+- 要 Xcode 里登录着付费的开发者账号：免费的个人团队传不了 TestFlight。团队没写时用 Xcode 里的那个付费团队（只有一个时；照
+  `defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier` 取，每个团队的键按字母排，`isFreeProvisioningTeam` 在 `teamID` 前面）。
+  团队 ID 不写进工程：签名是谁的团队，由在哪台 Mac 上运行定
+- 版本号是工程里的 `MARKETING_VERSION`（现在 1.0）；构建号是运行时的 UTC 时间 `年月日.时分秒`（时分秒去掉开头的 0，每一段都是整数），
+  每次上传都比上次大（同一个版本号下 App Store Connect 不收重复的构建号）
+- 签名都由 Xcode 管：归档用开发证书和通配的描述文件（`iOS Team Provisioning Profile: *`），导出时 Xcode 从云端拿分发证书、建
+  `iOS Team Store Provisioning Profile: com.cca.remote`（第一次导出时顺带把套装 ID 注册到这个团队）
+- 经 SSH 在别的 Mac 上运行：先 `security unlock-keychain` 解开登录钥匙串，不然 Xcode 读不了账号、签名报 `errSecInternalComponent`
+- 上传前 App Store Connect 里要先有这个 App 的记录（只能在网页上建，API 建不了）：平台 iOS、套装 ID `com.cca.remote`、名称要在整个 App Store 里唯一。
+  传上去处理完（十几分钟到半小时），每个构建要先回答出口合规才能给测试员装；内部测试（App Store Connect 的成员，最多 100 人）不用审核，
+  外部测试的第一个构建要过 Beta 审核（审核员用演示模式）。构建 90 天后过期
+- 实测（2026-11-25，测试 Mac 上的 Xcode 27.2）：检查、归档、导出、查签名一共两分半，.ipa 约 1.7 MB；`--upload` 再多十几秒，
+  第一次上传（1.0，20261125.110017）上传时没有警告，日志最后是 `Upload succeeded`、`** EXPORT SUCCEEDED **`
 
 ## 测试
 

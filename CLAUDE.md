@@ -11,6 +11,7 @@
 - `bash tests/linux.sh [--docker [镜像…]]` — Linux 上的测试，要联网；见 tests/CLAUDE.md
 - `bash macos/build.sh`、`bash macos/test.sh` — 编界面 App、跑 App 的契约测试，只要苹果的命令行工具、不用 Xcode；见 macos/CLAUDE.md
 - `bash ios/test.sh [--build]` — iOS 上的 cca App（`ios/`）：编（模拟器、真机）、查 SwiftTerm 去掉了图形协议、模拟器里截图；要 Xcode 和 iOS 模拟器的运行时。见 docs/dev/ios.md
+- `bash ios/testflight.sh [--upload]` — iOS App 传到 TestFlight：检查、归档、签名、导出（`--upload` 才上传）；要 Xcode 里登录着付费的开发者账号。见 docs/dev/ios.md「TestFlight」
 - `./release.sh "更新说明"` — 发布，约 25 分钟（大半是回归，另有四种机器的辅助程序各编一遍），同样放到后台跑（要装 Rust 和四个目标：先编四种机器的辅助程序，签名前接到 `cca` 后面）；见下面「发布」和 docs/dev/release.md
 
 ## 发布
