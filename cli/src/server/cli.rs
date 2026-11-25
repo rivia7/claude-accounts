@@ -70,7 +70,7 @@ enum Kind {
 }
 
 /// 认得的参数：名字、要什么值、说明（Py:2141-2176，先后也照它）
-const OPTS: [(&str, Kind, &str); 26] = [
+const OPTS: [(&str, Kind, &str); 27] = [
     ("--help", Kind::Help, "说明这些参数，然后退出"),
     (
         "--listen",
@@ -102,6 +102,12 @@ const OPTS: [(&str, Kind, &str); 26] = [
     ("--relay-listen", Kind::Text, "远程会话的中转：数据端口监听的地址:端口（不给就不开中转）"),
     ("--relay-port", Kind::Int, "客户端连数据端口用的端口（容器里外端口不一样时给；默认就是监听的那个）"),
     ("--relay-port-file", Kind::Text, "数据端口实际监听的端口写到这里（测试用）"),
+    (
+        "--no-guests",
+        Kind::Flag,
+        "不认访客（手机：iOS 上的 cca App、网页端）：设备开不了给手机的配对，已经配了对的手机接入不了（记录留着）。也可以用环境变量 \
+         CCA_GUESTS=0",
+    ),
     ("--remote", Kind::Text, "配对的记录（默认在状态文件旁边的 remote.json）"),
     (
         "--web-url",
@@ -320,6 +326,8 @@ struct RelayPlan {
     port_file: Option<String>,
     /// 配对的记录
     remote: String,
+    /// 认不认访客（--no-guests、CCA_GUESTS=0 关掉）
+    guests: bool,
 }
 
 /// 网页端另开的监听（给了 --web-listen）
@@ -453,6 +461,7 @@ fn plan(g: &Given, probe: &Probe) -> Result<Plan, String> {
                 port,
                 port_file: pick("--relay-port-file", None),
                 remote: pick("--remote", None).unwrap_or_else(|| path::join(&dir, "remote.json")),
+                guests: !(g.flag("--no-guests") || env("CCA_GUESTS").as_deref() == Some("0")),
             })
         }
     };
@@ -589,10 +598,11 @@ fn run(p: &Plan) -> R<()> {
     if let Some(r) = &p.relay {
         let (l, bound) = bind_or_die("数据端口", &r.listen)?;
         l.set_nonblocking(true).map_err(fatal)?;
-        // 给了网页端的地址才让设备开“给网页端的配对”、才有访客
+        // 网页端的地址：旧版 cca 开“给网页端的配对”要它
         let web_url = p.web.as_ref().map(|w| w.url.clone());
         let advertised = r.port.filter(|port| *port != 0).unwrap_or(bound.port());
         let mut rem = Remote::open(Path::new(&r.remote), advertised, web_url, Limits::DEFAULT);
+        rem.guests_on = r.guests;
         // 已经不在名单里的设备的配对不要了（根公钥换了、上次停着的时候名单改过）
         rem.keep_only(&store.fps(), time::time()).map_err(fatal)?;
         relay_said = Some((bound.port(), rem.edges()));
@@ -927,6 +937,7 @@ mod tests {
             port: Some(18446),
             port_file: Some("rport".into()),
             remote: "./remote.json".into(),
+            guests: true,
         };
         assert_eq!(p.relay, Some(relay));
         let p = planned(
@@ -942,8 +953,16 @@ mod tests {
         );
         assert_eq!(
             p.unwrap().relay.unwrap(),
-            RelayPlan { listen: ("0.0.0.0".into(), 1), port: None, port_file: None, remote: "/x/r.json".into() }
+            RelayPlan { listen: ("0.0.0.0".into(), 1), port: None, port_file: None, remote: "/x/r.json".into(), guests: true }
         );
+        // 不认访客：--no-guests 或者 CCA_GUESTS=0（别的值照认）
+        let guests = |args: &[&str], env: &[(&str, &str)]| {
+            let base = ["--behind-proxy", "--state", "s", "--relay-listen", ":1", "--team-root", ROOT];
+            planned(&[&base[..], args].concat(), env, false).unwrap().relay.unwrap().guests
+        };
+        assert!(!guests(&["--no-guests"], &[]));
+        assert!(!guests(&[], &[("CCA_GUESTS", "0")]));
+        assert!(guests(&[], &[("CCA_GUESTS", "1")]));
 
         // 根公钥只写后面那一段（安装脚本、托管平台的环境变量里这样写：没有空格）
         let bare = ROOT.split(' ').nth(1).unwrap();

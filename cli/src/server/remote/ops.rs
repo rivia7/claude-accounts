@@ -158,14 +158,24 @@ impl Remote {
         if self.slots.values().filter(|x| x.owner == fp).count() >= self.lim.pair_slots {
             return fail(429, "rate");
         }
-        // 这次配对开给网页端：输入配对码的可以是不在名单里的（手机上的那一页）
+        // 这次配对开给手机：输入配对码的可以是不在名单里的（iOS 上的 cca App 带 guest；旧版 cca 开给网页端，带 web）
         let web = matches!(j.get("web"), Some(V::Bool(true)));
+        let asked = matches!(j.get("guest"), Some(V::Bool(true)));
+        let guest = web || asked;
+        let web_url = self.web().filter(|_| self.guests_on).map(str::to_string);
+        if web && web_url.is_none() {
+            return fail(404, "no_web");
+        }
+        if guest && !self.guests_on {
+            return fail(404, "no_guest");
+        }
         let reply = crate::dict! { "v" => API, "ok" => true, "ttl" => PAIR_TTL };
-        if web {
-            match self.web() {
-                Some(url) => reply.set("web", url),
-                None => return fail(404, "no_web"),
-            }
+        // 带了 guest 的才回 guest（旧版 cca 只带 web：回的和以前一样）
+        if asked {
+            reply.set("guest", true);
+        }
+        if let (true, Some(url)) = (web, web_url) {
+            reply.set("web", url);
         }
         self.serial += 1;
         let slot = Slot {
@@ -176,18 +186,18 @@ impl Remote {
             commit: HashMap::new(),
             done: false,
             exp: now + PAIR_TTL as f64,
-            web,
+            guest,
             gkey: None,
         };
         self.slots.insert(rid.to_string(), slot);
         (200, V::Dict(reply))
     }
 
-    /// pair_open 以外的几个配对的 op 开头都要过的（Py:1113-1120）：有没有这次配对；访客只进得了开给网页端的；头一个放密文进来的
+    /// pair_open 以外的几个配对的 op 开头都要过的（Py:1113-1120）：有没有这次配对；访客只进得了开给手机的；头一个放密文进来的
     /// 别的设备坐下（是访客的话记下它的公钥：配成了才留下）；不是这次配对两边之一的不行。过了是 None，不过是要回的内容
     fn pair_enter(&mut self, rid: &str, op: &str, fp: &str, gkey: Option<&str>) -> Option<Reply> {
         let Some(s) = self.slots.get_mut(rid) else { return Some(fail(404, "no_pairing")) };
-        if gkey.is_some() && !s.web {
+        if gkey.is_some() && !s.guest {
             return Some(fail(403, "denied"));
         }
         if fp != s.owner && s.joiner.is_none() && op == "pair_put" {

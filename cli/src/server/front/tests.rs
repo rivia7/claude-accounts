@@ -484,7 +484,7 @@ fn a_browser_attaches_through_the_websocket() {
     let page = text(&talk(addr, b"GET / HTTP/1.1\r\nHost: relay.example.com:18446\r\n\r\n", false));
     assert!(page.starts_with("HTTP/1.0 200 OK\r\n") && page.ends_with("<title>cca</title>\n"), "{page}");
     let up = health(addr);
-    assert!(up.contains(&format!(r#""web":"{ORIGIN}/""#)) && up.contains(r#""relay":{"port":18444}"#), "{up}");
+    assert!(up.contains(&format!(r#""web":"{ORIGIN}/""#)) && up.contains(r#""relay":{"port":18444,"guests":true}"#), "{up}");
 
     let pid = net.pair(1, 2, 1);
     let sid = hex(50);

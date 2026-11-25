@@ -216,8 +216,8 @@ fn entry(
 /// `remote-pair-show [--web] [--hub 服务器]`：出一个配对码、等另一台机器输入。在哪台服务器上配见 `need_server`。
 /// stdout：先是 `code 配对码`（马上写出去：调用方——bash——
 /// 把它显示给用户，终端里打印、界面 App 里是一页），配好以后 `peer 对方的名字`。
-/// --web：这次配对开给手机上的网页端（输入配对码的可以是不在设备清单里的设备）；`code` 那一行后面紧跟一行 `web 网页端的地址`
-/// （一起写出去：手机上打开它、在那一页里输入配对码）
+/// --web：这次配对开给手机（iOS 上的 cca App；输入配对码的可以是不在设备清单里的设备）；`code` 那一行后面紧跟一行
+/// `link cca-remote://pair?…`（一起写出去：画成二维码，App 扫了就配对，格式见 `app_link`）
 pub fn cmd_remote_pair_show(args: &[String]) -> R<()> {
     let (hub, rest) = hub_arg(args)?;
     let web = match rest.as_slice() {
@@ -230,21 +230,31 @@ pub fn cmd_remote_pair_show(args: &[String]) -> R<()> {
     let k = crypto::pair_keys(&code);
     let open = dict! { "rid" => k.rid.as_str() };
     if web {
-        open.set("web", true);
+        open.set("guest", true);
     }
     let opened = ask(&srv, "pair_open", &open, 10)?;
-    // 旧版的服务器不认 web 这一项、照普通的配对开了：手机输入配对码会被拒，所以这里就停下
-    let page = opened.str("web").map(|u| u.to_string()).filter(|u| web_url_ok(u));
-    if web && page.is_none() {
-        let _ = srv.post("pair_close", &dict! { "rid" => k.rid.as_str() }, 5);
-        return die(srv.no_web());
-    }
+    // 旧版的服务器不认 guest 这一项、照普通的配对开了：手机输入配对码会被拒，所以这里就停下
+    let link = if web {
+        match (opened.at("guest").as_bool(), app_link(&srv, &crypto::code_text(&code))) {
+            (Some(true), Some(link)) => Some(link),
+            (Some(true), None) => {
+                let _ = srv.post("pair_close", &dict! { "rid" => k.rid.as_str() }, 5);
+                return die(format!("{}的地址、证书指纹做不成给手机扫的二维码", relay::label(srv.kind)));
+            }
+            _ => {
+                let _ = srv.post("pair_close", &dict! { "rid" => k.rid.as_str() }, 5);
+                return die(srv.no_guest());
+            }
+        }
+    } else {
+        None
+    };
     let na = urandom(32);
     let m = crypto::pair_msg(&k.keys, &k.rid, "a", &srv.fp, &na, &peers::machine_name())?;
     ask(&srv, "pair_put", &dict! { "rid" => k.rid.as_str(), "m" => m }, 10)?;
     crate::out!("code {}", crypto::code_text(&code));
-    if let Some(page) = &page {
-        crate::out!("web {page}");
+    if let Some(link) = &link {
+        crate::out!("link {link}");
     }
     crate::py::io::flush_out();
     // 等的时候被叫停（Ctrl-C、调用方不等了：界面 App 里点了取消）要能收场，所以这几个信号不直接把进程带走
@@ -327,7 +337,7 @@ pub fn cmd_remote_pair_join(args: &[String]) -> R<()> {
 }
 
 fn row(p: &Peer, note: &str) -> String {
-    let kind = if p.web { "（手机上的网页端）" } else { "" };
+    let kind = if p.web { "（手机）" } else { "" };
     // 记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）
     let via = format!("  经{}", relay::label(p.hub));
     format!(
@@ -366,7 +376,49 @@ pub fn cmd_remote_hubs(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 服务器给的网页端地址：要拿去显示、做成二维码，所以只认 `https://主机[:端口]/` 这一种样子（本机试的时候是
+/// 给手机扫的二维码（iOS 上的 cca App 认它）：
+/// `cca-remote://pair?v=1&u=服务器的地址&p=证书公钥的指纹（0～4 个）&c=配对码&n=这台机器的名字[&t=Team 的名字]`，
+/// 每一项都百分号转义过。配对码本来就显示在同一页上：扫二维码和照着输入是一回事（服务器见不到它：只在手机和这台机器之间）。
+/// 没有 p 时（托管平台：证书是证书机构签的）App 照系统的证书机构验。地址、指纹不像样（要画进二维码）时是 None
+fn app_link(srv: &Server, code: &str) -> Option<String> {
+    let cfg = srv.cfg();
+    let url = cfg.at("url").py_str();
+    let url = url.trim_end_matches('/');
+    if !web_url_ok(&format!("{url}/")) || url.starts_with("http://") {
+        return None;
+    }
+    let pins: Vec<String> = cfg.list("pins").map(|p| p.items().iter().map(|x| x.py_str()).collect()).unwrap_or_default();
+    if pins.len() > 4 || !pins.iter().all(|p| pin_ok(p)) {
+        return None;
+    }
+    let mut q = format!("v=1&u={}", pct(url));
+    for p in &pins {
+        q += &format!("&p={}", pct(p));
+    }
+    q += &format!("&c={}&n={}", code.replace('-', ""), pct(&clean(&peers::machine_name(), 48)));
+    // Team 的名字（App 里给这台电脑标上是哪个 Team 的）
+    q += &format!("&t={}", pct(&clean(&relay::team_name(srv.kind), 64)));
+    Some(format!("cca-remote://pair?{q}"))
+}
+
+/// curl 的 `--pinnedpubkey` 那种写法：`sha256//` 加 44 个字符的 base64（32 个字节）
+fn pin_ok(p: &str) -> bool {
+    p.strip_prefix("sha256//").is_some_and(|b| {
+        b.len() == 44 && b.ends_with('=') && b[..43].bytes().all(|c| c.is_ascii_alphanumeric() || c == b'+' || c == b'/')
+    })
+}
+
+/// 网址里的一项：字母、数字和 `-._~` 原样，别的（UTF-8 的每个字节）写成 %XX
+fn pct(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// 服务器的地址：要画进二维码，所以只认 `https://主机[:端口]/` 这一种样子（本机试的时候是
 /// `http://localhost[:端口]/`、`http://127.0.0.1[:端口]/`——主机要整个相等，`localhost.别的域名` 不算）
 fn web_url_ok(u: &str) -> bool {
     let (local, rest) = match (u.strip_prefix("https://"), u.strip_prefix("http://")) {
@@ -492,6 +544,23 @@ pub fn cmd_remote_forget(args: &[String]) -> R<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_parts() {
+        assert_eq!(pct("https://192.0.2.10:18443"), "https%3A%2F%2F192.0.2.10%3A18443");
+        assert_eq!(pct("我的 Mac"), "%E6%88%91%E7%9A%84%20Mac");
+        assert_eq!(pct("a-b._~"), "a-b._~");
+        assert!(pin_ok("sha256//47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="));
+        for bad in [
+            "",
+            "sha256//",
+            "sha256//47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU",
+            "sha1//47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+            "sha256//47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSu&U=",
+        ] {
+            assert!(!pin_ok(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn web_urls() {

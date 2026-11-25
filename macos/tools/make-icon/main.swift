@@ -13,6 +13,8 @@ import UniformTypeIdentifiers
 // --flat：给远程会话的网页端（手机主屏幕上的图标，server/web/icon-*.png）：整张铺满、不裁圆角、不描边——圆角由手机的系统自己裁，
 // 透明的角在主屏幕上会变成黑的
 let flat = CommandLine.arguments.contains("--flat")
+// --opaque（和 --flat 一起）：iOS App 的图标（ios/App/Assets.xcassets）：不带透明通道（App Store 不收带透明通道的图标）
+let opaque = flat && CommandLine.arguments.contains("--opaque")
 let S: CGFloat = 1024
 let inset: CGFloat = flat ? 0 : 100
 let body = CGRect(x: inset, y: inset, width: S - 2 * inset, height: S - 2 * inset)
@@ -20,7 +22,7 @@ let radius: CGFloat = 185.4
 
 let space = CGColorSpace(name: CGColorSpace.sRGB)!
 guard let ctx = CGContext(data: nil, width: Int(S), height: Int(S), bitsPerComponent: 8, bytesPerRow: 0, space: space,
-                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                          bitmapInfo: (opaque ? CGImageAlphaInfo.noneSkipLast : CGImageAlphaInfo.premultipliedLast).rawValue) else {
     fatalError("no context")
 }
 ctx.setAllowsAntialiasing(true)

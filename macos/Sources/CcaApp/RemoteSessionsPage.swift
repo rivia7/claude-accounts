@@ -294,7 +294,7 @@ private struct RemoteSessionList: View {
                 if model.remoteWebAvailable {
                     PairAction(title: "和手机配对…", systemImage: "iphone", hubs: doc?.relayHubs ?? []) { model.pairRemotePhone(hub: $0) }
                         .disabled(!usable)
-                        .help(usable ? "在手机的浏览器里接入这台 Mac 上的会话：这里显示二维码和配对码，手机扫码打开网页端、输入配对码（手机上不用装东西）"
+                        .help(usable ? "在 iPhone 上接入这台 Mac 上的会话：这里显示二维码，用 iPhone 上的 cca App 扫一下就配好"
                               : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
                 }
             }

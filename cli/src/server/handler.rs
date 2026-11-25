@@ -175,8 +175,11 @@ fn content_length(value: &str) -> Length {
 fn get(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f64) -> Outcome {
     let (path, _, query) = text::partition(&req.target, "?");
     if path == "/v1/health" {
-        let relay_port = ctx.remote.as_ref().map(|sh| lock(&sh.m).port());
-        let health = lock(&ctx.store).health(ctx.sig_ok, relay_port);
+        let relay = ctx.remote.as_ref().map(|sh| {
+            let r = lock(&sh.m);
+            (r.port(), r.guests_on)
+        });
+        let health = lock(&ctx.store).health(ctx.sig_ok, relay);
         if let (Some(web), Some(d)) = (&ctx.web, health.as_dict()) {
             d.set("web", web.url.as_str());
         }

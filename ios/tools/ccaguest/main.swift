@@ -1,0 +1,142 @@
+// 测试用的手机那一头（macOS 上的命令行程序，和 App 编进同一份 CcaRemoteKit）：tests/ios_kit.rs 拿它和真的服务器、真的 cca 对着测。
+// 用法：ccaguest --store 目录 --name 名字 <命令>
+//   pair <链接>             配对；stdout：peer 配对编号 名字，没成是 fail 原因（退出码 1）
+//   list                    一行一个 JSON：配对过的机器（没有 sid）、它上面的会话（有 sid）
+//   attach 配对编号 会话编号 [--view]   接入：stdin 是敲的键（读到头就断开），stdout 是终端的字节；
+//                           stderr：state open|retrying、exit 退出码、closed 原因。detached、ended 退出码 0，别的 1
+//   unpair 配对编号          取消配对；stdout：unpaired（服务器没问到也删本地的：told-no）
+// 密钥存在目录里的文件里（只给测试用；App 里存钥匙串）
+import Foundation
+
+final class DirStore: RemoteStore {
+    let dir: URL
+
+    init(_ dir: URL) {
+        self.dir = dir
+    }
+
+    private func file(_ key: String) -> URL {
+        dir.appendingPathComponent("secret-" + sha256(Bytes(utf8: key)).hex.prefix(24))
+    }
+
+    func secret(_ key: String) -> Bytes? {
+        (try? Data(contentsOf: file(key))).map { Bytes($0) }
+    }
+
+    func setSecret(_ key: String, _ value: Bytes?) throws {
+        if let value {
+            try Data(value).write(to: file(key), options: .atomic)
+        } else {
+            try? FileManager.default.removeItem(at: file(key))
+        }
+    }
+
+    func peersData() -> Data? {
+        try? Data(contentsOf: dir.appendingPathComponent("peers.json"))
+    }
+
+    func setPeersData(_ data: Data) throws {
+        try data.write(to: dir.appendingPathComponent("peers.json"), options: .atomic)
+    }
+}
+
+func say(_ s: String) {
+    FileHandle.standardError.write(Data((s + "\n").utf8))
+}
+
+var args = Array(CommandLine.arguments.dropFirst())
+var store = "", name = "iPhone"
+while args.count >= 2, args[0].hasPrefix("--") {
+    if args[0] == "--store" { store = args[1] } else if args[0] == "--name" { name = args[1] }
+    args.removeFirst(2)
+}
+guard !store.isEmpty, let cmd = args.first else {
+    say("用法：ccaguest --store 目录 [--name 名字] pair|list|attach|unpair …")
+    exit(64)
+}
+let client = RemoteClient(store: DirStore(URL(fileURLWithPath: store)), deviceName: name)
+
+func finish(_ code: Int32) -> Never {
+    fflush(stdout)
+    exit(code)
+}
+
+switch cmd {
+case "pair":
+    guard args.count == 2, let inv = PairInvite(args[1]) else {
+        print("fail link")
+        finish(1)
+    }
+    Task {
+        do {
+            let peer = try await client.pair(inv)
+            print("peer \(peer.pid) \(peer.name)")
+            finish(0)
+        } catch {
+            print("fail \((error as? RemoteFailure)?.code ?? "error")")
+            finish(1)
+        }
+    }
+case "list":
+    Task {
+        for row in await client.list() {
+            let base: [String: Any] = ["pid": row.peer.pid, "peer": row.peer.name, "gone": row.gone, "failure": row.failure?.code ?? NSNull()]
+            print(String(decoding: try! JSONSerialization.data(withJSONObject: base, options: [.sortedKeys]), as: UTF8.self))
+            for s in row.sessions {
+                let j = base.merging(["sid": s.sid, "machine": s.info.machine, "tool": s.info.tool, "name": s.info.name, "cwd": s.info.cwd,
+                                      "online": s.online, "view": s.info.viewOnly, "viewers": s.viewers]) { $1 }
+                print(String(decoding: try! JSONSerialization.data(withJSONObject: j, options: [.sortedKeys]), as: UTF8.self))
+            }
+        }
+        finish(0)
+    }
+case "unpair":
+    guard args.count == 2, let peer = client.peers().first(where: { $0.pid == args[1] }) else {
+        print("fail no_peer")
+        finish(1)
+    }
+    Task {
+        print(await client.unpair(peer) ? "unpaired" : "told-no")
+        finish(0)
+    }
+case "attach":
+    guard args.count >= 3, let peer = client.peers().first(where: { $0.pid == args[1] }) else {
+        print("fail no_peer")
+        finish(1)
+    }
+    let att = Attachment(client: client, peer: peer, sid: args[2], cols: 80, rows: 24, readOnly: args.contains("--view"))
+    att.onOutput = { b in
+        FileHandle.standardOutput.write(Data(b))
+    }
+    att.onExit = { say("exit \($0)") }
+    var reading = false
+    att.onState = { st in
+        switch st {
+        case .open:
+            say("state open")
+            guard !reading else { return }
+            reading = true
+            // 敲的键：stdin 读到什么送什么，读到头就断开
+            Thread.detachNewThread {
+                while true {
+                    let d = FileHandle.standardInput.availableData
+                    if d.isEmpty { break }
+                    DispatchQueue.main.async { _ = att.input(Bytes(d)) }
+                }
+                DispatchQueue.main.async { att.detach() }
+            }
+        case .connecting:
+            say("state connecting")
+        case .retrying:
+            say("state retrying")
+        case .closed(let why):
+            say("closed \(why)")
+            finish(why == "detached" || why == "ended" ? 0 : 1)
+        }
+    }
+    att.start()
+default:
+    say("不认识的命令 \(cmd)")
+    exit(64)
+}
+dispatchMain()

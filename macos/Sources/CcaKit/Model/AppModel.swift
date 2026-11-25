@@ -1971,7 +1971,7 @@ final class AppModel {
     /// cca 有 `remote pair --web`（hello 的 `remote_web`）：才给「和手机配对…」
     var remoteWebAvailable: Bool { remoteAvailable && hello?.remoteWeb == 1 }
 
-    /// 和手机配对：显示网页端的地址（二维码）和配对码，手机在浏览器里输入；之后手机能接入这台 Mac 的会话。提问会话
+    /// 和手机配对：显示二维码（cca-remote:// 链接，带配对码）和配对码，iPhone 上的 cca App 扫了就配好；之后手机能接入这台 Mac 的会话。提问会话
     func pairRemotePhone(hub: RemoteHub? = nil) {
         guard phase == .ready, remoteWebAvailable else { return }
         run(Handoff.remotePairWeb.on(hub))

@@ -8,7 +8,7 @@ cca App「远程会话」里的终端用它显示（`macos/Sources/CcaApp/Termin
 - 许可证：MIT，见 [LICENSE](LICENSE)（上游的原文，连同各条版权声明）。随 App 放在 `Contents/Resources/Licenses/SwiftTerm.txt`。
 - `Sources/SwiftTerm/` 里的文件和上游那个标签里的**逐字节一样**，没有改动；每个文件的 SHA-256 在 `SHA256SUMS`
   （`shasum -a 256 -c SHA256SUMS` 核对）。要改它的行为，在 `TerminalSurface.swift` 里改（子类、回调），不改这里的文件。
-- 没带的：`iOS/`（iOS、visionOS 的视图）、`Documentation.docc/`、自己起子进程的那几份（`LocalProcess.swift`、`Pty.swift`、
+- 没带的：`iOS/`（iOS、visionOS 的视图：iOS App 用的那几个在 `ios/Vendor/SwiftTerm-iOS`）、`Documentation.docc/`、自己起子进程的那几份（`LocalProcess.swift`、`Pty.swift`、
   `HeadlessTerminal.swift`、`Mac/MacLocalTerminalView.swift`：App 自己开伪终端，不用它们）、`Apple/Metal/Shaders.metal`
   （Metal 渲染默认不开，App 也不开；`Apple/Metal/` 里的 Swift 文件要留着，`MacTerminalView.swift` 里引用它们的地方没有编译开关）。
 - `BuildInfo.swift` 是 cca 写的：上游用 SwiftPM 的构建插件生成这个类型，这里给一份固定的。
@@ -24,7 +24,8 @@ cca App「远程会话」里的终端用它显示（`macos/Sources/CcaApp/Termin
 - 编好以后跑 `macos/tools/swiftterm-check/main.swift`：喂几条 Kitty 图形的序列（各种入口），有回话就算没关掉，不让编过。
 - iTerm2 的 OSC 1337、sixel 的上报在 `TerminalSurface.swift` 里用它公开的接口关。
 
-换版本以后编译停在这两行上：去看上游把分派改成了什么样，照新的写法换（`build.sh` 里的 `ST_KITTY`、`ST_SIXEL`），**不要**为了编过把检查去掉。
+换哪两行写在 `macos/tools/swiftterm-parser.sh`（iOS App 编 SwiftTerm 时用同一个脚本，见 `ios/Vendor/SwiftTerm-iOS/README.md`）。
+换版本以后编译停在这两行上：去看上游把分派改成了什么样，照新的写法改那个脚本，**不要**为了编过把检查去掉。
 
 ## 怎么编
 
@@ -35,7 +36,8 @@ cca App「远程会话」里的终端用它显示（`macos/Sources/CcaApp/Termin
 
 ## 换版本
 
-1. 把上游那个标签里 `Sources/SwiftTerm/` 下要的文件原样取出来换掉这里的（上面“没带的”照旧不带），`LICENSE` 一起换。
+1. 把上游那个标签里 `Sources/SwiftTerm/` 下要的文件原样取出来换掉这里的（上面“没带的”照旧不带），`LICENSE` 一起换
+   （iOS App 带着的那一份 `ios/App/Resources/SwiftTerm.txt` 也换）。iOS 的视图在 `ios/Vendor/SwiftTerm-iOS`，同一个版本，一起换。
 2. 重新生成 `SHA256SUMS`，改 `BuildInfo.swift` 和这一份里的版本、提交。
 3. `bash macos/build.sh` 编一遍；API 变了的地方只会影响 `TerminalSurface.swift`。
 4. 它新加的、会让终端里的内容碰到这台 Mac 的功能（打开链接和文件、读文件、剪贴板、往磁盘写东西、通知、新的图形协议、新的 APC / DCS / OSC）

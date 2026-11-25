@@ -1473,7 +1473,7 @@ fn teams(t: &mut Ctx) {
     let p1s = p1.to_string();
     let r = fx.install(&b, &["--team-root", &root1, "--host", "127.0.0.1", "--port", &p1s]);
     assert!(r.out.contains(&format!("cca team attach Team https://127.0.0.1:{p1} {}", pin(&d1))), "打出管理员接上它的那一行");
-    assert_eq!(health(p1).get("relay"), Some(&obj! { "port" => p1 + 1 }));
+    assert_eq!(health(p1).get("relay"), Some(&obj! { "port" => p1 + 1, "guests" => true }));
     assert!(b.running(&svc1) && b.d.join("users").join(&svc1).exists() && !b.running("cca-hub"), "服务名、系统用户是这个 Team 的");
     assert_eq!(
         a.ok(&["team-attach", &tid1, &format!("https://127.0.0.1:{p1}"), &pin(&d1)]).split('\n').next(),
@@ -1502,7 +1502,7 @@ fn teams(t: &mut Ctx) {
     assert_eq!(sync_state(&a), "ok", "管理员照旧连得上");
     assert_eq!(
         (env_of(&b, &d1, "CCA_HUB_RELAY"), health(p1).get("relay").cloned()),
-        ((p1 + 1).to_string(), Some(obj! { "port" => p1 + 1 })),
+        ((p1 + 1).to_string(), Some(obj! { "port" => p1 + 1, "guests" => true })),
         "中转照上次选的"
     );
     // 不开中转、换一个数据端口：记在 .env 里；写错的不动
@@ -1521,7 +1521,10 @@ fn teams(t: &mut Ctx) {
     assert_eq!(env_of(&b, &d1, "CCA_HUB_RELAY"), "off");
     let rp = one_port();
     fx.install(&b, &["--dir", &dir1, "--relay-port", &rp.to_string()]);
-    assert_eq!((env_of(&b, &d1, "CCA_HUB_RELAY"), health(p1).get("relay").cloned()), (rp.to_string(), Some(obj! { "port" => rp })));
+    assert_eq!(
+        (env_of(&b, &d1, "CCA_HUB_RELAY"), health(p1).get("relay").cloned()),
+        (rp.to_string(), Some(obj! { "port" => rp, "guests" => true }))
+    );
     // 装着另一个 Team 的目录不碰
     let r = fx.try_install(&b, &["--team-root", &root2, "--dir", &dir1]);
     assert_ne!(r.code, 0);

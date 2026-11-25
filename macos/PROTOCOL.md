@@ -90,7 +90,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `remote`：有远程会话的 App 入口（「远程会话」一页，见 9：`cca remote list --json`、配对、`cca remote attach`）。现在是 1。没有这个字段（旧版 cca）
   或者版本不认识时 App 不显示这一页、不调这些命令（旧版 cca 会把 `remote` 当成启动账号的参数）。
 - `remote_end`：有 `cca remote end <会话的 id>`（结束这台 Mac 上的一个会话，9.2）。没有这个字段（3.5.2-beta.2 及更早）时 App 不给「结束…」。
-- `remote_web`：有 `cca remote pair --web`（和手机配对：手机不装 cca，在浏览器里打开中转服务器给的那一页接入，9.2；提问页里有
+- `remote_web`：有 `cca remote pair --web`（和手机配对：iPhone 上的 cca App 扫二维码接入；3.5.3 是手机浏览器里中转服务器给的那一页，9.2；提问页里有
   `kind` 是 `qr` 的字段，4.6）。没有这个字段（3.5.3-beta.1 及更早）时 App 不给「和手机配对…」。
 - `hub`：3.5.2 的 cca 有（自己的同步服务器 `cca hub …`，那时的 4.13）；3.5.3 起去掉了，不再给（自己的几台设备之间同步改用 Team）。
   那时的 App 看不到它就不显示「自己的同步服务器」、不调 `cca hub`；现在的 App 不读它。
@@ -959,7 +959,7 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
 | `multi` | 多选 | 选中项的 `value`，空格隔开 | `options`、`min`（至少选几个） |
 | `confirm` | 是 / 否两个按钮（一页只有它） | `y` / `n` | `detail`、`severity`；`default` 是回车时的答案 |
 | `code` | 只显示的一段文字（`value`），带“复制”。一行的短文字（配对码）App 放大居中，多行的小字、能滚动 | 不用回答（不写答案） | |
-| `qr` | 只显示的一个网址（`value`）：App 画成二维码（手机的相机扫了就打开），下面写着网址，带“复制”。只有和手机配对那一页（`remote.pair_web`）用，要 `hello.remote_web`：cca 只在 `remote pair --web` 里发它，旧版 App 不会调这条命令 | 不用回答（不写答案） | |
+| `qr` | 只显示的一个链接（`value`）：App 画成二维码（iPhone 上的 cca App 扫），下面写着链接，带“复制”。只有和手机配对那一页（`remote.pair_web`）用，要 `hello.remote_web`：cca 只在 `remote pair --web` 里发它，旧版 App 不会调这条命令 | 不用回答（不写答案） | |
 
 字段还可以带：`section`（分组的小标题，相邻的同一组放在一起）、`style`（`choice` 写 `menu` 时是一行里的弹出菜单，字段多的表单用；选中只有一个选项时只显示它）。页面还可以带 `submit`（提交按钮的说法，空的是“继续”）。这几个都是新加的，旧版 App 忽略它们照样能显示。
 
@@ -1016,7 +1016,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `mail.password` | `mail setup`（终端） | `secret` | 邮箱助手的终端流程：这个 Gmail 的应用专用密码（cca 登录一次核对过才存进钥匙串；不对时重问）。只经答案管道 |
 | `mail.forwarder` | `mail trust-forwarder` | `text` | 「信任转发中转」要信任的中转域名（像 relay.example.com）。问之前 / 之后都有不安全的警告（页面 `message` + 随后的 `consent.mail_trust_forwarder`，4.11）。只给 Claude 账号 |
 | `remote.pair` | `remote pair` | `code` | 显示配对码的那一页（字段 id 是 `code`，`value` 是配对码 `XXXX-XXXX-XXXX-XXXX`，10 分钟内有效、只能用一次）。**没有要回答的**：另一台机器输入了，cca 自己发 `result` 的 `remote_paired` 退出；过期、服务器那边没成是 `fail`。App 取消（关掉答案管道）时 cca 把后台的配对停掉、告诉服务器作废这个配对码。前面先问 `consent.remote_pair`（4.2） |
-| `remote.pair_web` | `remote pair --web` | `qr`、`code` | 和手机配对的那一页：字段 `url`（`qr`：手机上打开的网页端的地址，`https://主机[:端口]/`，是服务器配置里写的那个）、`code`（配对码，和 `remote.pair` 的一样）。**没有要回答的**，收场、取消和 `remote.pair` 一样。前面先问 `consent.remote_pair`（范围是 `web`） |
+| `remote.pair_web` | `remote pair --web` | `qr`、`code` | 和手机配对的那一页：字段 `url`（`qr`：给 iPhone 上的 cca App 的链接 `cca-remote://pair?v=1&u=服务器的地址&p=证书公钥的指纹…&c=配对码&n=机器名[&t=Team 的名字]`，格式见 docs/dev/ios.md「二维码里的链接」；3.5.3 的 cca 给的是网页端的地址 `https://主机[:端口]/`。App 只管画，不解析）、`code`（配对码，和 `remote.pair` 的一样）。**没有要回答的**，收场、取消和 `remote.pair` 一样。前面先问 `consent.remote_pair`（范围是 `web`） |
 | `remote.code` | `remote join` | `text` | 另一台机器上显示的配对码（16 个字母和数字，大小写、横线随意；空着是取消）。不对、过期、服务器那边没成都是 `fail`（配对码错了不重问：那一头试错几次就作废，要重新显示一个） |
 | `consent.<item>` | 流程里需要同意时 | `confirm` | 4.2 的同意，默认值和 `severity` 不变 |
 
@@ -1413,7 +1413,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   没有时是它自己报的机器名）；
   `incoming`：它能对**这台 Mac** 的会话做什么，`control` | `view` | `none`（接不进来；这台 Mac 照样可以接入它的会话，看它那边怎么设）；
   `shown`：配对码是这台 Mac 显示的（是的话配对时 `incoming` 默认 `control`，否则默认 `none`）；`paired_epoch`；
-  `web`：它是手机上的网页端（`remote pair --web` 配的；只是给人看的，它能做什么照旧看 `incoming`；旧版 cca 没有这个字段，当成 false）；
+  `web`：它是手机（`remote pair --web` 配的：3.7.0 起是 iPhone 上的 cca App，以前是网页端；只是给人看的，它能做什么照旧看 `incoming`；旧版 cca 没有这个字段，当成 false）；
   `team`：这个配对记在哪个 Team 的服务器上（Team 的编号；经它看得到的是这个 Team 的账号的会话）。3.6.0 起总有；3.6.0 以前的 cca 给的 null
   是维护者的那一台（3.6.0 的 cca 读配对表时去掉这样的配对），旧版 cca 没有这个字段：App 照样列出来，不标是哪个 Team 的；
   `state`：`ok` | `gone`（对方取消了配对，或者太久没用被服务器清掉了：App 标出来，让用户「取消配对」清掉这一头）| `unknown`（这次没问服务器、没问到）。
@@ -1427,7 +1427,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 | 命令 | 做什么 | 方式 |
 |---|---|---|
 | `cca remote pair` | 这台 Mac 显示一个配对码；另一台机器输入以后，那台机器可以接入这台 Mac 上的会话（`incoming` 默认 `control`） | 提问会话（4.6）：先 `consent.remote_pair`，再 `remote.pair`（只显示配对码的一页，没有要回答的，App 只给「取消」）；配好了 `result` 的 `remote_paired` |
-| `cca remote pair --web` | 和手机配对（要 `hello.remote_web`）：这台 Mac 显示网页端的地址和一个配对码；手机在浏览器里打开那一页、输入配对码以后，可以在手机上接入这台 Mac 上的会话（`incoming` 默认 `control`，`peers[].web` 是 true）。服务器没开网页端时 `fail`（`message` 说明要那个 Team 的管理员打开） | 提问会话：先 `consent.remote_pair`（范围 `web`），再 `remote.pair_web`（地址画成二维码、配对码，没有要回答的）；配好了 `result` 的 `remote_paired` |
+| `cca remote pair --web` | 和手机配对（要 `hello.remote_web`）：这台 Mac 显示一个二维码（里面有配对码）；iPhone 上的 cca App 扫了以后，可以在手机上接入这台 Mac 上的会话（`incoming` 默认 `control`，`peers[].web` 是 true）。服务器不认手机（3.7.0 以前的、`--no-guests`）时 `fail`（`message` 说明要那个 Team 的管理员更新服务器） | 提问会话：先 `consent.remote_pair`（范围 `web`），再 `remote.pair_web`（链接画成二维码、配对码，没有要回答的）；配好了 `result` 的 `remote_paired` |
 | `cca remote join` | 输入另一台机器显示的配对码；之后这台 Mac 可以接入那台机器上的会话（那台机器接不进这台 Mac，除非再 `allow`） | 提问会话：`remote.code`；配好了 `result` 的 `remote_paired` |
 | `cca remote pair [--web] --team <编号>` | 同上面两条，说清楚在哪台中转服务器上配对（3.6.0 以前还有在维护者的服务器上配的 `--maintainer`，App 不用）。不写时在这台设备的「家」上配（9.1 的 `relay.hubs`）；用得了不止一台时，同意的说明里多一句“这次配对记在哪台服务器上”（不写时还说怎么换一台）。3.5.3-beta.2 及更早的 cca 有好几台时不写就不出配对码（`fail` 的 `message` 列出有哪几台），所以 App 照旧先让用户选 | 同上 |
 | `cca remote on` / `off` | 开关 | 无交互命令；`result` 的 `remote_updated` |

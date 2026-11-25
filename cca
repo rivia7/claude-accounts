@@ -5275,13 +5275,13 @@ remote_prepare() {
 # 两台机器之间：一台 cca remote pair 显示配对码，另一台 cca remote join 输入；之后输入的那台能经服务器（配对时选的那个 Team 的，
 # relay.rs 的 session_hub、home_hub）接入显示的那台上的会话（两头之间端到端加密，服务器只转字节）。配对表、对方能做什么
 # （allow）、取消（unpair）都在辅助程序里
-remote_pair_spec() {   # remote_pair_spec 配对码 [网页端的地址]：提问会话里显示配对码的那一页（给 py prompt-emit）。只显示、不用回答：配好了 cca 自己收场，
-	                     # 不想配了 App 关掉答案管道（「取消」）。给了网页端的地址是和手机配对（题号 remote.pair_web）：多一个 kind 是 qr 的字段，
-	                     # App 把地址画成二维码，手机的相机扫了就打开那一页
+remote_pair_spec() {   # remote_pair_spec 配对码 [给手机的链接]：提问会话里显示配对码的那一页（给 py prompt-emit）。只显示、不用回答：配好了 cca 自己收场，
+	                     # 不想配了 App 关掉答案管道（「取消」）。给了链接是和手机配对（题号 remote.pair_web）：多一个 kind 是 qr 的字段，
+	                     # App 把链接（cca-remote://…，里面有服务器的地址、证书指纹和配对码）画成二维码，iPhone 上的 cca App 扫了就配对
 	if [ -n "${2:-}" ]; then
-		gui_kv "q=remote.pair_web" "title=和手机配对" "message=用手机的相机扫二维码打开网页端（iPhone 上先点分享、「添加到主屏幕」，从主屏幕打开），在那一页里输入配对码。10 分钟内有效，只能用一次。"
-		gui_kv field=url kind=qr "label=手机上打开" "hint=网页端是中转服务器给的那一页；之后要用，从主屏幕的图标打开就行" "value=$2"
-		gui_kv field=code kind=code "label=配对码" "hint=正在等手机输入，配好以后这里自动完成"
+		gui_kv "q=remote.pair_web" "title=和手机配对" "message=在 iPhone 上打开 cca App，点「扫码配对」扫这个二维码。10 分钟内有效，只能用一次。"
+		gui_kv field=url kind=qr "label=用 iPhone 上的 cca App 扫" "hint=二维码里有配对码，扫了就配好，不用再输入" "value=$2"
+		gui_kv field=code kind=code "label=配对码" "hint=正在等手机，配好以后这里自动完成"
 	else
 		gui_kv "q=remote.pair" "title=和另一台机器配对" "message=在另一台机器上输入这个配对码：cca App 的「远程会话」里点「输入配对码…」，或者在终端里运行 cca remote join。10 分钟内有效，只能用一次。"
 		gui_kv field=code kind=code "label=配对码" "hint=正在等另一台机器输入，配好以后这里自动完成"
@@ -5321,7 +5321,7 @@ remote_need_hub() {   # 配对要经 Team 的服务器中转（3.6.0 起没有�
 	die "${why:-远程会话经 Team 的服务器中转，这台机器现在一台都用不了}"
 }
 remote_pair_run() {   # remote_pair_run web|"" [--hub 服务器]：出一个配对码、等另一台机器输入；配好了把对方的名字放进 REMOTE_PEER，没配成把原因放进 REMOTE_ERR。
-	                    # web：这次配对开给手机上的网页端（辅助程序多给一行网页端的地址，一起显示出来）。后面的参数原样交给辅助程序。辅助程序在后台跑
+	                    # web：这次配对开给手机（iOS 上的 cca App；辅助程序多给一行 cca-remote:// 链接，App 里画成二维码）。后面的参数原样交给辅助程序。辅助程序在后台跑
 	                    # （直接起它、不经 py：要拿到它自己的进程号。它的 stdout 先是“code 配对码”、配好以后是“peer 名字”，接到临时目录里
 	                    # 只有自己能读的文件），这边先把配对码显示出来：终端里打印，提问会话里是一页（PROTOCOL 4.6 的 remote.pair）。
 	                    # 中途不做了（Ctrl-C、App 取消：读答案读到头）要把辅助程序停掉——不然它会在后台把配对做完
@@ -5338,9 +5338,9 @@ remote_pair_run() {   # remote_pair_run web|"" [--hub 服务器]：出一个配�
 		kill -0 "$pid" 2>/dev/null || break
 		sleep 0.1
 	done
-	if [ -n "$code" ] && [ -n "${1:-}" ]; then   # 网页端的地址是紧跟着配对码写出来的第二行（两行一起写的）
+	if [ -n "$code" ] && [ -n "${1:-}" ]; then   # 给手机的链接是紧跟着配对码写出来的第二行（两行一起写的）
 		{ IFS= read -r line; IFS= read -r line; } < "$dir/out" 2>/dev/null || true
-		case "$line" in "web "*) page=${line#web } ;; esac
+		case "$line" in "link cca-remote://"*) page=${line#link } ;; esac
 	fi
 	if [ -n "$code" ]; then
 		if [ -n "$PROMPT_GUI" ]; then
@@ -5349,10 +5349,10 @@ remote_pair_run() {   # remote_pair_run web|"" [--hub 服务器]：出一个配�
 			# gui_answer_wait 按等了多久分（整秒），1 秒一圈有可能看成读到头
 			while kill -0 "$pid" 2>/dev/null; do gui_answer_wait "$seq" none 2 || true; done
 		elif [ -n "$page" ]; then
-			say "手机上打开：${C_B}${page}${C_0}"
-			say "  iPhone 上先点 Safari 的分享按钮、「添加到主屏幕」，从主屏幕打开（主屏幕上的那一份有自己的数据，要在它里面配对）"
-			say "配对码：${C_B}${code}${C_0}"
-			say "  在那一页里输入它。10 分钟内有效，只能用一次。正在等手机输入…（Ctrl-C 取消）"
+			say "给手机的配对链接（里面有配对码 ${C_B}${code}${C_0}）："
+			printf '%s\n' "$page" >&2
+			say "  复制这一行，在 iPhone 上的 cca App 里点「粘贴配对链接」（同一个 Apple 账号的设备之间复制粘贴是通的）；"
+			say "  有 cca App（Mac）的话，在「远程会话」里点「和手机配对…」扫二维码更方便。10 分钟内有效，只能用一次。正在等手机…（Ctrl-C 取消）"
 		else
 			say "配对码：${C_B}${code}${C_0}"
 			say "  在另一台机器上输入它：运行 cca remote join，或者在 cca App 的「远程会话」里点「输入配对码…」"
@@ -5394,18 +5394,18 @@ cmd_remote() {
 				say "  配对过 ${n} 台机器（cca remote peers 看是哪些；连同它们上面的会话一起列：cca remote list）"
 			fi ;;
 		ls|list) shift; py remote-list "$@" ;;   # --json 是给界面 App 的（PROTOCOL 9.1）
-		pair)   # 这台机器显示配对码：输入它的那台机器之后能接入这台机器上的会话，所以先问。--web：输入配对码的是手机上的网页端
-			      # （手机没有 cca：在浏览器里打开中转服务器给的那一页；同意的范围是 web，和两台机器配对分开问）。
+		pair)   # 这台机器显示配对码：输入它的那台机器之后能接入这台机器上的会话，所以先问。--web：和手机配对
+			      # （手机没有 cca：iPhone 上的 cca App 扫二维码或者粘贴链接；同意的范围是 web，和两台机器配对分开问）。
 			      # --team 名字：在哪个 Team 的服务器上配对（不写是加入的第一个 Team 的）
 			shift
-			remote_hub_args "$@" || die "用法：cca remote pair [--web] [--team 名字]（--web：和手机配对，在手机的浏览器里接入；--team：在哪个 Team 的服务器上配对，对方看得到的是这个 Team 的账号的会话）"
+			remote_hub_args "$@" || die "用法：cca remote pair [--web] [--team 名字]（--web：和手机配对，在 iPhone 上的 cca App 里接入；--team：在哪个 Team 的服务器上配对，对方看得到的是这个 Team 的账号的会话）"
 			web=$REMOTE_WEB
 			need_tty
 			remote_need_hub
 			via=$(remote_hub_label)
 			[ -z "$via" ] || via="。这次配对记在${via}上：对方经它看得到的，是走这台服务器的会话（哪个 Team 的服务器，就是那个 Team 的账号的会话）$([ -n "$REMOTE_HUB" ] || printf '；要在别的 Team 的服务器上配对：--team 名字')"
 			if [ -n "$web" ]; then
-				out="在手机上输入配对码以后，那台手机可以在浏览器里看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）。手机上的那一页是中转服务器给的：终端的内容在手机和这台机器之间加密，服务器看不到，但管着服务器的人能换掉那一页的代码${via}"
+				out="iPhone 上的 cca App 扫了二维码（或者粘贴了链接）以后，那台手机可以看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）。终端的内容在手机和这台机器之间加密，中转服务器看不到${via}"
 				rows="和手机配对"
 			else
 				out="在另一台机器上输入配对码以后，那台机器可以看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）${via}"
@@ -8320,8 +8320,8 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
                              会话走这个 Team 自己的服务器中转，别的账号（自己的、第三方 API 的）走加入的第一个 Team 的。
                              配对记在哪台服务器上，经它看得到的就是走那台的会话：pair 默认在第一个 Team 的那台上配，别的
                              写 --team 名字。没加入 Team 的设备用不了
-  cca remote pair --web      和手机配对：手机上不装 cca，在浏览器里打开它给的地址（iPhone 上添加到主屏幕）、输入配对码，
-                             之后在手机上接入这台机器上的会话。要那台服务器开着网页端；每个 Team 的服务器各是各的一页
+  cca remote pair --web      和手机配对：iPhone 上的 cca App 扫 Mac 上 cca App 里的二维码（或者粘贴这里给的链接），
+                             之后在手机上接入这台机器上的会话。要那台服务器认手机（3.7.0 起的服务器都认）
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
   cca uninstall [--no-backup]
                              完全卸载：撤销 cca 做过的全部改动（账号退出登录、路由器和内置代理还原），删掉 cca 自己和它放在

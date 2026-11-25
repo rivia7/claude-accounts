@@ -2397,7 +2397,7 @@ fn co_admins(t: &mut Ctx) {
     let port = srv.port;
     let evil = fx.d.join("evil");
     let evil_pub = pki::keygen(&evil);
-    let (_, _, keys_c) = spec::invite_parts(&fsx::read_text(tc.join("secret")).trim().to_string()).expect("carol 的那串随机数");
+    let (_, _, keys_c) = spec::invite_parts(fsx::read_text(tc.join("secret")).trim()).expect("carol 的那串随机数");
     let forged = |signer: &Path, by: &str, seq: i64, name: &str| {
         let content = with(&doc(&carol, tid).1, "name", name);
         let ct = spec::team_doc_seal(&keys_c, tid, &dev_c, seq, &content);

@@ -78,7 +78,7 @@ fn the_python_remote_step_by_step() {
     let name_of = |fp: &str| names.str(fp).map(|s| s.to_string());
     let dir = TempDir::new().unwrap();
     let path = PathBuf::from(format!("{}/remote.json", dir.path));
-    let mut sh = Shared::new(Remote::open(&path, port, doc.str("web").map(|s| s.to_string()), lim));
+    let mut sh = Shared::new(old_remote(Remote::open(&path, port, doc.str("web").map(|s| s.to_string()), lim)));
     let mut tids: HashMap<String, String> = HashMap::new();
     let mut last: Option<String> = None;
     // 存一次就是换一个文件（写到临时文件再换过去）：编号变了就是存过
@@ -155,7 +155,7 @@ fn the_python_remote_step_by_step() {
                     last = Some(written.to_string());
                     last_ino = ino(&path);
                 }
-                sh = Shared::new(Remote::open(&path, port, s.str("web").map(|s| s.to_string()), lim));
+                sh = Shared::new(old_remote(Remote::open(&path, port, s.str("web").map(|s| s.to_string()), lim)));
             }
             "open" => {
                 // remote.json 的位置上放一个文件（或者一个目录），再启动：日志里说的那一句
@@ -169,7 +169,9 @@ fn the_python_remote_step_by_step() {
                 let shown = path.to_string_lossy().to_string();
                 let mut said = Vec::new();
                 let web = s.str("web").map(|s| s.to_string());
-                sh = Shared::new(Remote::open_saying(&path, port, web, lim, &mut |line| said.push(line.replace(&shown, "<path>"))));
+                sh = Shared::new(old_remote(Remote::open_saying(&path, port, web, lim, &mut |line| {
+                    said.push(line.replace(&shown, "<path>"))
+                })));
                 assert_eq!(said, strs(&s.at("said")), "{at}");
                 opened += 1;
             }
@@ -193,4 +195,10 @@ fn the_python_remote_step_by_step() {
         assert_eq!(have.as_slice(), want.as_slice(), "{at}");
     }
     assert!(opened > 20, "对照数据里没有“读到不该有的文件”那几步");
+}
+
+/// 录下这些数据的 Python 服务端只在开着网页端时认访客（3.7.0 起不开网页端也认：iOS 上的 App）：照它当时的规矩
+fn old_remote(mut r: Remote) -> Remote {
+    r.guests_on = r.web().is_some();
+    r
 }

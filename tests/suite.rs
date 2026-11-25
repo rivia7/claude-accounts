@@ -6,6 +6,7 @@ mod client_updates;
 mod cost_view;
 mod device_identity;
 mod hub_deploy;
+mod ios_kit;
 mod isolation_apps;
 mod isolation_browser;
 mod isolation_chrome_native;
@@ -55,6 +56,7 @@ fn main() {
             team_relay::MODULE,
             acme::MODULE,
             web_relay::MODULE,
+            ios_kit::MODULE,
             isolation_chrome_native::MODULE,
         ],
     );

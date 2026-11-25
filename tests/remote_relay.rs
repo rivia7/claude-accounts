@@ -660,7 +660,7 @@ fn pair_list_attach(t: &mut Ctx) {
     // （它的钩子自己会弹）；会话外面调的不在哪个宿主里：65
     let notify = format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复", relay::helper(&a).display());
     let since = h.out().len();
-    h.send(&format!("{notify}\n"));
+    h.send(format!("{notify}\n"));
     h.expect("<ran 0>");
     v.expect(r"\x1b\]777;notify;做完了 · alice;第一行回复\x1b\\");
     assert!(!has(&h.out()[since..], "777;notify"), "启动它的终端上没有");

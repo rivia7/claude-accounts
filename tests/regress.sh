@@ -3008,7 +3008,7 @@ if sect 11b3c; then
 #        那一头（拿管理员给的邀请加入）。测试里的会话没有终端：在跑就算在用。这一节结束时这台 Mac 退出阁楼组、停掉服务器，配置还原
 STTL=10   # 服务器这么多秒没收到上报就算离线。上报进程 60 秒才一次心跳，所以「在用」只在每次上报后的这几秒里看得到：
           # 以前是 3 秒，机器慢时（xprotectd 忙着扫新文件，cca 每次运行慢好几倍）看到在用以后再问一两次就过了
-gl_upr() { gl_up --ttl "$STTL" --relay-listen 127.0.0.1:0 --web-url https://relay.example.com:18445/; }   # 网页端开着（cca remote pair --web 要它；页面是仓库里的 server/web/）
+gl_upr() { gl_up --ttl "$STTL" --relay-listen 127.0.0.1:0 --web-url https://relay.example.com:18445/; }   # 网页端开着（页面是仓库里的 server/web/；cca remote pair --web 3.7.0 起给的是 App 的链接，不要它）
 gl_upr; touch "$H/.cca/teams/checked"
 PRD="$H/.cca/presence"; ME=alice-mbp   # 这台 Mac 加入阁楼组时起的名字
 "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c.pop("presence", None)'   # 打开设备统计（11b2 起关着）
@@ -3176,7 +3176,7 @@ RCODE=""; for i in $(seq 1 150); do RCODE=$("$TESTBIN" run -s "a1=$T/ev.jsonl" '
 dj=$(dpair join "$RCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair.jsonl"
 ok "界面 App 里显示配对码：同意当场问，配对码在一页只显示的字段里（不用回答），对方输入后 result 事件 remote_paired" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(asks)" = "consent.remote_pair remote.pair" ] && printf "%s" "$RCODE" | grep -Eq "^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$" && evq "e.get(\"q\") == \"remote.pair\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"code\", \"code\")]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「dan-air」\" in e[\"message\"]" && ! grep -qF "$RCODE" "$T/rp.out" && [ -e "$T/keychain/cca-remote-${dj%% *}" ]'
-# 和手机配对（cca remote pair --web，docs/dev/remote.md「网页端」）：手机不是 Team 里的设备，是一把不在名单里的密钥（照 server/README.md「网页端」自己说话）。
+# 和手机配对（cca remote pair --web，docs/dev/ios.md）：手机不是 Team 里的设备，是一把不在名单里的密钥（照 server/README.md「手机（访客）」自己说话）。
 # 先把上一个配对的结果留着（dj），这一段用自己的变量。服务器按设备限流（每秒 0.5 个、最多攒 30 个），上面配对的那些把这台 Mac 的
 # 配额用得差不多了：先重启它（状态文件留着，记下的配对都在），配额从头算
 gl_down; gl_upr
@@ -3188,7 +3188,7 @@ WCODE=""; for i in $(seq 1 150); do WCODE=$("$TESTBIN" run -s "a1=$T/ev.jsonl" '
 wj=$(DPAIR_KEY="$T/phone" dpair web "$WCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair_web.jsonl"
 out2=$(run cca remote list --json 2>/dev/null </dev/null); printf '%s' "$out2" > "$T/guifx3/remote_list_web.json"
-ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是手机上打开的地址（kind 是 qr，服务器配置里写的那个）和配对码，都不用回答；不在 Team 的名单里的密钥输入配对码后配好，配对表里记着它是网页端、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以在浏览器里看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"] == \"https://relay.example.com:18445/\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | "$TESTBIN" check -f d=- "p = [x for x in d[\"peers\"] if x[\"name\"] == \"phone\"]; len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\"" && grep -q "\"guests\"" "$GLD/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
+ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是给 iPhone 上的 App 扫的链接（kind 是 qr，cca-remote://，带着服务器的地址、配对码和 Team 的名字）和配对码，都不用回答；不在 Team 的名单里的密钥输入配对码后配好，配对表里记着它是手机、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"].startswith(\"cca-remote://pair?v=1&u=https%3A%2F%2F127.0.0.1%3A\") and (\"&c=\" + e[\"fields\"][1][\"value\"].replace(\"-\", \"\") + \"&\") in e[\"fields\"][0][\"value\"] and e[\"fields\"][0][\"value\"].endswith(\"&t=%E9%98%81%E6%A5%BC%E7%BB%84\")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | "$TESTBIN" check -f d=- "p = [x for x in d[\"peers\"] if x[\"name\"] == \"phone\"]; len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\"" && grep -q "\"guests\"" "$GLD/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
 out=$(runev cca remote unpair "${wj%% *}" 2>&1); rc=$?
 ok "取消和手机的配对：服务器上那个访客跟着删掉（它一个配对都不剩了）" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-remote-${wj%% *}" ] && "$TESTBIN" check -f "j=$GLD/remote.json" "j.get(\"guests\") == {}"'
 out=$(runev cca remote unpair "${dj%% *}" 2>&1); rc=$?
@@ -4406,6 +4406,7 @@ ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在�
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_ok acme'
 # 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
 ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'suite_ok web_relay'
+ok "iOS App 的协议核心（ios/CcaRemoteKit，命令行工具的 swiftc 编成 macOS 上的程序；没有 swiftc 时跳过）：和 tests/kit/spec.rs 对着核对配对码、配对、会话的说明、握手、记录、开场白、证书的公钥指纹、二维码的链接、签名；手机那一头（ios/tools/ccaguest）扫 cca remote pair --web 给的链接配对、钉住服务器的证书、列会话、经数据端口接入、敲键、只看、会话结束、取消配对" 'suite_ok ios_kit'
 # suite 里平时跑的模块上面都得有一行：新加了模块（tests/suite.rs）却没在这里加一条的话，它在后台跑了、没过也没人知道
 ok "suite 的每个模块上面都有一行（tests/suite.rs 里加了模块，这一节也要加一条 suite_ok）" '[ -s "$UNITD/results.tsv" ] && [ "$(cut -f1 "$UNITD/results.tsv" | sort | tr "\n" " ")" = "$(printf "%s\n" $SUITE_SEEN | sort | tr "\n" " ")" ]'
 

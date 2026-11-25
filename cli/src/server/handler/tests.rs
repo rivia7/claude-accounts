@@ -318,7 +318,10 @@ fn get_health_and_not_found() {
     // 开着中转：ops 里多出中转的那几个，带着数据端口
     let relayed = Bench::with(true);
     let text = relayed.run(&request(Method::Get, "/v1/health", &[], b"")).1;
-    assert!(text.contains(r#""team_leave","pair_open","pair_put""#) && text.ends_with(r#","relay":{"port":18444}}"#), "{text}");
+    assert!(
+        text.contains(r#""team_leave","pair_open","pair_put""#) && text.ends_with(r#","relay":{"port":18444,"guests":true}}"#),
+        "{text}"
+    );
     // GET 不扣限流的配额（health 是给监控、安装脚本一直问的）
     for _ in 0..300 {
         assert_eq!(b.run_at(&request(Method::Get, "/v1/health", &[], b""), NOW, 0.0).0, 200);

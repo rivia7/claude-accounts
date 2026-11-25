@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 和 Xcode 生成的那一份合在一起（GENERATE_INFOPLIST_FILE）：这里只放生成不了的 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>cca.remote.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>cca-remote</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

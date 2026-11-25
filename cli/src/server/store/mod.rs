@@ -873,8 +873,8 @@ impl Store {
     }
 
     /// GET /v1/health 的内容（Py:525-533）。mode 总是 team、seq 总是 0（这两项留着：以前的客户端、安装脚本照它们认是不是 Team 的
-    /// 服务器）；relay_port 给了（开着中转）才列中转的那几个 op、带 relay 那一项
-    pub fn health(&self, sig_ok: bool, relay_port: Option<u16>) -> V {
+    /// 服务器）；relay（数据端口、认不认访客）给了（开着中转）才列中转的那几个 op、带 relay 那一项
+    pub fn health(&self, sig_ok: bool, relay: Option<(u16, bool)>) -> V {
         let ops = List::new();
         for op in ["report", "view"] {
             ops.push(op);
@@ -886,7 +886,7 @@ impl Store {
         for op in TEAM_OPS.iter().filter(|op| !op.starts_with("team_astate") && !TEAM_ROOT_OPS.contains(op)) {
             ops.push(*op);
         }
-        if relay_port.is_some() {
+        if relay.is_some() {
             for op in RELAY_OPS {
                 ops.push(op);
             }
@@ -901,8 +901,13 @@ impl Store {
             "ops" => ops,
             "team" => &self.team_id,
         };
-        if let Some(port) = relay_port {
-            out.set("relay", dict! { "port" => port });
+        // 中转的数据端口；认访客（手机）时多一项 guests（iOS 上的 cca App 看它知道这台服务器能不能配手机）
+        if let Some((port, guests)) = relay {
+            let r = dict! { "port" => port };
+            if guests {
+                r.set("guests", true);
+            }
+            out.set("relay", r);
         }
         V::Dict(out)
     }

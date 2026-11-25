@@ -1,7 +1,7 @@
 //! 远程会话的中转记着的东西，和设备发来的中转的请求（RELAY_OPS）。Python 的 `Remote`（Py:952-1230）。
 //!
 //! - edges（remote.json，移除设备、180 天没用过才删）：`{配对编号: {"a", "b", "at", "used"}}`，服务器只知道是哪两台设备配了对
-//! - guests（也在 remote.json 里）：访客（手机上的网页端，不在名单里）的公钥
+//! - guests（也在 remote.json 里）：访客（手机：iOS 上的 cca App、网页端，不在名单里）的公钥
 //! - 只在内存里的：slots（正在进行的配对）、tickets（进数据端口的票据）、sessions（开着的会话）
 //!
 //! Python 里是一把可重入的锁加一个条件变量；这里是 `Shared`：`Mutex<Remote>` + `Condvar`。pair_get 要等对方放密文进来：
@@ -195,8 +195,8 @@ struct Slot {
     /// 配对记下了
     done: bool,
     exp: f64,
-    /// 开给网页端的：输入配对码的可以是不在名单里的
-    web: bool,
+    /// 开给手机的（iOS 上的 cca App 带 guest，旧版 cca 开给网页端带 web）：输入配对码的可以是不在名单里的
+    guest: bool,
     /// 输入配对码的是访客时它的公钥那一行（配成了才记进 guests）
     gkey: Option<String>,
 }
@@ -274,8 +274,10 @@ pub struct Remote {
     path: PathBuf,
     /// 客户端连数据端口用的端口（--relay-port，默认是监听的那个）：票据里回给设备、/v1/health 里也有
     port: u16,
-    /// 网页端的地址（开着网页端时）：给了才让设备开“给网页端的配对”、才有访客
+    /// 网页端的地址（开着网页端时；pair_open 带 web 的旧版 cca 要它）
     web: Option<String>,
+    /// 认不认访客（手机：iOS 上的 cca App、网页端；--no-guests 关掉）：关着时设备开不了“给手机的配对”、访客的请求一律不认
+    pub guests_on: bool,
     pub(super) lim: Limits,
     /// remote.json 的 v：读进来什么样留什么样（没有就是 1）
     v: Val,
@@ -359,6 +361,7 @@ impl Remote {
             path: path.to_path_buf(),
             port,
             web,
+            guests_on: true,
             lim,
             v: Val::Num(Num::Int(API)),
             edges: OMap::new(),
@@ -438,18 +441,18 @@ impl Remote {
     }
 
     /// 不在名单里的这把密钥能不能发这个请求：能的话是验它签名用的公钥那一行，不能是 None（Py:997-1017）。两种：已经配了对的访客；
-    /// 正拿着配对码来的（那次配对是开给网页端的、还没有别的设备放过密文，公钥在请求的 pub 里、指纹要对得上）。
+    /// 正拿着配对码来的（那次配对是开给手机的、还没有别的设备放过密文，公钥在请求的 pub 里、指纹要对得上）。
     /// 知道 rid 就是知道配对码：不知道的人到不了验签名那一步
     pub fn guest_key(&self, fp: &str, op: &str, j: &V, now: f64) -> Option<String> {
-        // 没开网页端（关掉了）：访客的请求一律不认；记录留着，再打开时还在
-        if !GUEST_OPS.contains(&op) || self.web().is_none() {
+        // 不认访客（--no-guests）：访客的请求一律不认；记录留着，再打开时还在
+        if !GUEST_OPS.contains(&op) || !self.guests_on {
             return None;
         }
         if let Some(g) = self.guests.get(fp) {
             return Some(g.key.clone());
         }
         let j = j.as_dict()?;
-        let s = self.slots.get(&*j.str("rid")?).filter(|s| s.web && s.exp >= now)?;
+        let s = self.slots.get(&*j.str("rid")?).filter(|s| s.guest && s.exp >= now)?;
         if s.joiner.as_deref() == Some(fp) {
             return s.gkey.clone();
         }

@@ -1,0 +1,84 @@
+# iOS App（`ios/`）
+
+手机上装不了 cca。iOS 上的 cca App 只做一件事：接入 Mac（或者服务器）上开着的远程会话。它是服务器上的**访客**（server/README.md「手机（访客）」），
+没有 deploy key，是和它配对的那台设备领进来的。服务器、配对、握手、记录、帧都和 cca 之间的一样（remote.md），App 总是输入配对码的那一头（`b`）、接入方。
+要替掉网页端（remote.md「网页端」，M5）：App 做好、发布以后，一个版本里把网页端、它的端口、证书助手、`compose.web.yaml` / `compose.acme.yaml` 一起去掉。
+
+## 阶段
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| 1 | 服务器认手机不再要网页端（`guest`、`--no-guests`）；二维码改成给 App 的链接（带配对码）；协议核心 `ios/CcaRemoteKit`；测试用的手机 `ios/tools/ccaguest`；`tests/ios_kit.rs` | 做完了，还没提交、没发布 |
+| 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机还没试，见下面「App」 |
+| 3 | TestFlight、App Store 审核（隐私清单、出口合规：只用系统的加密） | 没开始 |
+| 4 | 去掉网页端，服务器重新部署（每台都先问） | 等 App 上架 |
+
+定下来的（别重新讨论）：
+- 走 TCP 数据端口（`CCA-RELAY/1`），不走 WebSocket：托管平台（Railway、Sealos）本来就开不了中转
+- 签名的请求发到主端口：服务器是自签证书，按二维码里的 `sha256//` 公钥指纹钉住（URLSession 的 delegate 自己解析证书的 DER 拿公钥），不认系统的证书机构；也不走系统代理
+- 二维码里带配对码：扫了就配好，不用再输入
+- 以后上 App Store；审核用的演示模式：本地模拟一台 Mac 和几个会话，终端里放预录的输出，不联网
+
+## 二维码里的链接
+
+`cca-remote://pair?v=1&u=<服务器地址>&p=<指纹>[&p=…]&c=<配对码>&n=<机器名>[&t=<Team 名>]`，值都是百分号编码（`-._~` 以外的都编）：
+- `u`：`https://` 地址（不带用户名、路径只能是 `/` 或者空）；`p`：0～4 个 `sha256//base64` 指纹（服务器配置里有几个写几个；没有就是系统认的证书）
+- `c`：配对码去掉横线的 16 个字符（同一个配对码只能用一次）；`n`：显示配对码的那台机器的名字（`clean` 过）；`t`：Team 的名字（服务器都是 Team 的，所以总有；本机没记名字时是 `Team 编号的前 8 位`）
+- 不认的（App 说“不是 cca 的配对链接”）：`v` 不是 1、不是 `pair`、不是 https、配对码不对、重复的 `c`、指纹不对、超过 4 个
+- 出处：辅助程序 `remote-pair-show --web` 的 `link` 那一行（`cli/src/cmd/remote/pair.rs` 的 `app_link`）；`ios/CcaRemoteKit` 的 `PairInvite` 解它
+
+## 协议核心（`ios/CcaRemoteKit`）
+
+没有界面的 Swift 包（iOS 17、macOS 14；只用 Foundation、CryptoKit、CommonCrypto 的 PBKDF2、Network.framework），第四份实现：
+`cli/src/cmd/remote/crypto.rs` ↔ `tests/kit/spec.rs` ↔ `server/web/core.js` ↔ 这一份。
+- `Bytes.swift`、`Crypto.swift`：配对码、配对消息、P、会话的说明（`dirOpen`）、`clean`
+- `Channel.swift`：握手、记录、帧、开场白
+- `Identity.swift`：Ed25519 的身份、SSHSIG 签名（命名空间 `cca-presence`）。每台服务器一把（键 `id <地址>`）
+- `PairInvite.swift`、`Net.swift`：链接、钉住证书的请求（`Requester`：时钟偏了服务器回 `clock` 时按它的时间重发一次）、TCP 连接
+- `Client.swift`：`RemoteClient`（配对、取消配对、列会话、接入）、`RemoteStore`（App 里是钥匙串；`ccaguest` 是目录里的文件）
+- `Attachment.swift`：`Link`（一条连接：开场白、握手、20 秒一次心跳、60 秒没听到对面算断、输入按 8192 字节切）、`Attachment`（断了重新接：
+  间隔 1、2、4、8、15 秒，共 300 秒；服务器说没有这个会话再等 45 秒；接上不到 10 秒又断连着 5 次就不再试——和 `attach.rs`、`core.js` 的同名常量一样）；
+  `nudge()`：App 回到前台时调，断着的马上再试，开着却 25 秒没听到对面的当成断了
+- 断开的原因是一个词：`detached`、`ended`、`lost`、`unreachable`、`refused`、`version`、`auth`、`nohost`、`busy`、`ticket`、`error`，
+  `Attachment` 另有 `gone`、`unpaired`、`gave_up`
+
+## App（`ios/cca.xcodeproj`）
+
+两个目标：`cca`（App，iOS 26 起，iPhone 和 iPad）和 `SwiftTerm`（静态的 framework，见 `ios/Vendor/SwiftTerm-iOS/README.md`）；
+协议核心 `ios/CcaRemoteKit` 是本地的 Swift 包。工程用 Xcode 16 起的“跟着文件夹走”的组：`ios/App/` 里新加的文件不用改工程。
+`macos/Sources/CcaApp/LogoGlyph.swift` 直接引用（Logo 的形状和颜色只写在那一处），图标是 `macos/tools/make-icon --flat --opaque` 画的
+（`ios/App/Assets.xcassets`：铺满、不带透明通道，圆角系统自己裁）。
+
+- `CcaApp.swift`：入口。启动参数 `-demo`（演示模式）、`-screen terminal|pair|settings`（演示模式里直接开那一页，截图用）
+- `Model/AppModel.swift`：配对过的电脑、它们上面的会话（列表看得见时 15 秒查一次，和 Mac App 一样）、配对的进度、开着的终端；
+  `TerminalSession`：一个终端的连接状态、标题，字节进出
+- `Model/Backend.swift`：`Backend`（`LiveBackend` 是 CcaRemoteKit 的 `RemoteClient`）、`KeychainStore`：密钥存钥匙串
+  （`AfterFirstUnlockThisDeviceOnly`、不同步到 iCloud），配对表存 App 自己的目录；删了 App 再装时第一次打开清掉钥匙串里留下的
+- `Model/Demo.swift`：演示模式（审核用、没有电脑时自己看看）：两台模拟的电脑、三个会话（一个只看、一个不在线），终端里放一段写好的输出，
+  敲的字只在本机回显；不联网、不碰钥匙串
+- `Views/`：欢迎页（没配对过）、会话列表（一台电脑一组，点一下接入，长按选只看）、终端页、配对（相机扫码用 VisionKit，扫不了时粘贴；
+  经链接打开 App 时先问一句再配）、设置（外观、这台手机的名字、配对过的电脑和取消配对、演示模式、开源许可）
+- `Terminal/TerminalSurface.swift`：唯一 `import SwiftTerm` 的文件，规矩和 Mac App 的同名文件一样：图形协议编的时候就去掉了，
+  不认 OSC 1337、不报 sixel，链接只开 http / https，剪贴板只在 App 在前台、键盘焦点在终端上时写、不给读，不响铃；终端固定黑底，
+  这一页的导航栏也是深色；只看的不弹键盘
+- `TestDriver.swift`：只在调试版里（`#if DEBUG`；`ios/test.sh` 查正式版里没有它）：端到端测试用启动参数让 App 自己配对、接入、敲键
+- `Design.swift`、`Texts.swift`：从 Mac App 搬过来的几样（`Brand`、`Surface`、`BrandMark`、`RemoteMark`、`Tag`、`Banner`、`Card`，玻璃只给按钮）和文字
+- `PrivacyInfo.xcprivacy`：不追踪、不收集；用到的要说明原因的接口只有 UserDefaults（CA92.1）
+
+bundle id 是 `com.cca.remote`（2026-11-23 用户定的；SwiftTerm 那个目标是 `com.cca.remote.swiftterm`）。
+还没定的（上 App Store 前要用户定）：开发者团队、版本号跟不跟 cca 走、出口合规怎么报
+（HTTPS 之外还有自己的端到端加密：HMAC-SHA256 做的流密码）。
+
+## 测试
+
+`bash ios/test.sh [--build]`：编（模拟器的调试版、真机的正式版）、查 SwiftTerm 编的是换过的那一份、正式版里没有 TestDriver；
+不带 `--build` 时还开一台模拟器（`cca-test iPhone`，没有就建），在里面跑 SwiftTerm 的自检（`macos/tools/swiftterm-check` 链 App 用的那一份
+SwiftTerm，`simctl spawn`），演示模式各页浅色 / 深色截图到 `ios/build/shots/`。要 Xcode 和模拟器的运行时（`xcodebuild -downloadPlatform iOS`）。
+
+`cd cli && cargo test --profile kit -p cca-tests --test suite -- ios_kit`（`tests/ios_kit.rs`，回归的 unit 一节里也跑；要先 `cargo build --release`；没有 swiftc 时跳过）：命令行工具的 swiftc 把 CcaRemoteKit 的源码加上一个 main 编成 macOS 上的程序（编出来的在 `ios/build/test/`，源码没变不重编）。
+- `against_the_spec`：`tests/kit/spec.rs`（照文档独立写的那一份）出数据，`ios/Tests/KitTests` 逐项核对；Swift 封的配对消息、发的记录、签名再拿回 `kit::spec` 核对（签名用 `ssh-keygen -Y verify`）。证书指纹对 EC、RSA、Ed25519 三种证书和 openssl 算的比
+- `pair_list_attach_type`、`wrong_pin_and_used_code`、`session_ends`：真的服务器、真的辅助程序（`remote-host` 里的会话、`remote-pair-show --web`），手机那一头是 `ios/tools/ccaguest`：扫链接配对、列会话、接入、敲键、只看、会话结束、取消配对；指纹不对一个请求都不发成，配对码只能用一次
+- `in_the_simulator`（`CCA_IOS_SIM=1`，先跑过 `bash ios/test.sh`：模拟器开着、App 编好了）：模拟器里真的 App（调试版），
+  照 `cca remote pair --web` 给的链接配对、接入 box 上真的会话、敲键，box 上收到；截一张 `ios/build/shots/e2e-terminal.png`
+- 改了 CcaRemoteKit 故意弄错一处（比如帧的类型）跑一遍，看测试挂不挂
+- `swift build`（`ios/CcaRemoteKit` 里）查它作为单独的模块编不编得过（`public` 的够不够用）

@@ -15,6 +15,8 @@
 //! - signature 里页面签的名交给 ssh-keygen 来验（改过的内容、别的命名空间它不认）；服务器自己的验签认不认，
 //!   pair_list_attach_type 那几条里真的服务器每个请求都在验
 //! - WsSock 等到时限（20 秒）还读不到东西算出错（原来是当成对面关了）：该断开的地方服务器得真的断开
+//! - iOS 上的 App 当访客的那几条（app_guest_without_the_web_side、link_in_the_terminal）不经 WebSocket：服务器只在开着网页端时
+//!   才有 /v1/relay/ws，App 只走数据端口
 
 use kit::fleet::{self, Device, WAIT};
 use kit::fsx::{self, wait_for};
@@ -50,6 +52,8 @@ pub const MODULE: Module = Module {
         case!(the_web_side_is_switched_off),
         case!(the_certificate_arrives_later),
         case!(off),
+        case!(app_guest_without_the_web_side),
+        case!(no_guests),
         case!(the_same_numbers),
         case!(handshake_and_records),
         case!(signature),
@@ -58,6 +62,7 @@ pub const MODULE: Module = Module {
         case!(view_only_unpair_and_no_session),
         case!(terminal),
         case!(in_the_app),
+        case!(link_in_the_terminal),
         case!(no_web),
         case!(the_real_page),
         case!(the_team_name),
@@ -346,13 +351,34 @@ struct Web {
     origin: Option<String>,
     /// 用例里开了、看完就不管的 WebSocket：留到用例完了才关（原来它们都记在 SOCKS 里、收尾时才关）
     held: RefCell<Vec<WsSock>>,
+    /// 不验证书（iOS 上的 App 那样连给设备的那个端口：自签的证书，App 照二维码里的指纹钉住；这里不验）
+    insecure: bool,
 }
 
 impl Web {
+    /// 开着网页端的服务器：网页端的端口在 d/wport 里，照 ca 验证书；origin：开 WebSocket 时带的 Origin
+    fn new(d: &Path, ca: PathBuf, origin: Option<String>) -> Web {
+        Web { wport: wport_in(d), ca, origin, held: RefCell::new(Vec::new()), insecure: false }
+    }
+
+    /// iOS 上的 App 那样：请求发到给设备的那个端口（fx.srv.port），证书不验；不开 WebSocket（App 只走数据端口）
+    fn app(fx: &Base) -> Web {
+        Web { wport: fx.srv.port, ca: PathBuf::new(), origin: None, held: RefCell::new(Vec::new()), insecure: true }
+    }
+
+    /// 连这一头用的 TLS 客户端
+    fn client(&self) -> tls::Client {
+        if self.insecure {
+            tls::Client::insecure()
+        } else {
+            ca_client(&self.ca)
+        }
+    }
+
     /// GET 网页端的端口上的 path（照证书机构验证书）：状态码、头、内容
     fn get(&self, path: &str, headers: &[(&str, &str)]) -> Got {
         let url = format!("https://127.0.0.1:{}{path}", self.wport);
-        fetch(&url, ca_client(&self.ca), headers, secs(20)).unwrap_or_else(|e| panic!("{e}"))
+        fetch(&url, self.client(), headers, secs(20)).unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// 开一条 WebSocket（握手做完；成没成看 status）
@@ -422,7 +448,7 @@ impl Guest {
             .header("Content-Type", "application/json")
             .header("X-Cca-Sig", &crypto::b64(&sig))
             .body(raw)
-            .tls(ca_client(&web.ca))
+            .tls(web.client())
             .timeout(secs(20));
         let mut tries = 0;
         loop {
@@ -545,7 +571,7 @@ fn wport_in(d: &Path) -> u16 {
 fn web_fx_with(t: &mut Ctx, origin: Option<&str>) -> (Base, Web, Device, Device) {
     let fx = Base::with(t, true, web_extra);
     let ca = fx.d.join("web-tls").join("ca.pem");
-    let web = Web { wport: wport_in(&fx.d), ca, origin: origin.map(str::to_string), held: RefCell::new(Vec::new()) };
+    let web = Web::new(&fx.d, ca, origin.map(str::to_string));
     let (a, b) = (fx.device("box"), fx.device("laptop"));
     fx.machines(&[&a, &b]);
     (fx, web, a, b)
@@ -885,7 +911,8 @@ fn many_websockets(t: &mut Ctx) {
     wait_for("名额还了", secs(20), || web.status(g.ws(&web, Some(g.ticket(&web, &sid)["tid"].str()), &[])) == 101);
 }
 
-/// 关掉网页端（重启时不带那几个参数）：记下的访客的请求一律不认；再打开，它还在
+/// 关掉网页端（重启时不带那几个参数）：访客照旧（在给设备的那个端口上：iOS 上的 App 走的就是它）；不认访客（--no-guests）时
+/// 记下的访客的请求一律不认；再打开，它还在
 fn the_web_side_is_switched_off(t: &mut Ctx) {
     let (mut fx, mut web, a, _b) = web_fx(t);
     let d = fx.d.clone();
@@ -894,6 +921,8 @@ fn the_web_side_is_switched_off(t: &mut Ctx) {
     let port = fx.srv.port;
     restart(&mut fx, port, Vec::new());
     let pids = obj! { "pids" => list![&pid] };
+    assert_eq!(names(&g.good(&Web::app(&fx), "relay_list", &pids)["peers"]), [pid.as_str()], "没开网页端：访客照旧");
+    restart(&mut fx, port, vec!["--no-guests".to_string()]);
     assert_eq!(signed_once(port, &g.keyfile, &g.fp, "relay_list", &pids), fx.unknown());
     assert_eq!(names(&remote(&d)["guests"]), [g.fp.as_str()], "记录留着");
     assert_eq!(names(&fx.good(&a, "relay_list", &pids)["peers"]), [pid.as_str()], "电脑那一头照旧");
@@ -937,22 +966,76 @@ fn the_certificate_arrives_later(t: &mut Ctx) {
     });
 }
 
-/// 没开网页端的服务器（和以前一样）：没有那一页、没有 WebSocket，设备开不了给网页端的配对，不在名单里的一律不认
+/// GET 给设备的那个端口（不验证书）上的 path，带着 WebSocket 升级的请求头：回的状态码
+fn ws_get(port: u16, path: &str) -> u16 {
+    let key = crypto::b64(&crypto::random(16));
+    let upgrade =
+        [("Upgrade", "websocket"), ("Connection", "Upgrade"), ("Sec-WebSocket-Version", "13"), ("Sec-WebSocket-Key", key.as_str())];
+    let url = format!("https://127.0.0.1:{port}{path}");
+    fetch(&url, tls::Client::insecure(), &upgrade, secs(10)).unwrap_or_else(|e| panic!("{e}")).status
+}
+
+/// 网址里的一项解回来（%XX → 字节，再当 UTF-8）；写得不对（% 后面不是两个十六进制的数、不是 UTF-8）是 None
+fn pct_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// 给手机扫的二维码：cca-remote://pair?v=1&u=服务器&p=指纹&c=配对码&n=机器名&t=Team（每一项转义过）。
+/// code：配对码（带不带横线都行）；port、pin：设备连的那个端口、它的证书指纹；team：Team 的名字
+#[track_caller]
+fn check_link(link: &str, code: &str, port: u16, pin: &str, team: &str) {
+    let query = link.strip_prefix("cca-remote://pair?").unwrap_or_else(|| panic!("不是给 App 的链接：{link:?}"));
+    assert!(!query.contains('+'), "空格也写成 %20：{link}");
+    assert!(!query.contains('#') && !query.contains(' '), "{link}");
+    let mut q: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for item in query.split('&') {
+        let (k, v) = item.split_once('=').unwrap_or_else(|| panic!("链接里的一项不是 键=值：{item:?}（{link}）"));
+        let v = pct_decode(v).unwrap_or_else(|| panic!("链接里的一项转义得不对：{item:?}（{link}）"));
+        q.entry(k.to_string()).or_default().push(v);
+    }
+    let one = |v: &str| vec![v.to_string()];
+    let want: BTreeMap<String, Vec<String>> = [
+        ("v", one("1")),
+        ("u", one(&format!("https://127.0.0.1:{port}"))),
+        ("p", one(pin)),
+        ("c", one(&code.replace('-', ""))),
+        ("t", one(team)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let got: BTreeMap<String, Vec<String>> =
+        q.iter().filter(|(k, _)| want.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    assert_eq!(got, want, "{link}");
+    let names = q.get("n").unwrap_or_else(|| panic!("链接里没有机器名：{link}"));
+    assert!(names.len() == 1 && !names[0].is_empty(), "{link}");
+    assert_eq!(q.len(), 6, "多了别的项：{link}");
+}
+
+/// 测试的 Team 的名字（kit::fleet::Team::new 起的）：链接的 t 里是它
+const TEAM: &str = "测试组";
+
+/// 没开网页端的服务器：没有那一页，设备开不了给网页端的配对（旧版 cca 的 pair --web），普通的配对里不在名单里的一律不认。
+/// WebSocket 那条路也没有（只给网页端；iOS 上的 App 只走数据端口）
 fn off(t: &mut Ctx) {
     let fx = Base::new(t);
     let a = fx.device("box");
     fx.machines(&[&a]);
     for path in ["/", "/index.html", "/v1/relay/ws"] {
-        let key = crypto::b64(&crypto::random(16));
-        let upgrade = [
-            ("Upgrade", "websocket"),
-            ("Connection", "Upgrade"),
-            ("Sec-WebSocket-Version", "13"),
-            ("Sec-WebSocket-Key", key.as_str()),
-        ];
-        let url = format!("https://127.0.0.1:{}{path}", fx.srv.port);
-        let r = fetch(&url, tls::Client::insecure(), &upgrade, secs(10)).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(r.status, 404, "{path}");
+        assert_eq!(ws_get(fx.srv.port, path), 404, "{path}");
     }
     let (_kc, keys, rid) = spec::pair_keys(&crypto::random(10));
     assert_eq!(fx.call(&a, "pair_open", &obj! { "rid" => &rid, "web" => true }), (404, obj! { "error" => "no_web" }));
@@ -961,6 +1044,66 @@ fn off(t: &mut Ctx) {
     let m = spec::pair_msg(&keys, &rid, "b", &g.fp, &crypto::random(32), "x");
     let put = obj! { "rid" => &rid, "pub" => &g.pubkey, "m" => m };
     assert_eq!(signed_once(fx.srv.port, &g.keyfile, &g.fp, "pair_put", &put), fx.unknown());
+}
+
+/// 没开网页端的服务器上 iOS 上的 App 当访客（[`Web::app`]：和 cca 的设备一样连给设备的那个端口）：配对开给手机
+/// （pair_open 带 guest），配好以后看得到会话、换得到票据、经数据端口接入
+fn app_guest_without_the_web_side(t: &mut Ctx) {
+    let fx = Base::new(t);
+    let a = fx.device("box");
+    fx.machines(&[&a]);
+    let app = Web::app(&fx);
+    assert_eq!(app.get("/v1/health", &[]).json()["relay"]["guests"], Value::Bool(true));
+    let code = crypto::random(10);
+    let (_kc, keys, rid) = spec::pair_keys(&code);
+    let web_open = fx.call(&a, "pair_open", &obj! { "rid" => &rid, "web" => true });
+    assert_eq!(web_open, (404, obj! { "error" => "no_web" }), "旧版 cca 要网页端的地址：没有");
+    let j = fx.good(&a, "pair_open", &obj! { "rid" => &rid, "guest" => true });
+    assert_eq!((&j["guest"], j.get("web").is_some()), (&Value::Bool(true), false), "{j}");
+    let na = crypto::random(32);
+    fx.good(&a, "pair_put", &obj! { "rid" => &rid, "m" => spec::pair_msg(&keys, &rid, "a", a.fp(), &na, &a.name) });
+    let mut g = Guest::new(&fx.d, "我的 iPhone");
+    let (p, pid) = g.join(&app, &code, Some(a.fp()));
+    assert_eq!(fx.good(&a, "pair_commit", &obj! { "rid" => &rid, "pid" => &pid })["done"], Value::Bool(true));
+    assert_eq!(g.good(&app, "pair_get", &obj! { "rid" => &rid, "until" => "done" })["done"], Value::Bool(true));
+    assert_eq!(g.good(&app, "relay_list", &obj! { "pids" => list![&pid] })["sessions"], obj! { &pid => list![] });
+    assert_eq!(g.post(&app, "pair_open", &obj! { "rid" => crypto::token_hex(16) }).0, 403, "访客开不了配对");
+    // 普通的配对（没带 guest）访客进不来
+    let (_kc2, keys2, rid2) = spec::pair_keys(&crypto::random(10));
+    fx.good(&a, "pair_open", &obj! { "rid" => &rid2 });
+    let other = Guest::new(&fx.d, "iPad");
+    let m = spec::pair_msg(&keys2, &rid2, "b", &other.fp, &crypto::random(32), "iPad");
+    assert_eq!(other.post(&app, "pair_put", &obj! { "rid" => &rid2, "pub" => &other.pubkey, "m" => m }).0, 403);
+    // 经数据端口接入（App 走的路；没有 WebSocket）：宿主那头收到有人接入
+    let sid = crypto::token_hex(16);
+    let ht = fx.good(&a, "relay_host", &obj! { "sid" => &sid, "pids" => list![&pid] });
+    let (mut host, ok) = dial(fx.srv.data_port(), "host", ht["tid"].str(), &unb64(&ht["tkey"]));
+    assert_eq!(read_line(&mut host), ok);
+    let blob = spec::dir_seal(&p, &pid, &sid, &obj! { "v" => 1 });
+    sendall(&mut host, &ctl(F_ANNOUNCE, dumps(&obj! { &pid => blob }).as_bytes()));
+    wait_for("访客看到会话", WAIT, || truthy(&listed(&g, &app, &pid)));
+    let tk = g.ticket(&app, &sid);
+    let port = u16::try_from(tk["port"].i64()).unwrap_or_else(|_| panic!("票据里的端口不对：{tk}"));
+    let (mut view, vok) = dial(port, "view", tk["tid"].str(), &unb64(&tk["tkey"]));
+    let (kind, payload) = read_ctl(&mut host);
+    assert_eq!(kind, Some(F_JOIN));
+    let j = json::parse_bytes(&payload).unwrap_or_else(|e| panic!("有人要接入的那一帧不是 JSON：{e}"));
+    let (mut join, jok) = dial(fx.srv.data_port(), "join", j["token"].str(), &unb64(&ht["tkey"]));
+    assert_eq!((read_line(&mut join), read_line(&mut view)), (jok, vok));
+    assert_eq!(ws_get(fx.srv.port, "/v1/relay/ws"), 404, "没开网页端：没有 WebSocket 那条路");
+}
+
+/// --no-guests：设备开不了给手机的配对；health 里不说认访客；普通的配对照旧
+fn no_guests(t: &mut Ctx) {
+    let fx = Base::with(t, true, |_| vec!["--no-guests".to_string()]);
+    let a = fx.device("box");
+    fx.machines(&[&a]);
+    let health = Web::app(&fx).get("/v1/health", &[]).json();
+    assert_eq!(health["relay"], obj! { "port" => fx.sniff.port }, "{health}");
+    let guest = fx.call(&a, "pair_open", &obj! { "rid" => crypto::token_hex(16), "guest" => true });
+    assert_eq!(guest, (404, obj! { "error" => "no_guest" }));
+    assert_eq!(ws_get(fx.srv.port, "/v1/relay/ws"), 404);
+    fx.good(&a, "pair_open", &obj! { "rid" => crypto::token_hex(16) });
 }
 
 // ---- 浏览器里跑的那一份（server/web/core.js），在 Node 里 ----
@@ -1215,12 +1358,13 @@ fn client_fx(t: &mut Ctx) -> (Base, Web, Device, Device, Node, String) {
 }
 
 /// dev 上 cca remote pair --web（辅助程序的那一步），手机输入配对码。返回 (那一头回的, 辅助程序说的对方的名字)
-fn pair_web(node: &mut Node, dev: &Device) -> (Value, Option<String>) {
+fn pair_web(fx: &Base, node: &mut Node, dev: &Device) -> (Value, Option<String>) {
     let mut p = Popen::spawn(&mut relay::helper_cmd(dev, &["remote-pair-show", "--web"]));
-    let (line, web) = (p.out_line(), p.out_line());
+    let (line, link) = (p.out_line(), p.out_line());
     assert!(matches(r"^code [0-9A-Z]{4}(-[0-9A-Z]{4}){3}$", &line), "{line:?}");
-    assert_eq!(web, "web https://relay.example.com:8443/\n", "手机上打开的地址：服务器配置里写的那个");
     let code = line.split_whitespace().nth(1).expect("code 后面是配对码");
+    let link = link.strip_prefix("link ").unwrap_or_else(|| panic!("配对码后面该是给 App 的链接：{link:?}"));
+    check_link(link.trim_end(), code, fx.srv.port, &fx.pin, TEAM);
     let j = node.call("pair", obj! { "code" => code });
     if !truthy(&j["ok"]) {
         return (j, None);
@@ -1260,7 +1404,7 @@ fn pair_list_attach_type(t: &mut Ctx) {
     assert_eq!(node.call("pair", obj! { "code" => "not a code" })["error"], Value::from("code"));
     let other = spec::code_text(&crypto::random(10));
     assert_eq!(node.call("pair", obj! { "code" => other })["error"], Value::from("no_pairing"));
-    let (j, said) = pair_web(&mut node, &a);
+    let (j, said) = pair_web(&fx, &mut node, &a);
     assert_eq!(
         cols(&j, &["fp", "name", "steps", "extractable"]),
         list![a.fp(), "box", list!["deriving", "asking", "confirming"], false]
@@ -1271,7 +1415,7 @@ fn pair_list_attach_type(t: &mut Ctx) {
     let row = fsx::read_json(a.cca.join("remote").join("peers.json"))["peers"][pid.as_str()].clone();
     assert_eq!(cols(&row, &["fp", "name", "incoming", "shown", "web"]), list![&me["fp"], "我的 iPhone", "control", true, true]);
     let peers = a.ok(&["remote-peers"]);
-    assert!(peers.contains("我的 iPhone（手机上的网页端）  对方可以看和操作这台机器的会话"), "{peers}");
+    assert!(peers.contains("我的 iPhone（手机）  对方可以看和操作这台机器的会话"), "{peers}");
     let doc = remote(&fx.d);
     let my_fp = me["fp"].str();
     assert_eq!((names(&doc["guests"]), &doc["guests"][my_fp]["key"]), (vec![my_fp.to_string()], &me["pub"]));
@@ -1352,7 +1496,7 @@ fn view_only_unpair_and_no_session(t: &mut Ctx) {
     let (fx, _web, a, _b, mut node, base) = client_fx(t);
     node.good("start", obj! { "base" => &base, "name" => "iPad" });
     let mut h = relay::session(&a, Device::KEY, "alice", &[]);
-    let (j, _said) = pair_web(&mut node, &a);
+    let (j, _said) = pair_web(&fx, &mut node, &a);
     let pid = j["pid"].str().to_string();
     let rows = phone_rows(&mut node, "手机看到会话", |_| true);
     let sid = rows[0]["sessions"][0]["sid"].str().to_string();
@@ -1391,25 +1535,30 @@ fn terminal(t: &mut Ctx) {
     let r = fx.cca(&a, &["remote", "pair", "--phone"]);
     assert_eq!((r.code, r.out.as_str()), (1, ""));
     assert!(r.err.contains("用法：cca remote pair [--web]"), "{}", r.err);
-    // 不同意就不出配对码；问之前说清楚：是手机、那一页是服务器给的
+    // 不同意就不出配对码；问之前说清楚：是 iPhone 上的 App、能看和操作
     let r = fx.cca_with(&a, &["remote", "pair", "--web"], Some(&["n"]), None);
     assert_eq!((r.code, r.out.as_str()), (1, ""));
-    assert!(r.err.contains("那台手机可以在浏览器里看和操作这台机器上开着远程会话的会话"), "{}", r.err);
-    assert!(r.err.contains("管着服务器的人能换掉那一页的代码"), "{}", r.err);
+    let what = "iPhone 上的 cca App 扫了二维码（或者粘贴了链接）以后，那台手机可以看和操作这台机器上开着远程会话的会话";
+    assert!(r.err.contains(what), "{}", r.err);
     assert!(!r.err.contains("配对码："), "{}", r.err);
     assert_eq!(a.sent(None), Vec::<Value>::new(), "没同意：什么都没发给服务器");
     let mut p = Popen::spawn(&mut fx.cca_cmd(&a, &["remote", "pair", "--web"], &[("CCA_TTY", &fx.answers(&["y"]))]));
     let mut seen = String::new();
     let code = loop {
         let line = p.err_line();
-        assert!(!line.is_empty(), "没等到配对码：{seen}");
+        assert!(!line.is_empty(), "没等到配对链接：{seen}");
         seen.push_str(&line);
-        if line.contains("配对码：") {
-            break line.trim().split('：').nth(1).expect("配对码：后面是配对码").to_string();
+        if line.starts_with("cca-remote://") {
+            let found = regex::Regex::new("&c=([0-9A-Z]{16})&").expect("正则").captures(&line).map(|c| c[1].to_string());
+            let code = found.unwrap_or_else(|| panic!("链接里没有配对码：{line}"));
+            check_link(line.trim(), &code, fx.srv.port, &fx.pin, TEAM);
+            seen.push_str(&p.err_line());
+            break code;
         }
     };
-    assert!(seen.contains(&format!("手机上打开：{ORIGIN}/")), "先说地址，再说配对码：{seen}");
-    assert!(seen.contains("添加到主屏幕"), "{seen}");
+    let dashed = format!("{}-{}-{}-{}", &code[..4], &code[4..8], &code[8..12], &code[12..]);
+    assert!(seen.contains(&format!("给手机的配对链接（里面有配对码 {dashed}）")), "先说配对码，再给链接：{seen}");
+    assert!(seen.contains("粘贴配对链接"), "{seen}");
     let mut g = Guest::new(&fx.d, "我的 iPhone");
     g.join(&web, &spec::code_bytes(&code).expect("配对码的样子是对的"), Some(a.fp()));
     let (rc, out, said) = p.communicate(secs(60));
@@ -1418,7 +1567,7 @@ fn terminal(t: &mut Ctx) {
     let left: Vec<PathBuf> = walk(&fx.d).into_iter().filter(|f| named_like(f, "cca-pair.")).collect();
     assert_eq!(left, Vec::<PathBuf>::new());
     let r = fx.cca(&a, &["remote", "peers"]);
-    assert!(matches(r"^[0-9a-f]{8}  我的 iPhone（手机上的网页端）  对方可以看和操作这台机器的会话  ", &r.out), "{}", r.out);
+    assert!(matches(r"^[0-9a-f]{8}  我的 iPhone（手机）  对方可以看和操作这台机器的会话  ", &r.out), "{}", r.out);
     let r = fx.cca(&a, &["remote", "list", "--json"]);
     assert_eq!(
         rows_of(&parsed(&r.out)["peers"], &["name", "web", "incoming", "state"]),
@@ -1442,7 +1591,7 @@ fn in_the_app(t: &mut Ctx) {
     let asks: Vec<&Value> = es.iter().filter(|e| e["ev"].str() == "ask").collect();
     assert_eq!(asks.len(), 1, "{asks:?}");
     assert_eq!((asks[0]["q"].str(), asks[0].get("scope").map_or("web", Value::str)), ("consent.remote_pair", "web"));
-    // 显示的那一页：先是手机上打开的地址（App 画成二维码），再是配对码；都不用回答
+    // 显示的那一页：先是给 iPhone 上的 App 的链接（Mac 上的 App 画成二维码），再是配对码；都不用回答
     let yes = obj! { "consent.remote_pair" => list![obj! { "v" => "y" }], "remote.pair_web" => list![Value::Null] };
     let (mut p, ev) = fx.app_session(&a, &yes, &["remote", "pair", "--web"], &[]);
     let pages = wait_for("显示配对码的那一页", secs(30), || {
@@ -1453,9 +1602,10 @@ fn in_the_app(t: &mut Ctx) {
     assert_eq!(pages.len(), 1, "{pages:?}");
     let page = &pages[0];
     assert_eq!(rows_of(&page["fields"], &["id", "kind"]), [list!["url", "qr"], list!["code", "code"]]);
-    assert_eq!((page["title"].str(), page["fields"][0]["value"].str()), ("和手机配对", format!("{ORIGIN}/").as_str()));
     let code = page["fields"][1]["value"].str();
     assert!(matches("^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$", code), "{code:?}");
+    assert_eq!(page["title"].str(), "和手机配对");
+    check_link(page["fields"][0]["value"].str(), code, fx.srv.port, &fx.pin, TEAM);
     Guest::new(&fx.d, "iPad").join(&web, &spec::code_bytes(code).expect("配对码的样子是对的"), Some(a.fp()));
     let rc = p.wait(secs(60));
     assert_eq!(rc, 0, "{}", p.err_rest());
@@ -1465,17 +1615,33 @@ fn in_the_app(t: &mut Ctx) {
     assert_eq!((results[0]["code"].str(), results[0]["message"].str().contains("「iPad」")), ("remote_paired", true));
 }
 
-/// 服务器没开网页端（或者是旧版）：cca remote pair --web 说清楚，不留下一个手机输了也没用的配对码
-fn no_web(t: &mut Ctx) {
+/// 没开网页端的服务器（更新过的都认手机）：终端里 cca remote pair --web 的辅助程序那一步给出链接（App 扫的二维码里的那一个），
+/// 手机拿它配好
+fn link_in_the_terminal(t: &mut Ctx) {
     let fx = Base::new(t);
+    let a = fx.device("box");
+    fx.machines(&[&a]);
+    let mut p = Popen::spawn(&mut relay::helper_cmd(&a, &["remote-pair-show", "--web"]));
+    let (line, link) = (p.out_line(), p.out_line());
+    let code = line.split_whitespace().nth(1).unwrap_or_else(|| panic!("头一行该是 code 配对码：{line:?}")).to_string();
+    let link = link.strip_prefix("link ").unwrap_or_else(|| panic!("配对码后面该是给 App 的链接：{link:?}"));
+    check_link(link.trim_end(), &code, fx.srv.port, &fx.pin, TEAM);
+    let app = Web::app(&fx);
+    Guest::new(&fx.d, "iPhone").join(&app, &spec::code_bytes(&code).expect("配对码的样子是对的"), Some(a.fp()));
+    assert_eq!(p.communicate(secs(60)), (0, "peer iPhone\n".to_string(), String::new()));
+}
+
+/// 服务器不认手机（--no-guests，或者是旧版）：cca remote pair --web 说清楚，不留下一个手机输了也没用的配对码
+fn no_web(t: &mut Ctx) {
+    let fx = Base::with(t, true, |_| vec!["--no-guests".to_string()]);
     let a = fx.device("box");
     fx.machines(&[&a]);
     let r = fx.cca_with(&a, &["remote", "pair", "--web"], Some(&["y"]), None);
     assert_eq!((r.code, r.out.as_str()), (1, ""));
-    let why = "「测试组」的服务器还没有开网页端，手机上接入不了（管理员要重新部署、把网页端打开：cca team deploy）";
+    let why = "「测试组」的服务器还不认手机，手机上接入不了（管理员要更新服务器：cca team deploy）";
     assert!(r.err.contains(why), "{}", r.err);
     assert!(!r.err.contains("配对码："), "{}", r.err);
-    // 没开网页端的服务器照样配得了两台机器
+    // 辅助程序那一步也停下，服务器上不留这次配对
     let r = a.run(&["remote-pair-show", "--web"]);
     assert_eq!((r.code, r.out.as_str()), (1, ""));
     assert_eq!(fx.call(&a, "pair_get", &obj! { "rid" => "0".repeat(32) }).0, 404);
@@ -1530,7 +1696,7 @@ fn real_page_fx(t: &mut Ctx, name: Option<&str>) -> (Base, Web) {
     });
     let ca = fx.d.join("web-tls").join("ca.pem");
     let origin = Some("https://relay.example.com".to_string());
-    let web = Web { wport: wport_in(&fx.d), ca, origin, held: RefCell::new(Vec::new()) };
+    let web = Web::new(&fx.d, ca, origin);
     (fx, web)
 }
 
@@ -1676,9 +1842,9 @@ fn the_page_in_a_browser(t: &mut Ctx) {
     fx.machines(&[&b]);
     let _h = relay::session(&b, Device::KEY, "alice", &[]);
     let mut p = Popen::spawn(&mut relay::helper_cmd(&b, &["remote-pair-show", "--web"]));
-    let (line, web) = (p.out_line(), p.out_line());
+    let (line, link) = (p.out_line(), p.out_line());
     let code = line.split_whitespace().nth(1).unwrap_or_else(|| panic!("头一行该是 code 配对码：{line:?}")).to_string();
-    assert_eq!(web, format!("web {url}\n"));
+    assert!(link.starts_with("link cca-remote://"), "{link:?}");
     let kept = std::env::var_os("CCA_WEB_SHOTS").filter(|dir| !dir.is_empty()).map(PathBuf::from);
     let shots = kept.unwrap_or_else(|| t.tmp("cca-shots-"));
     // 环境里只有 PATH、Chrome 在哪、临时目录（不带代理的那些：只连本机）。临时目录指着用例自己的：Chrome 的资料目录建在

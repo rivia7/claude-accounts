@@ -100,24 +100,18 @@ ST_FLAGS=(-parse-as-library -O -whole-module-optimization -swift-version 5 -supp
 # 文件、把成不成告诉对方，sixel 是又一个解码别人给的图的入口。上游没有开关，源码又要原样留着（SHA256SUMS）：编的时候用改过分派
 # 那两行的一份 EscapeSequenceParser.swift。两处都得正好各有一处、都换上了才往下走——上游改了写法就停在这里，不能悄悄带着它编出去；
 # 编好以后再喂它几条试一遍（tools/swiftterm-check）
+# （换哪两行写在 tools/swiftterm-parser.sh：iOS App 编 SwiftTerm 时用同一份）
 ST_PARSER="$HERE/Vendor/SwiftTerm/Sources/SwiftTerm/EscapeSequenceParser.swift"
-ST_KITTY='case 0x47: terminal.handleKittyGraphics(content)'
-ST_SIXEL='return SixelDcsHandler(terminal: terminal)'
 ST_CHECK="$HERE/tools/swiftterm-check/main.swift"
 [ -f "$ST_PARSER" ] && [ -f "$ST_CHECK" ] || die "没找到 $ST_PARSER 或者 $ST_CHECK"
-[ "$(grep -cF "$ST_KITTY" "$ST_PARSER" || true)" = 1 ] && [ "$(grep -cF "$ST_SIXEL" "$ST_PARSER" || true)" = 1 ] ||
-	die "SwiftTerm 的 EscapeSequenceParser.swift 里分派图形协议的那两行对不上（上游改了写法？）：见 Vendor/SwiftTerm/README.md「不要的功能」"
 mkdir -p "$ST/src"
-sed -e "s|$ST_KITTY|case 0x47: break|" -e "s|$ST_SIXEL|return nil|" "$ST_PARSER" >"$ST/src/EscapeSequenceParser.swift"
-if grep -qF -e "$ST_KITTY" -e "$ST_SIXEL" "$ST/src/EscapeSequenceParser.swift" || ! grep -qF 'case 0x47: break' "$ST/src/EscapeSequenceParser.swift"; then
-	die "没能把 SwiftTerm 分派图形协议的那两行换掉"
-fi
+bash "$HERE/tools/swiftterm-parser.sh" "$ST_PARSER" "$ST/src/EscapeSequenceParser.swift" || die "没编 SwiftTerm（见上一行）"
 ST_BUILD=()
 for f in "${ST_SRC[@]}"; do
 	if [ "$f" = "$ST_PARSER" ]; then ST_BUILD+=("$ST/src/EscapeSequenceParser.swift"); else ST_BUILD+=("$f"); fi
 done
 # 源码（换过那两行的）、自检、编译器、SDK、编译选项有一样变了就重编（按架构各一份：目标写在目录名里）
-ST_SUM=$( { swiftc --version 2>&1; xcrun --show-sdk-version 2>&1; printf '%s\n' "${ST_FLAGS[@]}" macos26.0 "${ST_SRC[@]#"$HERE"/}"; cat "${ST_BUILD[@]}" "$ST_CHECK"; } | shasum -a 256 | cut -d' ' -f1)
+ST_SUM=$( { swiftc --version 2>&1; xcrun --show-sdk-version 2>&1; printf '%s\n' "${ST_FLAGS[@]}" macos26.0 "${ST_SRC[@]#"$HERE"/}"; cat "${ST_BUILD[@]}" "$ST_CHECK" "$HERE/tools/swiftterm-parser.sh"; } | shasum -a 256 | cut -d' ' -f1)
 pids=""
 for a in $ARCHS; do
 	mkdir -p "$ST/$a"

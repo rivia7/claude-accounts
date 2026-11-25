@@ -666,14 +666,20 @@ fn guests() {
         assert_eq!(t.op("pair_commit", dev, dict! { "rid" => hex(5), "pid" => hex(55) }).0, 200);
     }
     assert_eq!(t.sh.lock().guests.keys().collect::<Vec<_>>(), [g.as_str()]);
-    // 关掉网页端重启：访客的请求一律不认，记录留着；再打开，它还在
+    // 关掉网页端重启：访客照旧（iOS 上的 App 不要网页端），旧版 cca 开给网页端的配对开不了
     t.reopen(None);
+    assert_eq!(key(&t, &g, "relay_list", dict! {}), Some(gpub.clone()));
+    assert_eq!(t.op("pair_open", 1, dict! { "rid" => hex(6), "web" => true }), bad(404, "no_web"));
+    t.reopen(Some(""));
+    assert_eq!(t.op("pair_open", 1, dict! { "rid" => hex(6), "web" => true }), bad(404, "no_web"));
+    // 不认访客（--no-guests）：访客的请求一律不认，给手机的配对开不了，记录留着；再认，它还在
+    t.sh.lock().guests_on = false;
     assert_eq!(key(&t, &g, "relay_list", dict! {}), None);
+    assert_eq!(t.op("pair_open", 1, dict! { "rid" => hex(6), "guest" => true }), bad(404, "no_guest"));
+    t.reopen(Some(WEB));
+    t.sh.lock().guests_on = false;
     assert_eq!(t.op("pair_open", 1, dict! { "rid" => hex(6), "web" => true }), bad(404, "no_web"));
     assert_eq!(t.sh.lock().guests.len(), 1);
-    t.reopen(Some(""));
-    assert_eq!(key(&t, &g, "relay_list", dict! {}), None);
-    assert_eq!(t.op("pair_open", 1, dict! { "rid" => hex(6), "web" => true }), bad(404, "no_web"));
     t.reopen(Some(WEB));
     assert_eq!(key(&t, &g, "relay_list", dict! {}), Some(gpub.clone()));
     // 访客手里有票据；它最后一个配对取消了：它和它的票据都不留
@@ -691,6 +697,31 @@ fn guests() {
     assert_eq!(key(&t, &g, "relay_list", dict! {}), None);
     let doc = json::loads(&t.file()).unwrap().as_dict().unwrap();
     assert!(doc.dict("guests").unwrap().is_empty() && doc.dict("edges").unwrap().len() == 1);
+}
+
+/// iOS 上的 App：没开网页端也行，配对开给手机（pair_open 带 guest），回的里面带 guest
+#[test]
+fn an_app_guest_without_the_web_side() {
+    let t = Rig::with(Limits::DEFAULT, None);
+    let (g, gpub) = guest(1);
+    let (rid, pid) = (hex(1), hex(11));
+    let key = |t: &Rig, who: &str, op: &str, j: Dict| t.sh.lock().guest_key(who, op, &V::Dict(j), t.now);
+    assert_eq!(t.op("pair_open", 1, dict! { "rid" => &rid, "web" => true }), bad(404, "no_web"), "旧版 cca 要网页端的地址");
+    let open = r#"{"v":1,"ok":true,"ttl":600,"guest":true}"#.to_string();
+    assert_eq!(t.op("pair_open", 1, dict! { "rid" => &rid, "guest" => true }), (200, open));
+    assert_eq!(key(&t, &g, "pair_put", dict! { "rid" => &rid, "pub" => &gpub }), Some(gpub.clone()));
+    // guest 要是 true；普通的配对访客进不来
+    let plain = (200, r#"{"v":1,"ok":true,"ttl":600}"#.to_string());
+    assert_eq!(t.op("pair_open", 2, dict! { "rid" => hex(2), "guest" => 1 }), plain);
+    assert_eq!(key(&t, &g, "pair_put", dict! { "rid" => hex(2), "pub" => &gpub }), None);
+    assert_eq!(t.op_as("pair_put", &g, dict! { "rid" => hex(2), "m" => blob() }, Some(&gpub)), bad(403, "denied"));
+    // 配成：记进 guests，之后它的请求认它
+    assert_eq!(t.op_as("pair_put", &g, dict! { "rid" => &rid, "m" => blob() }, Some(&gpub)).0, 200);
+    assert_eq!(t.op("pair_put", 1, dict! { "rid" => &rid, "m" => blob() }).0, 200);
+    assert_eq!(t.op_as("pair_commit", &g, dict! { "rid" => &rid, "pid" => &pid }, Some(&gpub)).0, 200);
+    assert_eq!(t.op("pair_commit", 1, dict! { "rid" => &rid, "pid" => &pid }).0, 200);
+    assert_eq!(t.sh.lock().guests.keys().collect::<Vec<_>>(), [g.as_str()]);
+    assert_eq!(key(&t, &g, "relay_list", dict! {}), Some(gpub.clone()));
 }
 
 #[test]

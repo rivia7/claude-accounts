@@ -151,7 +151,7 @@ impl Server {
         let text = match (code, error.as_str()) {
             (404, "not_found") => self.old(),
             (404, "no_pairing") => "服务器上没有这个配对（配对码过期了，或者对方取消了配对）".into(),
-            (404, "no_web") => self.no_web(),
+            (404, "no_web" | "no_guest") => self.no_guest(),
             (404, "no_session") => "那台机器上现在没有这个会话（它结束了，或者那边不让这台机器接入）".into(),
             (409, "taken") => "这个配对码已经有另一台机器在用了：重新显示一个".into(),
             (409, "mismatch") => "配对没对上（两边算出来的不一样）：重新来一次".into(),
@@ -168,9 +168,14 @@ impl Server {
         format!("{}还没开远程会话的中转（管理员要重新部署、把中转打开：cca team deploy）", label(self.kind))
     }
 
-    /// 这台服务器没开网页端
-    pub fn no_web(&self) -> String {
-        format!("{}还没有开网页端，手机上接入不了（管理员要重新部署、把网页端打开：cca team deploy）", label(self.kind))
+    /// 这台服务器不认手机（旧版，不认 `pair_open` 的 guest 这一项；或者用 --no-guests 关掉了）
+    pub fn no_guest(&self) -> String {
+        format!("{}还不认手机，手机上接入不了（管理员要更新服务器：cca team deploy）", label(self.kind))
+    }
+
+    /// 配置：{url, pins, …}（给手机的二维码要地址和证书指纹）
+    pub fn cfg(&self) -> &Dict {
+        &self.cfg
     }
 
     pub fn ticket(&self, op: &str, payload: &Dict) -> R<Result<Ticket, Fault>> {

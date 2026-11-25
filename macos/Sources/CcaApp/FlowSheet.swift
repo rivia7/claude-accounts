@@ -250,7 +250,8 @@ private struct FlowMenu: View {
     }
 }
 
-/// 只显示的一个网址（和手机配对那一页）：画成二维码，手机的相机扫了就打开；下面写着网址，照着输也行。
+/// 只显示的一个链接（和手机配对那一页）：画成二维码，iPhone 上的 cca App 扫了就配对；下面写着链接，复制了在 iPhone 上粘贴也行
+/// （同一个 Apple 账号的设备之间复制粘贴是通的）。
 /// 二维码是系统自带的生成器画的（CoreImage），App 不联网、不经别人的服务。
 private struct FlowQR: View {
     @Environment(AppModel.self) private var model
@@ -280,16 +281,18 @@ private struct FlowQR: View {
                 Image(decorative: code, scale: 1)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 168, height: 168)
+                    .frame(width: 200, height: 200)
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 10).fill(.white))   // 深色外观下也是白底黑点：相机认得出
-                    .accessibilityLabel("手机上打开的地址的二维码")
+                    .accessibilityLabel("给 iPhone 上的 cca App 扫的二维码")
             }
             HStack(spacing: 8) {
                 Text(text)
-                    .font(.system(.callout, design: .monospaced))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
                     .textSelection(.enabled)
-                    .lineLimit(2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Button("复制") { model.copy(text) }
                     .controlSize(.small)
             }

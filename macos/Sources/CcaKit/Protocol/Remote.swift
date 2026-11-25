@@ -168,7 +168,7 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     var shown: Bool
     var pairedEpoch: Double?
     var state: RemotePeerState
-    /// 它是手机上的网页端（`cca remote pair --web` 配的）：只是给人看的，它能做什么照旧看 `incoming`。旧版 cca 没有这个字段
+    /// 它是手机（`cca remote pair --web` 配的：iPhone 上的 cca App，或者以前的网页端）：只是给人看的，它能做什么照旧看 `incoming`。旧版 cca 没有这个字段
     var web: Bool
     /// 这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）。旧版 cca 没有这个字段、3.6.0 以前经维护者的
     /// 服务器配的（3.6.0 的 cca 不再列出）是 nil：照样列出来，不标是哪个 Team 的
