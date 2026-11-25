@@ -3488,12 +3488,11 @@ health_note() {   # health_note 结果：没有出口检测数据的结果（第
 		"${COFFEE_LINE:-}" 2>/dev/null)
 }
 settings_warn() {   # settings_warn 问题 [-- 启动参数…]：py settings-check（带 -- 时是 launch-check，同样的启动参数）查出的问题。
-	                 # Claude 的由 py settings-explain 说清楚是哪份文件、哪几项、带着它启动会怎样、怎么办（只说路径和名字，不说值）
+	                 # 由 py settings-explain 说清楚是哪份文件、哪几项、带着它启动会怎样、怎么办（只说路径和名字，不说值；三种工具都有，
+	                 # Claude 的共享设置还能 cca settings fix）；说不出来时照下面的一句说
 	local bad="$1" msg=""
 	shift
-	if [ "$TOOL" = claude ]; then
-		if [ "${1:-}" = -- ]; then shift; msg=$(py settings-explain launch "$@"); else msg=$(py settings-explain shared); fi
-	fi
+	if [ "${1:-}" = -- ]; then shift; msg=$(py settings-explain launch "$@"); else msg=$(py settings-explain shared); fi
 	if [ -n "$msg" ]; then
 		gui_fail settings_conflict "$(printf '%s' "$msg" | tr -d '\n')"
 		printf '%s\n' "$msg" | { IFS= read -r line; warn "$line"; while IFS= read -r line; do printf '%s\n' "  ${line}" >&2; done; }

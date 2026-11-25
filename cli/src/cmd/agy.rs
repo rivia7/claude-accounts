@@ -709,11 +709,15 @@ mod tests {
         let w = agy_week(&two, now).unwrap();
         assert_eq!((w.at("utilization").as_num(), w.at("resets_at").as_str()), (Some(40.0), Some("2026-11-25T02:00:00Z")));
         // 一样多时先重置的那个；过了重置时间的算 0（use_first 看到重置时间过了就不提示）
-        let tie = rl(r#"[{"name": "A", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-26T00:00:00Z"}]},
-                        {"name": "B", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-25T00:00:00Z"}]}]"#);
+        let tie = rl(
+            r#"[{"name": "A", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-26T00:00:00Z"}]},
+                        {"name": "B", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-25T00:00:00Z"}]}]"#,
+        );
         assert_eq!(agy_week(&tie, now).unwrap().at("resets_at").as_str(), Some("2026-11-25T00:00:00Z"));
-        let old = rl(r#"[{"name": "A", "buckets": [{"window": "weekly", "remaining_fraction": 0.1, "reset_time": "2026-11-24T00:00:00Z"}]},
-                        {"name": "B", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-25T00:00:00Z"}]}]"#);
+        let old = rl(
+            r#"[{"name": "A", "buckets": [{"window": "weekly", "remaining_fraction": 0.1, "reset_time": "2026-11-24T00:00:00Z"}]},
+                        {"name": "B", "buckets": [{"window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-25T00:00:00Z"}]}]"#,
+        );
         assert_eq!(agy_week(&old, now).unwrap().at("utilization").as_num(), Some(0.0));
         // 没有本周额度：None
         assert!(agy_week(&rl(r#"[{"name": "A", "buckets": [{"window": "5h", "remaining_fraction": 0.5}]}]"#), now).is_none());

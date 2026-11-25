@@ -757,7 +757,7 @@ pub fn cmd_launch_check(args: &[String]) -> R<()> {
     settings_check_result(&launch_settings_problems(args)?)
 }
 
-// ---- 共享设置的说明和修复（bash 的 settings_warn、cca settings fix；只给 Claude）----
+// ---- 共享设置的说明和修复（bash 的 settings_warn、cca settings fix；这一节只给 Claude，Codex、agy 的说明在后面）----
 
 /// 会盖掉账号自己设置的一类
 struct SettingsKind {
@@ -944,12 +944,228 @@ pub fn settings_explain(bad: &[String]) -> Vec<String> {
     head
 }
 
-/// py settings-explain shared | launch [启动参数…]：settings_warn 给人看的说明（只给 Claude），一句一行；
+// ---- Codex、agy 的说明（settings_warn；没有 settings fix：TOML 改写会丢注释，照说的手动改）----
+
+/// Codex、agy 会盖掉账号的一类：认哪几个名字（名字是标签最后那一段：config.toml 的键、.env 的变量、--enable 的值）
+struct ToolKind {
+    name: &'static str,
+    effect: &'static str,
+    hit: fn(&str) -> bool,
+}
+
+static CODEX_KINDS: [ToolKind; 5] = [
+    ToolKind {
+        name: "接口地址",
+        effect: "官方账号的请求和登录信息会被发到别的地址",
+        hit: |k| {
+            k.ends_with("_base_url")
+                || k == "model_provider"
+                || k == "model_providers.openai"
+                || k.eq_ignore_ascii_case("OPENAI_BASE_URL")
+        },
+    },
+    ToolKind {
+        name: "登录方式或凭证",
+        effect: "各账号会混用同一份登录，或者换成别的凭证、工作空间",
+        hit: |k| {
+            matches!(k, "cli_auth_credentials_store" | "forced_login_method" | "forced_chatgpt_workspace_id")
+                || k.eq_ignore_ascii_case("OPENAI_API_KEY")
+                || k.eq_ignore_ascii_case("CODEX_HOME")
+                || k.eq_ignore_ascii_case("CODEX_API_KEY")
+        },
+    },
+    ToolKind {
+        name: "系统代理",
+        effect: "账号会绕开 cca 给它分的出口",
+        hit: |k| {
+            matches!(
+                k,
+                "features.respect_system_proxy"
+                    | "features.system_proxy_fallback"
+                    | "respect_system_proxy"
+                    | "system_proxy_fallback"
+            ) || matches!(k.to_ascii_uppercase().as_str(), "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY" | "NO_PROXY")
+        },
+    },
+    ToolKind {
+        name: "选用的 profile（名字不对）",
+        effect: "没法确认它会用哪一套设置",
+        hit: |k| k == "profile" || k == "invalid_profile",
+    },
+    ToolKind { name: "会换掉账号设置的变量", effect: "账号会被换到别处", hit: |_| true },
+];
+
+static AGY_KINDS: [ToolKind; 1] =
+    [ToolKind { name: "Google Cloud 项目", effect: "所有账号都会记到同一个 Google Cloud 项目上", hit: |_| true }];
+
+/// 一组名字按类分：[(类, [写法…])]，按类的先后
+fn tool_groups(kinds: &'static [ToolKind], names: &[String]) -> Vec<(&'static ToolKind, Vec<String>)> {
+    let mut out: Vec<(&'static ToolKind, Vec<String>)> = Vec::new();
+    for kind in kinds {
+        let hit: Vec<String> = names
+            .iter()
+            .filter(|n| {
+                let key = n.rsplit(' ').next().unwrap_or(n);
+                kinds.iter().position(|k| (k.hit)(key)) == kinds.iter().position(|k| std::ptr::eq(k, kind))
+            })
+            .cloned()
+            .collect();
+        if !hit.is_empty() {
+            out.push((kind, hit));
+        }
+    }
+    out
+}
+
+/// 接在「设置了」后面：以字母开头时前面空一格（设置了 Google Cloud 项目）
+fn tool_kinds_text(groups: &[(&ToolKind, Vec<String>)]) -> String {
+    let s = groups.iter().map(|(kind, hit)| format!("{}（{}）", kind.name, hit.join("、"))).collect::<Vec<_>>().join("，还有");
+    if s.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        format!(" {s}")
+    } else {
+        s
+    }
+}
+
+fn tool_effects(groups: &[(&ToolKind, Vec<String>)]) -> String {
+    groups.iter().map(|(kind, _)| kind.effect).collect::<Vec<_>>().join("；")
+}
+
+/// settings_warn 的说明（Codex、agy）：哪份文件、哪几项、带着它启动会怎样、怎么办，一句一行。只说路径和名字，不说值。
+/// 标签是 codex_settings_problems / agy_settings_problems / launch_settings_problems 给的「来源:名字」（Codex 的 profile 里的是
+/// 「来源:profiles.名字:键」）
+pub fn tool_settings_explain(tool: &Tool, bad: &[String]) -> Vec<String> {
+    let (cmd, label) = (tool.cmd, tool.product);
+    let (kinds, lang): (&'static [ToolKind], &str) = match tool.kind {
+        Kind::Agy => (&AGY_KINDS, "JSON"),
+        _ => (&CODEX_KINDS, "TOML"),
+    };
+    let master = tool.master.clone();
+    // 来源 → (写法…, 读不了)
+    let mut by_src: Vec<(String, Vec<String>, bool)> = Vec::new();
+    for label in fromkeys(bad) {
+        let (src, rest) = match label.split_once(':') {
+            Some((src, rest)) => (src.to_string(), rest.to_string()),
+            None => (label.clone(), String::new()),
+        };
+        let (scope, key) = match rest.rsplit_once(':') {
+            Some((scope, key)) => (scope.to_string(), key.to_string()),
+            None => (String::new(), rest.clone()),
+        };
+        let broken = SETTINGS_UNREADABLE.contains(&key.as_str()) || key == "unreadable";
+        let key = if key == "invalid_profile" { "profile".to_string() } else { key }; // profile 写的名字不对（配置里的、-p 给的）
+        let shown = match scope.strip_prefix("profiles.") {
+            Some(p) => format!("profiles.{p} 的 {key}"),
+            None => key.clone(),
+        };
+        let entry = match by_src.iter().position(|(s, _, _)| *s == src) {
+            Some(i) => &mut by_src[i],
+            None => {
+                by_src.push((src.clone(), Vec::new(), false));
+                by_src.last_mut().unwrap()
+            }
+        };
+        if broken {
+            entry.2 = true;
+        } else if !key.is_empty() {
+            entry.1.push(shown);
+        }
+    }
+    let (mut head, mut rest, mut shared) = (Vec::new(), Vec::new(), Vec::new());
+    for (src, names, broken) in &by_src {
+        let src = src.as_str();
+        let file_src = src.starts_with('/') || src.starts_with("~/");
+        let is_shared = !file_src && !src.starts_with('-') && src != "app";
+        if is_shared || src == "~/.codex" {
+            // 共享的 ~/.codex/config.toml、profile、.env；~/.gemini/antigravity-cli/settings.json
+            let file = if src.starts_with("~/") { src.to_string() } else { home_tilde(&path::join(&master, src)) };
+            if *broken {
+                head.push(format!(
+                    "{file} 读不了，或者不是合法的 {}：cca 确认不了里面有没有会换掉账号的设置，所以没有继续。把它改对（或者挪走）再试。",
+                    if src.ends_with(".env") || src == "~/.codex" { "配置" } else { lang }
+                ));
+            } else if !names.is_empty() {
+                shared.push((file, tool_groups(kinds, names)));
+            }
+        } else if file_src {
+            // 这个目录和上层目录的项目设置（.codex/config.toml）
+            let place = format!("项目设置 {}", home_tilde(src));
+            if *broken {
+                rest.push(format!("{place} 读不了，或者不是合法的 {lang}，所以 cca 没有继续。"));
+            } else if !names.is_empty() {
+                let groups = tool_groups(kinds, names);
+                rest.push(format!("{place} 里设置了{}。", tool_kinds_text(&groups)));
+                rest.push(format!(
+                    "在这个目录下启动时 {label} 也会读它，带着它启动的话{}，所以 cca 没有继续。删掉这几项再启动。",
+                    tool_effects(&groups)
+                ));
+            }
+        } else {
+            // 启动参数
+            let override_names: Vec<&String> = names.iter().filter(|n| n.as_str() == "account_override").collect();
+            let setting: Vec<String> = names
+                .iter()
+                .filter(|n| !matches!(n.as_str(), "account_override" | "missing_value" | "use_cca_codex_app"))
+                .cloned()
+                .collect();
+            if names.iter().any(|n| n == "missing_value") {
+                rest.push(format!("启动参数 {src} 后面少了值。"));
+            }
+            if names.iter().any(|n| n == "use_cca_codex_app") {
+                rest.push(format!("启动参数里有 {src}：要打开这个账号的 ChatGPT App，用 {cmd} app。"));
+            }
+            if !override_names.is_empty() {
+                rest.push(format!("启动参数 {src} 会换掉账号的登录、接口或数据目录，不能经 cca 用。"));
+            }
+            if *broken {
+                rest.push(format!("启动参数 {src} 给的设置读不了，所以 cca 没有继续。"));
+            } else if !setting.is_empty() {
+                let groups = tool_groups(kinds, &setting);
+                rest.push(format!("启动参数 {src} 设置了{}。", tool_kinds_text(&groups)));
+                rest.push(format!("带着它启动的话{}，所以 cca 没有继续。去掉它再启动。", tool_effects(&groups)));
+            }
+        }
+    }
+    if !shared.is_empty() {
+        let mut groups: Vec<(&ToolKind, Vec<String>)> = Vec::new();
+        for (_, g) in &shared {
+            for (kind, _) in g {
+                if !groups.iter().any(|(k, _)| std::ptr::eq(*k, *kind)) {
+                    groups.push((kind, Vec::new()));
+                }
+            }
+        }
+        groups.sort_by_key(|(k, _)| kinds.iter().position(|x| std::ptr::eq(x, *k)));
+        head.extend(shared.iter().map(|(file, g)| format!("{file} 里设置了{}。", tool_kinds_text(g))));
+        head.push(format!(
+            "{}所有账号共用，带着它启动的话{}，所以 cca 没有继续。",
+            if shared.len() == 1 { "这份设置" } else { "这几份设置" },
+            tool_effects(&groups)
+        ));
+        let api = groups.iter().any(|(k, _)| k.name == "接口地址");
+        head.push(format!(
+            "删掉这几项再用 {cmd} 启动{}",
+            if api && tool.kind == Kind::Codex {
+                format!("（第三方 API 用 {cmd} add api 加成单独的账号）。")
+            } else {
+                "。".into()
+            }
+        ));
+    }
+    head.extend(rest);
+    head
+}
+
+/// py settings-explain shared | launch [启动参数…]：settings_warn 给人看的说明（Claude 是 settings_explain，Codex、agy 是 tool_settings_explain），一句一行；
 /// shared 照 settings-check 查，launch 照 launch-check 查（同样的启动参数）
 pub fn cmd_settings_explain(args: &[String]) -> R<()> {
     arity("cmd_settings_explain", args, 1, usize::MAX)?;
     let bad = if args[0] == "launch" { launch_settings_problems(&args[1..])? } else { t().settings_problems() };
-    let lines = if bad.is_empty() { Vec::new() } else { settings_explain(&bad) };
+    let lines = match (bad.is_empty(), t().kind) {
+        (true, _) => Vec::new(),
+        (false, Kind::Claude) => settings_explain(&bad),
+        (false, _) => tool_settings_explain(t(), &bad),
+    };
     if !lines.is_empty() {
         out!("{}", lines.join("\n"));
     }
@@ -1239,6 +1455,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn codex_agy_explain() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let cx = codex();
+        let m = home_tilde(&cx.master);
+        // 共享的 config.toml、profile 和 .env：按文件说是哪几类，最后说怎么办（没有 settings fix）
+        let lines = tool_settings_explain(
+            cx,
+            &s(&[
+                "config.toml:openai_base_url",
+                "config.toml:profiles.work:chatgpt_base_url",
+                "config.toml:features.respect_system_proxy",
+                ".env:OPENAI_API_KEY",
+                ".env:HTTPS_PROXY",
+            ]),
+        );
+        assert_eq!(lines, [
+            format!("{m}/config.toml 里设置了接口地址（openai_base_url、profiles.work 的 chatgpt_base_url），还有系统代理（features.respect_system_proxy）。"),
+            format!("{m}/.env 里设置了登录方式或凭证（OPENAI_API_KEY），还有系统代理（HTTPS_PROXY）。"),
+            "这几份设置所有账号共用，带着它启动的话官方账号的请求和登录信息会被发到别的地址；各账号会混用同一份登录，或者换成别的凭证、工作空间；账号会绕开 cca 给它分的出口，所以 cca 没有继续。".to_string(),
+            "删掉这几项再用 cca codex 启动（第三方 API 用 cca codex add api 加成单独的账号）。".to_string(),
+        ]);
+        // 读不了；profile 名字不对；项目设置；启动参数
+        let lines = tool_settings_explain(cx, &s(&["config.toml:invalid_or_unreadable_config"]));
+        assert!(lines[0].starts_with(&format!("{m}/config.toml 读不了，或者不是合法的 TOML")), "{lines:?}");
+        let lines = tool_settings_explain(cx, &s(&["config.toml:profile:invalid_profile"]));
+        assert!(lines[0].contains("选用的 profile（名字不对）（profile）"), "{lines:?}");
+        let lines = tool_settings_explain(cx, &s(&["/work/p/.codex/config.toml:model_provider"]));
+        assert_eq!(lines[0], "项目设置 /work/p/.codex/config.toml 里设置了接口地址（model_provider）。");
+        assert!(lines[1].starts_with("在这个目录下启动时 Codex 也会读它"), "{lines:?}");
+        let lines = tool_settings_explain(
+            cx,
+            &s(&["-c:forced_login_method", "--remote:account_override", "app:use_cca_codex_app", "-p:missing_value"]),
+        );
+        assert_eq!(
+            lines,
+            [
+                "启动参数 -c 设置了登录方式或凭证（forced_login_method）。",
+                "带着它启动的话各账号会混用同一份登录，或者换成别的凭证、工作空间，所以 cca 没有继续。去掉它再启动。",
+                "启动参数 --remote 会换掉账号的登录、接口或数据目录，不能经 cca 用。",
+                "启动参数里有 app：要打开这个账号的 ChatGPT App，用 cca codex app。",
+                "启动参数 -p 后面少了值。",
+            ]
+        );
+        // agy：Google Cloud 项目、读不了、换数据目录
+        let ag = agy();
+        let a = home_tilde(&ag.master);
+        let lines = tool_settings_explain(
+            ag,
+            &s(&["antigravity-cli/settings.json:gcp.project", "antigravity-cli/settings.json:gcp.location"]),
+        );
+        assert_eq!(
+            lines,
+            [
+                format!("{a}/antigravity-cli/settings.json 里设置了 Google Cloud 项目（gcp.project、gcp.location）。"),
+                "这份设置所有账号共用，带着它启动的话所有账号都会记到同一个 Google Cloud 项目上，所以 cca 没有继续。".to_string(),
+                "删掉这几项再用 cca agy 启动。".to_string(),
+            ]
+        );
+        assert!(tool_settings_explain(ag, &s(&["antigravity-cli/settings.json:unreadable"]))[0].contains("不是合法的 JSON"));
+        assert_eq!(
+            tool_settings_explain(ag, &s(&["--gemini_dir:account_override"])),
+            ["启动参数 --gemini_dir 会换掉账号的登录、接口或数据目录，不能经 cca 用。"]
+        );
+        assert_eq!(tool_settings_explain(ag, &s(&["--settings:gcp"]))[0], "启动参数 --settings 设置了 Google Cloud 项目（gcp）。");
     }
 
     #[test]

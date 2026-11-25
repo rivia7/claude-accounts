@@ -4,7 +4,9 @@
 //! 这一块的子命令都移植了。`Tool` 里按工具分派、和用量 / 套餐有关的几个方法（who、plan、plan_tier、outdated_login_plan、
 //! usage_query、usage_caches）也在这里；Codex 那一半（app-server、登录身份）在 codex.rs。
 
-use super::agy::{agy_cell, agy_table_lines, agy_week, agy_usage_query, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups};
+use super::agy::{
+    agy_cell, agy_table_lines, agy_usage_query, agy_week, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups,
+};
 use super::codex::{
     agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query, json_loads_bytes, temp_file, Got, Piped,
 };

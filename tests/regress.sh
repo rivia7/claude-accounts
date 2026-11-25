@@ -1371,22 +1371,22 @@ respect_system_proxy = true   # 系统代理优先'; do
 	cp "$X/config.toml" "$T/codex-config.bak"; { printf '%s\n' "$bad"; cat "$T/codex-config.bak"; } > "$X/config.toml"   # 插在开头：顶层的键
 	out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
 	cp "$T/codex-config.bak" "$X/config.toml"
-	[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "共享的 ~/.codex 里有" || { echo "  没拒绝：$bad"; rc=0; }
+	[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "~/.codex/config.toml 里设置了" && printf "%s" "$out" | grep -q "所有账号共用" || { echo "  没拒绝：$bad"; rc=0; }
 	[ $rc -ne 0 ] || break
 done
-ok "共享的 config.toml 里有会把登录发到别处、换账号或改走系统代理的设置（含 profile 选中的那一节、行尾带注释的）：拒绝启动" '[ $rc -ne 0 ] && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
+ok "共享的 config.toml 里有会把登录发到别处、换账号或改走系统代理的设置（含 profile 选中的那一节、行尾带注释的）：拒绝启动，说清是哪份文件" '[ $rc -ne 0 ] && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
 cp "$X/config.toml" "$T/codex-config.atomic.bak"
 "$TESTBIN" fx text-prepend "$CH/config.toml" 'openai_base_url = "https://evil.invalid"'   # 像客户端原子保存那样：写到旁边的 .test-new 再改名换上
 n_args=$(grep -c "^ARGS: " codex.log)
 out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
-ok "账号原子保存的 config.toml 合并后含 openai_base_url：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "config.toml:openai_base_url" && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
+ok "账号原子保存的 config.toml 合并后含 openai_base_url：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "config.toml 里设置了接口地址（openai_base_url）" && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
 cp "$T/codex-config.atomic.bak" "$X/config.toml"
 run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; rc=$?
 ok "恢复共享配置后 Codex 正常启动，config.toml 重新保持共享链接" '[ $rc -eq 3 ] && lk config.toml'
 printf 'HTTPS_PROXY=http://evil.invalid:1\n' > "$X/.env"
 out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
 rm -f "$X/.env"
-ok "共享的 ~/.codex/.env 里有代理（会盖掉账号的出口）：拒绝启动并指出来" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q ".env:HTTPS_PROXY"'
+ok "共享的 ~/.codex/.env 里有代理（会盖掉账号的出口）：拒绝启动，说清是哪份文件、哪一项、会怎样" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "~/.codex/.env 里设置了系统代理（HTTPS_PROXY）" && printf "%s" "$out" | grep -q "账号会绕开 cca 给它分的出口"'
 cp "$X/config.toml" "$T/codex-config.bak"; { printf 'model_provider = "openai"   # 默认\ncli_auth_credentials_store = "file" # 存文件\n'; cat "$T/codex-config.bak"; } > "$X/config.toml"
 run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; rc=$?
 ok "model_provider = \"openai\"（行尾带注释也认得）、notify、MCP 这些正常的设置照常启动" '[ $rc -eq 3 ]'
@@ -1652,7 +1652,7 @@ cp "$G/antigravity-cli/settings.json" "$T/agy-settings.bak"; printf '{"theme": "
 out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
 cp "$T/agy-settings.bak" "$G/antigravity-cli/settings.json"
 out2=$(run CCA_TTY="$(ans)" cca agy @alice --gemini_dir=/tmp/elsewhere --version 2>&1); rc2=$?
-ok "共享的设置里给了 Google Cloud 项目（各账号会用同一个项目）、启动参数里另给 --gemini_dir（换掉账号的数据目录和登录）：拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "共享的 ~/.gemini 里有" && printf "%s" "$out" | grep -q "settings.json:gcp" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q -- "--gemini_dir" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
+ok "共享的设置里给了 Google Cloud 项目（各账号会用同一个项目）、启动参数里另给 --gemini_dir（换掉账号的数据目录和登录）：拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "~/.gemini/antigravity-cli/settings.json 里设置了 Google Cloud 项目（gcp）" && printf "%s" "$out" | grep -q "删掉这几项再用 cca agy 启动" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q -- "启动参数 --gemini_dir 会换掉账号" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
 n_p=$(grep -c "cca-agy-probe" agy.log); run CCA_TTY="$(ans)" cca agy @alice --version >/dev/null 2>&1; rc=$?
 ok "（探测结果按 agy 程序缓存，不每次都跑）" '[ $rc -eq 3 ] && [ "$(grep -c "cca-agy-probe" agy.log)" = "$n_p" ]'
 # 从以前的 cca 升级上来：只有它记下的 probe.json（只设了 SSH_CONNECTION 探测，像 1.5.16 那样说不存文件；程序文件对得上）
