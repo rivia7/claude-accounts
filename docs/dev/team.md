@@ -780,7 +780,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - `add [链接]`：写法和 `cca node add` 一样（链接或者粘贴一段 Clash 节点配置，`node_read_block`）：`py node-check` 解析、起不冲突的名字
   （避开这个 Team 已有的和这台设备知道的），`node_validate` 拿内核 `-t` 校验，`py team-node-add`（stdin 是节点的 JSON）。
 - `copy 模板 新名字 [--port 端口]`（`py team-node-copy`）：整份复制一个节点（`deepcopy`，`reality-opts` 这些也是新的一份），只换名字、
-  端口。一台服务器上按端口分开的几个入站（各有各的出口）就这样一个个加，节点的密钥不出这台设备（skill 也不用经手）。
+  端口。一台服务器上按端口分开的几个入站（各有各的出口）就这样一个个加，节点的密钥不出这台设备（加外部账号时也不经手）。
 - `rm 节点`（`py team-node-rm`）：还有账号走它、别的节点经它连出去、它是 `install_node` 时不去掉（`node_used`，原因里说是谁）；去掉最后
   一个时 `config.nodes` 回到 null。
 - `install 节点|-`（`py team-node-install`，3.6.1 起）：指定各台设备直连拿不到安装脚本时经内置代理装客户端用的节点（`config.install_node`，
@@ -798,11 +798,10 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   哪个都没取到的直连它的服务器端口（`port_open`），分清没开入站和入站参数不对。结果交给 `py team-node-verdict`（`judge`）：不通、经它出得去
   而要用的服务不通、出口在受限地区（`RESTRICTED`）、和别的测着的节点在服务那边是同一个 IP、别的节点在那边有自己的出口而它看到的是服务器
   自己的 IP。退出码：0 都好；1 有节点不通；2 全都不通（多半是这台机器的网络）；3 都通了、有要提醒的。不写节点是全部。`--json`
-  （`kind: team_node_test`：`hosts`、每个节点的 `state`、`exits`、`tcp`、`notes`）给 skill 用。
+  （`kind: team_node_test`：`hosts`、每个节点的 `state`、`exits`、`tcp`、`notes`）给脚本用。
 - 只在命令行里（App 不调）；失败的原因码 `team_no_node`、`team_node`、`team_node_used`、`team_name`、`team_usage`（PROTOCOL 4.14）。
-- 加外部账号的 skill（`cca-external-account`，只在维护者的仓库里、不进 git）3.5.3-beta.8 起照它做：`copy` 出新节点 → `test`
-  （同一组里有账号在用的节点当对照）→ 好了 `cca team map`，不好 `rm` 撤回；不再碰映射仓库、不签名推送。要这台 Mac 装着有 `cca team node`
-  的版本。
+- 加外部账号的做法：`copy` 出新节点 → `test`（同一组里有账号在用的节点当对照）→ 好了 `cca team map`，不好 `rm` 撤回。3.5.3-beta.8 起由维护者本机的
+  skill（`cca-external-account`，不进 git）照这个做，2026-11-26 删掉了，现在是手动。
 
 ## 导出、导入、修改配置（`cca team export|import|edit`，3.6.14 起）
 
