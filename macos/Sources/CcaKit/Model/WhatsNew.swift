@@ -20,6 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.15", title: "Codex、Antigravity 的账号也有这些功能了", points: [
+            .init(symbol: "calendar.badge.clock",
+                  text: "Antigravity 也有周结算提醒：本周额度快重置、还剩不少时，提醒先用这个账号。"),
+            .init(symbol: "exclamationmark.bubble",
+                  text: "Codex、Antigravity 的共享设置有问题时，说清是哪份文件、哪几项、会怎样、怎么改。"),
+            .init(symbol: "arrow.down.circle",
+                  text: "客户端更新里加上了终端里的 Antigravity，有新版本时能直接更新。"),
+            .init(symbol: "square.and.arrow.down",
+                  text: "没装 ChatGPT App 时，点「去下载」直接下载官方安装包。"),
+            .init(symbol: "person.badge.plus",
+                  text: "配置向导里添加账号时，可以选加 Codex 或 Antigravity 的账号。"),
+        ]),
         ReleaseNote(version: "3.6.14", title: "Team 的配置能导出、导入、修改", points: [
             .init(symbol: "square.and.arrow.up.on.square",
                   text: "管理员能把 Team 的配置导出成文件、改好再导入，也能直接在终端里改（App 里在 Team 的「更多」菜单）；导入前先列出会改什么，同意了才换。"),
