@@ -5903,7 +5903,7 @@ client_update_py() {   # 客户端更新独立于账号准备和 cca 自身更�
 		fi
 	fi
 	CCA_CLIENT_CLAUDE_APP="$(claude_app_path)" CCA_CLIENT_CODEX_APP="$(codex_app_path)" CCA_CLIENT_VERIFIER="$verifier" \
-		CCA_CLI_CLAUDE="$CLAUDE_BIN" CCA_CLI_CODEX="$CODEX_BIN" py client-updates "$@"
+		CCA_CLI_CLAUDE="$CLAUDE_BIN" CCA_CLI_CODEX="$CODEX_BIN" CCA_CLI_AGY="$AGY_BIN" py client-updates "$@"
 }
 
 cmd_clients() {   # cca clients status|check [--force]|mode auto|off|auto-install on|off|install TOKEN [--json]

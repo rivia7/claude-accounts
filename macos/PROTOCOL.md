@@ -1309,8 +1309,8 @@ ZeroTier / Tailscale、代理内核自己的流量照旧直连。
 }
 ```
 
-- `clients` 里 `id=claude`、`id=codex`（`kind=desktop`）、`id=claude-cli`、`id=codex-cli`（`kind=cli`）各一行（`status=missing` 是没装，UI 不显示）；UI 按数组显示，不因查询客户端状态而启用 Codex 账号。
-- 终端工具（`kind=cli`）只查版本、不下载软件包：`status` 里的现在版本是现跑 `命令 --version`（空环境），最新版本从官方的公开地址查（官方安装器：Claude Code 是 `downloads.claude.ai` 的发布通道，跟用户设的 `autoUpdatesChannel`；Codex 是 GitHub 的 latest release；npm、Homebrew 装的查 npm、Homebrew）。有新版本时 `status=available`，`available_version` 是新版本。官方安装器装的 `can_install=true`，`install` 运行它们自己的 `update` 命令（空环境、真 HOME；claude 用一次性的配置目录，不碰账号）；npm、Homebrew 装的 `can_install=false`，`message` 写着在终端里运行什么。
+- `clients` 里 `id=claude`、`id=codex`（`kind=desktop`）、`id=claude-cli`、`id=codex-cli`、`id=agy-cli`（`kind=cli`；`agy-cli` 是 3.6.15 加的，以前的 cca 没有这一行）各一行（`status=missing` 是没装，UI 不显示）；UI 按数组显示，不因查询客户端状态而启用 Codex 账号。
+- 终端工具（`kind=cli`）只查版本、不下载软件包：`status` 里的现在版本是现跑 `命令 --version`（空环境），最新版本从官方的公开地址查（官方安装器：Claude Code 是 `downloads.claude.ai` 的发布通道，跟用户设的 `autoUpdatesChannel`；Codex 是 GitHub 的 latest release；agy 是它的安装脚本查的那份清单 `manifests/<平台>.json`；npm、Homebrew 装的查 npm、Homebrew）。有新版本时 `status=available`，`available_version` 是新版本。官方安装器装的 `can_install=true`，`install` 运行它们自己的 `update` 命令（空环境、真 HOME；claude 用一次性的配置目录，不碰账号）；npm、Homebrew 装的 `can_install=false`，`message` 写着在终端里运行什么。
   一个客户端出问题写在它自己那一行，不影响另一个；`check`、`install` 有问题时退出码 1。`install` 的 TOKEN 只对它那一个客户端有效。
 - `status`：`missing/current/checking/busy/unsupported/staged/available/running/blocked/error/updated/unverified/needs_recheck`，以后可增加；原因直接显示 `message`。
   `busy` 显示「正在更新」，`unsupported` 显示「这个系统暂时没有可用的安装包」。

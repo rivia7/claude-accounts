@@ -150,7 +150,33 @@ pub static CU_CODEX_CLI: Client = Client {
     own_dir: ".codex/packages/standalone",
     npm: "@openai/codex",
 };
-pub static CU_CLIENTS: [&Client; 4] = [&CU_CLAUDE, &CU_CODEX, &CU_CLAUDE_CLI, &CU_CODEX_CLI];
+/// Antigravity 的 agy：官方安装器把程序直接放进 ~/.local/bin（不是链接到版本目录），装在那里的算它自己装的；没有 npm 包
+pub static CU_AGY_CLI: Client = Client {
+    id: "agy-cli",
+    label: "Antigravity（终端）",
+    cli: true,
+    bundle: "",
+    team: "",
+    app: None,
+    names: &[],
+    env: "CCA_CLI_AGY",
+    app_env: "",
+    dotted_build: false,
+    updater: &[],
+    command: "agy",
+    own_dir: ".local/bin",
+    npm: "",
+};
+pub static CU_CLIENTS: [&Client; 5] = [&CU_CLAUDE, &CU_CODEX, &CU_CLAUDE_CLI, &CU_CODEX_CLI, &CU_AGY_CLI];
+
+/// 要处理的几种客户端（CU_CLIENTS）。单元测试里重放从 Python 冻结下来的场景时只有原来那四种（agy-cli 是后来加的，另有它的测试）
+fn cu_clients() -> Vec<&'static Client> {
+    #[cfg(test)]
+    if tests::legacy_four() {
+        return CU_CLIENTS[..4].to_vec();
+    }
+    CU_CLIENTS.to_vec()
+}
 
 thread_local! {
     /// 正在处理的那一种客户端（和账号的 T 一样）
@@ -176,7 +202,7 @@ impl Client {
     fn advice(&self, method: &str, cask: &str) -> String {
         match method {
             "brew" => format!("brew upgrade --cask {cask}"),
-            "npm" => format!("npm install -g {}@latest", self.npm),
+            "npm" if !self.npm.is_empty() => format!("npm install -g {}@latest", self.npm),
             _ => format!("{} update", self.command),
         }
     }
@@ -194,6 +220,8 @@ impl Client {
     fn latest(&self) -> String {
         if is(self, &CU_CLAUDE_CLI) {
             format!("https://downloads.claude.ai/claude-code-releases/{}", cu_claude_channel())
+        } else if is(self, &CU_AGY_CLI) {
+            format!("https://{AGY_FEED_HOST}/manifests/{}.json", agy_platform())
         } else {
             "https://api.github.com/repos/openai/codex/releases/latest".to_string()
         }
@@ -203,6 +231,8 @@ impl Client {
     fn run_env(&self, folder: &str) -> R<Vec<(String, String)>> {
         if is(self, &CU_CLAUDE_CLI) {
             cu_claude_env(folder)
+        } else if is(self, &CU_AGY_CLI) {
+            Ok(Vec::new())
         } else {
             Ok(vec![("CODEX_NON_INTERACTIVE".into(), "1".into())])
         }
@@ -311,8 +341,24 @@ fn cu_url_claude(p: &Url, package: bool) -> bool {
         && re!(r"device_id=[0-9a-f-]{36}&version=[0-9.]+&os_version=[0-9.]+").fullmatch(&p.query).is_some()
 }
 
+/// agy 的安装脚本（antigravity.google/cli/install.sh）查最新版本的地方：manifests/<平台>.json 给 version、url、sha512
+const AGY_FEED_HOST: &str = "antigravity-cli-auto-updater-974169037036.us-central1.run.app";
+const AGY_MANIFESTS: &[&str] =
+    &["/manifests/darwin_arm64.json", "/manifests/darwin_amd64.json", "/manifests/linux_arm64.json", "/manifests/linux_amd64.json"];
+
+/// 这台机器的 agy 平台名（安装脚本的 os_arch）。Linux 上 musl 和 glibc 是两份程序、版本号一样：只为查版本，不分
+fn agy_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin_arm64",
+        ("macos", _) => "darwin_amd64",
+        (_, "aarch64") => "linux_arm64",
+        _ => "linux_amd64",
+    }
+}
+
 /// 终端工具的最新版本从哪查（host → path）：和它们自己检查更新用的地址一样，都是不带身份的公开地址
-const CU_CLI_SOURCES: [(&str, &[&str]); 4] = [
+const CU_CLI_SOURCES: [(&str, &[&str]); 5] = [
+    (AGY_FEED_HOST, AGY_MANIFESTS),
     ("downloads.claude.ai", &["/claude-code-releases/latest", "/claude-code-releases/stable"]),
     ("api.github.com", &["/repos/openai/codex/releases/latest"]),
     (
@@ -1263,7 +1309,7 @@ impl Problems {
 fn cu_doc(problems: &Problems) -> R<Dict> {
     let current = cu();
     let mut rows = Vec::new();
-    for client in CU_CLIENTS {
+    for client in cu_clients() {
         set_cu(client);
         let mut problem = problems.get(client.id).cloned();
         let state = match cu_read_state() {
@@ -1456,7 +1502,7 @@ fn cu_auto(state: &Dict) -> R<()> {
 /// 安装凭据是哪个客户端的；都对不上时停在第一个，由 cu_validate_plan 说凭据失效
 fn cu_token_client(token: &str) -> R<()> {
     if hex64(token) {
-        for client in CU_CLIENTS {
+        for client in cu_clients() {
             set_cu(client);
             let stage = match cu_read_state() {
                 Ok(state) => state.get("stage"),
@@ -1504,7 +1550,8 @@ fn cu_drop_package() -> R<()> {
 fn cu_check_all(force: bool, problems: &mut Problems) -> R<()> {
     CU_BUDGET.with(|b| b.set(Some(time() + CU_CHECK_SECONDS)));
     // 终端工具先查：只是一个小请求，不被桌面客户端的大下载占完时间
-    for client in CU_CLIENTS.iter().filter(|c| c.cli).chain(CU_CLIENTS.iter().filter(|c| !c.cli)) {
+    let all = cu_clients();
+    for client in all.iter().filter(|c| c.cli).chain(all.iter().filter(|c| !c.cli)) {
         set_cu(client);
         if cu_target()?.is_empty() && !path::lexists(&path::join_all(&[&cu_base(false)?, client.id, "transaction.json"])) {
             continue;

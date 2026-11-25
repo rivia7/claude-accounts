@@ -63,6 +63,15 @@ thread_local! {
     static RENAMING: RefCell<bool> = const { RefCell::new(false) };
 }
 
+thread_local! {
+    /// 重放冻结的场景时只有原来那四种客户端（见 cu_clients）
+    static LEGACY_FOUR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn legacy_four() -> bool {
+    LEGACY_FOUR.with(|c| c.get())
+}
+
 pub fn world() -> Option<World> {
     WORLD.with(|w| w.borrow().clone())
 }
@@ -522,6 +531,39 @@ fn time_budget_stops_new_downloads() {
     assert!(cu_time(300).is_err());
     CU_BUDGET.with(|b| b.set(None));
     assert_eq!(cu_time(300).unwrap(), 300);
+}
+
+#[test]
+fn agy_cli_feed_and_method() {
+    // agy：最新版本从安装脚本用的那份清单查，只认它的几个平台；装在 ~/.local/bin 的算官方安装器装的（agy update 自己换）
+    let _reset = Reset;
+    let temp = Temp::new("agy-cli");
+    set_cu(&CU_AGY_CLI);
+    let latest = CU_AGY_CLI.latest();
+    assert!(latest.starts_with(&format!("https://{AGY_FEED_HOST}/manifests/")) && latest.ends_with(".json"), "{latest}");
+    let ok = |u: &str| CU_AGY_CLI.url_ok(&urlsplit(u).unwrap(), false);
+    assert!(ok(&latest) && ok(&format!("https://{AGY_FEED_HOST}/manifests/linux_amd64.json")));
+    assert!(
+        !ok(&format!("https://{AGY_FEED_HOST}/manifests/windows_amd64.json")) && !ok(&format!("https://{AGY_FEED_HOST}/download"))
+    );
+    assert!(!CU_AGY_CLI.url_ok(&urlsplit(&latest).unwrap(), true)); // 只查版本，不下载软件包
+    let manifest = br#"{"version": "1.5.16", "url": "https://storage.googleapis.com/x/cli_mac_arm64.tar.gz", "sha512": "33f5"}"#;
+    assert_eq!(feed::cu_cli_latest(manifest).unwrap(), "1.5.16");
+    let home = path::join(&temp.0, "home");
+    WORLD.with(|w| *w.borrow_mut() = Some(World { home: home.clone(), cca_home: path::join(&home, ".cca"), env: HashMap::new() }));
+    let put = |rel: &str| {
+        let p = path::join(&temp.0, rel);
+        std::fs::create_dir_all(path::dirname(&p)).unwrap();
+        std::fs::write(&p, b"#!/bin/sh\n").unwrap();
+        p
+    };
+    assert_eq!(cli::cu_cli_method(&put("home/.local/bin/agy")), ("self", String::new()));
+    assert_eq!(cli::cu_cli_method(&put("elsewhere/bin/agy")), ("other", String::new()));
+    // 没有 npm 包：装在 node_modules 里也只说 agy update
+    assert_eq!(CU_AGY_CLI.advice("npm", ""), "agy update");
+    assert_eq!(CU_CODEX_CLI.advice("npm", ""), "npm install -g @openai/codex@latest");
+    // 状态里在 codex-cli 后面
+    assert_eq!(cu_clients().iter().map(|c| c.id).collect::<Vec<_>>(), ["claude", "codex", "claude-cli", "codex-cli", "agy-cli"]);
 }
 
 #[test]
@@ -1229,7 +1271,9 @@ fn check_scenarios(v: &Dict, wrong: &mut Vec<String>) {
         if only.as_ref().is_some_and(|o| !s.at("name").py_str().contains(o.as_str())) {
             continue;
         }
+        LEGACY_FOUR.with(|c| c.set(true));
         wrong.extend(replay(&s));
+        LEGACY_FOUR.with(|c| c.set(false));
     }
 }
 
