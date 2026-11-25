@@ -74,8 +74,10 @@ func usageEntryInvariants(_ n: String, _ ru: [String: Any], _ u: UsageEntry?) {
         // 周结算提醒：区间到本周的重置时间为止，还剩至少 20%（规则在 cca：24 小时、20%）
         check("\(n) use_first 解码", u.useFirst != nil, "\(f)")
         if let uf = u.useFirst {
-            check("\(n) use_first 区间到本周的重置时间为止", uf.fromEpoch < uf.untilEpoch && uf.untilEpoch == u.sevenDay?.resetsEpoch,
-                  "\(uf) \(String(describing: u.sevenDay?.resetsEpoch))")
+            // 本周的窗口：Claude、Codex 是 seven_day；agy 是各组的本周额度里用得最少的那个（cca 的 agy_week，同一条规则）
+            let week = u.pressureWindows(now: uf.fromEpoch).first { $0.slot == .sevenDay }?.window
+            check("\(n) use_first 区间到本周的重置时间为止", uf.fromEpoch < uf.untilEpoch && uf.untilEpoch == week?.resetsEpoch,
+                  "\(uf) \(String(describing: week?.resetsEpoch))")
             check("\(n) use_first 还剩至少 20%", (20...100).contains(uf.leftPercent), "\(uf.leftPercent)")
         }
     }
