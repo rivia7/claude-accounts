@@ -3,6 +3,7 @@
 #   bash ios/test.sh               编（模拟器、调试版）、查 SwiftTerm 编进去的是去掉了图形协议的那一份、在模拟器里跑 SwiftTerm 的自检、
 #                                  演示模式各页浅色 / 深色截图（ios/build/shots/）
 #   bash ios/test.sh --build       只编（模拟器的调试版 + 真机的正式版，不签名），不开模拟器
+#   bash ios/test.sh --check 派生数据目录 cca.app   不编，只查编好的正式版（SwiftTerm、TestDriver 那两项）：testflight.sh 拿它查归档
 # 端到端（真的服务器、真的 cca、模拟器里的 App 配对、接入、敲键）在 tests/ios_kit.rs 的 in_the_simulator：它先跑这里的编译那一步
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -13,6 +14,23 @@ DEVICE_NAME="cca-test iPhone"
 BUNDLE=com.cca.remote
 fail() { echo "✗ $*" >&2; exit 1; }
 ok() { echo "✓ $*"; }
+
+# 查正式版的两项，testflight.sh 拿它们（--check）再查一遍归档：
+# SwiftTerm 编进去的是 swiftterm-parser.sh 换过那两行的那一份，不是上游原样的（macos/Vendor/SwiftTerm/README.md「不要的功能」）
+swiftterm_patched() {   # 派生数据目录
+	local lists list
+	lists=$(find "$1/Build/Intermediates.noindex" -name SwiftTerm.SwiftFileList)
+	[ -n "$lists" ] || fail "找不到 SwiftTerm 的编译清单（${1}）"
+	for list in $lists; do
+		grep -q "DerivedSources/EscapeSequenceParser.swift" "$list" || fail "SwiftTerm 没编换过的 EscapeSequenceParser.swift（${list}）"
+		if grep -q "Vendor/SwiftTerm/Sources/SwiftTerm/EscapeSequenceParser.swift" "$list"; then fail "SwiftTerm 编了上游原样的 EscapeSequenceParser.swift（${list}）"; fi
+	done
+}
+# 正式版里没有测试用的那一段（TestDriver）
+no_test_driver() {   # cca.app
+	if grep -rqa "cca-test: " "$1"; then fail "正式版里带着测试用的 TestDriver（${1}）"; fi
+}
+if [ "${1:-}" = --check ]; then swiftterm_patched "$2"; no_test_driver "$3"; exit 0; fi
 
 command -v xcodebuild >/dev/null && xcodebuild -version >/dev/null 2>&1 || fail "要 Xcode（只有命令行工具编不了 iOS App）"
 mkdir -p "$OUT"
@@ -29,18 +47,13 @@ ok "编好了：模拟器的调试版"
 build Release iphoneos 'generic/platform=iOS' "$OUT/build-device.log" CODE_SIGNING_ALLOWED=NO
 ok "编好了：真机的正式版（没签名）"
 
-# SwiftTerm 编进去的是 swiftterm-parser.sh 换过那两行的那一份，不是上游原样的（macos/Vendor/SwiftTerm/README.md「不要的功能」）
-for list in $(find "$DD/Build/Intermediates.noindex" -name SwiftTerm.SwiftFileList); do
-	grep -q "DerivedSources/EscapeSequenceParser.swift" "$list" || fail "SwiftTerm 没编换过的 EscapeSequenceParser.swift（${list}）"
-	if grep -q "Vendor/SwiftTerm/Sources/SwiftTerm/EscapeSequenceParser.swift" "$list"; then fail "SwiftTerm 编了上游原样的 EscapeSequenceParser.swift（${list}）"; fi
-done
+swiftterm_patched "$DD"
 grep -q "case 0x47: break" "$DD/Build/Intermediates.noindex/cca.build/Debug-iphonesimulator/SwiftTerm.build/DerivedSources/EscapeSequenceParser.swift" ||
 	fail "换过的 EscapeSequenceParser.swift 不对"
 ok "SwiftTerm 编的是去掉了图形协议的那一份"
-# 正式版里没有测试用的那一段（TestDriver）
-# （调试版里它在 cca.debug.dylib 里，所以整个 .app 都查）
+# 调试版里得有 TestDriver，不然下一条查不出什么（它在 cca.debug.dylib 里，所以整个 .app 都查）
 grep -rqa "cca-test: " "$DD/Build/Products/Debug-iphonesimulator/cca.app" || fail "调试版里没找到 TestDriver：这一条查不出什么了，改一改"
-if grep -rqa "cca-test: " "$DD/Build/Products/Release-iphoneos/cca.app"; then fail "正式版里带着测试用的 TestDriver"; fi
+no_test_driver "$DD/Build/Products/Release-iphoneos/cca.app"
 ok "正式版里没有测试用的 TestDriver"
 [ "${1:-}" = "--build" ] && exit 0
 

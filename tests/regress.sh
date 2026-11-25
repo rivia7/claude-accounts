@@ -2397,7 +2397,7 @@ lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-
 	"$TESTBIN" lint dollar "$D/.." "$CCA" install.sh release.sh server/hub-install.sh 'macos/*.sh' 'ios/*.sh' macos/Sources macos/tools   # 目录下面查 .sh、.swift
 }
 ld=$(lint_dollar)
-ok "lint：cca、install.sh、release.sh、server/hub-install.sh、macos 和 ios 的脚本、App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
+ok "lint：lint_dollar 列的脚本、App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
 # 仓库里不再有 Python 的程序（辅助程序、服务端、测试、小工具都是 Rust）：.py 这类文件、python 的 shebang 都算（见 tests/tool/lint.rs）
 lpy=$("$TESTBIN" lint nopython "$D/..")
 ok "lint：仓库里没有 Python 的程序（.py 文件、第一行是 python 的脚本）${lpy#ok}" '[ "$lpy" = ok ]'

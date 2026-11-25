@@ -72,8 +72,9 @@ TestFlight 先用用户自己的付费个人团队（2026-11-25），版本号�
 ## TestFlight
 
 `bash ios/testflight.sh [--team 团队ID] [--upload]`：先跑 `test.sh --build` 的检查，再归档（Release、真机、自动签名、`-allowProvisioningUpdates`），
-导出成 .ipa 查签名（Apple Distribution 签的、App Store 的描述文件不带设备列表、`get-task-allow` 是 false）；`--upload` 时查过以后再导出一次、
-直接传到 App Store Connect（`ExportOptions.plist` 的 `destination` 是 `upload`）。东西都在 `ios/build/testflight/`（日志：`archive.log`、`export.log`、`upload.log`）。
+归档是另编的，用 `test.sh --check` 把查正式版的那两项再查一遍；导出成 .ipa 查签名（Apple Distribution 签的、App Store 的描述文件不带设备列表、
+`get-task-allow` 是 false）；`--upload` 时查过以后再导出一次、直接传到 App Store Connect（`ExportOptions.plist` 的 `destination` 是 `upload`）。
+东西都在 `ios/build/testflight/`（日志：`archive.log`、`export.log`、`upload.log`；查过的 .ipa 在 `export/`，解开的在 `ipa/`）。
 - 要 Xcode 里登录着付费的开发者账号：免费的个人团队传不了 TestFlight。团队没写时用 Xcode 里的那个付费团队（只有一个时；照
   `defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier` 取，每个团队的键按字母排，`isFreeProvisioningTeam` 在 `teamID` 前面）。
   团队 ID 不写进工程：签名是谁的团队，由在哪台 Mac 上运行定
@@ -93,6 +94,7 @@ TestFlight 先用用户自己的付费个人团队（2026-11-25），版本号�
 `bash ios/test.sh [--build]`：编（模拟器的调试版、真机的正式版）、查 SwiftTerm 编的是换过的那一份、正式版里没有 TestDriver；
 不带 `--build` 时还开一台模拟器（`cca-test iPhone`，没有就建），在里面跑 SwiftTerm 的自检（`macos/tools/swiftterm-check` 链 App 用的那一份
 SwiftTerm，`simctl spawn`），演示模式各页浅色 / 深色截图到 `ios/build/shots/`。要 Xcode 和模拟器的运行时（`xcodebuild -downloadPlatform iOS`）。
+`bash ios/test.sh --check 派生数据目录 cca.app` 不编，只查编好的正式版那两项（SwiftTerm、TestDriver）：testflight.sh 拿它查归档。
 
 `cd cli && cargo test --profile kit -p cca-tests --test suite -- ios_kit`（`tests/ios_kit.rs`，回归的 unit 一节里也跑；要先 `cargo build --release`；没有 swiftc 时跳过）：命令行工具的 swiftc 把 CcaRemoteKit 的源码加上一个 main 编成 macOS 上的程序（编出来的在 `ios/build/test/`，源码没变不重编）。
 - `against_the_spec`：`tests/kit/spec.rs`（照文档独立写的那一份）出数据，`ios/Tests/KitTests` 逐项核对；Swift 封的配对消息、发的记录、签名再拿回 `kit::spec` 核对（签名用 `ssh-keygen -Y verify`）。证书指纹对 EC、RSA、Ed25519 三种证书和 openssl 算的比

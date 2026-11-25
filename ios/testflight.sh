@@ -3,8 +3,7 @@
 # 见 docs/dev/ios.md「TestFlight」。
 #   bash ios/testflight.sh [--team 团队ID]            先跑 test.sh --build 的检查，再归档、签名、导出 .ipa 并查它的签名（ios/build/testflight/），不上传
 #   bash ios/testflight.sh [--team 团队ID] --upload   同上，查过以后再导出一次、直接传到 App Store Connect（那里要先有套装 ID 是 com.cca.remote 的 App）
-# 团队没写时用 Xcode 里登录着的付费团队（只有一个时）。版本号是工程里的 MARKETING_VERSION；构建号取 UTC 时间（年月日.时分秒），
-# 每次都比上次大（同一个版本号下 App Store Connect 不收重复的构建号）。
+# 团队没写时用 Xcode 里登录着的付费团队（只有一个时）。
 # 经 SSH 在别的 Mac 上跑时先解开登录钥匙串（security unlock-keychain），不然签名时报 errSecInternalComponent。
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -26,21 +25,23 @@ command -v xcodebuild >/dev/null && xcodebuild -version >/dev/null 2>&1 || fail 
 
 # 团队：Xcode 里登录着的付费团队。defaults 打出来的每个团队的键按字母排：isFreeProvisioningTeam 在 teamID 前面
 if [ -z "$TEAM" ]; then
-	TEAMS=$( { defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier 2>/dev/null || true; } |
+	# 参数前面都处理完了，位置参数拿来放找到的团队（团队 ID 只有字母和数字）；defaults 读不到就是一个也没有
+	set -- $(defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier 2>/dev/null |
 		awk '/isFreeProvisioningTeam =/ { free = $3 } /teamID =/ { id = $3; gsub(/[";]/, "", id); if (free == "0;") print id }' | sort -u)
-	case "$(printf '%s\n' "$TEAMS" | grep -c . || true)" in
+	case $# in
 		0) fail "Xcode 里没有登录着的付费开发者团队（「设置 → Accounts」；免费的个人团队传不了 TestFlight）" ;;
-		1) TEAM="$TEAMS" ;;
-		*) fail "Xcode 里有几个付费团队，用 --team 选一个：$(echo $TEAMS)" ;;
+		1) TEAM=$1 ;;
+		*) fail "Xcode 里有几个付费团队，用 --team 选一个：$*" ;;
 	esac
 fi
+# 构建号：UTC 时间 年月日.时分秒，每次都比上次大（同一个版本号下 App Store Connect 不收重复的构建号）；时分秒去掉开头的 0，每一段都是整数
 NOW=$(date -u +%Y%m%d.%H%M%S)
-BUILD="${NOW%%.*}.$((10#${NOW#*.}))"   # 时分秒去掉开头的 0：每一段都是整数
+BUILD="${NOW%%.*}.$((10#${NOW#*.}))"
 
-# 和 test.sh --build 一样的检查：两种都编得过、cca 自己的代码没有警告、SwiftTerm 编的是去掉了图形协议的那一份、正式版里没有 TestDriver
+# 先跑 test.sh --build 的检查（查什么见那里）
 bash "$HERE/test.sh" --build
 
-rm -rf "$OUT/cca.xcarchive" "$OUT/export"
+rm -rf "$OUT/cca.xcarchive"
 mkdir -p "$OUT"
 xcodebuild -project "$HERE/cca.xcodeproj" -scheme cca -configuration Release -destination 'generic/platform=iOS' \
 	-archivePath "$OUT/cca.xcarchive" -derivedDataPath "$DD" -allowProvisioningUpdates \
@@ -48,21 +49,15 @@ xcodebuild -project "$HERE/cca.xcodeproj" -scheme cca -configuration Release -de
 	{ grep -E "error:|errSec" "$OUT/archive.log" | sort -u | head -20 >&2; fail "没归档成（全部输出在 ${OUT}/archive.log）"; }
 APP="$OUT/cca.xcarchive/Products/Applications/cca.app"
 [ -d "$APP" ] || fail "归档里没有 cca.app"
-plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Info.plist"; }
-[ "$(plist CFBundleIdentifier)" = "$BUNDLE" ] || fail "套装 ID 不是 ${BUNDLE}"
-[ "$(plist CFBundleVersion)" = "$BUILD" ] || fail "构建号没换上（${BUILD}）"
-VERSION=$(plist CFBundleShortVersionString)
-# 归档的这一份也查一遍（它是另编的）：SwiftTerm 编的是换过的那一份，没有 TestDriver
-LISTS=$(find "$DD/Build/Intermediates.noindex" -name SwiftTerm.SwiftFileList)
-[ -n "$LISTS" ] || fail "找不到归档时 SwiftTerm 的编译清单"
-for list in $LISTS; do
-	grep -q "DerivedSources/EscapeSequenceParser.swift" "$list" || fail "归档的 SwiftTerm 没编换过的 EscapeSequenceParser.swift（${list}）"
-	if grep -q "Vendor/SwiftTerm/Sources/SwiftTerm/EscapeSequenceParser.swift" "$list"; then fail "归档的 SwiftTerm 编了上游原样的 EscapeSequenceParser.swift"; fi
-done
-if grep -rqa "cca-test: " "$APP"; then fail "归档里带着测试用的 TestDriver"; fi
+plist() { plutil -extract "$2" raw "$1"; }   # 文件 键
+[ "$(plist "$APP/Info.plist" CFBundleIdentifier)" = "$BUNDLE" ] || fail "套装 ID 不是 ${BUNDLE}"
+[ "$(plist "$APP/Info.plist" CFBundleVersion)" = "$BUILD" ] || fail "构建号没换上（${BUILD}）"
+VERSION=$(plist "$APP/Info.plist" CFBundleShortVersionString)
+# 归档是另编的：test.sh 查正式版的那两项（SwiftTerm 编的是换过的那一份、没有 TestDriver）在它上面再查一遍
+bash "$HERE/test.sh" --check "$DD" "$APP"
 ok "归档好了：${VERSION}（${BUILD}），团队 ${TEAM}"
 
-export_as() {   # export|upload：照 App Store 的分发签名（Xcode 管的证书、描述文件），导出到 $OUT/export 或者直接上传
+export_as() {   # export|upload：照 App Store 的分发签名（Xcode 管的证书、描述文件），导出到 $OUT/export 或者直接上传（Xcode 留下的在 $OUT/upload）
 	cat >"$OUT/ExportOptions.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,9 +72,9 @@ export_as() {   # export|upload：照 App Store 的分发签名（Xcode 管的�
 </dict>
 </plist>
 EOF
-	rm -rf "$OUT/export"
+	rm -rf "$OUT/$1"
 	xcodebuild -exportArchive -archivePath "$OUT/cca.xcarchive" -exportOptionsPlist "$OUT/ExportOptions.plist" \
-		-exportPath "$OUT/export" -allowProvisioningUpdates >"$OUT/$1.log" 2>&1 ||
+		-exportPath "$OUT/$1" -allowProvisioningUpdates >"$OUT/$1.log" 2>&1 ||
 		{ grep -iE "error|errSec" "$OUT/$1.log" | sort -u | head -20 >&2; fail "没导出成（${1}；全部输出在 ${OUT}/${1}.log）"; }
 }
 
@@ -87,17 +82,17 @@ EOF
 export_as export
 IPA=$(find "$OUT/export" -maxdepth 1 -name "*.ipa" | head -1)
 [ -n "$IPA" ] || fail "没导出 .ipa"
-T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT
-ditto -x -k "$IPA" "$T"
-A="$T/Payload/cca.app"
+X="$OUT/ipa"   # 解开的 .ipa、读出来的描述文件和权限，留着备查
+rm -rf "$X"
+ditto -x -k "$IPA" "$X"
+A="$X/Payload/cca.app"
 codesign --verify --deep --strict "$A" || fail "导出的 App 签名验不过"
 SIGNER=$(codesign -dvv "$A" 2>&1) || fail "读不了导出的 App 的签名"
 case "$SIGNER" in *"Authority=Apple Distribution"*) ;; *) fail "导出的 App 不是 Apple Distribution 签的" ;; esac
-security cms -D -i "$A/embedded.mobileprovision" >"$T/profile.plist" 2>/dev/null || fail "读不了导出的 App 的描述文件"
-if /usr/libexec/PlistBuddy -c "Print :ProvisionedDevices" "$T/profile.plist" >/dev/null 2>&1; then fail "描述文件带着设备列表：不是 App Store 的"; fi
-codesign -d --entitlements - --xml "$A" >"$T/ent.plist" 2>/dev/null || fail "读不了导出的 App 的权限"
-[ "$(/usr/libexec/PlistBuddy -c "Print :get-task-allow" "$T/ent.plist" 2>/dev/null || echo false)" = false ] || fail "导出的 App 允许调试器接上（get-task-allow）"
+security cms -D -i "$A/embedded.mobileprovision" >"$X/profile.plist" 2>/dev/null || fail "读不了导出的 App 的描述文件"
+if plist "$X/profile.plist" ProvisionedDevices >/dev/null 2>&1; then fail "描述文件带着设备列表：不是 App Store 的"; fi
+codesign -d --entitlements - --xml "$A" >"$X/ent.plist" 2>/dev/null || fail "读不了导出的 App 的权限"
+[ "$(plist "$X/ent.plist" get-task-allow 2>/dev/null || echo false)" = false ] || fail "导出的 App 允许调试器接上（get-task-allow）"
 ok "导出、查过签名：${IPA}"
 if [ -z "$UPLOAD" ]; then
 	echo "没上传（要传到 TestFlight 加 --upload）"
