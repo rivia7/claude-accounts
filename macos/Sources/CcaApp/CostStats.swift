@@ -225,6 +225,7 @@ private enum CostStatsColumns {
 }
 
 /// 顶上的合计：三个数（按周：本周、平均每周、近 12 周合计；按日：今天、平均每天、近 30 天合计；启用了两种工具时下面按工具分开列），
+/// cca 给了缓存命中率（3.7.5 起，合计的不是 null）时多一栏（按周是近 12 周的、按日是近 30 天的；按工具的那几行没有的写「—」），
 /// 按日时再下面是最近 30 天每天的柱子（cca 给的 `days`，各账号加起来；各账号的周期不一样，所以按周时没有加起来的柱子）。
 /// 鼠标指着一天时下面那一行换成那一天的。看本机时都是 cca 给的 `me` 里的（旧版 cca 没有，写「—」），看另一台设备时是 `devices` 里那一台的
 private struct CostTotalTile: View {
@@ -239,6 +240,15 @@ private struct CostTotalTile: View {
 
     private var titles: [String] {
         granularity == .week ? ["本周", "平均每周", "近 12 周合计"] : ["今天", "平均每天", "近 30 天合计"]
+    }
+
+    /// 第四栏（缓存命中率）的说明
+    private var hitTitle: String {
+        granularity == .week ? "近 12 周缓存命中" : "近 30 天缓存命中"
+    }
+
+    private func hit(_ s: CostSummary?) -> String? {
+        s.flatMap { Texts.costCacheHit($0.cacheHit(granularity)) }
     }
 
     private func values(_ s: CostSummary?) -> [Double?] {
@@ -281,16 +291,21 @@ private struct CostTotalTile: View {
         v.map { Texts.money($0, currency: total.currency) } ?? "—"
     }
 
-    /// 三个数：上面一行是说明，下面是金额；分开列时左边多一栏写合计、Claude、ChatGPT
+    /// 三个数（和缓存命中率）：上面一行是说明，下面是金额；分开列时左边多一栏写合计、Claude、ChatGPT
     private func figures(_ part: CostTotalPart?) -> some View {
         let split = tools.count >= 2
         let titles = titles
+        let hits = hit(part?.summary) != nil
         return Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 28, verticalSpacing: 6) {
             // 读屏：每个金额自己说是哪一项（标签）和多少（值），表头、行头就不再单独读一遍
             GridRow {
                 if split { Color.clear.gridCellUnsizedAxes([.horizontal, .vertical]) }
                 ForEach(titles.indices, id: \.self) { i in
                     Text(titles[i]).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                if hits {
+                    Text(hitTitle).font(.caption).foregroundStyle(.secondary)
                         .accessibilityHidden(true)
                 }
             }
@@ -302,6 +317,13 @@ private struct CostTotalTile: View {
                     Text(v)
                         .font(.title2.weight(.semibold).monospacedDigit())
                         .accessibilityLabel(split ? "合计 " + titles[i] : titles[i])
+                        .accessibilityValue(v)
+                }
+                if hits {
+                    let v = hit(part?.summary) ?? "—"
+                    Text(v)
+                        .font(.title2.weight(.semibold).monospacedDigit())
+                        .accessibilityLabel(split ? "合计 " + hitTitle : hitTitle)
                         .accessibilityValue(v)
                 }
             }
@@ -316,6 +338,14 @@ private struct CostTotalTile: View {
                                 .font(.callout.monospacedDigit())
                                 .foregroundStyle(.secondary)
                                 .accessibilityLabel(Texts.product(t) + " " + titles[i])
+                                .accessibilityValue(v)
+                        }
+                        if hits {
+                            let v = hit(part?.byTool[t]) ?? "—"
+                            Text(v)
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel(Texts.product(t) + " " + hitTitle)
                                 .accessibilityValue(v)
                         }
                     }

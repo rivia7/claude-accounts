@@ -41,8 +41,13 @@ func costFixtureTests() {
     check("bob：开始时还没有记录的 5 项是 partial", bob?.weeks.map(\.partial) == Array(repeating: true, count: 5) + Array(repeating: false, count: 8))
     check("bob：30 天，最后一天是今天（2026-11-07）", bob?.days.count == 30 && bob?.today?.date == "2026-11-07" && bob?.days.first?.date == "2026-10-09")
     check("bob：summary", bob?.summary == CostSummary(weeksUSD: 7957.48, currentUSD: 518.48, averageUSD: 976.02, averageWeeks: 7, daysUSD: 4284.04,
-                                                     todayUSD: 44.06, averageDayUSD: 146.21, averageDays: 29, requests: 36213, unpricedRequests: 4),
+                                                     todayUSD: 44.06, averageDayUSD: 146.21, averageDays: 29, requests: 36213, unpricedRequests: 4,
+                                                     weeksCacheHit: 0.9747, daysCacheHit: 0.9749),
           "\(String(describing: bob?.summary))")
+    check("bob：缓存命中率（cca 按 token 算的：账号、按模型、设备的；old-mini 30 天里没有用量，没有按天的）", bob?.models?.first?.weeks.cacheHit == 0.9747
+          && bob?.models?.first?.days.cacheHit == 0.9749 && bob?.models?.last?.model == nil && bob?.models?.last?.days.cacheHit == nil
+          && bob?.device(aliceMini)?.models?.first?.weeks.cacheHit == 0.9747 && bob?.devices.last?.summary.weeksCacheHit == 0.9747
+          && bob?.devices.last?.summary.daysCacheHit == nil, "\(String(describing: bob?.models?.map(\.weeks.cacheHit)))")
     check("bob：本周的 token", bob?.currentWeek?.tokens == CostTokens(input: 146741, output: 1128071, cacheRead: 199181482, cacheWrite: 5216937))
     check("bob：四台设备，这台在最前，撤销了的排最后", bob?.devices.map(\.name) == ["studio-mac", "alice-mini", "office-imac", "old-mini"]
           && bob?.devices.first?.isMe == true && bob?.devices.first?.id == me)
@@ -52,7 +57,8 @@ func costFixtureTests() {
     check("bob：alice-mini 本周、今天", bob?.device(aliceMini)?.weeksUSD.last == 172.76 && bob?.device(aliceMini)?.daysUSD.last == 14.36
           && bob?.device(aliceMini)?.summary.currentUSD == 172.76)
     check("bob：设备的平均（按整个账号的那几周、那几天算）", bob?.device(aliceMini)?.summary == CostSummary(
-        weeksUSD: 2172.79, currentUSD: 172.76, averageUSD: 266.16, averageWeeks: 7, daysUSD: 1302.43, todayUSD: 14.36, averageDayUSD: 44.42, averageDays: 29),
+        weeksUSD: 2172.79, currentUSD: 172.76, averageUSD: 266.16, averageWeeks: 7, daysUSD: 1302.43, todayUSD: 14.36, averageDayUSD: 44.42, averageDays: 29,
+        weeksCacheHit: 0.9747, daysCacheHit: 0.9749),
           "\(String(describing: bob?.device(aliceMini)?.summary))")
     check("bob：这台设备", bob?.me?.id == me && bob?.me?.name == "studio-mac" && bob?.me?.summary.averageDayUSD == 74.03)
     check("bob：设备的诊断（这台都认得出；alice-mini 命令行里还在用旧版 Claude Code，有回复认不出；旧版 cca 的设备没有）",
@@ -73,6 +79,7 @@ func costFixtureTests() {
     check("grace：记录都在 12 周以前（每一项都是 0），上次同步没成功", grace?.weeks.allSatisfy { $0.usd == 0 } == true
           && grace?.days.allSatisfy { $0.usd == 0 } == true && grace?.summary.averageUSD == 0 && grace?.syncState == .error
           && grace?.sync?.message == "连不上设备统计的服务器（https://192.0.2.10:18443）")
+    check("grace：12 周、30 天里都没有输入，没有缓存命中率", grace?.summary.weeksCacheHit == nil && grace?.summary.daysCacheHit == nil)
     let frank = codex?.accounts.first?.cost
     check("frank（Codex）：不是哪个 Team 给的，只有这台设备（local_only），有没有公开价格的模型", frank?.syncState == .localOnly
           && frank?.sync?.hub == nil && frank?.unpricedModels == ["codex-auto-review"] && frank?.summary.currentUSD == 544.31 && frank?.weeks.count == 13)
@@ -82,9 +89,12 @@ func costFixtureTests() {
               && t.all.summary.averageDayUSD == 302.68 && t.all.summary.daysUSD == 8874.43 && t.all.summary.todayUSD == 96.83, "\(t.all.summary)")
         check("cost_total：按工具", t.all.byTool[.claude]?.currentUSD == 780.59 && t.all.byTool[.codex]?.daysUSD == 3320.53
               && t.all.byTool[.claude]?.averageDayUSD == 189.23 && t.all.byTool.count == 2)
+        check("cost_total：缓存命中率（各账号的 token 加起来算的；按工具、按模型的也有）", t.all.summary.weeksCacheHit == 0.9559
+              && t.all.summary.daysCacheHit == 0.9501 && t.all.byTool[.claude]?.weeksCacheHit == 0.9748 && t.all.byTool[.codex]?.daysCacheHit == 0.9107
+              && t.all.models?.first?.weeks.cacheHit == 0.9748, "\(t.all.summary)")
         check("cost_total：30 天，今天", t.all.days.count == 30 && t.all.today?.usd == 96.83 && t.all.today?.date == "2026-11-07")
         check("cost_total.me：各账号里这台设备的那一份加起来", t.me?.summary == CostSummary(weeksUSD: 13830.11, currentUSD: 1100.12, averageUSD: 1516.1,
-              daysUSD: 6766.87, todayUSD: 82.47, averageDayUSD: 230.5), "\(String(describing: t.me?.summary))")
+              daysUSD: 6766.87, todayUSD: 82.47, averageDayUSD: 230.5, weeksCacheHit: 0.9559, daysCacheHit: 0.9501), "\(String(describing: t.me?.summary))")
         check("cost_total.me：按工具、30 天", t.me?.byTool[.claude]?.currentUSD == 555.81 && t.me?.byTool[.codex]?.daysUSD == 3320.53
               && t.me?.days.count == 30 && t.me?.today?.usd == 82.47 && t.me?.days.first?.usd == 253.01)
         check("看哪一方：所有设备是顶层的，本机是 me", t.part(.all) == t.all && t.part(.me) == t.me)
@@ -92,9 +102,10 @@ func costFixtureTests() {
               t.devices.map(\.name) == ["studio-mac", "alice-mini", "office-imac", "old-mini", "lab-studio"] && t.devices.first?.isMe == true
               && t.devices.first?.id == me && t.devices.first?.part == t.me, t.devices.map(\.name).joined(separator: ","))
         let mini = t.device(aliceMini)
-        check("cost_total.devices：alice-mini 只用过 bob（数字是它在 bob 里的那一份；Codex 都是 0、没有平均）",
+        check("cost_total.devices：alice-mini 只用过 bob（数字是它在 bob 里的那一份；Codex 都是 0、没有平均、没有缓存命中率）",
               mini?.part.summary.daysUSD == 1302.43 && mini?.part.summary.averageUSD == 266.16 && mini?.part.days.last?.usd == 14.36
-              && mini?.part.byTool[.claude]?.weeksUSD == 2172.79 && mini?.part.byTool[.codex]?.daysUSD == 0 && mini?.part.byTool[.codex]?.averageUSD == nil,
+              && mini?.part.byTool[.claude]?.weeksUSD == 2172.79 && mini?.part.byTool[.codex]?.daysUSD == 0 && mini?.part.byTool[.codex]?.averageUSD == nil
+              && mini?.part.summary.weeksCacheHit == 0.9747 && mini?.part.byTool[.codex]?.weeksCacheHit == nil,
               "\(String(describing: mini?.part.summary))")
         check("cost_total.devices：很久没同步、撤销了", t.devices.map(\.stale) == [false, false, true, true, false]
               && t.devices.map(\.revoked) == [false, false, false, true, false])
@@ -384,21 +395,28 @@ func costUnitTests() {
     check("指着今天、别的一天", detail(29, .all, .day) == "今天到现在：$44.06 · 191 次请求"
           && detail(0, .all, .day) == "10 月 9 日 周五：$185 · 864 次请求", detail(29, .all, .day) + " | " + detail(0, .all, .day))
     check("柱子的金额是 cca 给的", bars.map(\.usd) == bob.weeks.map(\.usd))
-    check("图下面那一行（按周）", Texts.costCaption(bob.summary, granularity: .week, currency: "USD") == "本周 $518 · 平均每周 $976（7 周） · 近 12 周合计 $7,957",
+    check("图下面那一行（按周）", Texts.costCaption(bob.summary, granularity: .week, currency: "USD") == "本周 $518 · 平均每周 $976（7 周） · 近 12 周合计 $7,957 · 缓存命中 97.4%",
           Texts.costCaption(bob.summary, granularity: .week, currency: "USD"))
-    check("图下面那一行（按天）", Texts.costCaption(bob.summary, granularity: .day, currency: "USD") == "今天 $44.06 · 平均每天 $146（29 天） · 近 30 天合计 $4,284",
+    check("图下面那一行（按天）", Texts.costCaption(bob.summary, granularity: .day, currency: "USD") == "今天 $44.06 · 平均每天 $146（29 天） · 近 30 天合计 $4,284 · 缓存命中 97.4%",
           Texts.costCaption(bob.summary, granularity: .day, currency: "USD"))
     check("没有平均（一周、一天都没过完）时不写平均", Texts.costCaption(CostSummary(weeksUSD: 3, currentUSD: 3), granularity: .week, currency: "USD")
           == "本周 $3.00 · 近 12 周合计 $3.00"
           && Texts.costCaption(CostSummary(daysUSD: 3, todayUSD: 3), granularity: .day, currency: "USD") == "今天 $3.00 · 近 30 天合计 $3.00")
     check("一台设备的平均也写几周、几天（按整个账号的那几周、那几天算）", Texts.costCaption(bob.device(aliceMini)!.summary, granularity: .week, currency: "USD")
-          == "本周 $173 · 平均每周 $266（7 周） · 近 12 周合计 $2,173"
-          && Texts.costCaption(bob.device(aliceMini)!.summary, granularity: .day, currency: "USD") == "今天 $14.36 · 平均每天 $44.42（29 天） · 近 30 天合计 $1,302",
+          == "本周 $173 · 平均每周 $266（7 周） · 近 12 周合计 $2,173 · 缓存命中 97.4%"
+          && Texts.costCaption(bob.device(aliceMini)!.summary, granularity: .day, currency: "USD") == "今天 $14.36 · 平均每天 $44.42（29 天） · 近 30 天合计 $1,302 · 缓存命中 97.4%",
           Texts.costCaption(bob.device(aliceMini)!.summary, granularity: .day, currency: "USD"))
     check("旧版 cca 没给几周、平均每天：平均不写几周，按天不写平均", Texts.costCaption(CostSummary(weeksUSD: 10, currentUSD: 1, averageUSD: 3), granularity: .week,
                                                                     currency: "USD") == "本周 $1.00 · 平均每周 $3.00 · 近 12 周合计 $10.00"
           && Texts.costCaption(CostSummary(weeksUSD: 10, currentUSD: 1, averageUSD: 3, daysUSD: 5, todayUSD: 1), granularity: .day, currency: "USD")
             == "今天 $1.00 · 近 30 天合计 $5.00")
+    check("缓存命中率：千分之一往下取（没到 100% 的不写成 100%），整的不写小数；cca 没给时没有", Texts.costCacheHit(0.9747) == "97.4%"
+          && Texts.costCacheHit(0.973) == "97.3%" && Texts.costCacheHit(0.97) == "97%" && Texts.costCacheHit(0.29) == "29%"
+          && Texts.costCacheHit(0.9999) == "99.9%" && Texts.costCacheHit(1) == "100%" && Texts.costCacheHit(0.0004) == "0%"
+          && Texts.costCacheHit(nil) == nil && Texts.costCacheHit(.nan) == nil, String(describing: Texts.costCacheHit(0.973)))
+    check("图下面那一行：缓存命中率写在最后，这一段没有（cca 没给、没有输入）时不写", Texts.costCaption(CostSummary(weeksUSD: 3, currentUSD: 3,
+          weeksCacheHit: 0.5), granularity: .week, currency: "USD") == "本周 $3.00 · 近 12 周合计 $3.00 · 缓存命中 50%"
+          && Texts.costCaption(CostSummary(daysUSD: 3, todayUSD: 3, weeksCacheHit: 0.5), granularity: .day, currency: "USD") == "今天 $3.00 · 近 30 天合计 $3.00")
     check("价格的小字：按工具说是谁的价格", Texts.costFootnote([.claude], pricesDate: "2026-11-01")
           == "按 Anthropic 官方 API 的价格折算（价格表 2026 年 11 月 1 日），不是实际花费：订阅不按这个收费。"
           && Texts.costFootnote([.codex], pricesDate: nil) == "按 OpenAI 官方 API 的价格折算，不是实际花费：订阅不按这个收费。"
@@ -518,6 +536,21 @@ func costUnitTests() {
           == "$22.30，316 次请求，其中 4 次没有公开价格、没算钱\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开"
           && Texts.costModelHelp(opus, granularity: .week, currency: "USD") == Texts.costModelValue(opus, granularity: .week, currency: "USD"),
           "\(Texts.costModelValue(restRow, granularity: .week, currency: "USD")) / \(Texts.costModelRequests(opus.weeks))")
+    let hitRow = CostModelRow(model: "claude-opus-5-5", weeks: CostModelRange(usd: 790.1, requests: 8804, cacheHit: 0.9731))
+    check("按模型：缓存命中率那一栏（cca 没给时空着）、读屏和悬停", Texts.costModelHit(hitRow.weeks) == "命中 97.3%" && Texts.costModelHit(opus.weeks) == ""
+          && Texts.costModelValue(hitRow, granularity: .week, currency: "USD") == "$790，8,804 次请求，缓存命中 97.3%"
+          && Texts.costModelHelp(hitRow, granularity: .week, currency: "USD") == Texts.costModelValue(hitRow, granularity: .week, currency: "USD"),
+          Texts.costModelValue(hitRow, granularity: .week, currency: "USD"))
+    let hitSummary = try? JSONDecoder().decode(CostSummary.self, from: Data(#"{"weeks_cache_hit": 0.9731, "days_cache_hit": null}"#.utf8))
+    let clampedHit = try? JSONDecoder().decode(CostSummary.self, from: Data(#"{"weeks_cache_hit": 1.5, "days_cache_hit": -0.2}"#.utf8))
+    let oddHit = try? JSONDecoder().decode(CostSummary.self, from: Data(#"{"weeks_cache_hit": "97%", "days_cache_hit": true}"#.utf8))
+    let oldHit = try? JSONDecoder().decode(CostSummary.self, from: Data(#"{"weeks_usd": 1}"#.utf8))
+    check("缓存命中率（3.7.5 起）：数字照收（超出 0～1 的夹回来）；null、别的类型、旧版 cca 没有：nil，不影响别的字段",
+          hitSummary?.weeksCacheHit == 0.9731 && hitSummary?.daysCacheHit == nil && clampedHit?.weeksCacheHit == 1 && clampedHit?.daysCacheHit == 0
+          && oddHit != nil && oddHit?.weeksCacheHit == nil && oddHit?.daysCacheHit == nil && oldHit?.weeksUSD == 1 && oldHit?.weeksCacheHit == nil)
+    let hitRange = try? JSONDecoder().decode(CostModelRange.self, from: Data(#"{"usd": 1, "requests": 2, "cache_hit": 0.5}"#.utf8))
+    let oldRange = try? JSONDecoder().decode(CostModelRange.self, from: Data(#"{"usd": 1, "requests": 2}"#.utf8))
+    check("按模型的缓存命中率（cache_hit；旧版 cca 没有）", hitRange?.cacheHit == 0.5 && hitRange?.requests == 2 && oldRange != nil && oldRange?.cacheHit == nil)
     // 3.6.14 起：cca 的价格表里还没有的新模型按同系列的标价估算（priced_as）
     let newer = CostModelRow(model: "claude-opus-5-6", weeks: CostModelRange(usd: 12.5, requests: 30), pricedAs: "claude-opus-5-5")
     let newer2 = CostModelRow(model: "gpt-6.3-sol", weeks: CostModelRange(usd: 3, requests: 3), days: CostModelRange(usd: 1, requests: 1),

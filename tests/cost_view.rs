@@ -51,6 +51,7 @@ pub const MODULE: Module = Module {
         case!(me_without_records),
         case!(diag),
         case!(models),
+        case!(cache_hit_rate),
         case!(unattributed_sync),
         case!(sync_states),
         case!(scan_state),
@@ -1544,6 +1545,11 @@ fn row1(usd: f64) -> Value {
     row(usd, 1, 0)
 }
 
+/// 一次请求、带缓存的一个小时：金额（美元）、输入（不含缓存）、缓存读、缓存写
+fn rowc(usd: f64, input: i64, read: i64, write: i64) -> Value {
+    list![(usd * M as f64) as i64, 1, input, 10, read, write, 0]
+}
+
 /// 任何能当 JSON 值的东西（比较时写起来短一点）
 fn v(x: impl Into<Value>) -> Value {
     x.into()
@@ -1763,7 +1769,7 @@ fn account(t: &mut Ctx) {
         t["by_tool"]["codex"],
         obj! {
             "current_usd" => 4.0, "weeks_usd" => 4.0, "average_usd" => Value::Null, "average_day_usd" => Value::Null,
-            "days_usd" => 4.0, "today_usd" => 0.0,
+            "days_usd" => 4.0, "today_usd" => 0.0, "weeks_cache_hit" => 0.0, "days_cache_hit" => 0.0,
         }
     );
     assert_eq!(t["by_tool"]["claude"]["weeks_usd"], v(20.0));
@@ -1785,7 +1791,7 @@ fn account(t: &mut Ctx) {
         me["by_tool"]["claude"],
         obj! {
             "current_usd" => 8.0, "weeks_usd" => 16.0, "average_usd" => 1.4, "average_day_usd" => 0.3448, "days_usd" => 15.0,
-            "today_usd" => 5.0,
+            "today_usd" => 5.0, "weeks_cache_hit" => 0.0, "days_cache_hit" => 0.0,
         }
     );
     assert_eq!(
@@ -1875,9 +1881,9 @@ fn by_device(t: &mut Ctx) {
         b["by_tool"]["codex"],
         obj! {
             "current_usd" => 0.0, "weeks_usd" => 0.0, "average_usd" => Value::Null, "average_day_usd" => Value::Null,
-            "days_usd" => 0.0, "today_usd" => 0.0,
+            "days_usd" => 0.0, "today_usd" => 0.0, "weeks_cache_hit" => Value::Null, "days_cache_hit" => Value::Null,
         },
-        "没用过 Codex：都是 0、没有平均"
+        "没用过 Codex：都是 0、没有平均，没有输入也就没有缓存命中率"
     );
     assert_eq!(
         list![b["days"].list().len(), &back(&b["days"], 2)["usd"], col(&b["days"], "start_epoch")],
@@ -2225,6 +2231,71 @@ fn models(t: &mut Ctx) {
     assert_eq!(priced(&a["models"]), want, "账号的");
     assert_eq!(priced(mine), want, "设备的");
     assert_eq!(priced(&t["models"]), want, "cost_total 的");
+}
+
+/// 缓存命中率（3.7.5 起，PROTOCOL 2.2 的 weeks_cache_hit、days_cache_hit、models[] 两段的 cache_hit）：缓存读 ÷（没走缓存的输入 + 缓存读 +
+/// 缓存写），先把 token 加起来再除（不是把各段、各台设备的比率平均），四位小数；没有输入是 null。账号的、设备的、按模型的、
+/// cost_total 的（顶层、按工具、me、设备菜单）、认不出是哪个账号的都有
+fn cache_hit_rate(t: &mut Ctx) {
+    let mut fx = View::new(t);
+    // 这台设备的 alice（Claude）：11 月 13 日输入 100、缓存读 800、缓存写 100（0.8）；10 月 1 日（30 天以前）输入 2700、缓存读 300（0.1）
+    let (recent, older) = (rowc(1.0, 100, 800, 100), rowc(1.0, 2700, 300, 0));
+    let acc = obj! {
+        claude(U1) => obj! { at(2026, 11, 13, 9) => recent.clone(), at(2026, 10, 1, 10) => older.clone() },
+        codex(U3) => obj! { at(2026, 11, 12, 8) => row1(4.0) },
+    };
+    put(&mut fx.local, "acc", acc);
+    let hm = obj! { at(2026, 11, 13, 9) => obj! { OPUS => recent }, at(2026, 10, 1, 10) => obj! { OPUS => older } };
+    put(&mut fx.local, "hm", obj! { claude(U1) => hm });
+    // 别的设备只留 bob-mini：11 月 12 日一次请求，输入全是缓存读（1.0），没有按模型分的
+    let bob = obj! {
+        "h" => obj! { at(2026, 11, 12, 10) => rowc(2.0, 0, 1000, 0) }, "um" => list![], "at" => NOW - 600.0,
+        "name" => "bob-mini", "tag" => "t1", "dv" => BOB,
+    };
+    obj_at(&mut fx.remote, &["acc"]).insert(ALICE, obj! { "SHA256:bob" => bob });
+    fx.write();
+    let mut cv = fx.view();
+    let a = cv.account("claude", "alice(alice@example.com)", Value::Null, Given::Team);
+    let hits = |s: &Value| list![&s["weeks_cache_hit"], &s["days_cache_hit"]];
+    assert_eq!(
+        hits(&a["summary"]),
+        list![0.42, 0.9],
+        "近 12 周 (1100 + 1000) / 5000，不是两台设备的比率平均；近 30 天 (800 + 1000) / 2000"
+    );
+    assert_eq!(hits(&named(&a["devices"], "alice-mbp")["summary"]), list![0.275, 0.8], "这台设备：1100 / 4000；800 / 1000");
+    assert_eq!(hits(&named(&a["devices"], "bob-mini")["summary"]), list![1.0, 1.0]);
+    let mhit = |ms: &Value, part: &str| -> Value {
+        Value::List(ms.list().iter().map(|m| list![&m["model"], &m[part]["cache_hit"]]).collect())
+    };
+    assert_eq!(
+        mhit(&a["models"], "weeks"),
+        list![list![OPUS, 0.275], list![Value::Null, 1.0]],
+        "按模型的也有（bob-mini 的没有按模型记下）"
+    );
+    assert_eq!(mhit(&a["models"], "days"), list![list![OPUS, 0.8], list![Value::Null, 1.0]]);
+    assert_eq!(
+        a["models"][0]["weeks"]["tokens"],
+        obj! { "input" => 2800, "output" => 20, "cache_read" => 1100, "cache_write" => 100 },
+        "和同一段的 tokens 对得上"
+    );
+    assert_eq!(mhit(&named(&a["devices"], "alice-mbp")["models"], "days"), list![list![OPUS, 0.8]], "设备的按模型的也有");
+    cv.account("codex", "alice@example.com", Value::Null, Given::Team);
+    let t = cv.total(&["claude", "codex"]);
+    assert_eq!(hits(&t), list![0.35, 0.6], "所有账号的 token 先加起来：2100 / 6000（Codex 的 1000 输入没走缓存）；1800 / 3000");
+    assert_eq!(list![hits(&t["by_tool"]["claude"]), hits(&t["by_tool"]["codex"])], list![list![0.42, 0.9], list![0.0, 0.0]]);
+    assert_eq!(hits(&t["me"]), list![0.22, 0.4], "这台设备在各账号里的那一份：1100 / 5000；800 / 2000");
+    assert_eq!(hits(&t["devices"][0]), hits(&t["me"]));
+    assert_eq!(
+        list![&t["devices"][1]["name"], hits(&t["devices"][1]), hits(&t["devices"][1]["by_tool"]["codex"])],
+        list!["bob-mini", list![1.0, 1.0], list![Value::Null, Value::Null]],
+        "bob-mini 没用过 Codex：没有输入，是 null"
+    );
+    assert_eq!(
+        mhit(&t["models"], "weeks"),
+        list![list![OPUS, 0.275], list![Value::Null, 0.5]],
+        "没按模型记下的：bob-mini 的 1000 缓存读和 Codex 的 1000 输入并在一起"
+    );
+    assert_eq!(hits(&t["unattributed"]["cost"]["summary"]), list![0.0, 0.0], "认不出是哪个账号的也有（这台设备的没有缓存）");
 }
 
 /// 认不出是哪个账号的（unattributed.cost）：这台设备的，和别的设备经各个 Team 的服务器传来的（remote.json 的 orphan）。同一台机器

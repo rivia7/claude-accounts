@@ -183,17 +183,21 @@ struct CostModelRange: Decodable, Sendable, Equatable {
     var unpricedRequests = 0
     /// 只给账号的（设备、cost_total 的没有）
     var tokens: CostTokens?
+    /// 这一段的缓存命中率（3.7.5 起，0～1，cca 算的）；没有输入、旧版 cca 没有时为 nil
+    var cacheHit: Double?
 
     enum CodingKeys: String, CodingKey {
         case usd, requests, tokens
         case unpricedRequests = "unpriced_requests"
+        case cacheHit = "cache_hit"
     }
 
-    init(usd: Double = 0, requests: Int = 0, unpricedRequests: Int = 0, tokens: CostTokens? = nil) {
+    init(usd: Double = 0, requests: Int = 0, unpricedRequests: Int = 0, tokens: CostTokens? = nil, cacheHit: Double? = nil) {
         self.usd = usd
         self.requests = requests
         self.unpricedRequests = unpricedRequests
         self.tokens = tokens
+        self.cacheHit = cacheHit
     }
 
     init(from decoder: Decoder) throws {
@@ -202,6 +206,7 @@ struct CostModelRange: Decodable, Sendable, Equatable {
         requests = max(c.int(.requests) ?? 0, 0)
         unpricedRequests = max(c.int(.unpricedRequests) ?? 0, 0)
         tokens = c.lossy(CostTokens.self, .tokens)
+        cacheHit = c.double(.cacheHit).map { min(max($0, 0), 1) }
     }
 
     /// 这一段里没有用量（没有请求、没有金额）
@@ -334,6 +339,9 @@ struct CostSummary: Decodable, Sendable, Equatable {
     var averageDays = 0
     var requests = 0
     var unpricedRequests = 0
+    /// 缓存命中率（3.7.5 起，0～1，cca 算的）：列出的周期、30 天里输入的 token 有多少是读的缓存。没有输入、旧版 cca 没有时为 nil
+    var weeksCacheHit: Double?
+    var daysCacheHit: Double?
 
     enum CodingKeys: String, CodingKey {
         case weeksUSD = "weeks_usd"
@@ -346,10 +354,13 @@ struct CostSummary: Decodable, Sendable, Equatable {
         case averageDays = "average_days"
         case requests
         case unpricedRequests = "unpriced_requests"
+        case weeksCacheHit = "weeks_cache_hit"
+        case daysCacheHit = "days_cache_hit"
     }
 
     init(weeksUSD: Double = 0, currentUSD: Double = 0, averageUSD: Double? = nil, averageWeeks: Int = 0, daysUSD: Double = 0,
-         todayUSD: Double = 0, averageDayUSD: Double? = nil, averageDays: Int = 0, requests: Int = 0, unpricedRequests: Int = 0) {
+         todayUSD: Double = 0, averageDayUSD: Double? = nil, averageDays: Int = 0, requests: Int = 0, unpricedRequests: Int = 0,
+         weeksCacheHit: Double? = nil, daysCacheHit: Double? = nil) {
         self.weeksUSD = weeksUSD
         self.currentUSD = currentUSD
         self.averageUSD = averageUSD
@@ -360,6 +371,8 @@ struct CostSummary: Decodable, Sendable, Equatable {
         self.averageDays = averageDays
         self.requests = requests
         self.unpricedRequests = unpricedRequests
+        self.weeksCacheHit = weeksCacheHit
+        self.daysCacheHit = daysCacheHit
     }
 
     init(from decoder: Decoder) throws {
@@ -374,6 +387,8 @@ struct CostSummary: Decodable, Sendable, Equatable {
         averageDays = max(c.int(.averageDays) ?? 0, 0)
         requests = max(c.int(.requests) ?? 0, 0)
         unpricedRequests = max(c.int(.unpricedRequests) ?? 0, 0)
+        weeksCacheHit = c.double(.weeksCacheHit).map { min(max($0, 0), 1) }
+        daysCacheHit = c.double(.daysCacheHit).map { min(max($0, 0), 1) }
     }
 }
 

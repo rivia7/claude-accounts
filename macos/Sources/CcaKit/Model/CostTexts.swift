@@ -137,8 +137,9 @@ extension Texts {
         return s + notes.map { "；" + $0 }.joined()
     }
 
-    /// 图下面那一行（鼠标没指着柱子时）：按周「本周 $483.51 · 平均每周 $988.78（7 周）· 近 12 周合计 $8,052」，
-    /// 按天「今天 $38.91 · 平均每天 $140.20（29 天）· 近 30 天合计 $4,200」。都是 cca 给的 summary，平均算不出来（一项都没过完）时不写
+    /// 图下面那一行（鼠标没指着柱子时）：按周「本周 $483.51 · 平均每周 $988.78（7 周）· 近 12 周合计 $8,052 · 缓存命中 97.3%」，
+    /// 按天「今天 $38.91 · 平均每天 $140.20（29 天）· 近 30 天合计 $4,200 · 缓存命中 97.5%」。都是 cca 给的 summary，平均算不出来（一项都没过完）时不写，
+    /// 缓存命中率 cca 没给（没有输入、旧版 cca）时不写
     static func costCaption(_ s: CostSummary, granularity g: CostGranularity, currency: String) -> String {
         let (current, average, count, total): (String, Double?, String?, String)
         switch g {
@@ -152,7 +153,15 @@ extension Texts {
             count = s.averageDays > 0 ? "（\(s.averageDays) 天）" : nil
         }
         let avg = average.map { (g == .week ? "平均每周 " : "平均每天 ") + money($0, currency: currency) + (count ?? "") }
-        return ([current] + (avg.map { [$0] } ?? []) + [total]).joined(separator: " · ")
+        let hit = costCacheHit(s.cacheHit(g)).map { "缓存命中 " + $0 }
+        return ([current] + (avg.map { [$0] } ?? []) + [total] + (hit.map { [$0] } ?? [])).joined(separator: " · ")
+    }
+
+    /// 缓存命中率（cca 给的 0～1）：「97.3%」，千分之一往下取（没到 100% 的不写成 100%）；cca 没给（没有输入、旧版 cca）时是 nil
+    static func costCacheHit(_ v: Double?) -> String? {
+        guard let v, v.isFinite else { return nil }
+        let tenths = Int((min(max(v, 0), 1) * 1000 + 1e-6).rounded(.down))
+        return (tenths % 10 == 0 ? "\(tenths / 10)" : "\(tenths / 10).\(tenths % 10)") + "%"
     }
 
     /// 一直显示的小字：按谁的价格折算、价格表是哪天的，不是实际花费
@@ -363,10 +372,16 @@ extension Texts {
         grouped(x.requests) + " 次"
     }
 
-    /// 读屏：「$790，8,804 次请求」「没有公开价格，316 次请求」；有一部分没算钱时补一句
+    /// 缓存命中率那一栏：「命中 97.3%」；cca 没给（这一段没有输入、旧版 cca）时空着
+    static func costModelHit(_ x: CostModelRange) -> String {
+        costCacheHit(x.cacheHit).map { "命中 " + $0 } ?? ""
+    }
+
+    /// 读屏：「$790，8,804 次请求，缓存命中 97.3%」「没有公开价格，316 次请求」；有一部分没算钱时补一句
     static func costModelValue(_ r: CostModelRow, granularity g: CostGranularity, currency: String) -> String {
         let x = r.range(g)
         var s = costModelMoney(x, currency: currency, estimated: r.pricedAs != nil) + "，" + grouped(x.requests) + " 次请求"
+        if let hit = costCacheHit(x.cacheHit) { s += "，缓存命中 " + hit }
         if !x.allUnpriced, x.unpricedRequests > 0 { s += "，其中 \(grouped(x.unpricedRequests)) 次没有公开价格、没算钱" }
         if !x.allUnpriced, let base = r.pricedAs { s += "，按 \(base) 的价格估算" }
         return s

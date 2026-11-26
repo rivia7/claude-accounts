@@ -222,7 +222,8 @@ struct CostGranularityPicker: View {
 
 /// 按模型分开的金额（cca 给的 `models[]`，3.6.8 起；旧版 cca 没有，不显示）：账号页「折合金额」、折合金额页合计那一块里。
 /// 一个模型一行：名字、一根细条（这一行的金额占这几行加起来的多少；中性色，和折合金额的柱子一样）、金额（都没有公开价格的写
-/// 「没有公开价格」，cca 的价格表里还没有、按同系列估算的新模型前面加「≈」，列表下面说一句）、请求数。按周看是列出的周期（近 12 周）的，按天看是 30 天的；没有按模型记下的那一部分在最后、灰字。
+/// 「没有公开价格」，cca 的价格表里还没有、按同系列估算的新模型前面加「≈」，列表下面说一句）、请求数、缓存命中率（3.7.5 起 cca 给的 `cache_hit`；
+/// 一行都没有时不留这一栏）。按周看是列出的周期（近 12 周）的，按天看是 30 天的；没有按模型记下的那一部分在最后、灰字。
 /// 数字都是 cca 给的，App 只挑那一段、排版（rows 是 CostChart.modelRows 挑好、排好的）
 struct CostModelList: View {
     let rows: [CostModelRow]
@@ -231,6 +232,7 @@ struct CostModelList: View {
 
     var body: some View {
         if !rows.isEmpty {
+            let hits = rows.contains { $0.range(granularity).cacheHit != nil }
             VStack(alignment: .leading, spacing: 6) {
                 Text(Texts.costModelsTitle(granularity))
                     .font(.caption)
@@ -253,6 +255,11 @@ struct CostModelList: View {
                             Text(Texts.costModelRequests(x))
                                 .foregroundStyle(.secondary)
                                 .frame(width: 84, alignment: .trailing)
+                            if hits {
+                                Text(Texts.costModelHit(x))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 84, alignment: .trailing)
+                            }
                         }
                         .lineLimit(1)
                         .help(Texts.costModelHelp(r, granularity: granularity, currency: currency))

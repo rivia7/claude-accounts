@@ -8,6 +8,11 @@ enum CostGranularity: String, Sendable, CaseIterable {
     case week, day
 }
 
+extension CostSummary {
+    /// 这一段的缓存命中率（cca 给的）：按周看是列出的周期的，按天看是 30 天的
+    func cacheHit(_ g: CostGranularity) -> Double? { g == .week ? weeksCacheHit : daysCacheHit }
+}
+
 /// 折合金额看谁的（账号页、折合金额页共用）：所有设备加起来（整个账号）、这台设备（本机），或者另一台设备（cca 给的设备 id，
 /// `cost_total.devices`）。记在 App 的设置里：`all`、`me`、`d:设备 id`（旧版 App 读到不认识的当作所有设备）。
 enum CostScope: Hashable, Sendable {

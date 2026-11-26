@@ -145,6 +145,35 @@ private func sameModels(_ rows: [CostModelRow], _ parts: [[CostModelRow]]) -> Bo
     }
 }
 
+/// 缓存命中率（PROTOCOL 2.2，3.7.5 起；旧版 cca 没有）：没有、null，或者 0～1 的数
+private func hitValue(_ x: Any?) -> Bool {
+    guard let x, !(x is NSNull) else { return true }
+    guard isNumber(x), let v = (x as? NSNumber)?.doubleValue else { return false }
+    return v >= 0 && v <= 1
+}
+
+/// 照 token 算的缓存命中率：读缓存的 ÷（没读缓存的输入 + 读缓存 + 写缓存）；1 只给全读缓存的，别的最多 0.9999；没有输入是 nil
+private func expectedHit(_ list: [CostTokens]) -> Double? {
+    let read = list.map(\.cacheRead).reduce(0, +), all = list.map { $0.input + $0.cacheRead + $0.cacheWrite }.reduce(0, +)
+    guard all > 0 else { return nil }
+    return read >= all ? 1 : min(Double(read) / Double(all), 0.9999)
+}
+
+/// cca 给的缓存命中率（四位小数）和照 token 算的一样
+private func sameHit(_ hit: Double?, _ list: [CostTokens]) -> Bool {
+    guard let e = expectedHit(list) else { return hit == nil }
+    guard let hit else { return false }
+    return e == 1 ? hit == 1 : abs(hit - e) <= 0.00006
+}
+
+/// 几部分加起来算的缓存命中率（按输入加权的平均）在各部分的之间；各部分都没有时它也没有
+private func hitBetween(_ hit: Double?, _ parts: [Double?]) -> Bool {
+    let p = parts.compactMap { $0 }
+    guard let lo = p.min(), let hi = p.max() else { return hit == nil }
+    guard let hit else { return false }
+    return hit >= lo - 0.00011 && hit <= hi + 0.00011
+}
+
 /// 按模型分开的（PROTOCOL 2.2 的 `models[]`，3.6.8 起）：每一项的样子、排法；各项加起来是 s 的金额（withRequests：还有请求数）。
 /// tokens：账号的带，设备、合计的不带
 private func modelInvariants(_ n: String, _ raw: Any?, _ rows: [CostModelRow]?, summary s: CostSummary, withRequests: Bool, tokens: Bool) {
@@ -166,6 +195,15 @@ private func modelInvariants(_ n: String, _ raw: Any?, _ rows: [CostModelRow]?, 
         guard tokens, let o = t as? [String: Any] else { return false }
         return ["input", "output", "cache_read", "cache_write"].allSatisfy { wholeCount(o[$0]) }
     })
+    check("\(n) cache_hit（3.7.5 起）没有、null 或者 0～1", ranges.allSatisfy { hitValue($0?["cache_hit"]) })
+    if tokens {
+        check("\(n) cache_hit 是这一段的 token 算的", zip(list, rows).allSatisfy { r, row in
+            [("weeks", row.weeks), ("days", row.days)].allSatisfy { k, x in
+                guard (r[k] as? [String: Any])?["cache_hit"] != nil, let t = x.tokens else { return true }
+                return sameHit(x.cacheHit, [t])
+            }
+        })
+    }
     check("\(n) priced_as（3.6.14 起）没有，或者是模型名（只在有名字的模型上）", list.allSatisfy { r in
         guard let p = r["priced_as"] else { return true }
         return (p as? String).map { !$0.isEmpty } == true && r["model"] is String
@@ -281,6 +319,15 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
         check("\(n) average_day_usd 是这几天的平均", near(avg, goodDays.map { d[$0].usd }.reduce(0, +) / Double(goodDays.count), terms: goodDays.count),
               "\(avg)")
     }
+    // 缓存命中率（3.7.5 起；旧版 cca 没有）：列出的周期、30 天的 token 加起来算的
+    let rawSummary = raw["summary"] as? [String: Any] ?? [:]
+    check("\(n) weeks_cache_hit、days_cache_hit 没有、null 或者 0～1", hitValue(rawSummary["weeks_cache_hit"]) && hitValue(rawSummary["days_cache_hit"]))
+    if rawSummary["weeks_cache_hit"] != nil, w.allSatisfy({ $0.tokens != nil }) {
+        check("\(n) weeks_cache_hit 是列出的周期的 token 算的", sameHit(s.weeksCacheHit, w.compactMap(\.tokens)), "\(String(describing: s.weeksCacheHit))")
+    }
+    if rawSummary["days_cache_hit"] != nil, d.allSatisfy({ $0.tokens != nil }) {
+        check("\(n) days_cache_hit 是 30 天的 token 算的", sameHit(s.daysCacheHit, d.compactMap(\.tokens)), "\(String(describing: s.daysCacheHit))")
+    }
     // 设备
     let rawDevices = raw["devices"] as? [[String: Any]]
     check("\(n) devices 是对象数组，每一台都解码了", rawDevices?.count == c.devices.count, "\(rawDevices?.count ?? -1) vs \(c.devices.count)")
@@ -302,11 +349,15 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
         let ds = rd["summary"] as? [String: Any] ?? [:]
         check("\(dn) summary 的字段类型", ["weeks_usd", "current_usd", "days_usd", "today_usd"].allSatisfy { nonNegative(ds[$0]) }
               && ["average_weeks", "average_days"].allSatisfy { wholeCount(ds[$0]) }
-              && (nonNegative(ds["average_usd"]) || isNull(ds["average_usd"])) && (nonNegative(ds["average_day_usd"]) || isNull(ds["average_day_usd"])))
+              && (nonNegative(ds["average_usd"]) || isNull(ds["average_usd"])) && (nonNegative(ds["average_day_usd"]) || isNull(ds["average_day_usd"]))
+              && hitValue(ds["weeks_cache_hit"]) && hitValue(ds["days_cache_hit"]))
     }
     check("\(n) 每一项是各台设备加起来", w.indices.allSatisfy { i in
         near(c.devices.map { $0.weeksUSD[i] }.reduce(0, +), w[i].usd, terms: c.devices.count + 1)
     } && d.indices.allSatisfy { i in near(c.devices.map { $0.daysUSD[i] }.reduce(0, +), d[i].usd, terms: c.devices.count + 1) })
+    check("\(n) 缓存命中率在各台设备的之间（整个账号的 token 是各台加起来的），都没有时没有",
+          hitBetween(s.weeksCacheHit, c.devices.map(\.summary.weeksCacheHit)) && hitBetween(s.daysCacheHit, c.devices.map(\.summary.daysCacheHit)),
+          "\(String(describing: s.weeksCacheHit)) \(String(describing: s.daysCacheHit))")
     let currentIndex = w.lastIndex(where: \.current), todayIndex = d.lastIndex(where: \.current)
     for dv in c.devices {
         let ds = dv.summary, dn = "\(n) \(dv.name)"
@@ -372,6 +423,11 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
         check("\(label) 金额的类型", ["current_usd", "weeks_usd", "days_usd", "today_usd"].allSatisfy { nonNegative(raw[$0]) }
               && (nonNegative(raw["average_usd"]) || isNull(raw["average_usd"])) && (nonNegative(raw["average_day_usd"]) || isNull(raw["average_day_usd"])))
         thirtyDays(label, p.days, raw["days"] as? [[String: Any]], now: now)
+        check("\(label) 缓存命中率（3.7.5 起）没有、null 或者 0～1", hitValue(raw["weeks_cache_hit"]) && hitValue(raw["days_cache_hit"])
+              && ((raw["by_tool"] as? [String: Any]) ?? [:]).values.allSatisfy { x in
+                  let o = x as? [String: Any] ?? [:]
+                  return hitValue(o["weeks_cache_hit"]) && hitValue(o["days_cache_hit"])
+              })
         func sums(_ list: [CostSummary], _ s: CostSummary, _ label: String) {
             check("\(label) current、weeks、days、today 是各账号加起来",
                   near(s.currentUSD, list.map(\.currentUSD).reduce(0, +), terms: list.count)
@@ -383,6 +439,8 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
                   (s.averageUSD == nil) == avgs.isEmpty && (s.averageUSD.map { near($0, avgs.reduce(0, +), terms: avgs.count) } ?? true)
                   && (s.averageDayUSD == nil) == days.isEmpty && (s.averageDayUSD.map { near($0, days.reduce(0, +), terms: days.count) } ?? true),
                   "\(String(describing: s.averageUSD)) \(String(describing: s.averageDayUSD))")
+            check("\(label) 缓存命中率在各账号的之间（token 加起来算的），都没有时没有", hitBetween(s.weeksCacheHit, list.map(\.weeksCacheHit))
+                  && hitBetween(s.daysCacheHit, list.map(\.daysCacheHit)), "\(String(describing: s.weeksCacheHit)) \(String(describing: s.daysCacheHit))")
         }
         sums(rows.map(\.s), p.summary, label)
         check("\(label) 每一天是各账号那一天加起来", p.days.allSatisfy { day in

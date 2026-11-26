@@ -296,30 +296,32 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
        "tokens": {"input": 20100, "output": 160200, "cache_read": 40100223, "cache_write": 801100}}
     ],
     "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "average_weeks": 3,
-                "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30, "requests": 9120, "unpriced_requests": 4},
+                "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30, "requests": 9120, "unpriced_requests": 4,
+                "weeks_cache_hit": 0.9807, "days_cache_hit": 0.9799},
     "devices": [
       {"id": "SHA256:…", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041000.0, "stale": false, "used": true,
        "weeks_usd": [182.41], "days_usd": [31.2],
        "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "average_weeks": 3,
-                   "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30},
+                   "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30,
+                   "weeks_cache_hit": 0.9807, "days_cache_hit": 0.9799},
        "diag": {"cca": "3.6.0", "claude_code": "2.1.316", "claude_code_old": true,
                 "why": [{"code": "old_claude_code", "last_epoch": 1793923200.0, "claude_code": "2.1.316"}]},
-       "models": [{"model": "claude-opus-5-5", "weeks": {"usd": 790.1, "requests": 8804, "unpriced_requests": 0},
-                   "days": {"usd": 620.0, "requests": 6102, "unpriced_requests": 0}},
-                  {"model": null, "weeks": {"usd": 22.3, "requests": 316, "unpriced_requests": 4},
-                   "days": {"usd": 20.2, "requests": 290, "unpriced_requests": 4}}]}
+       "models": [{"model": "claude-opus-5-5", "weeks": {"usd": 790.1, "requests": 8804, "unpriced_requests": 0, "cache_hit": 0.9803},
+                   "days": {"usd": 620.0, "requests": 6102, "unpriced_requests": 0, "cache_hit": 0.9812}},
+                  {"model": null, "weeks": {"usd": 22.3, "requests": 316, "unpriced_requests": 4, "cache_hit": 0.9891},
+                   "days": {"usd": 20.2, "requests": 290, "unpriced_requests": 4, "cache_hit": 0.9891}}]}
     ],
     "unpriced_models": ["codex-auto-review"],
     "models": [
       {"model": "claude-opus-5-5",
-       "weeks": {"usd": 790.1, "requests": 8804, "unpriced_requests": 0,
+       "weeks": {"usd": 790.1, "requests": 8804, "unpriced_requests": 0, "cache_hit": 0.9803,
                  "tokens": {"input": 110334, "output": 780112, "cache_read": 200334112, "cache_write": 3911223}},
-       "days": {"usd": 620.0, "requests": 6102, "unpriced_requests": 0,
+       "days": {"usd": 620.0, "requests": 6102, "unpriced_requests": 0, "cache_hit": 0.9812,
                 "tokens": {"input": 80100, "output": 600200, "cache_read": 150100223, "cache_write": 2801100}}},
       {"model": null,
-       "weeks": {"usd": 22.3, "requests": 316, "unpriced_requests": 4,
+       "weeks": {"usd": 22.3, "requests": 316, "unpriced_requests": 4, "cache_hit": 0.9891,
                  "tokens": {"input": 10000, "output": 22000, "cache_read": 10000000, "cache_write": 100000}},
-       "days": {"usd": 20.2, "requests": 290, "unpriced_requests": 4,
+       "days": {"usd": 20.2, "requests": 290, "unpriced_requests": 4, "cache_hit": 0.9891,
                 "tokens": {"input": 9000, "output": 20000, "cache_read": 9000000, "cache_write": 90000}}}
     ],
     "sync": {"state": "ok", "message": null, "checked_epoch": 1794041000.0, "hub": "team",
@@ -340,6 +342,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     （`average_weeks` 是算了几项：一项都没有时 `average_usd` 是 null、`average_weeks` 是 0），`days_usd` 30 天加起来，`today_usd` 今天，
     `average_day_usd` 过完的、不是 `partial` 的那几天的平均（今天不算；`average_days` 是算了几天，一天都没有时 null 和 0；
     旧版 cca 没有这两项，App 当作没有平均每天、不写），`requests` / `unpriced_requests` 列出的周期加起来。
+    `weeks_cache_hit`、`days_cache_hit`（3.7.5 起）：列出的周期、30 天的缓存命中率，缓存读 ÷（输入 + 缓存读 + 缓存写）：各项的 token
+    先加起来再除（不是把各项、各台设备的比率平均）；四位小数，1 只给全读缓存的（别的最多 0.9999），没有输入（这一段没有用量）时为 null。
+    三种工具都按 `tokens` 的四项算：Codex 的 `input_tokens` 含缓存读、缓存写，cca 记的输入是减掉它们的；Antigravity 不说缓存写了多少
+    （都在输入里）。App 千分之一往下取，写成「97.3%」；旧版 cca 没有这两项，App 不显示缓存命中率。
   - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列（3.7.4 及以前的 cca 例外：
     别的设备最近有回复认不出账号时，没有这个账号的记录也列出来，数字都是 0，`used` 是 false）；只有这台设备时只有一项。
     `id`：认同一台机器用的。传了机器标识的设备（config.json 里有 `device_id` 的：同步路由器时生成，16 个小写十六进制字符；
@@ -352,7 +358,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     这台设备是最后一次统计的时间），`stale`：超过 36 小时没同步上来（那台设备没开、断网、cca 太旧），之后用的可能还没算进来。
     `used`：那台设备用过这个账号（列出的周期里有请求）；3.7.5 起总是 true，3.7.4 及以前只为诊断列出来的那种是 false（App 不列它：设备菜单看
     那台设备时不列这个账号，账号页的设备菜单不列那台设备，折合金额页账号下面也不列）。旧版 cca 没有这一项，当作 true。
-    `weeks_usd`、`days_usd` 和 `weeks`、`days` 一一对应；`summary` 同上（没有 `requests`、`unpriced_requests`）。平均按整个账号的那几周、那几天算
+    `weeks_usd`、`days_usd` 和 `weeks`、`days` 一一对应；`summary` 同上（没有 `requests`、`unpriced_requests`；缓存命中率是那台设备自己的 token 算的）。平均按整个账号的那几周、那几天算
     （`average_weeks`、`average_days` 和账号的一样），所以各台设备的平均加起来就是整个账号的（旧版 cca 的设备 `summary` 没有
     `average_weeks`、`average_days`、`average_day_usd`）。App 看「本机」时用 `me` 为真的那一台，看另一台设备时按 `id` 找那一台
     （那台设备没有这个账号的记录时没有，App 当作都是 0）。
@@ -368,7 +374,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     小写，去掉了 `[1m]` 这类后缀和末尾的日期；会话记录里没写时是 `""`，App 写「没写模型名」），`null` 是没有按模型记下的那一部分（合计减去
     各个模型的：3.6.7 及以前的 cca 统计的、旧版 cca 的设备传来的、传的时候为了放得下去掉了明细的；不会是负的）；`weeks`：列出的周期
     （`weeks[]`）加起来，`days`：30 天（`days[]`）加起来，各有 `usd`、`requests`、`unpriced_requests`（没有标价的模型也列：`usd` 是 0、
-    `unpriced_requests` 是它的请求数），账号的另有 `tokens`（同上）。各项加起来就是 `summary` 的 `weeks_usd`、`days_usd`、`requests`、
+    `unpriced_requests` 是它的请求数）、`cache_hit`（3.7.5 起：这一段的缓存命中率，算法同 `summary`），账号的另有 `tokens`（同上）。各项加起来就是 `summary` 的 `weeks_usd`、`days_usd`、`requests`、
     `unpriced_requests`（四舍五入的差别以外）。按 `weeks.usd`、`weeks.requests` 从多到少，再按 `days.usd`、模型名排，`null` 那一项总在最后；
     两段里都没有请求、没有金额的不列，没有记录时为 `[]`。`priced_as`（3.6.14 起，只在有名字的模型上，没有这一项时照它自己的标价、或者
     没有公开价格）：cca 的价格表里还没有的新版本（Claude 的 `claude-<系列>-<版本>`：opus、sonnet、haiku、fable、mythos；OpenAI 的
@@ -444,6 +450,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 "cost_total": {
   "currency": "USD", "prices_date": "2026-11-13",
   "current_usd": 340.2, "weeks_usd": 3021.5, "average_usd": 812.0, "average_day_usd": 70.1, "days_usd": 2101.0, "today_usd": 33.0,
+  "weeks_cache_hit": 0.9736, "days_cache_hit": 0.9741,
   "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 33.0}],
   "by_tool": {"claude": {"current_usd": 300.1, "weeks_usd": 2800.2, "average_usd": 760.0, "average_day_usd": 65.0, "days_usd": 1950.0, "today_usd": 31.2},
               "codex": {"current_usd": 40.1, "weeks_usd": 221.3, "average_usd": 52.0, "average_day_usd": 5.1, "days_usd": 151.0, "today_usd": 1.8}},
@@ -493,6 +500,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - 各账号的周期不一样（额度窗口各自的重置时间），所以没有按周加起来的柱子：`current_usd` 是各账号当前那一项加起来，`weeks_usd`、`days_usd`、
   `today_usd` 同理；`average_usd`、`average_day_usd` 是有平均值的账号的平均加起来（一个都没有为 null）。`days[]` 是最近 30 个本地日历日，
   各账号加起来（日期是共同的）。
+- `weeks_cache_hit`、`days_cache_hit`（3.7.5 起）：缓存命中率，各账号的 token 先加起来再算（不是各账号的比率平均；`me` 是各账号里这台设备的、
+  `devices[]` 是那台设备的），算法同账号的 `summary`，没有输入时为 null；`by_tool`、`me`、`devices[]` 里也有，`models[]` 的每一段有 `cache_hit`。
 - `by_tool`：按工具分开的同样几项，只列启用了的工具（`agy` 3.7.2 起）。
 - `models[]`：所有账号按模型加起来（3.6.8 起），一项的样子、排法和账号的 `models[]` 一样，没有 `tokens`；`me`、`devices[]` 里也有，
   各自的加起来（旧版 cca 没有：App 不显示按模型的那一块）。不含 `unattributed`。

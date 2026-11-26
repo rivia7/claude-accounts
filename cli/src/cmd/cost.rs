@@ -3023,6 +3023,31 @@ fn usd_opt(m: Option<i128>) -> V {
     m.map_or(V::None, |m| V::from(usd(m)))
 }
 
+/// 几项的 7 个计数加起来
+fn counts_sum<'a>(rows: impl IntoIterator<Item = &'a Counts>) -> Counts {
+    let mut c = [0i128; 7];
+    for r in rows {
+        for x in 0..7 {
+            c[x] += r[x];
+        }
+    }
+    c
+}
+
+/// 缓存命中率（PROTOCOL 2.2 的 `weeks_cache_hit`、`days_cache_hit`、`models[]` 两段的 `cache_hit`）：输入的 token 里读缓存的占多少，
+/// 缓存读 ÷（没走缓存的输入 + 缓存读 + 缓存写）。c 是先加起来的计数（不是把各段、各台设备的比率平均），四位小数；没有输入时是 null。
+/// 1 只给全读缓存的：别的最多 0.9999（四舍五入进到 1 的话 App 就写成 100% 了）
+fn cache_hit(c: &Counts) -> V {
+    let all = c[2] + c[4] + c[5];
+    if all <= 0 {
+        return V::None;
+    }
+    if c[4] >= all {
+        return V::from(1.0);
+    }
+    V::from(num::round_to((c[4] as f64 / all as f64).max(0.0), 4).min(0.9999))
+}
+
 /// 一方（整个账号或者一台设备）的几项（百万分之一美元）
 #[derive(Clone)]
 struct Money {
@@ -3033,6 +3058,8 @@ struct Money {
     average: Option<i128>,
     average_day: Option<i128>,
     day_list: Vec<i128>,
+    /// 列出的周期、按天的那 30 天各自加起来的 7 个计数（算缓存命中率：合计的要先把 token 加起来）
+    sums: [Counts; 2],
     /// 按模型分的两段（view 算好以后放进来）
     models: Models,
 }
@@ -3055,11 +3082,13 @@ fn cost_summary(wr: &[Counts], dr: &[Counts], good: &[usize], good_days: &[usize
         average: avg(wr, good),
         average_day: avg(dr, good_days),
         day_list: dr.iter().map(|r| r[0]).collect(),
+        sums: [counts_sum(wr), counts_sum(dr)],
         models: Models::new(),
     };
     let summary = dict! {
         "weeks_usd" => usd(m.weeks), "current_usd" => usd(m.current), "average_usd" => usd_opt(m.average), "average_weeks" => good.len(),
         "days_usd" => usd(m.days), "today_usd" => usd(m.today), "average_day_usd" => usd_opt(m.average_day), "average_days" => good_days.len(),
+        "weeks_cache_hit" => cache_hit(&m.sums[0]), "days_cache_hit" => cache_hit(&m.sums[1]),
     };
     (m, summary)
 }
@@ -3171,7 +3200,7 @@ fn add_models(into: &mut Models, m: &Models) {
 }
 
 /// PROTOCOL 2.2 的 models[]：每个模型（没有按模型记下的那一部分 model 是 null）在列出的周期（weeks）、按天的那 30 天（days）里
-/// 折成多少美元、几次请求、其中没有标价的几次；tokens 只给整个账号的；价格表里还没有、按同系列的标价估算的带 priced_as。
+/// 折成多少美元、几次请求、其中没有标价的几次、缓存命中率；tokens 只给整个账号的；价格表里还没有、按同系列的标价估算的带 priced_as。
 /// 按列出的周期的金额、请求数从多到少，再按 30 天的金额、模型名排，没有按模型记下的在最后；两段里都没有请求、没有金额的不列
 fn models_view(ms: &Models, tokens: bool) -> Vec<V> {
     let mut rows: Vec<(&Option<String>, &[Counts; 2])> =
@@ -3185,7 +3214,7 @@ fn models_view(ms: &Models, tokens: bool) -> Vec<V> {
             .then(a.0.cmp(b.0))
     });
     let range = |c: &Counts| -> Dict {
-        let d = dict! { "usd" => usd(c[0]), "requests" => count_v(c[1]), "unpriced_requests" => count_v(c[6]) };
+        let d = dict! { "usd" => usd(c[0]), "requests" => count_v(c[1]), "unpriced_requests" => count_v(c[6]), "cache_hit" => cache_hit(c) };
         if tokens {
             d.set(
                 "tokens",
@@ -3688,11 +3717,14 @@ impl CostView {
         let agg = |sel: &[&Money]| -> Dict {
             let avg: Vec<i128> = sel.iter().filter_map(|m| m.average).collect();
             let avd: Vec<i128> = sel.iter().filter_map(|m| m.average_day).collect();
+            // 缓存命中率：各账号的 token 先加起来再算
+            let hit = |n: usize| cache_hit(&counts_sum(sel.iter().map(|m| &m.sums[n])));
             dict! {
                 "current_usd" => usd(sel.iter().map(|m| m.current).sum()), "weeks_usd" => usd(sel.iter().map(|m| m.weeks).sum()),
                 "average_usd" => if avg.is_empty() { V::None } else { V::from(usd(avg.iter().sum())) },
                 "average_day_usd" => if avd.is_empty() { V::None } else { V::from(usd(avd.iter().sum())) },
                 "days_usd" => usd(sel.iter().map(|m| m.days).sum()), "today_usd" => usd(sel.iter().map(|m| m.today).sum()),
+                "weeks_cache_hit" => hit(0), "days_cache_hit" => hit(1),
             }
         };
         // ms 是 [(工具名, 各项)]：几项统计、30 天每天、按工具分开
@@ -4158,7 +4190,7 @@ mod tests {
         let a = rows[0].as_dict().unwrap();
         assert_eq!(
             json::dumps(&a.get("days").unwrap(), json::Fmt::new()),
-            r#"{"usd": 0.0, "requests": 1, "unpriced_requests": 0}"#,
+            r#"{"usd": 0.0, "requests": 1, "unpriced_requests": 0, "cache_hit": 0.0}"#,
             "设备的不带 tokens"
         );
         let with = models_view(&ms, true);
@@ -4174,6 +4206,21 @@ mod tests {
             "各个模型的比合计多（传来的不一致）：剩下的按 0 算，不是负的"
         );
         assert!(!device_models(&weeks, &days, &hm, &[c(16, 5), c(0, 0)], &[c(1, 1)]).contains_key(&None), "都记下了：没有 None");
+    }
+
+    #[test]
+    fn cache_hit_adds_tokens_first() {
+        // 缓存命中率：缓存读 ÷（没走缓存的输入 + 缓存读 + 缓存写），四位小数；几项的先把 token 加起来再除；没有输入是 null
+        let c = |input: i128, read: i128, write: i128| [1, 1, input, 5, read, write, 0];
+        let hit = |c: &Counts| cache_hit(c).as_pynum();
+        assert_eq!(hit(&c(100, 600, 300)), Some(0.6));
+        assert_eq!(hit(&c(2, 1, 0)), Some(0.3333));
+        assert!(matches!(cache_hit(&c(0, 0, 0)), V::None), "只有输出、没有输入");
+        assert_eq!(hit(&c(0, 7, 0)), Some(1.0));
+        assert_eq!(hit(&c(1, 99_999, 0)), Some(0.9999), "差一点全读缓存：不进到 1");
+        assert_eq!(hit(&c(0, 99_999, 1)), Some(0.9999), "写缓存也算输入");
+        // 900 输入 + 100 缓存读（0.1）和 3000 缓存读（1.0）：合起来是 3100 / 4000，不是两个比率的平均 0.55
+        assert_eq!(hit(&counts_sum([&c(900, 100, 0), &c(0, 3000, 0)])), Some(0.775));
     }
 
     #[test]
