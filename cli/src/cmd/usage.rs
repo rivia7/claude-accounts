@@ -1779,6 +1779,7 @@ pub fn cmd_usage_render(args: &[String]) -> R<()> {
     if t().has_cost {
         cost_kick(); // 折合金额：在后台统计、和别的设备同步（最多 COST_EVERY 一次）
     }
+    crate::cmd::remote::status_kick(); // 有手机配对时：在后台给它放账号的状态、推额度用完的通知（remote/status.rs）
     exit(if rows.iter().any(|r| r.source != "none") { 0 } else { 1 })
 }
 

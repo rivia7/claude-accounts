@@ -41,6 +41,8 @@ public struct PushedNote: Sendable, Equatable {
     public let title: String
     public let subtitle: String
     public let body: String
+    /// 额度的通知（宿主的 status.rs 推的：额度用完了、恢复了）：这时没有会话，sid 是空的；会话里说的是 nil
+    public let usage: UsageNote?
 }
 
 /// 推送的内容（`{"aps": …, "n": 封好的一份}`，通知扩展、App 拿到的 userInfo）：拿这台手机上的每把通知密钥试着解开（推送里不写
@@ -53,17 +55,24 @@ public func openPushed(_ userInfo: [AnyHashable: Any], keys: [NoteKey]) -> Pushe
     return nil
 }
 
-/// 用一把通知密钥解：认证带着配对编号（别的配对的、别的密钥封的、会话的说明都解不开）；要有编号和会话编号，标题、正文不能都是空的
+/// 用一把通知密钥解：认证带着配对编号（别的配对的、别的密钥封的、会话的说明、账号的状态都解不开）；要有编号，会话里说的要有会话编号、
+/// 标题和正文不能都是空的；额度的通知（`kind` 是 usage）要认得出是哪个账号的哪个窗口（字在这台手机上写，NoteCard）。别的 kind 不认
 func noteOpen(_ key: NoteKey, _ blob: Any?) -> PushedNote? {
     guard key.raw.count == 32, let pt = unseal("cca-remote-note", SealKeys(from: Mac(key: key.raw)), [key.pid], blob), let j = parsed(pt),
-          jsonInt(j["v"]) == 1, let id = j["id"] as? String, Note.idOK(id), let sid = j["sid"] as? String, sid.count == 32,
-          Bytes.unhex(sid) != nil
+          jsonInt(j["v"]) == 1, let id = j["id"] as? String, Note.idOK(id)
     else { return nil }
-    let title = clean(j["title"], Note.titleMax), body = clean(j["body"], Note.bodyMax)
-    guard !title.isEmpty || !body.isEmpty else { return nil }
+    let title = clean(j["title"], Note.titleMax), body = clean(j["body"], Note.bodyMax), subtitle = clean(j["subtitle"], Note.titleMax)
     let at = jsonNumber(j["at"]).flatMap { $0.isFinite ? $0 : nil } ?? 0
-    return PushedNote(pid: key.pid, machine: key.name, id: id, sid: sid, at: at, title: title, subtitle: clean(j["subtitle"], Note.titleMax),
-                      body: body)
+    switch j["kind"] as? String {
+    case nil:
+        guard let sid = j["sid"] as? String, sid.count == 32, Bytes.unhex(sid) != nil, !title.isEmpty || !body.isEmpty else { return nil }
+        return PushedNote(pid: key.pid, machine: key.name, id: id, sid: sid, at: at, title: title, subtitle: subtitle, body: body, usage: nil)
+    case "usage":
+        guard let u = UsageNote(json: j) else { return nil }
+        return PushedNote(pid: key.pid, machine: key.name, id: id, sid: "", at: at, title: title, subtitle: subtitle, body: body, usage: u)
+    default:
+        return nil
+    }
 }
 
 /// 别的机器上的程序写的一行字显示之前：控制字符、看不见的排版字符去掉（行、段的分隔换成空格），去掉两头的空白，截短（按字符）
@@ -101,9 +110,15 @@ public struct NoteCard: Sendable, Equatable {
         self.body = b
     }
 
-    /// 推来的那一条
-    public init?(_ n: PushedNote) {
-        self.init(title: n.title, body: n.body, machine: n.machine, what: n.subtitle)
+    /// 推来的那一条。额度的通知照它说的账号、窗口、重置时间在这里写字（时间照这台手机的时区，说法和 App 里一样：UsageText），
+    /// 不用宿主写的那几句
+    public init?(_ n: PushedNote, now: Double = Date().timeIntervalSince1970, calendar: Calendar = .current) {
+        if let u = n.usage {
+            let t = UsageText.note(u, now: now, calendar: calendar)
+            self.init(title: t.title, body: t.body, machine: n.machine, what: UsageText.who(u))
+        } else {
+            self.init(title: n.title, body: n.body, machine: n.machine, what: n.subtitle)
+        }
     }
 }
 

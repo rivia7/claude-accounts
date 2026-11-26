@@ -3,7 +3,8 @@
 //! - edges（remote.json，移除设备、180 天没用过才删）：`{配对编号: {"a", "b", "at", "used"}}`，服务器只知道是哪两台设备配了对
 //! - guests（也在 remote.json 里）：访客（手机：iOS 上的 cca App、网页端，不在名单里）的公钥，登记了推送的还有它的推送令牌
 //!   （`push`：`{"token", "env", "at"}`，push.rs）
-//! - 只在内存里的：slots（正在进行的配对）、tickets（进数据端口的票据）、sessions（开着的会话）
+//! - 只在内存里的：slots（正在进行的配对）、tickets（进数据端口的票据）、sessions（开着的会话）、status（宿主放上来的账号的状态，
+//!   status_put）、later（到点再推的通知：额度恢复的那一刻）。重启就没了：宿主下次放上来（它隔一会儿就放一次）
 //!
 //! Python 里是一把可重入的锁加一个条件变量；这里是 `Shared`：`Mutex<Remote>` + `Condvar`。pair_get 要等对方放密文进来：
 //! 等的时候放开锁（`cv.wait_timeout`），同时等着的最多 `PAIR_WAITERS` 个（多了的不等，照现在的回）；配对的状态每变一次
@@ -32,7 +33,7 @@ use super::limits::Limits;
 use super::omap::OMap;
 use super::push::{Job, Pusher};
 use super::wire::{self, Blob, Num};
-use super::{sshsig, API, EDGE_IDLE, GUEST_OPS, PUSH_BLOB, TICKET_TTL};
+use super::{sshsig, API, EDGE_IDLE, GUEST_OPS, PUSH_BLOB, STATUS_TTL, TICKET_TTL};
 use crate::py::fs::open_error_text;
 use crate::py::json::{self, Fmt};
 use crate::py::obj::{str_list, Dict, V};
@@ -191,6 +192,8 @@ struct PushReg {
     env: String,
     /// 只推这几个会话（会话的编号）：手机上「关掉的会话也推送」关着时是 App 里正开着的那个，一个都没开着是空的；None 是都推
     sids: Option<Vec<String>>,
+    /// 也推额度的通知（push_note、到点的 later：额度用完了、恢复了）。手机说了要才推：旧版的 App 解不开、会显示成一句看不懂的
+    usage: bool,
     at: Val,
 }
 
@@ -215,6 +218,7 @@ impl PushReg {
             token: token.to_string(),
             env: env.to_string(),
             sids,
+            usage: matches!(d.get("usage"), Some(V::Bool(true))),
             at: d.get("at").map_or_else(Val::null, |at| Val::of(&at)),
         })
     }
@@ -223,6 +227,10 @@ impl PushReg {
         let d = crate::dict! { "token" => &self.token, "env" => &self.env, "at" => self.at.v() };
         if let Some(sids) = &self.sids {
             d.set("sids", str_list(sids));
+        }
+        // 没要额度的通知时不写：remote.json 和以前一样
+        if self.usage {
+            d.set("usage", true);
         }
         V::Dict(d)
     }
@@ -323,6 +331,32 @@ pub(super) struct Session {
     pub(super) since: f64,
 }
 
+/// 宿主放上来的账号的状态（status_put）：封给这个配对的密文，这里解不开
+#[derive(Clone, Debug)]
+pub(super) struct Status {
+    pub(super) blob: Blob,
+    /// 什么时候放上来的（服务器的时间）
+    pub(super) at: f64,
+}
+
+/// 到点再推的一条通知（status_put 的 later：额度恢复的那一刻）
+#[derive(Clone, Debug)]
+pub(super) struct Later {
+    pub(super) pid: String,
+    /// 放它的那台设备（配对的这一头）
+    pub(super) by: String,
+    /// 宿主给的：同一个配对里 slot 一样的是同一件事
+    pub(super) slot: String,
+    /// 什么时候推（Unix 时间，秒）
+    pub(super) at: f64,
+    /// 通知的编号（推送服务照它去重）
+    pub(super) id: String,
+    pub(super) note: Blob,
+}
+
+/// 推过的到点的通知记多久（秒）：宿主的时钟慢一点、刚推过又把同一条放上来，不再推一遍
+const LATER_SEEN: f64 = 86400.0;
+
 pub struct Remote {
     /// remote.json
     path: PathBuf,
@@ -353,6 +387,12 @@ pub struct Remote {
     pub(super) sessions: OMap<Session>,
     /// 推送（--push 给了才有）：交给推送网关的那条线程的队列
     pub(super) pusher: Option<Pusher>,
+    /// 宿主放上来的账号的状态：(配对编号, 放的那台设备) → 状态
+    pub(super) status: HashMap<(String, String), Status>,
+    /// 到点再推的通知
+    pub(super) later: Vec<Later>,
+    /// 到点推过的：(配对编号, 通知的编号) → 什么时候推的
+    later_done: HashMap<(String, String), f64>,
 }
 
 /// 几个线程共用的那一份：处理请求的线程、中转的线程都经它
@@ -430,6 +470,9 @@ impl Remote {
             tickets: HashMap::new(),
             sessions: OMap::new(),
             pusher: None,
+            status: HashMap::new(),
+            later: Vec::new(),
+            later_done: HashMap::new(),
         };
         let Some(doc) = load_doc(path, &["edges"], say) else { return r };
         for (k, v) in doc.items() {
@@ -496,6 +539,45 @@ impl Remote {
         }
         let reg = self.guests.get(self.other(&pid, &x.fp)?)?.push.as_ref().filter(|r| r.wants(sid))?;
         Some(Job { token: reg.token.clone(), env: reg.env.clone(), id: id.to_string(), note })
+    }
+
+    /// 宿主交来的一条额度的通知（push_note、到点的 later）：交给推送网关的那一条。by 得还在这个配对里，配对的另一头得是登记了
+    /// 推送、要额度的通知（`usage`）的访客；对不上的是 None（不推）
+    pub(super) fn usage_job(&self, pid: &str, by: &str, id: &str, note: &Blob) -> Option<Job> {
+        if !self.guests_on || !self.member(pid, by) {
+            return None;
+        }
+        let reg = self.guests.get(self.other(pid, by)?)?.push.as_ref().filter(|r| r.usage)?;
+        Some(Job { token: reg.token.clone(), env: reg.env.clone(), id: id.to_string(), note: note.clone() })
+    }
+
+    /// 到点了的通知（推送那条线程隔一会儿来拿，now 是 Unix 时间）：拿走，推得出去的变成交给推送网关的那几条；推过的记一天
+    /// （宿主又把同一条放上来时不再推）
+    pub(super) fn due(&mut self, now: f64) -> Vec<Job> {
+        if self.later.iter().all(|l| l.at > now) {
+            return Vec::new();
+        }
+        let (due, keep): (Vec<Later>, Vec<Later>) = std::mem::take(&mut self.later).into_iter().partition(|l| l.at <= now);
+        self.later = keep;
+        self.later_done.retain(|_, at| now - *at < LATER_SEEN);
+        let mut jobs = Vec::new();
+        for l in due {
+            if self.later_done.insert((l.pid.clone(), l.id.clone()), now).is_some() {
+                continue;
+            }
+            jobs.extend(self.usage_job(&l.pid, &l.by, &l.id, &l.note));
+        }
+        jobs
+    }
+
+    /// 下一条到点再推的通知什么时候到（Unix 时间；没有是 None）
+    pub(super) fn next_due(&self) -> Option<f64> {
+        self.later.iter().map(|l| l.at).min_by(f64::total_cmp)
+    }
+
+    /// 这一条（配对编号、通知的编号）是不是一天之内到点推过了
+    fn later_seen(&self, pid: &str, id: &str) -> bool {
+        self.later_done.contains_key(&(pid.to_string(), id.to_string()))
     }
 
     /// 推送网关说这个令牌没用了（410：App 删了、换了手机）：登记了它的都拿掉。存不了只在日志里说（下次再说 410 时再存）
@@ -619,6 +701,9 @@ impl Remote {
                 x.blobs.remove(pid);
             }
         }
+        self.status.retain(|(p, _), _| p != pid);
+        self.later.retain(|l| l.pid != pid);
+        self.later_done.retain(|(p, _), _| p != pid);
         self.prune_guests();
     }
 
@@ -638,6 +723,7 @@ impl Remote {
             self.slot_pop(rid);
         }
         self.tickets.retain(|_, k| k.exp >= now);
+        self.status.retain(|_, s| now - s.at < STATUS_TTL as f64);
         let old: Vec<String> =
             self.edges.iter().filter(|(_, e)| e.last() < now - EDGE_IDLE as f64).map(|(p, _)| p.to_string()).collect();
         for p in &old {

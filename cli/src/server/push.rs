@@ -7,20 +7,23 @@
 //! POST 给网关，一条一个连接（HTTP/1.0 那样回完就关；通知不多，握手的那点开销不算什么），钉住网关证书的公钥（`--push-pin`，
 //! curl 的 --pinnedpubkey 那种写法），不看证书机构。每台手机（令牌）限流：攒得下 `PHONE_BURST` 条、`PHONE_GAP` 秒回一条。
 //! 网关回 410（推送服务说这个令牌没用了：App 删了、换了手机）就把这个登记拿掉；别的出错在日志里说一句（一分钟最多一句，不带令牌）。
+//!
+//! 额度的通知（3.7.5 起）：宿主经 push_note 交来的（额度用完了）也放进这个队列；到点再推的（status_put 的 later：额度恢复的那一刻）
+//! 记在 Remote 里，这条线程最多隔 `LATER_POLL` 秒看一眼，到点的拿出来推（`Remote::due`）。
 
 use super::remote::Shared;
 use super::wire::Blob;
-use super::x509;
+use super::{x509, LATER_POLL};
 use crate::py::json::{self, Fmt};
 use crate::py::obj::V;
-use crate::py::time::monotonic;
+use crate::py::time::{self, monotonic};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, SignatureScheme, StreamOwned};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -136,30 +139,52 @@ pub fn start(gw: Gateway, sh: Arc<Shared>) -> io::Result<Pusher> {
 fn run(gw: &Gateway, config: &Arc<ClientConfig>, sh: &Shared, rx: &Receiver<Job>) {
     let mut budget: HashMap<String, (f64, f64)> = HashMap::new();
     let mut said = f64::NEG_INFINITY;
-    while let Ok(job) = rx.recv() {
-        let now = monotonic();
-        if !take(&mut budget, &job.token, now, PHONE_BURST, PHONE_GAP) {
-            continue;
-        }
-        let body = json::dumps(
-            &V::Dict(
-                crate::dict! { "v" => 1, "token" => &job.token, "env" => &job.env, "id" => &job.id, "note" => job.note.to_v() },
-            ),
-            Fmt::new().compact(),
-        );
-        let why = match post(gw, config, body.as_bytes()) {
-            Ok(200) => None,
-            Ok(410) => {
-                sh.lock().push_gone(&job.token);
-                None
-            }
-            Ok(code) => Some(format!("回 {code}")),
-            Err(e) => Some(format!("连不上、没回（{e}）")),
+    loop {
+        // 等队列里来一条，最多等到下一条到点再推的通知（最多 LATER_POLL 秒：中间新放上来的早一点的也赶得上）
+        let next = sh.lock().next_due();
+        let wait = next.map_or(LATER_POLL, |at| (at - time::time()).clamp(0.0, LATER_POLL));
+        let wait = Duration::try_from_secs_f64(wait).unwrap_or(Duration::from_secs(1));
+        let mut jobs = match rx.recv_timeout(wait) {
+            Ok(job) => vec![job],
+            Err(RecvTimeoutError::Timeout) => Vec::new(),
+            Err(RecvTimeoutError::Disconnected) => return,
         };
-        if let Some(why) = why.filter(|_| now - said >= SAY_EVERY) {
-            said = now;
-            crate::err!("cca-presence: 推送网关 {} {why}，这一条没推出去", gw.shown());
+        jobs.extend(sh.lock().due(time::time()));
+        for job in jobs {
+            deliver(gw, config, sh, job, &mut budget, &mut said);
         }
+    }
+}
+
+/// 交一条给网关（每台手机限流）：网关说令牌没用了就拿掉登记，别的出错在日志里说一句（一分钟最多一句）
+fn deliver(
+    gw: &Gateway,
+    config: &Arc<ClientConfig>,
+    sh: &Shared,
+    job: Job,
+    budget: &mut HashMap<String, (f64, f64)>,
+    said: &mut f64,
+) {
+    let now = monotonic();
+    if !take(budget, &job.token, now, PHONE_BURST, PHONE_GAP) {
+        return;
+    }
+    let body = json::dumps(
+        &V::Dict(crate::dict! { "v" => 1, "token" => &job.token, "env" => &job.env, "id" => &job.id, "note" => job.note.to_v() }),
+        Fmt::new().compact(),
+    );
+    let why = match post(gw, config, body.as_bytes()) {
+        Ok(200) => None,
+        Ok(410) => {
+            sh.lock().push_gone(&job.token);
+            None
+        }
+        Ok(code) => Some(format!("回 {code}")),
+        Err(e) => Some(format!("连不上、没回（{e}）")),
+    };
+    if let Some(why) = why.filter(|_| now - *said >= SAY_EVERY) {
+        *said = now;
+        crate::err!("cca-presence: 推送网关 {} {why}，这一条没推出去", gw.shown());
     }
 }
 

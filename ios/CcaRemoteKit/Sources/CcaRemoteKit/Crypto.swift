@@ -232,14 +232,18 @@ public struct SessionInfo: Sendable, Equatable {
     public let since: Double
     /// 只看（宿主那边定的）
     public let viewOnly: Bool
+    /// 会话用的是哪个账号（账号摘要，和账号的状态里的 AccountStatus.aid 一样：「账号」页照它把会话放到账号下面）；
+    /// 那台电脑不在 Team 里、旧版的宿主没给是空的
+    public let aid: String
 
-    public init(machine: String, tool: String, name: String, cwd: String, since: Double, viewOnly: Bool) {
+    public init(machine: String, tool: String, name: String, cwd: String, since: Double, viewOnly: Bool, aid: String = "") {
         self.machine = machine
         self.tool = tool
         self.name = name
         self.cwd = cwd
         self.since = since
         self.viewOnly = viewOnly
+        self.aid = aid
     }
 }
 
@@ -251,6 +255,7 @@ func dirKeys(_ p: Bytes) -> SealKeys {
 func dirOpen(_ keys: SealKeys, pid: String, sid: String, _ blob: Any?) -> SessionInfo? {
     guard let pt = unseal("cca-remote-dir", keys, [pid, sid], blob), let j = parsed(pt), jsonInt(j["v"]) == 1 else { return nil }
     let since = jsonNumber(j["since"]).flatMap { $0.isFinite ? $0 : nil } ?? 0
+    let aid = (j["aid"] as? String).flatMap { lowerHex($0, 32) ? $0 : nil } ?? ""
     return SessionInfo(machine: clean(j["machine"], 48), tool: clean(j["tool"], 16), name: clean(j["name"], 48), cwd: clean(j["cwd"], 200),
-                       since: since, viewOnly: j["access"] as? String == "view")
+                       since: since, viewOnly: j["access"] as? String == "view", aid: aid)
 }

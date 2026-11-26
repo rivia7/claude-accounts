@@ -2,7 +2,7 @@
 
 `cca` 按 GitHub Releases 分发，是单个签名文件：bash 3.2 主体 + 路由器端 busybox ash（`router_sh`）和 ruby（`router_rb`），文件最后接着四种机器的辅助程序（`cca-core`，Rust，源码在 `cli/`；bash 里的 `py 子命令 …` 就是运行它。它原来是内嵌的 Python，函数名都没变：文档里说“辅助程序的 `xxx`”，在 `cli/src` 里按名字找）。新功能的 bash 部分写进 `cca`，辅助程序的部分写进 `cli/src`。管三种工具的账号：Claude Code（`cca …`）、Codex（`cca codex …`）和 Antigravity（`cca agy …`）。
 
-这一份只放每次都要守的规矩、要一起改的地方和索引。各块怎么实现、实测过什么、怎么测，按主题写在 `docs/dev/` 下：动到哪一块，先读末尾「细节在哪」里对应的那一份。改了行为就顺手改那一份；新功能写进最贴近的那一份，没有就新建一份、加进索引。`tests/`、`macos/`、`cli/`、`ios/` 下各有一份 CLAUDE.md，读那里的文件时自动加载；只跟 Team、远程会话有关的「要一起改的」在 `.claude/rules/team.md`、`remote.md`，读到它们开头 `paths` 里列的文件时自动加载。这几份和这一份都有大小上限（`tests/claude_md_size.sh`，回归里查）：只跟某一块有关的规矩写进那一块的那一份，别往这里加。
+这一份只放每次都要守的规矩、要一起改的地方和索引。各块怎么实现、实测过什么、怎么测，按主题写在 `docs/dev/` 下：动到哪一块，先读末尾「细节在哪」里对应的那一份。改了行为就顺手改那一份；新功能写进最贴近的那一份，没有就新建一份、加进索引。`tests/`、`macos/`、`cli/`、`ios/` 下各有一份 CLAUDE.md，读那里的文件时自动加载；只跟 Team、远程会话、手机上的账号有关的「要一起改的」在 `.claude/rules/team.md`、`remote.md`、`phone-accounts.md`，读到它们开头 `paths` 里列的文件时自动加载。这几份和这一份都有大小上限（`tests/claude_md_size.sh`，回归里查）：只跟某一块有关的规矩写进那一块的那一份，别往这里加。
 
 ## 命令
 - `bash -n cca && bash -n install.sh` — 快速语法检查
@@ -81,7 +81,7 @@
 - App 的接口：PROTOCOL.md ↔ Swift 模型 ↔ regress 的 10g；`router_sh` 的 `status` 输出 ↔ `cmd_gui_live` 的 `GUI_SLOT_RE`（regress 守着）
 - Claude App 的会话记下账号（`cca cost hook`）：写进用户共享的 `~/.claude/settings.json` 的命令（`cost.rs` 的 `desktop_hook_command`、`DESKTOP_HOOK_MARK`）↔ bash 的 `_session-start` 分支（`--desktop` 原样交给 `py session-start`）↔ `cmd_session_start` 的 `--desktop`：已经加上的 hook 留在各台设备的设置里，改了这几处也要一直认原来的命令（`off`、卸载照 `DESKTOP_HOOK_MARK` 认出它）；同意项 `cost_hook`、结果 `cost_hook`、`unattributed.app_hook`：`cca` ↔ PROTOCOL（2.2、3.5、4.1、4.2）↔ Swift 的 `ConsentItem`、`ResultCode`、`CostAppHook` ↔ `macos/Tests/Fixtures/state.json`
 - `VERSION` ↔ `WhatsNew.swift` 最前面的 `ReleaseNote`（`macos/test.sh` 查用词和版本先后）
-- Team（同步服务器、部署、托管平台、证书助手、线上格式、节点、界面里的 Team）和远程会话（中转、端到端加密、网页端、iOS 的 App、SwiftTerm、和手机配对、每个 Team 各用各的中转服务器）的成对修改在 `.claude/rules/team.md`、`.claude/rules/remote.md`：读到它们开头 `paths` 里列的文件时自动加载；只改 `cca` 里 bash 那一侧（`cmd_team`、`team_deploy`、`hub_deploy_*`、`remote_*`、`run_account` 的 `HOSTCMD`）时自己先读。这两块新的成对修改也写进那两份
+- Team（同步服务器、部署、托管平台、证书助手、线上格式、节点、界面里的 Team）和远程会话（中转、端到端加密、网页端、iOS 的 App、SwiftTerm、和手机配对、每个 Team 各用各的中转服务器）的成对修改在 `.claude/rules/team.md`、`.claude/rules/remote.md`，手机上的账号和额度的通知（iPhone 的「账号」页、Mac App 在本机弹的）在 `.claude/rules/phone-accounts.md`：读到它们开头 `paths` 里列的文件时自动加载；只改 `cca` 里 bash 那一侧（`cmd_team`、`team_deploy`、`hub_deploy_*`、`remote_*`、`run_account` 的 `HOSTCMD`）时自己先读。这几块新的成对修改也写进那几份
 - `README.md`（中文）↔ `README.en.md`（英文）：同样的小节、同样的内容，一起改；`docs/images/` 的截图是界面 App 调试版的截图模式用演示数据截的（macos/README.md「看界面（截图）」），界面改了要重截
 
 ## 细节在哪

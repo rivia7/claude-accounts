@@ -1,14 +1,15 @@
 // 测试用的手机那一头（macOS 上的命令行程序，和 App 编进同一份 CcaRemoteKit）：tests/ios_kit.rs 拿它和真的服务器、真的 cca 对着测。
 // 用法：ccaguest --store 目录 --name 名字 <命令>
 //   pair <链接>             配对；stdout：peer 配对编号 名字，没成是 fail 原因（退出码 1）
-//   list                    一行一个 JSON：配对过的机器（没有 sid）、它上面的会话（有 sid）
+//   list                    一行一个 JSON：配对过的机器（没有 sid；served：服务器转不转账号的状态，status：那台机器放上来的账号的状态，
+//                           没有是 null）、它上面的会话（有 sid）
 //   attach 配对编号 会话编号 [--view] [--size 列x行]   接入（窗口大小默认 80x24）：stdin 是敲的键（读到头就断开），stdout 是终端的字节；
 //                           stderr：state open|retrying、size 会话的列 行（宿主说的）、exit 退出码、note 通知的 JSON、closed 原因。
 //                           detached、ended 退出码 0，别的 1
 //   unpair 配对编号          取消配对；stdout：unpaired（服务器没问到也删本地的：told-no）
-//   push-set 令牌 环境 [--only 会话编号,…]   在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉；--only：只推这几个会话，
-//                           空的是一个都不推）；stdout 一台一行：push 服务器 ok|fail 原因（带了 --only 时 ok 后面是 only：服务器认了，
-//                           all：旧的服务器不认、照旧都推）
+//   push-set 令牌 环境 [--only 会话编号,…] [--usage]   在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉；--only：只推这几个
+//                           会话，空的是一个都不推；--usage：也推额度的通知）；stdout 一台一行：push 服务器 ok|fail 原因（带了 --only 时
+//                           ok 后面是 only：服务器认了，all：旧的服务器不认、照旧都推；带了 --usage 时再跟 usage：服务器认了，no-usage：不认）
 //   push-open 文件           文件里是推来的内容（推送服务收到的那份 JSON）：像通知扩展那样拿每个配对的通知密钥试着解开；
 //                           stdout：解开的通知和弹出来的字（一行 JSON），解不开是 fail（退出码 1）
 // 密钥存在目录里的文件里（只给测试用；App 里存钥匙串）
@@ -50,6 +51,22 @@ func say(_ s: String) {
     FileHandle.standardError.write(Data((s + "\n").utf8))
 }
 
+/// list 里一台机器放上来的账号的状态：解开、读成模型以后的样子（测试照它核对）
+func statusJSON(_ s: HostStatus, now: Double) -> [String: Any] {
+    let accounts: [[String: Any]] = s.accounts.map { a in
+        func win(_ w: UsageWindow?) -> Any {
+            guard let w else { return NSNull() }
+            return ["utilization": w.utilization ?? NSNull(), "resets_epoch": w.resetsEpoch ?? NSNull(), "reset": w.reset] as [String: Any]
+        }
+        let used = a.exhausted(now: now).map { [$0.slot.rawValue, $0.resetsEpoch ?? NSNull()] as [Any] }
+        return ["id": a.id, "aid": a.aid, "tool": a.tool, "name": a.name, "kind": a.kind, "login": a.login, "plan": a.plan, "tier": a.tier,
+                "busy": a.busy, "color": a.color ?? NSNull(), "badge": a.badge, "source": a.usage?.source ?? NSNull(),
+                "five_hour": win(a.usage?.fiveHour), "seven_day": win(a.usage?.sevenDay), "weeks": a.weeks?.weeks.count ?? NSNull(),
+                "exhausted": used]
+    }
+    return ["machine": s.machine, "off": s.off, "more": s.more, "at": s.at, "age": s.age, "accounts": accounts]
+}
+
 var args = Array(CommandLine.arguments.dropFirst())
 var store = "", name = "iPhone"
 while args.count >= 2, args[0].hasPrefix("--") {
@@ -85,12 +102,14 @@ case "pair":
     }
 case "list":
     Task {
+        let now = Date().timeIntervalSince1970
         for row in await client.list() {
             let base: [String: Any] = ["pid": row.peer.pid, "peer": row.peer.name, "gone": row.gone, "failure": row.failure?.code ?? NSNull()]
-            print(String(decoding: try! JSONSerialization.data(withJSONObject: base, options: [.sortedKeys]), as: UTF8.self))
+            let head = base.merging(["served": row.statusServed, "status": row.status.map { statusJSON($0, now: now) } ?? NSNull()]) { $1 }
+            print(String(decoding: try! JSONSerialization.data(withJSONObject: head, options: [.sortedKeys]), as: UTF8.self))
             for s in row.sessions {
                 let j = base.merging(["sid": s.sid, "machine": s.info.machine, "tool": s.info.tool, "name": s.info.name, "cwd": s.info.cwd,
-                                      "online": s.online, "view": s.info.viewOnly, "viewers": s.viewers]) { $1 }
+                                      "online": s.online, "view": s.info.viewOnly, "viewers": s.viewers, "aid": s.info.aid]) { $1 }
                 print(String(decoding: try! JSONSerialization.data(withJSONObject: j, options: [.sortedKeys]), as: UTF8.self))
             }
         }
@@ -106,6 +125,8 @@ case "unpair":
         finish(0)
     }
 case "push-set":
+    let usage = args.last == "--usage"
+    if usage { args.removeLast() }
     guard args.count == 3 || (args.count == 5 && args[3] == "--only") else {
         print("fail usage")
         finish(1)
@@ -114,9 +135,9 @@ case "push-set":
     Task {
         var all = true
         for s in client.servers() {
-            switch await client.pushSet(on: s, token: args[1], env: args[2], sids: sids) {
-            case .ok(let filtered):
-                print("push \(s.url) ok" + (sids == nil ? "" : filtered ? " only" : " all"))
+            switch await client.pushSet(on: s, token: args[1], env: args[2], sids: sids, usage: usage ? true : nil) {
+            case .ok(let filtered, let usageOK):
+                print("push \(s.url) ok" + (sids == nil ? "" : filtered ? " only" : " all") + (usage ? usageOK ? " usage" : " no-usage" : ""))
             case .failed(let f):
                 print("push \(s.url) fail \(f.code)")
                 all = false
@@ -135,8 +156,12 @@ case "push-open":
         print("fail")
         finish(1)
     }
-    let j: [String: Any] = ["pid": n.pid, "machine": n.machine, "id": n.id, "sid": n.sid, "at": n.at, "title": n.title,
+    var j: [String: Any] = ["pid": n.pid, "machine": n.machine, "id": n.id, "sid": n.sid, "at": n.at, "title": n.title,
                             "subtitle": n.subtitle, "body": n.body, "card": [card.title, card.subtitle, card.body]]
+    if let u = n.usage {
+        j["usage"] = ["event": u.event.rawValue, "account": u.account, "aid": u.aid, "tool": u.tool, "name": u.name, "window": u.slot.rawValue,
+                      "resets_epoch": u.resetsEpoch ?? NSNull()] as [String: Any]
+    }
     print(String(decoding: try! JSONSerialization.data(withJSONObject: j, options: [.sortedKeys]), as: UTF8.self))
     finish(0)
 case "attach":

@@ -192,6 +192,64 @@ check(NoteCard(title: "", body: "改好了", machine: "", what: "")?.title == "�
       && NoteCard(title: "", body: "改好了", machine: "", what: "")?.subtitle == "来自另一台电脑", "弹出来的字：没写标题、不知道哪台机器")
 check(plainLine("a\u{1b}b\u{2028}c\u{202e}d  ", max: 4) == "ab c", "plainLine：控制字符、看不见的排版字符去掉，截短")
 
+// 账号的状态：kit::spec 封的（和辅助程序的 status_seal 一样），这边解开、读成模型；额度用完的规则和辅助程序 status.rs 的 exhausted 一样
+if let st = v["status"] as? [String: Any] {
+    let p = hx(st["p"]), pid = st["pid"] as? String ?? "", now = jsonNumber(st["now"]) ?? 0
+    let w = st["want"] as? [String: Any] ?? [:]
+    check(hmac(p, Bytes(utf8: "cca-remote/v1/status")) == hx(st["key"]), "账号的状态的密钥：HMAC(P, cca-remote/v1/status)")
+    let s = statusOpen(statusKeys(p), pid: pid, st["blob"], age: 12, received: now)
+    check(s?.machine == w["machine"] as? String && s?.more == jsonInt(w["more"]) && s?.at == jsonNumber(w["at"]) && s?.off == false
+          && s?.age == 12 && s?.putAt == now - 12, "账号的状态：\(String(describing: s?.machine)) \(String(describing: s?.more))")
+    check(s?.accounts.map(\.name) == w["names"] as? [String], "账号（编号不对的不要）：\(s?.accounts.map(\.name) ?? [])")
+    let used = w["exhausted"] as? [String: Any] ?? [:]
+    for a in s?.accounts ?? [] {
+        let got = a.exhausted(now: now)
+        let want = used[a.id] as? [[Any]] ?? []
+        check(got.count == want.count && zip(got, want).allSatisfy { $0.slot.rawValue == $1[0] as? String && $0.resetsEpoch == jsonNumber($1[1]) },
+              "额度用完：\(a.name) \(got)")
+    }
+    check(s?.accounts.filter { $0.nearLimit(now: now) }.map(\.name) == w["near"] as? [String], "快用完了（数据旧的不算）")
+    if let a = s?.accounts.first, let f = w["first"] as? [String: Any] {
+        check(a.aid == f["aid"] as? String && a.color == f["color"] as? String && a.badge == f["badge"] as? String && a.plan == f["plan"] as? String
+              && a.tier == f["tier"] as? String && a.busy && a.kind == "oauth" && a.tool == "claude", "第一个账号：\(a)")
+        check(a.usage?.fiveHour == UsageWindow(utilization: 100, resetsEpoch: jsonNumber(f["five_resets"]), reset: false)
+              && a.usage?.sevenDay?.utilization == 41 && a.usage?.modelScoped.first?.name == "Fable"
+              && a.usage?.modelScoped.first?.allowancePercentOfWeekly == 50 && a.usage?.source == "live",
+              "第一个账号的用量：\(String(describing: a.usage))")
+        check(a.weeks?.weeks.count == 2 && a.weeks?.weeks.last?.current == true && a.weeks?.weeks.first?.usedPercent == 63
+              && a.weeks?.summary.averagePercent == 63 && a.weeks?.summary.weeks == 1, "每周用量按时间排好：\(String(describing: a.weeks))")
+    }
+    let gem = s?.accounts.first { $0.tool == "agy" }
+    check(gem?.usage?.quotaGroups.map(\.displayName) == w["groups"] as? [String] && gem?.usage?.hasQuota == true
+          && gem?.usage?.quotaMost(.fiveHour, now: now)?.group == "Gemini 模型", "Antigravity 的几组：\(gem?.usage?.quotaGroups.map(\.displayName) ?? [])")
+    check(statusOpen(statusKeys(p), pid: st["other_pid"] as? String ?? "", st["blob"], age: 0, received: now) == nil, "配对编号不对解不开")
+    for bad in ["forged", "dir", "note", "v2"] {
+        check(statusOpen(statusKeys(p), pid: pid, st[bad], age: 0, received: now) == nil, "账号的状态不认：\(bad)")
+    }
+}
+
+// 额度的通知：kit::spec 封的（和辅助程序的 usage_note 一样，kind 是 usage）；字在这里照窗口、重置时间写（时间用 UTC）
+if let un = v["usage"] as? [String: Any] {
+    let p = hx(un["p"]), pid = un["pid"] as? String ?? "", now = jsonNumber(un["now"]) ?? 0
+    let key = NoteKey(pid: pid, p: p, name: "Mac mini")
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(identifier: "UTC")!
+    let want = un["want"] as? [String: Any] ?? [:]
+    for k in ["used", "used_tomorrow", "back"] {
+        let n = openPushed(["n": un[k] ?? NSNull()], keys: [key])
+        let card = n.flatMap { NoteCard($0, now: now, calendar: utc) }
+        check(n?.sid == "" && n?.usage != nil && card.map { [$0.title, $0.subtitle, $0.body] } == want[k] as? [String],
+              "额度的通知 \(k)：\(String(describing: card))")
+    }
+    let u = openPushed(["n": un["used"] ?? NSNull()], keys: [key])?.usage
+    check(u?.event == .usedUp && u?.account == un["account"] as? String && u?.aid == un["aid"] as? String && u?.slot == .fiveHour
+          && u?.tool == "claude" && u?.name == "alice" && u?.resetsEpoch == jsonNumber(un["resets"]), "额度的通知：\(String(describing: u))")
+    check(openPushed(["n": un["back"] ?? NSNull()], keys: [key])?.usage?.event == .back, "恢复的那一条")
+    for bad in ["bad_window", "other_kind", "bad_account", "no_event"] {
+        check(openPushed(["n": un[bad] ?? NSNull()], keys: [key]) == nil, "额度的通知不认：\(bad)")
+    }
+}
+
 // 签名：Rust 那头拿 ssh-keygen -Y verify 核对
 if let s = v["sign"] as? [String: Any], let id = Identity(raw: hx(s["raw"])) {
     out["sign"] = ["pub": id.pub, "fp": id.fp, "sig": id.sign(hx(s["data"]))]

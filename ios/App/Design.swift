@@ -1,3 +1,4 @@
+import CcaRemoteKit
 import SwiftUI
 
 // 样子照 Mac App（macos/README.md「界面的规矩」）：Logo 的颜色只取 LogoGlyph（和 Mac App 共用 macos/Sources/CcaApp/LogoGlyph.swift
@@ -18,12 +19,155 @@ enum Brand {
     static let rose = Color(hex: LogoGlyph.rose)
     static let teal = Color(hex: LogoGlyph.teal)
     static let amber = Color(hex: LogoGlyph.amber)
+    /// Logo 的整条渐变：只给最高档套餐的四角星（PlanBadge）
+    static let spectrum = [blue, violet, rose, amber]
+}
+
+extension Color {
+    /// 「#RRGGBB」（账号头像的颜色，那台电脑给的）
+    init?(hexString s: String) {
+        guard s.utf8.count == 7, s.hasPrefix("#"), let v = UInt32(s.dropFirst(), radix: 16) else { return nil }
+        self.init(hex: v)
+    }
 }
 
 /// 内容层的色块（不是玻璃）：深浅色下都比背景深一点 / 亮一点
 enum Surface {
     static let tile = Color.primary.opacity(0.045)
+    /// 用量条的底槽
+    static let track = Color.primary.opacity(0.09)
     static let hairline = Color.primary.opacity(0.12)
+}
+
+/// 用量的颜色档（和 Mac App 的 Palette.usage 一样：固定的语义色）：70% 以下绿、70–89% 橙、90% 以上红
+enum Palette {
+    static func usage(percent: Double) -> Color {
+        percent >= 90 ? .red : percent >= 70 ? .orange : .green
+    }
+}
+
+/// 用量条（Mac App 的 Meter）：灰色的底槽，按用了多少填上颜色；数据旧了填灰色（不靠透明度）
+struct Meter: View {
+    var fraction: Double
+    var color: Color
+    var height: CGFloat = 6
+    var dim = false
+
+    /// 数据旧了、不全时填的灰色（每周用量里没记全的那一周也是它）
+    static let dimColor = Color.secondary.opacity(0.6)
+
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Surface.track)
+                if fraction > 0 {
+                    Capsule()
+                        .fill(dim ? Self.dimColor : color)
+                        .frame(width: max(g.size.width * min(fraction, 1), height))
+                }
+            }
+        }
+        .frame(height: height)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 账号的头像（Mac App 的 BadgeAvatar）：启动器的颜色和上面的字（那台电脑给的）；没有时是灰色的人像，第三方 API 是钥匙。
+/// 在用（那台电脑上桌面 App 开着、命令行里有会话）时右下角一个绿点
+struct AccountAvatar: View {
+    let account: AccountStatus
+    var size: CGFloat = 34
+
+    var body: some View {
+        ZStack {
+            Circle().fill(account.color.flatMap { Color(hexString: $0) } ?? Color(uiColor: .systemGray).opacity(0.6))
+            if !account.badge.isEmpty {
+                Text(account.badge)
+                    .font(.system(size: size * 0.44, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+                    .padding(size * 0.1)
+            } else {
+                Image(systemName: account.isAPI ? "key.horizontal.fill" : "person.fill")
+                    .font(.system(size: size * 0.4, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+        .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
+            if account.busy {
+                Circle().fill(.green)
+                    .frame(width: max(size * 0.28, 8), height: max(size * 0.28, 8))
+                    .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 1.5))
+                    .offset(x: 1, y: 1)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// 套餐档位的小徽记（Mac App 的 TierMark，一档比一档足）：入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵 Logo 渐变的四角星
+private struct TierMark: View {
+    let tier: String
+    let size: CGFloat
+
+    var body: some View {
+        Canvas { c, s in
+            let w = s.width, r = CGRect(origin: .zero, size: s)
+            func tint(_ color: Color) -> GraphicsContext.Shading {
+                .linearGradient(Gradient(colors: [color.mix(with: .white, by: 0.25), color]), startPoint: .zero, endPoint: CGPoint(x: w, y: w))
+            }
+            switch tier {
+            case "entry":
+                c.stroke(Path(ellipseIn: r.insetBy(dx: w * 0.14, dy: w * 0.14)), with: .color(Color(hex: 0x8E95A1)), lineWidth: w * 0.16)
+            case "standard":
+                c.fill(Path(ellipseIn: r.insetBy(dx: w * 0.08, dy: w * 0.08)), with: tint(Brand.blue))
+            case "advanced":
+                var d = Path()
+                d.addRoundedRect(in: r.insetBy(dx: w * 0.17, dy: w * 0.17), cornerSize: CGSize(width: w * 0.16, height: w * 0.16), style: .continuous,
+                                 transform: CGAffineTransform(translationX: w / 2, y: w / 2).rotated(by: .pi / 4).translatedBy(x: -w / 2, y: -w / 2))
+                c.fill(d, with: tint(Brand.violet))
+            case "premium":
+                // 圆润的四角星：四条边向里弯
+                let m = w / 2
+                let tips = [CGPoint(x: m, y: 0), CGPoint(x: w, y: m), CGPoint(x: m, y: w), CGPoint(x: 0, y: m)]
+                var star = Path()
+                star.move(to: tips[0])
+                for i in 0..<4 {
+                    let a = tips[i], b = tips[(i + 1) % 4]
+                    star.addQuadCurve(to: b, control: CGPoint(x: m + (a.x + b.x - w) * 0.12, y: m + (a.y + b.y - w) * 0.12))
+                }
+                star.closeSubpath()
+                c.fill(star, with: .linearGradient(Gradient(colors: Brand.spectrum), startPoint: .zero, endPoint: CGPoint(x: w, y: w)))
+            default:
+                break
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 套餐徽章（Mac App 的 PlanBadge）：中性的胶囊和字，颜色只在前面的小徽记上（档位是那台电脑上的 cca 给的 plan_tier，不按名字猜）
+struct PlanBadge: View {
+    let plan: String
+    let tier: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if ["entry", "standard", "advanced", "premium"].contains(tier) {
+                TierMark(tier: tier, size: 9)
+            }
+            Text(plan).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 18)
+        .background(Capsule().fill(.quaternary.opacity(0.7)))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Texts.planName(plan, tier: tier))
+    }
 }
 
 /// 品牌标记：App 图标里那个字形，不带底

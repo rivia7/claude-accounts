@@ -3,7 +3,7 @@
 iPhone 上的 cca App 锁着屏、切到别的 App、没开着时，远程会话里的通知（cca 自己带的钩子推的「做完了」「在等你」、`cca remote notify`）也送得到：
 经苹果的推送服务（APNs）。用户定的（2026-11-26）：推送服务的密钥只放在维护者自己的服务器上（推送网关，`cca-core team-push`），各个 Team 的
 服务器把推送请求转给它；通知的内容到手机上才解开，一路上的服务器都看不到明文；cca 在远程会话里自己带上「做完了 / 在等你」的钩子
-（docs/dev/remote.md「cca 自己带的钩子」）。
+（docs/dev/remote.md「cca 自己带的钩子」）。3.7.5 起还推额度用完、恢复的通知（下面「额度的通知」）。
 
 线上的格式（`PUSH` 帧、`push_set`、网关的请求、通知的密文）在 server/README.md「推送」；iOS 那一头（通知扩展、钥匙串分组、登记）在
 docs/dev/ios.md「推送」。
@@ -37,6 +37,32 @@ docs/dev/ios.md「推送」。
 - 推送令牌是一台手机上这个 App 的固定编号：同一台手机登记在几个 Team 的服务器上，这几台服务器（和网关）看得出是同一台手机
 - 网关不认谁能用：知道它的地址和一台手机的令牌就推得过去，只是推过去的手机解不开、照固定的那一句显示；每个 IP、每个令牌各一个限流的桶
   挡着刷屏。只给同一台服务器上的 Team 用时，安全组里不放行网关的端口，就只有那台服务器上连得上
+
+## 额度的通知（3.7.5）
+
+除了会话里的通知，手机还收两种额度的通知（用户要的，2026-11-26）：配对的电脑上一个账号的 5 小时或本周的额度用完了（「额度用完了」
+「5 小时的额度用完了，16:00 恢复」），到了重置的时候（「额度恢复了」「5 小时的额度恢复了，可以接着用了」）。和会话没关系：手机没接着、App 没开着、
+电脑上没开远程会话也到；电脑睡着了，恢复的那一条照样到。
+
+1. 电脑上的 `remote-status`（remote.md「手机上的账号」：查完用量以后在后台跑）照「额度用完了」的规则（`status.rs` 的 `exhausted`）挑出新用完的
+   窗口，给每个手机的配对封一份通知（`note_seal`，和会话的通知同一把通知密钥），`push_note` 交给这个配对所在的 Team 的服务器；恢复的那一条同时
+   封好放进 `status_put` 的 `later`（到点的时间是重置时间）
+2. Team 的服务器：配对的另一头是登记了推送、登记时带了 `"usage": true` 的手机才推（`remote.rs` 的 `usage_job`；不看 `sids`），转给网关的和会话的
+   通知一样；`later` 由推送的那条线程到点拿出来推（`Remote::due`，最多隔 15 秒看一眼，推过的记一天：电脑又把同一条放上来不再推）
+3. 手机：通知扩展解开（`openPushed` 认出 `kind: "usage"`），字由手机照 `window`、`resets_epoch` 写（CcaRemoteKit 的 `UsageText.note`、`NoteCard`：
+   几点恢复照这台手机的时区；副标题「来自「机器名」 · 账号的名字 · Claude Code」），同一个账号的叠在一起（`threadIdentifier` 是
+   `usage:<配对编号>:<账号编号>`），点它打开「账号」页里那个账号（userInfo 的 `peer`、`account`）
+
+通知的明文：`{"v":1,"id","kind":"usage","event":"used_up"|"back","at","account","tool","name","machine","window":"five_hour"|"seven_day","resets_epoch","aid"?,"title","subtitle","body"}`
+（`account` 是这个配对里的账号编号、`aid` 是会话的说明里的账号摘要，同「账号」页；`title`、`subtitle`、`body` 是电脑写好的、给认不出 `kind` 的手机看的，
+时间照电脑的时区）。编号（`id`、`apns-collapse-id`）同一轮的同一个窗口一直是同一个：推了两回手机上也只剩一条。
+
+开关：手机的设置「额度用完、恢复时通知」（`Pusher.usageNotes`，默认开着）：登记时说 `usage`，关掉就重新登记成不要（服务器照它不推，电脑照样交）；
+服务器回的没有 `"usage": true`（3.7.5 以前的）就在设置里说哪台服务器推不了，一天以后再登记看它更新了没有。旧版的 App 不说 `usage`，就收不到它解不开的这一种。
+Mac 上的 cca App 不经推送：自己照同一个规则在本机弹（usage.md「额度」里「额度用完、恢复的通知」那一条），字和手机上的一样。
+
+谁另外知道什么（和会话的通知比）：Team 的服务器知道哪个配对什么时候有个账号的额度用完了（`push_note` 的时间）、什么时候恢复（`later` 的 `at`；同一个账号的
+同一个窗口在这个配对里 `slot` 一直一样），不知道是哪个账号、哪个工具、用了多少；推送网关、苹果和会话的通知一样只看到令牌、编号、密文。
 
 ## 推送网关（`cca-core team-push`）
 
@@ -116,7 +142,11 @@ services:
 - `tests/ios_kit.rs`：`against_the_spec` 的 note 向量（CcaRemoteKit ↔ `kit::spec` 的 `note_seal`）；`pushes_reach_the_phone`（ccaguest 登记、
   会话里 `remote-notify`、假的推送服务收到、CcaRemoteKit 解开，登记里的 `sids` 没有这个会话的那台手机收不到、有的收得到，取消配对以后解不开）；`in_the_simulator`（`CCA_IOS_SIM=1`：真的 App 登记、
   通知密钥写进共用的钥匙串分组，App 照通知扩展的读法解开真的宿主封的那一份）
-- `server/remote/tests.rs` 的 `push_registration`、`push_jobs`、`push_only_some_sessions`（`sids`：存、读、样子不对的、只推哪几个）
+- `server/remote/tests.rs` 的 `push_registration`、`push_jobs`、`push_only_some_sessions`（`sids`：存、读、样子不对的、只推哪几个）、
+  `account_status`、`usage_notes`（`status_put`、`later` 到点推、一天里不再推、`push_note`、登记的 `usage`）
+- 额度的通知：`tests/web_relay.rs` 的 `app_guest_sees_accounts`、`tests/ios_kit.rs` 的 `accounts_reach_the_phone`（真的电脑上的 `remote-status` → Team 的服务器 →
+  网关 → 假的推送服务，用完的马上到、恢复的到点到、同一轮不再推；ccaguest 解开、字照手机的时区写；登记不带 `usage` 就不推）；
+  `against_the_spec` 的额度通知的向量；Mac App 的 `UsageAlertsTests`（`macos/test.sh`）
 - `tests/hub_deploy.rs` 的 `push`：安装脚本、`cca team deploy` 的 `--push`、`--push-pin`、`--no-push`，`.env`，交给服务端的两种方式
 - `tests/remote_relay.rs` 的 `cca_hooks_reach_the_other_machine`：cca 自己带的钩子推到别的机器
 
@@ -131,4 +161,5 @@ services:
   `mutableContent: YES` 也不调扩展，到 App 的还是固定的那一句）。扩展里解开的那一段和 `in_the_simulator` 里 App 照扩展的读法解开的是同一份代码
   （CcaRemoteKit 的 `openPushed`、`NoteCard`、`NoteKeychain.read`），可扩展的进程读不读得到共用分组的钥匙串、时限内做没做完，要真的推送
   到真机（TestFlight 的构建）上才看得到：第三个构建（1.0，20261126.54245）真机上解开了（上一条）
+- 额度的通知：真机、真的推送服务还没试过（要 3.7.5 的 cca、重新部署的 Team 的服务器和新的 TestFlight 构建）
 - 环境：TestFlight / App Store 装的照描述文件的 `aps-environment` 认成 production，Xcode 装的是 sandbox；传给 TestFlight 的那一份里是 production（testflight.sh 查过），真机上登记的也是 production（上面那一条）

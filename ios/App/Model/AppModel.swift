@@ -25,6 +25,11 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// 底下的两页：账号（各台电脑上的账号的状态、用量）、会话（可以接入的远程会话）
+enum AppTab: String {
+    case accounts, sessions
+}
+
 /// 配对的那一页现在到哪了
 enum PairPhase: Equatable {
     /// 扫码或者粘贴
@@ -62,10 +67,22 @@ final class AppModel {
     var pairing: PairPhase?
     /// 开着的终端（推到导航里的那一页）
     var terminal: TerminalSession? {
-        // 开着的会话变了：「关掉的会话也推送」关着时，服务器上登记的只推哪个会话跟着变
-        didSet { if oldValue !== terminal { Pusher.shared.openChanged() } }
+        didSet {
+            guard oldValue !== terminal else { return }
+            // 开着的会话变了：「关掉的会话也推送」关着时，服务器上登记的只推哪个会话跟着变；开着终端时不查列表
+            Pusher.shared.openChanged()
+            updatePolling()
+        }
     }
+    /// 终端是从哪一页推进去的（账号页里点了这个账号的会话的，返回时回到账号页）
+    private(set) var terminalTab: AppTab = .sessions
     var showSettings = false
+    /// 底下选着的那一页（记着，下次打开还是它）
+    var tab: AppTab {
+        didSet { UserDefaults.standard.set(tab.rawValue, forKey: "tab") }
+    }
+    /// 「账号」页推进去的账号
+    var accountPath: [AccountRef] = []
 
     var appearance: AppearanceMode {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance") }
@@ -81,10 +98,13 @@ final class AppModel {
 
     @ObservationIgnored private var poll: Task<Void, Never>?
     @ObservationIgnored private var pairTask: Task<Void, Never>?
+    /// App 在前台（回到后台时不查）
+    @ObservationIgnored private var foreground = true
 
     init(demo: Bool = false) {
         let d = UserDefaults.standard
         appearance = AppearanceMode(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
+        tab = AppTab(rawValue: d.string(forKey: "tab") ?? "") ?? .sessions
         let name = Texts.nonEmpty(d.string(forKey: "deviceName")) ?? Self.defaultName
         deviceName = name
         backend = demo ? DemoBackend() : LiveBackend(deviceName: name)
@@ -114,6 +134,7 @@ final class AppModel {
         backend = b
         peers = b.peers()
         listings = [:]
+        accountPath = []
         fetchedAt = nil
         loading = false   // 前一个那头还没查完的，回来时看到换了就不管了（fetch 里的 b === backend）
         refresh()
@@ -122,8 +143,16 @@ final class AppModel {
 
     // MARK: 会话
 
-    /// 列表看得见、App 在前台时：马上查一次，之后每 15 秒一次
-    func startPolling() {
+    /// App 在前台、没开着终端时查列表（会话和账号的状态是同一次查到的）：马上查一次，之后每 15 秒一次
+    func updatePolling() {
+        if foreground && terminal == nil {
+            startPolling()
+        } else {
+            stopPolling()
+        }
+    }
+
+    private func startPolling() {
         guard poll == nil else { return }
         poll = Task { [weak self] in
             while !Task.isCancelled {
@@ -133,7 +162,7 @@ final class AppModel {
         }
     }
 
-    func stopPolling() {
+    private func stopPolling() {
         poll?.cancel()
         poll = nil
     }
@@ -155,6 +184,25 @@ final class AppModel {
     }
 
     func listing(_ p: Peer) -> PeerListing? { listings[p.pid] }
+
+    // MARK: 账号
+
+    /// 一台电脑放上来的账号的状态（那台电脑上的 cca、它所在的服务器都够新、放过一次以后才有）
+    func status(_ p: Peer) -> HostStatus? { listings[p.pid]?.status }
+
+    /// 「账号」页推进去的那个账号：哪台电脑、账号现在的状态（那台电脑后来没放它了是 nil）
+    func account(_ ref: AccountRef) -> (peer: Peer, account: AccountStatus)? {
+        guard let p = peers.first(where: { $0.pid == ref.pid }), let a = status(p)?.accounts.first(where: { $0.id == ref.id }) else { return nil }
+        return (p, a)
+    }
+
+    /// 打开一个账号的那一页（点了额度的通知）：关掉开着的终端，换到「账号」页
+    func openAccount(peer pid: String, account id: String) {
+        closeTerminal()
+        tab = .accounts
+        accountPath = [AccountRef(pid: pid, id: id)]
+        refresh()
+    }
 
     // MARK: 配对
 
@@ -225,8 +273,10 @@ final class AppModel {
 
     // MARK: 终端
 
+    /// 接入一个会话：终端推到现在这一页的导航里（账号页里点的，返回时回到账号页）
     func attach(_ s: RemoteSession, on peer: Peer, readOnly: Bool) {
         closeTerminal()
+        terminalTab = tab
         terminal = TerminalSession(backend: backend, peer: peer, session: s, readOnly: readOnly || s.info.viewOnly)
     }
 
@@ -259,15 +309,14 @@ final class AppModel {
     /// App 回到前台（系统设置里的通知开关可能改过：Pusher 对一对登记）
     func becameActive() {
         Pusher.shared.sync()
-        if let t = terminal {
-            t.nudge()
-        } else {
-            startPolling()   // 列表那一页：马上查一次（开着终端时不查，回到列表时 SessionsView 自己开始）
-        }
+        foreground = true
+        terminal?.nudge()
+        updatePolling()   // 没开着终端：马上查一次
     }
 
     func wentBackground() {
-        stopPolling()
+        foreground = false
+        updatePolling()
     }
 }
 

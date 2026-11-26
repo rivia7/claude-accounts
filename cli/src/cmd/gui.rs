@@ -546,6 +546,14 @@ fn gui_account(
 /// bash 才知道的（找到的命令、App、Chrome）经 CCA_GUI_* 环境变量传进来
 pub fn cmd_gui_state(args: &[String]) -> R<()> {
     arity("cmd_gui_state", args, 0, 0)?;
+    let out = gui_snapshot(true)?;
+    out!("{}", json::dumps(&V::Dict(out), json::FILE));
+    Ok(())
+}
+
+/// _gui state 的那一份（不打印）。stdin：读 stdin 上的路由器端代码（算同步摘要）；远程会话给手机的账号状态（remote/status.rs）
+/// 不要同步摘要，不读
+pub fn gui_snapshot(stdin: bool) -> R<Dict> {
     let now = time();
     let mut errors: Vec<V> = Vec::new();
     let raw = match load_quiet(&CFG) {
@@ -573,7 +581,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         tool.set_tab(Some(table));
     }
     reconcile_all(&c)?;
-    let code = io::read_stdin_text();
+    let code = if stdin { io::read_stdin_text() } else { String::new() };
     let (r, loc) = (section(&c, "router"), section(&c, "local"));
     // local_want 只在配了内置代理时才算（没配时原来也不调它）
     let want = if loc.truthy("client") { local_want(&c)? } else { String::new() };
@@ -734,8 +742,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
     out.set("errors", errors);
     out.set("notices", NOTICES.with(|n| n.borrow().iter().cloned().map(V::Dict).collect::<Vec<V>>()));
     out.set("cost_total", cv.total(&enabled_ids));
-    out!("{}", json::dumps(&V::Dict(out), json::FILE));
-    Ok(())
+    Ok(out)
 }
 
 /// 这台 Mac 连不连得上这些端口：{端口: bool}（并行，每个最多 1 秒；用 PATH 里的 nc，和 probe 一样）

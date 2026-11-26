@@ -68,8 +68,9 @@ use std::sync::{Arc, Mutex};
 /// 接口的版本（请求和回的内容里的 v）（Py:67）
 pub const API: i64 = 1;
 /// 服务端的级别（GET /v1/version 回的 level）：服务器加了这一版 cca 要靠的东西时加一，cca 的 `team::SERVER_NEED` 跟着改（cca 同步配置时
-/// 问一次，比它低的 Team 在界面里提示管理员更新服务器）。这个地址 3.7.1 起有；1：3.7.0 起（认 iPhone 上的 cca App：pair_open 的 guest）
-pub const LEVEL: i64 = 1;
+/// 问一次，比它低的 Team 在界面里提示管理员更新服务器）。这个地址 3.7.1 起有；1：3.7.0 起（认 iPhone 上的 cca App：pair_open 的 guest）；
+/// 2：3.7.5 起（手机上看账号的状态、收额度的通知：status_put、push_note，relay_list 的 have / status，push_set 的 usage）
+pub const LEVEL: i64 = 2;
 /// 设备给请求签名用的命名空间（Py:68）
 pub const NS_REPORT: &str = "cca-presence";
 /// 一个请求的内容最多这么大（Py:69）
@@ -142,8 +143,8 @@ pub const MAX_ASTATE: usize = 524_288;
 
 // ---- 远程会话的中转、网页端（Py:901-941） ----
 
-/// 中转的 op（开了中转才认）（Py:901）
-pub const RELAY_OPS: [&str; 10] = [
+/// 中转的 op（开了中转才认）（Py:901）；最后三个是后加的（`RELAY_OPS_UNLISTED`）
+pub const RELAY_OPS: [&str; 12] = [
     "pair_open",
     "pair_put",
     "pair_get",
@@ -154,7 +155,12 @@ pub const RELAY_OPS: [&str; 10] = [
     "relay_attach",
     "relay_list",
     "push_set",
+    "status_put",
+    "push_note",
 ];
+/// 后加的中转的 op：/v1/health 不列（和以前逐字节一样；设备发了服务器不认的 op 回 404 not_found，照它知道服务器太旧）。
+/// push_set：手机登记推送；status_put：宿主放上账号的状态、到点再推的通知；push_note：宿主推一条额度的通知
+pub const RELAY_OPS_UNLISTED: [&str; 3] = ["push_set", "status_put", "push_note"];
 /// 访客（手机：iOS 上的 cca App、网页端）能发的（Py:904）；push_set（登记推送）是后加的、只有访客能发
 pub const GUEST_OPS: [&str; 8] =
     ["pair_put", "pair_get", "pair_commit", "pair_close", "pair_drop", "relay_attach", "relay_list", "push_set"];
@@ -199,6 +205,16 @@ pub const F_PUSH: u8 = 0x0a;
 /// 推送的通知（密文，base64）最长多少个字符：最长的一条（标题、副标题各 64 个字，正文 240 个字，都是 4 个字节的字）补齐以后是
 /// 1792 个字节，base64 是 2392 个字符。推送服务一条最多 4 KB：网关照这个数留着余地
 pub const PUSH_BLOB: usize = 3072;
+/// 账号的状态（status_put 的密文，base64）最长多少个字符：一个请求最多 MAX_BODY，留出到点再推的那几条
+pub const STATUS_BLOB: usize = 40960;
+/// 一个配对最多几条到点再推的通知（status_put 的 later：额度恢复的那一刻）
+pub const LATER_MAX: usize = 8;
+/// 到点再推的通知最多推后多久（秒）：每周的额度最长 7 天才恢复
+pub const LATER_SPAN: i64 = 8 * 86400;
+/// 账号的状态留多久（秒）：宿主这么久没再放上来（多半关机了、不用了）就不给了
+pub const STATUS_TTL: i64 = 14 * 86400;
+/// 推送那条线程最多隔多久看一眼到点再推的通知（秒）
+pub const LATER_POLL: f64 = 15.0;
 /// 网页端同时几条 WebSocket（Py:927）
 pub const WS_CONN: usize = 64;
 /// 网页端同一个 IP 同时几条 WebSocket（Py:928）

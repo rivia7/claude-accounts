@@ -15,8 +15,8 @@ protocol Backend: AnyObject {
     func fingerprint(on server: ServerRef) -> String?
     /// 配对的电脑所在的服务器（每台一次）
     func servers() -> [ServerRef]
-    /// 在这台服务器上登记推送（Pusher）；sids：只推这几个会话，nil 是都推
-    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?) async -> PushSetResult
+    /// 在这台服务器上登记推送（Pusher）；sids：只推这几个会话，nil 是都推；usage：也推额度的通知，nil 是不说
+    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?, usage: Bool?) async -> PushSetResult
     /// 通知扩展用的通知密钥照配对表重写一遍（一样就不动）
     func syncNoteKeys()
 }
@@ -67,8 +67,8 @@ final class LiveBackend: Backend {
 
     func servers() -> [ServerRef] { client.servers() }
 
-    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?) async -> PushSetResult {
-        await client.pushSet(on: server, token: token, env: env, sids: sids)
+    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?, usage: Bool?) async -> PushSetResult {
+        await client.pushSet(on: server, token: token, env: env, sids: sids, usage: usage)
     }
 
     /// 存进 App 和通知扩展共用的钥匙串分组（NoteKeychain）：通知扩展只拿得到这几把，拿不到配对的密钥

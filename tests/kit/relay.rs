@@ -970,6 +970,34 @@ pub fn session(dev: &Device, key: &str, name: &str, client_args: &[&str]) -> Ter
     h
 }
 
+/// UTC 的时间（写到秒），用量的接口给的那种
+pub fn iso(t: f64) -> String {
+    let d = crate::plist::date_from_unix(t.floor() as i64);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", d.year, d.month, d.day, d.hour, d.minute, d.second)
+}
+
+/// dev 上 alice 登录着（账号目录里 Claude Code 的 .claude.json），cca 记下的用量（usage.json）：5 小时的用了 five%、resets 重置，
+/// 本周的用了 41%、三天以后重置
+pub fn signed_in(dev: &Device, five: i64, resets: f64) {
+    let acct = dev.cca.join("accounts").join(Device::acct_ident());
+    let who = obj! { "emailAddress" => "alice@example.com", "accountUuid" => "uuid-alice", "organizationType" => "claude_max" };
+    fsx::write(acct.join("claude/.claude.json"), json::dumps(&obj! { "oauthAccount" => who }, &Style::default()));
+    let now = fleet::now();
+    let rl = obj! {
+        "five_hour" => obj! { "utilization" => five, "resets_at" => iso(resets) },
+        "seven_day" => obj! { "utilization" => 41, "resets_at" => iso(now + 3.0 * 86400.0) },
+    };
+    let j = obj! { "fetchedAtMs" => (now * 1000.0) as i64, "accountUuid" => "uuid-alice", "utilization" => rl };
+    fsx::write(acct.join("usage.json"), json::dumps(&j, &Style::default()));
+}
+
+/// dev 上放一轮账号的状态（bash 的 _remote-status 那样：CCA_RO=1；手机上的「账号」页、额度的通知）：该成、什么都不说
+pub fn publish(dev: &Device) {
+    let mut cmd = helper_cmd(dev, &["remote-status"]);
+    cmd.env("CCA_RO", "1");
+    assert_eq!(Popen::spawn(&mut cmd).communicate(secs(60)), (0, String::new(), String::new()));
+}
+
 /// dev 的配对表（~/.cca/remote/peers.json 的 peers：{配对编号: {fp, name, incoming, shown, hub…}}）；还没有是 {}
 pub fn peers(dev: &Device) -> Value {
     let p = dev.cca.join("remote").join("peers.json");

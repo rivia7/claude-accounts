@@ -641,6 +641,21 @@ enum Texts {
         return weekdayTime(epoch, calendar: calendar)
     }
 
+    /// 额度的通知（UsageAlerts，CcaApp 的 UsageNotifier 弹）：和手机上的一样（CcaRemoteKit 的 UsageText.note）。标题「额度用完了」、
+    /// 正文「5 小时的额度用完了，16:00 恢复」（重置时间不知道、已经过了的不说几点）；恢复的「额度恢复了」「5 小时的额度恢复了，可以接着用了」。
+    /// 副标题是哪个账号：「工作 · Claude Code」
+    static func usageNote(_ n: UsageAlerts.Note, now: Double, calendar: Calendar = .current) -> (title: String, subtitle: String, body: String) {
+        let w = n.window == .fiveHour ? "5 小时" : "本周"
+        let who = n.name + " · " + cliProduct(n.account.tool)
+        switch n.event {
+        case .usedUp:
+            let when = n.resetsEpoch.flatMap { $0 > now ? "，" + backTime(epoch: $0, now: now, calendar: calendar) + " 恢复" : nil } ?? ""
+            return ("额度用完了", who, "\(w)的额度用完了" + when)
+        case .back:
+            return ("额度恢复了", who, "\(w)的额度恢复了，可以接着用了")
+        }
+    }
+
     /// 周结算提醒（cca 给的 use_first）：“本周额度还剩 59%，明天 19:55 重置，建议先用这个账号”。
     /// 账号页那句话、总览卡片和侧栏 / 菜单栏沙漏的悬停说明、读屏都用这一句。
     static func useFirst(_ f: UseFirst, now: Double, calendar: Calendar = .current) -> String {

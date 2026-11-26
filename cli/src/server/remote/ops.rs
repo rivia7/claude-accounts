@@ -2,12 +2,12 @@
 //!
 //! 各个 op 回什么（状态码、error 的那个词）照 Python 一个不差；先查什么后查什么也照它（同一个请求两处都不对时回的是先查的那一处）。
 
-use super::{sids_of, Edge, Guest, PushReg, Remote, Role, Shared, Slot, Val};
+use super::{sids_of, Edge, Guest, Later, PushReg, Remote, Role, Shared, Slot, Status, Val};
 use crate::py::obj::{Dict, V};
 use crate::py::time::monotonic;
 use crate::py::{num, R};
 use crate::server::wire::{self, Blob, Num};
-use crate::server::{API, GUEST_OPS, PAIR_MSG, PAIR_TTL, PAIR_WAIT, PAIR_WAITERS};
+use crate::server::{API, GUEST_OPS, LATER_MAX, LATER_SPAN, PAIR_MSG, PAIR_TTL, PAIR_WAIT, PAIR_WAITERS, PUSH_BLOB, STATUS_BLOB};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -89,6 +89,8 @@ pub(super) fn handle(
         "relay_attach" => r.relay_attach(fp, &j, now),
         "relay_list" => Ok(r.relay_list(fp, &j, now, name_of)),
         "push_set" => r.push_set(fp, gkey.is_some(), &j, now),
+        "status_put" => Ok(r.status_put(fp, &j, now)),
+        "push_note" => Ok(r.push_note(fp, &j)),
         _ => Ok(fail(404, "not_found")),
     }
 }
@@ -156,7 +158,8 @@ impl Remote {
     /// （名单里的设备、正在配对的是 403 denied）；这台服务器没开推送是 404 no_push。一个令牌只记在一个访客上（App 删了重装、
     /// 换了身份：旧的那一项不再推）。和记着的一样时不存。sids（可以不带）：只推这几个会话（`PUSH_SIDS` 个以内的会话编号；手机上
     /// 「关掉的会话也推送」关着时是 App 里正开着的那个），不带、null 是都推；带了的回的里面多一项 `"sids": true`——旧的服务器不认
-    /// 它、照旧都推，手机看这一项知道
+    /// 它、照旧都推，手机看这一项知道。usage（可以不带）：true 是也推额度的通知（push_note、到点的 later），不带、别的是不推；
+    /// 带了的回的里面多一项 `"usage": true`（旧的服务器不认，手机看这一项知道这台服务器推不了）
     fn push_set(&mut self, fp: &str, guest: bool, j: &Dict, now: f64) -> R<Reply> {
         if !guest || !self.guests.contains(fp) {
             return Ok(fail(403, "denied"));
@@ -176,12 +179,21 @@ impl Remote {
                 None => return Ok(fail(400, "bad")),
             },
         };
+        let usage = match j.get("usage") {
+            None => None,
+            Some(V::Bool(b)) => Some(b),
+            Some(_) => return Ok(fail(400, "bad")),
+        };
         let told = sids.is_some();
         let reg = match token.is_empty() {
             true => None,
-            false if wire::push_token_re().matches(&token) && matches!(&*env, "production" | "sandbox") => {
-                Some(PushReg { token: token.to_string(), env: env.to_string(), sids, at: Val::Num(Num::Float(now)) })
-            }
+            false if wire::push_token_re().matches(&token) && matches!(&*env, "production" | "sandbox") => Some(PushReg {
+                token: token.to_string(),
+                env: env.to_string(),
+                sids,
+                usage: usage == Some(true),
+                at: Val::Num(Num::Float(now)),
+            }),
             false => return Ok(fail(400, "bad")),
         };
         let mut changed = false;
@@ -194,7 +206,7 @@ impl Remote {
             });
         }
         if let Some(g) = self.guests.get_mut(fp) {
-            let key = |r: &Option<PushReg>| r.as_ref().map(|p| (p.token.clone(), p.env.clone(), p.sids.clone()));
+            let key = |r: &Option<PushReg>| r.as_ref().map(|p| (p.token.clone(), p.env.clone(), p.sids.clone(), p.usage));
             if key(&g.push) != key(&reg) {
                 g.push = reg;
                 changed = true;
@@ -203,10 +215,55 @@ impl Remote {
         if changed {
             self.save()?;
         }
-        Ok(match told {
-            true => (200, V::Dict(crate::dict! { "v" => API, "ok" => true, "sids" => true })),
-            false => done(),
-        })
+        let reply = crate::dict! { "v" => API, "ok" => true };
+        if told {
+            reply.set("sids", true);
+        }
+        if usage.is_some() {
+            reply.set("usage", true);
+        }
+        Ok((200, V::Dict(reply)))
+    }
+
+    /// status_put（宿主发的）：这台机器上账号的状态（`blob`，封给这个配对的密文，这里解不开），配对的另一头（手机）查 relay_list 时
+    /// 一起拿走；`later`（可以不带）：到点再推的通知（额度恢复的那一刻，`[{"slot", "at", "id", "note"}]`，最多 `LATER_MAX` 条），
+    /// 这个配对原来放的换成这几条（不带、空的是都拿掉；一天之内到点推过的同一条不再放）。只在内存里；不是这个配对的回 404 no_pairing
+    fn status_put(&mut self, fp: &str, j: &Dict, now: f64) -> Reply {
+        let (Some(pid), Some(blob)) = (hex32(j.get("pid")), j.get("blob").and_then(|b| wire::parse_blob(&b, STATUS_BLOB))) else {
+            return fail(400, "bad");
+        };
+        let later = match j.get("later") {
+            None | Some(V::None) => Vec::new(),
+            Some(v) => match later_of(&v, &pid, fp, now) {
+                Some(l) => l,
+                None => return fail(400, "bad"),
+            },
+        };
+        if !self.member(&pid, fp) {
+            return fail(404, "no_pairing");
+        }
+        self.status.insert((pid.to_string(), fp.to_string()), Status { blob, at: now });
+        self.later.retain(|l| !(*l.pid == *pid && l.by == fp));
+        let fresh: Vec<Later> = later.into_iter().filter(|l| !self.later_seen(&l.pid, &l.id)).collect();
+        self.later.extend(fresh);
+        done()
+    }
+
+    /// push_note（宿主发的）：一条额度的通知（额度用完了：`{"pid", "id", "note"}`，封给这个配对的），马上交给推送网关。配对的
+    /// 另一头得是登记了推送、要额度的通知的访客；推不了（没开推送、对方没登记、不要）时回的 sent 是 false
+    fn push_note(&mut self, fp: &str, j: &Dict) -> Reply {
+        let id = j.str("id").filter(|i| wire::note_id_re().matches(i));
+        let note = j.get("note").and_then(|n| wire::parse_blob(&n, PUSH_BLOB));
+        let (Some(pid), Some(id), Some(note)) = (hex32(j.get("pid")), id, note) else { return fail(400, "bad") };
+        if !self.member(&pid, fp) {
+            return fail(404, "no_pairing");
+        }
+        let job = self.pusher.as_ref().zip(self.usage_job(&pid, fp, &id, &note));
+        let sent = job.is_some();
+        if let Some((p, job)) = job {
+            p.send(job);
+        }
+        (200, V::Dict(crate::dict! { "v" => API, "ok" => true, "sent" => sent }))
     }
 
     /// pair_open（Py:1102-1112）：显示配对码的设备开一次配对
@@ -387,14 +444,29 @@ impl Remote {
         self.ticket(now, Role::View, fp, sid.to_string(), Vec::new(), Some(pid.to_string()))
     }
 
-    /// relay_list（Py:1216-1229）：这几个配对的另一头是谁、它开着哪些给这个配对看的会话
+    /// relay_list（Py:1216-1229）：这几个配对的另一头是谁、它开着哪些给这个配对看的会话。带了 have（`{配对编号: 手里那一份的 n}`，
+    /// 可以是空的）的（3.7.5 起的手机）回的里面多一项 status：另一头放上来的账号的状态（`{配对编号: {"blob", "age"}}`，和手里那一份
+    /// 一样的是 `{"same": true, "age"}`；没放过的不在里面）。不带 have 的回的和以前一样
     fn relay_list(&self, fp: &str, j: &Dict, now: f64, name_of: &dyn Fn(&str) -> Option<String>) -> Reply {
         let Some(pids) = self.pid_list(j.get("pids")) else { return fail(400, "bad") };
-        let (out, peers) = (Dict::new(), Dict::new());
+        let have = match j.get("have") {
+            None => None,
+            Some(V::Dict(d)) => Some(d),
+            Some(_) => return fail(400, "bad"),
+        };
+        let (out, peers, status) = (Dict::new(), Dict::new(), Dict::new());
         for pid in &pids {
             // 对方取消了配对（或者从来没有）：不在回的里面
             let Some(peer) = self.other(pid, fp).filter(|_| self.member(pid, fp)) else { continue };
             peers.set(pid.clone(), crate::dict! { "fp" => peer, "name" => name_of(peer) });
+            if let (Some(have), Some(s)) = (&have, self.status.get(&(pid.to_string(), peer.to_string()))) {
+                let age = num::round((now - s.at).max(0.0));
+                let row = match have.str(pid).is_some_and(|n| *n == *s.blob.n) {
+                    true => crate::dict! { "same" => true, "age" => age },
+                    false => crate::dict! { "blob" => s.blob.to_v(), "age" => age },
+                };
+                status.set(pid.clone(), row);
+            }
             let rows: Vec<V> = self
                 .sessions
                 .iter()
@@ -412,6 +484,36 @@ impl Remote {
                 .collect();
             out.set(pid.clone(), rows);
         }
-        (200, V::Dict(crate::dict! { "v" => API, "ok" => true, "peers" => peers, "sessions" => out }))
+        let reply = crate::dict! { "v" => API, "ok" => true, "peers" => peers, "sessions" => out };
+        if have.is_some() {
+            reply.set("status", status);
+        }
+        (200, V::Dict(reply))
     }
+}
+
+/// status_put 的 later：列表，最多 `LATER_MAX` 条，每条 `{"slot", "at", "id", "note"}`（slot、id 是 16 个小写的十六进制字符，at 是
+/// Unix 时间、不晚于 `LATER_SPAN` 以后，note 是封好的通知）；slot 不能重复。样子不对是 None
+fn later_of(v: &V, pid: &str, by: &str, now: f64) -> Option<Vec<Later>> {
+    let list = v.as_list()?;
+    if list.len() > LATER_MAX {
+        return None;
+    }
+    let mut out: Vec<Later> = Vec::new();
+    for x in list.items() {
+        let d = x.as_dict()?;
+        let slot = d.str("slot").filter(|s| wire::note_id_re().matches(s))?;
+        let id = d.str("id").filter(|s| wire::note_id_re().matches(s))?;
+        let at = match d.get("at") {
+            Some(V::Int(i)) => i as f64,
+            Some(V::Float(f)) => f,
+            _ => return None,
+        };
+        let note = wire::parse_blob(&d.get("note")?, PUSH_BLOB)?;
+        if !(at.is_finite() && at > 0.0 && at <= now + LATER_SPAN as f64) || out.iter().any(|l| *l.slot == *slot) {
+            return None;
+        }
+        out.push(Later { pid: pid.to_string(), by: by.to_string(), slot: slot.to_string(), at, id: id.to_string(), note });
+    }
+    Some(out)
 }

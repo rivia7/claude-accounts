@@ -23,6 +23,11 @@ enum RemoteNotifier {
         return true
     }
 
+    /// 通知中心的 delegate 只有一个：会话的通知和额度的通知（UsageNotifier）共用这一个（App 启动时就设好：点通知把 App 打开时也认得）
+    static func installDelegate() {
+        UNUserNotificationCenter.current().delegate = delegate
+    }
+
     static func post(title: String, body: String, from terminal: RemoteTerminal) {
         let title = Texts.plainLine(title, max: 80), body = Texts.plainLine(body, max: 240)
         guard !title.isEmpty || !body.isEmpty, allow(terminal.id) else { return }
@@ -61,11 +66,18 @@ enum RemoteNotifier {
             done([.banner, .sound])
         }
 
+        // 点了通知：会话的回到那个终端，额度的（UsageNotifier）打开那个账号
         func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                     withCompletionHandler done: @escaping () -> Void) {
-            let id = response.notification.request.content.userInfo["terminal"] as? String
+            let info = response.notification.request.content.userInfo
+            let id = info["terminal"] as? String
+            let tool = info["tool"] as? String, account = info["account"] as? String
             DispatchQueue.main.async {
-                RemoteNotifier.open(id)
+                if let tool, let account {
+                    UsageNotifier.open(tool: tool, key: account)
+                } else {
+                    RemoteNotifier.open(id)
+                }
                 done()
             }
         }

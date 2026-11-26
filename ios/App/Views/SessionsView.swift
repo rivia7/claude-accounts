@@ -31,8 +31,6 @@ struct SessionsView: View {
         }
         .navigationTitle("远程会话")
         .refreshable { await model.fetch() }
-        .onAppear { model.startPolling() }
-        .onDisappear { model.stopPolling() }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 RemoteMark(size: 22).accessibilityHidden(true)
@@ -99,8 +97,8 @@ private struct MachineSection: View {
     }
 }
 
-/// 一个会话：状态点、名字、在哪个文件夹、开了多久；点一下接入（那台电脑只让看的只能看），长按可以选只看
-private struct SessionRow: View {
+/// 一个会话：状态点、名字、在哪个文件夹、开了多久；点一下接入（那台电脑只让看的只能看），长按可以选只看。账号的那一页也用它
+struct SessionRow: View {
     @Environment(AppModel.self) private var model
     let peer: Peer
     let session: RemoteSession

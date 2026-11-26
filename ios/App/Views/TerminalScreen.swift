@@ -16,6 +16,8 @@ struct TerminalScreen: View {
         }
         .background(Color(uiColor: TerminalSurface.background).ignoresSafeArea(edges: .bottom))
         .navigationBarTitleDisplayMode(.inline)
+        // 开着终端时底下那一排（会话、账号）收起来：返回就是断开，换不了页
+        .toolbar(.hidden, for: .tabBar)
         // 整页是黑底的终端：这一页的导航栏也是深色（App 是浅色时也一样，和 Mac App 里终端固定深色外观是一个道理）
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(Color(uiColor: TerminalSurface.background), for: .navigationBar)

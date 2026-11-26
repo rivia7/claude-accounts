@@ -7,7 +7,7 @@ use super::*;
 use crate::dict;
 use crate::py::fs::TempDir;
 use crate::py::re::Re;
-use crate::server::PAIR_WAITERS;
+use crate::server::{LATER_MAX, LATER_SPAN, PAIR_WAITERS, STATUS_BLOB};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1312,4 +1312,171 @@ fn push_only_some_sessions() {
     assert_eq!(load(&format!(r#","sids":["{sid}"]"#)), Some(Some(vec![sid.clone()])));
     assert_eq!(load(r#","sids":["nope"]"#), Some(Some(vec![])));
     assert_eq!(load(r#","sids":5"#), Some(Some(vec![])));
+}
+
+/// 宿主放上来的账号的状态（status_put）：只有配对里的设备放得了，访客（手机）放不了；手机查 relay_list 带了 have 才拿得到
+/// （不带的回的和以前一样），手里那一份没变的只回 same；只给另一头放的；配对没了、放了太久的都拿掉
+#[test]
+fn account_status() {
+    let mut t = Rig::new();
+    let (g, gpub) = guest(1);
+    let pid = hex(11);
+    {
+        let mut r = t.sh.lock();
+        r.test_guest(&g, &gpub, NOW);
+        r.test_edge(&pid, &fp(1), &g, NOW);
+    }
+    let other = t.pair(2, 3, 5).1;
+    let put = |t: &Rig, dev: u32, j: Dict| t.op("status_put", dev, j);
+    let with_blob = |pid: &str| dict! { "pid" => pid, "blob" => blob() };
+    // 样子不对、不是自己的配对、访客发的
+    for j in [dict! {}, dict! { "pid" => &pid }, dict! { "pid" => &pid, "blob" => "x" }, dict! { "blob" => blob() }] {
+        assert_eq!(put(&t, 1, j), bad(400, "bad"));
+    }
+    let big = format!(r#"{{"n":"{}==","c":"{}","t":"{}="}}"#, "A".repeat(22), "A".repeat(STATUS_BLOB + 4), "A".repeat(43));
+    assert_eq!(put(&t, 1, dict! { "pid" => &pid, "blob" => json::loads(&big).unwrap() }), bad(400, "bad"), "太长");
+    assert_eq!(put(&t, 1, with_blob(&other)), bad(404, "no_pairing"));
+    assert_eq!(t.op_as("status_put", &g, with_blob(&pid), Some(&gpub)), bad(403, "denied"));
+    // 放上来；手机查：不带 have 的和以前一样，带了的多一项 status
+    assert_eq!(put(&t, 1, with_blob(&pid)), (200, OK.to_string()));
+    let list = |t: &Rig, have: Option<Dict>| {
+        let j = dict! { "pids" => vec![V::str(&pid)] };
+        if let Some(h) = have {
+            j.set("have", h);
+        }
+        t.op_as("relay_list", &g, j, Some(&gpub))
+    };
+    let head = format!(r#"{{"v":1,"ok":true,"peers":{{"{pid}":{{"fp":"{}","name":"dev"}}}},"sessions":{{"{pid}":[]}}"#, fp(1));
+    assert_eq!(list(&t, None), (200, format!("{head}}}")));
+    t.now += 2.4;
+    assert_eq!(list(&t, Some(dict! {})), (200, format!(r#"{head},"status":{{"{pid}":{{"blob":{BLOB},"age":2}}}}}}"#)));
+    let n = blob().as_dict().unwrap().str("n").unwrap().to_string();
+    assert_eq!(list(&t, Some(dict! { &*pid => &*n })), (200, format!(r#"{head},"status":{{"{pid}":{{"same":true,"age":2}}}}}}"#)));
+    assert_eq!(list(&t, Some(dict! { &*pid => "x" })).1, format!(r#"{head},"status":{{"{pid}":{{"blob":{BLOB},"age":2}}}}}}"#));
+    assert_eq!(t.op_as("relay_list", &g, dict! { "pids" => vec![V::str(&pid)], "have" => 5 }, Some(&gpub)), bad(400, "bad"));
+    // 宿主自己查：它放的不回给它
+    let mine = t.op("relay_list", 1, dict! { "pids" => vec![V::str(&pid)], "have" => dict! {} }).1;
+    assert!(mine.ends_with(r#""status":{}}"#), "{mine}");
+    // 放了太久的不给；配对没了的拿掉
+    t.now += STATUS_TTL as f64;
+    assert!(list(&t, Some(dict! {})).1.ends_with(r#""status":{}}"#));
+    assert_eq!(put(&t, 1, with_blob(&pid)), (200, OK.to_string()));
+    assert_eq!(t.sh.lock().status.len(), 1);
+    assert_eq!(t.op("pair_drop", 1, dict! { "pid" => &pid }), (200, OK.to_string()));
+    assert!(t.sh.lock().status.is_empty());
+}
+
+/// 一条到点再推的通知（status_put 的 later）
+fn later(slot: &str, at: f64, id: &str) -> V {
+    V::Dict(dict! { "slot" => slot, "at" => at, "id" => id, "note" => blob() })
+}
+
+/// 额度的通知：手机 push_set 带 usage 才推（回的里面多一项 usage）；push_note 马上推、回 sent；status_put 的 later 到点才推，
+/// 再放一次换掉原来的，推过的同一条不再推；样子不对的不要
+#[test]
+fn usage_notes() {
+    let t = Rig::new();
+    let ((g, gpub), (g2, g2pub)) = (guest(1), guest(2));
+    let (pid, p2) = (hex(11), hex(12));
+    let (pusher, rx) = Pusher::for_test();
+    {
+        let mut r = t.sh.lock();
+        r.test_guest(&g, &gpub, NOW);
+        r.test_guest(&g2, &g2pub, NOW);
+        r.test_edge(&pid, &fp(1), &g, NOW);
+        r.test_edge(&p2, &fp(1), &g2, NOW);
+    }
+    let note =
+        |t: &Rig, dev: u32, pid: &str| t.op("push_note", dev, dict! { "pid" => pid, "id" => "00000000000000aa", "note" => blob() });
+    let sent = |yes: bool| (200, format!(r#"{{"v":1,"ok":true,"sent":{yes}}}"#));
+    assert_eq!(note(&t, 1, &pid), sent(false), "没开推送");
+    t.sh.lock().set_pusher(pusher);
+    assert_eq!(note(&t, 1, &pid), sent(false), "手机没登记推送");
+    let tok = "cd".repeat(32);
+    let set = |who: &str, key: &str, usage: Option<V>| {
+        let j = dict! { "token" => &tok, "env" => "sandbox" };
+        if let Some(u) = usage {
+            j.set("usage", u);
+        }
+        t.op_as("push_set", who, j, Some(key))
+    };
+    assert_eq!(set(&g, &gpub, None), (200, OK.to_string()));
+    assert_eq!(note(&t, 1, &pid), sent(false), "登记了推送、没说要额度的通知");
+    assert_eq!(set(&g, &gpub, Some(V::from(5))), bad(400, "bad"));
+    let told = r#"{"v":1,"ok":true,"usage":true}"#.to_string();
+    assert_eq!(set(&g, &gpub, Some(V::Bool(true))), (200, told.clone()));
+    assert!(t.file().contains(r#""usage":true"#), "{}", t.file());
+    assert_eq!(note(&t, 1, &pid), sent(true));
+    let job = rx.try_recv().unwrap();
+    assert_eq!((job.token.as_str(), job.env.as_str(), job.id.as_str()), (tok.as_str(), "sandbox", "00000000000000aa"));
+    assert!(rx.try_recv().is_err());
+    // 样子不对、不是自己的配对、访客发的
+    for j in [
+        dict! { "pid" => &pid },
+        dict! { "pid" => &pid, "id" => "x", "note" => blob() },
+        dict! { "pid" => &pid, "id" => "00000000000000aa" },
+    ] {
+        assert_eq!(t.op("push_note", 1, j), bad(400, "bad"));
+    }
+    assert_eq!(note(&t, 2, &pid), bad(404, "no_pairing"));
+    assert_eq!(
+        t.op_as("push_note", &g, dict! { "pid" => &pid, "id" => "00000000000000aa", "note" => blob() }, Some(&gpub)),
+        bad(403, "denied")
+    );
+    // 到点再推的：到点前不推；到点了推一次，同一条再放上来不再推；再放一次（不带 later）是都拿掉
+    let put = |l: Vec<V>| t.op("status_put", 1, dict! { "pid" => &pid, "blob" => blob(), "later" => l });
+    assert_eq!(put(vec![later("0000000000000001", NOW + 100.0, "00000000000000b1")]), (200, OK.to_string()));
+    assert_eq!(t.sh.lock().next_due(), Some(NOW + 100.0));
+    assert!(t.sh.lock().due(NOW + 99.0).is_empty());
+    let due = t.sh.lock().due(NOW + 100.0);
+    assert_eq!(due.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), ["00000000000000b1"]);
+    assert_eq!(t.sh.lock().next_due(), None);
+    assert_eq!(put(vec![later("0000000000000001", NOW + 100.0, "00000000000000b1")]), (200, OK.to_string()));
+    assert!(t.sh.lock().later.is_empty(), "推过的同一条");
+    // 换掉：slot 一样、时间变了（编号跟着变）；不带 later 是拿掉
+    assert_eq!(put(vec![later("0000000000000001", NOW + 200.0, "00000000000000b2")]), (200, OK.to_string()));
+    assert_eq!(
+        put(vec![
+            later("0000000000000001", NOW + 300.0, "00000000000000b3"),
+            later("0000000000000002", NOW + 50.0, "00000000000000c1")
+        ])
+        .0,
+        200
+    );
+    assert_eq!(t.sh.lock().later.len(), 2);
+    assert_eq!(t.sh.lock().next_due(), Some(NOW + 50.0));
+    assert_eq!(t.op("status_put", 1, dict! { "pid" => &pid, "blob" => blob() }), (200, OK.to_string()));
+    assert!(t.sh.lock().later.is_empty());
+    // 到点时手机不要了：不推（拿掉）
+    assert_eq!(put(vec![later("0000000000000003", NOW + 10.0, "00000000000000d1")]).0, 200);
+    assert_eq!(set(&g, &gpub, Some(V::Bool(false))), (200, told));
+    assert!(!t.file().contains(r#""usage""#), "{}", t.file());
+    assert!(t.sh.lock().due(NOW + 10.0).is_empty());
+    assert!(t.sh.lock().later.is_empty());
+    // 样子不对的 later
+    let nine: Vec<V> = (0..=LATER_MAX).map(|i| later(&format!("{i:016x}"), NOW + 1.0, "00000000000000e1")).collect();
+    for l in [
+        nine,
+        vec![later("0000000000000001", NOW + LATER_SPAN as f64 + 1.0, "00000000000000e1")],
+        vec![later("0000000000000001", NOW, "00000000000000e1"), later("0000000000000001", NOW, "00000000000000e2")],
+        vec![later("x", NOW, "00000000000000e1")],
+        vec![later("0000000000000001", NOW, "E1")],
+        vec![later("0000000000000001", -1.0, "00000000000000e1")],
+        vec![V::from(5)],
+    ] {
+        let shown = json::dumps(&V::from(l.clone()), COMPACT);
+        assert_eq!(put(l), bad(400, "bad"), "{shown}");
+    }
+    assert_eq!(t.op("status_put", 1, dict! { "pid" => &pid, "blob" => blob(), "later" => 5 }), bad(400, "bad"));
+    // 别的手机（g2）没要额度的通知：给它的到点了也不推
+    assert_eq!(
+        t.op(
+            "status_put",
+            1,
+            dict! { "pid" => &p2, "blob" => blob(), "later" => vec![later("0000000000000001", NOW, "00000000000000f1")] }
+        )
+        .0,
+        200
+    );
+    assert!(t.sh.lock().due(NOW).is_empty());
 }

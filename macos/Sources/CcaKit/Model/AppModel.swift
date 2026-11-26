@@ -103,6 +103,8 @@ struct AppHooks {
     var terminate: @MainActor () -> Void = {}
     /// 读屏软件播报（提示条出现时）。
     var announce: @MainActor (String) -> Void = { _ in }
+    /// 账号、用量可能变了（读完 state、查完用量、每分钟的定时器）：App 照它弹额度用完、恢复的通知（UsageNotifier）
+    var accountsChanged: @MainActor () -> Void = {}
 }
 
 /// 整个 App 的状态（主窗口和菜单栏面板共用一份）。所有界面状态都在这里（这套工具链里 @State 用不了）。
@@ -400,7 +402,10 @@ final class AppModel {
         if let g = defaults.string(forKey: Prefs.costGranularity).flatMap(CostGranularity.init(rawValue:)) { costGranularity = g }
         if let v = defaults.string(forKey: Prefs.costScope).flatMap(CostScope.init(rawValue:)) { costScope = v }
         updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
-        self.scheduler.onUsageTick = { [weak self] in self?.refreshUsageIfNeeded() }
+        self.scheduler.onUsageTick = { [weak self] in
+            self?.refreshUsageIfNeeded()
+            self?.hooks.accountsChanged()   // 没查也看一眼：过了重置时间、读到的 state 里的用量变了
+        }
         self.scheduler.clientCheckDelay = { [weak self] in self?.clientCheckDelay() ?? 3600 }
         self.scheduler.onLiveTick = { [weak self] in self?.refreshLive() }
         self.scheduler.onClientCheckTick = { [weak self] in self?.checkClientUpdates(manual: false) }
@@ -597,6 +602,7 @@ final class AppModel {
             reconcileCore()
             reconcileDevicesPolling()  // 刚加入了 Team、这个账号刚由 Team 给了这台设备
             if s.costTotal?.scan.state == .never { startDueCostSync() }   // 还没统计过：马上统计一次（PROTOCOL 3.5）
+            hooks.accountsChanged()
             // 2.9.0-beta.17 的顺序只记在 App 里：第一次读到账号表时写回去
             if !orderChecked {
                 orderChecked = true
@@ -677,6 +683,11 @@ final class AppModel {
         guard let c = cached else { return run }
         if (c.fetchedEpoch ?? 0) > (run.fetchedEpoch ?? 0) { return c }
         return run
+    }
+
+    /// 额度用完、恢复的通知（UsageAlerts）看的：三个工具的账号和各自该显示的用量
+    func usageAlertItems() -> [(account: Account, usage: UsageEntry?)] {
+        ToolID.allKnown.flatMap { t in accounts(t).map { (account: $0, usage: usage(for: $0)) } }
     }
 
     /// 登录已失效（查用量时才知道：本地的登录信息还在，所以 cca 算的 login 还是已登录）。
@@ -829,6 +840,7 @@ final class AppModel {
             var entries = usageRuns[t] ?? [:]
             for e in doc.accounts { if let k = e.key ?? e.account { entries[k] = e } }
             usageRuns[t] = entries
+            hooks.accountsChanged()
         }
         switch r.status {
         case .success:
@@ -1461,6 +1473,7 @@ final class AppModel {
             self.activities[ref] = nil
             if let u = doc?.usage, let k = u.key ?? u.account {
                 self.usageRuns[ref.tool, default: [:]][k] = u
+                self.hooks.accountsChanged()
             }
             let text = nonEmpty(doc?.message) ?? "已重置额度"
             if r.isSuccess, doc?.outcome == .nothingToReset {

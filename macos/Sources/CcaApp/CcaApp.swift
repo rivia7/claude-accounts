@@ -143,6 +143,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appearance = AppearanceSetting(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
         super.init()
         RemoteNotifier.model = model
+        RemoteNotifier.installDelegate()
+        UsageNotifier.shared.model = model
+        model.hooks.accountsChanged = { UsageNotifier.shared.check() }
         model.hooks.openInTerminal = { Platform.open($0, in: $1, done: $2) }
         model.hooks.openTerminalApp = { Platform.open($0, done: $1) }
         model.hooks.installedTerminals = { Platform.installedTerminals() }

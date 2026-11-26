@@ -34,7 +34,10 @@ use super::limits::Limits;
 use super::omap::OMap;
 use super::sshsig;
 use super::wire::{self, Blob, Num};
-use super::{API, MAX_ACCOUNTS, MAX_COST_BLOB, MAX_TEAM_DOC, RELAY_OPS, SYNC_OPS, TEAM_DOCS_BYTES, TEAM_OPS, TEAM_ROOT_OPS};
+use super::{
+    API, MAX_ACCOUNTS, MAX_COST_BLOB, MAX_TEAM_DOC, RELAY_OPS, RELAY_OPS_UNLISTED, SYNC_OPS, TEAM_DOCS_BYTES, TEAM_OPS,
+    TEAM_ROOT_OPS,
+};
 use crate::dict;
 use crate::py::json::{self, Fmt};
 use crate::py::obj::{Dict, List, V};
@@ -886,9 +889,9 @@ impl Store {
         for op in TEAM_OPS.iter().filter(|op| !op.starts_with("team_astate") && !TEAM_ROOT_OPS.contains(op)) {
             ops.push(*op);
         }
-        // push_set（后加的）不列：没开推送时 /v1/health 和以前逐字节一样；开着时 relay 里有 push
+        // 后加的（push_set、status_put、push_note）不列：/v1/health 和以前逐字节一样；开着推送时 relay 里有 push
         if relay.is_some() {
-            for op in RELAY_OPS.iter().filter(|op| **op != "push_set") {
+            for op in RELAY_OPS.iter().filter(|op| !RELAY_OPS_UNLISTED.contains(op)) {
                 ops.push(*op);
             }
         }

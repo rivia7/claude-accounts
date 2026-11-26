@@ -2734,13 +2734,13 @@ ok "cca edit 把 Team 给的账号改成别的节点：改回 Team 的配置定�
 # 认是不是 3.7.0：tests/team.rs 的 server_level。取值放在断言外面（断言里的命令替换套转义引号，bash 3.2 解析不对）
 glsync="$H/.cca/teams/$GLTID/sync.json"
 run cca team sync >/dev/null 2>&1; lv1=$("$TESTBIN" val -f "j=$glsync" 'j["level"]' 2>/dev/null)
-svjs=$(run cca team ls --json 2>/dev/null); sv1=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 1 and j["teams"][0]["server_update"] is None' 2>/dev/null)
-perl -0pi -e 's/("level":\s*)1/${1}0/' "$glsync"
+svjs=$(run cca team ls --json 2>/dev/null); sv1=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 2 and j["teams"][0]["server_update"] is None' 2>/dev/null)
+perl -0pi -e 's/("level":\s*)2/${1}0/' "$glsync"
 out=$(run cca team ls 2>&1)
-svjs=$(run cca team ls --json 2>/dev/null); sv2=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 0 and j["teams"][0]["server_update"]["level"] == 0 and j["teams"][0]["server_update"]["need"] == 1 and "iPhone" in j["teams"][0]["server_update"]["why"]' 2>/dev/null)
+svjs=$(run cca team ls --json 2>/dev/null); sv2=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 0 and j["teams"][0]["server_update"]["level"] == 0 and j["teams"][0]["server_update"]["need"] == 2 and "iPhone" in j["teams"][0]["server_update"]["why"]' 2>/dev/null)
 run cca team sync >/dev/null 2>&1
-svjs=$(run cca team ls --json 2>/dev/null); sv3=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 1 and j["teams"][0]["server_update"] is None' 2>/dev/null)
-ok "服务器要更新：同步时记下服务器的级别；记着的是旧服务器的（级别 0）时 cca team ls 说请管理员更新、--json 给 server_update（级别、要的、原因）；再同步问到这台服务器的就没了" '[ "$lv1" = 1 ] && [ "$sv1" = True ] && [ "$sv2" = True ] && printf "%s" "$out" | grep -q "「阁楼组」的服务器要更新：3.7.0 以前的服务器不认 iPhone 上的 cca App，手机配对不了。请建这个 Team 的管理员更新服务器" && [ "$sv3" = True ]'
+svjs=$(run cca team ls --json 2>/dev/null); sv3=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 2 and j["teams"][0]["server_update"] is None' 2>/dev/null)
+ok "服务器要更新：同步时记下服务器的级别；记着的是旧服务器的（级别 0）时 cca team ls 说请管理员更新、--json 给 server_update（级别、要的、原因）；再同步问到这台服务器的就没了" '[ "$lv1" = 2 ] && [ "$sv1" = True ] && [ "$sv2" = True ] && printf "%s" "$out" | grep -q "「阁楼组」的服务器要更新：3.7.5 以前的服务器给不了 iPhone 上的 cca App 账号的额度，也推不了额度用完、恢复的通知。请建这个 Team 的管理员更新服务器" && [ "$sv3" = True ]'
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-D"}}}' "$GLD/evil"; out=$(run cca team sync 2>&1); rc=$?
 gl_put '{"accounts": {"claude": {"Not-An-Email": "US-D", "alice@example.com": "US-D"}}}'; out2=$(run cca team sync 2>&1); rc2=$?
 gl_down; out3=$(run cca team sync 2>&1); rc3=$?; gl_up
@@ -3224,13 +3224,16 @@ wj=$(DPAIR_KEY="$T/phone" dpair web "$WCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair_web.jsonl"
 out2=$(run cca remote list --json 2>/dev/null </dev/null); printf '%s' "$out2" > "$T/guifx3/remote_list_web.json"
 ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是给 iPhone 上的 App 扫的链接（kind 是 qr，cca-remote://，带着服务器的地址、配对码和 Team 的名字）和配对码，都不用回答；不在 Team 的名单里的密钥输入配对码后配好，配对表里记着它是手机、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"].startswith(\"cca-remote://pair?v=1&u=https%3A%2F%2F127.0.0.1%3A\") and (\"&c=\" + e[\"fields\"][1][\"value\"].replace(\"-\", \"\") + \"&\") in e[\"fields\"][0][\"value\"] and e[\"fields\"][0][\"value\"].endswith(\"&t=%E9%98%81%E6%A5%BC%E7%BB%84\")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | "$TESTBIN" check -f d=- "p = [x for x in d[\"peers\"] if x[\"name\"] == \"phone\"]; len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\"" && grep -q "\"guests\"" "$GLD/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
+# 配好了手机就在后台放一轮这台 Mac 上账号的状态（cca _remote-status，docs/dev/remote.md「手机上的账号」）：它也在问服务器，等它放完再往下
+WPID="${wj%% *}"; for i in $(seq 1 100); do grep -q '"put"' "$H/.cca/remote/status.json" 2>/dev/null && break; sleep 0.1; done
+ok "配好了手机：在后台给它放一轮这台 Mac 上账号的状态（cca _remote-status），服务器收下了；这台 Mac 记着的（remote/status.json，600）只有摘要和时间，没有邮箱" '"$TESTBIN" check -f "j=$H/.cca/remote/status.json" "j[\"pids\"][\"$WPID\"][\"put\"] > 0" && [ "$(stat -f %Lp "$H/.cca/remote/status.json")" = 600 ] && ! grep -q "example.com" "$H/.cca/remote/status.json"'
 out=$(runev cca remote unpair "${wj%% *}" 2>&1); rc=$?
 ok "取消和手机的配对：服务器上那个访客跟着删掉（它一个配对都不剩了）" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-remote-${wj%% *}" ] && "$TESTBIN" check -f "j=$GLD/remote.json" "j.get(\"guests\") == {}"'
 out=$(runev cca remote unpair "${dj%% *}" 2>&1); rc=$?
 ok "界面 App 取消配对（按配对的编号）：result 事件 remote_updated，钥匙串里的密钥删掉" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"已经取消和「dan-air」的配对\" in e[\"message\"]" && [ ! -e "$T/keychain/cca-remote-${dj%% *}" ]'
 out=$(sess '{"remote.code":[{"v":"0000-0000-0000-0000"}]}' -- cca remote join 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_join.jsonl"
 ok "界面 App 里输入配对码：一个输入框；配对码不对是 fail 事件，说原因" '[ $rc -ne 0 ] && [ "$(asks)" = "remote.code" ] && evq "e[\"ev\"] == \"fail\" and \"没有这个配对码\" in e[\"message\"]"'
-rm -f "$H/.cca/remote/peers.json"; rmdir "$H/.cca/remote" 2>/dev/null
+rm -f "$H/.cca/remote/peers.json" "$H/.cca/remote"/status.*; rmdir "$H/.cca/remote" 2>/dev/null   # status.*：给手机放账号的状态的那一轮留下的
 tm_spec revoke "$GLROOT" "$GLPORT" "$DANS" >/dev/null   # 管理员把 dan-air 移出阁楼组
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state)
 ok "管理员把 dan-air 移出了阁楼组：服务器删掉它传的；同步以后 alice 只剩这台设备（0.026 美元），设备菜单里也没有它" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False)] and a[\"summary\"][\"days_usd\"] == 0.026)(acct(0, \"alice@example.com\")[\"cost\"]) and [x[\"name\"] for x in d[\"cost_total\"][\"devices\"]] == [\"$ME\"]" && ! grep -q "dan-air" "$GLD/cost-slots.json"'

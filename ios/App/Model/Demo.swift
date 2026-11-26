@@ -1,8 +1,8 @@
 import CcaRemoteKit
 import Foundation
 
-/// 演示模式（App 审核、没有电脑时自己看看）：本地模拟两台电脑和几个会话，终端里放一段预先写好的输出，敲的字只在这台手机上回显。
-/// 不联网、不碰钥匙串；退出演示时全丢掉
+/// 演示模式（App 审核、没有电脑时自己看看）：本地模拟两台电脑、它们上面的账号和几个会话，终端里放一段预先写好的输出，敲的字只在
+/// 这台手机上回显。不联网、不碰钥匙串；退出演示时全丢掉
 @MainActor
 final class DemoBackend: Backend {
     private var all: [Peer]
@@ -30,22 +30,26 @@ final class DemoBackend: Backend {
             case "a1":
                 sessions = [
                     RemoteSession(sid: String(repeating: "1", count: 32),
-                                  info: SessionInfo(machine: p.name, tool: "claude", name: "工作", cwd: "~/srv/api", since: t - 2 * 3600 - 640, viewOnly: false),
+                                  info: SessionInfo(machine: p.name, tool: "claude", name: "工作", cwd: "~/srv/api", since: t - 2 * 3600 - 640, viewOnly: false,
+                                                    aid: DemoAccounts.aid(1)),
                                   online: true, viewers: 0),
                     RemoteSession(sid: String(repeating: "2", count: 32),
-                                  info: SessionInfo(machine: p.name, tool: "codex", name: "个人", cwd: "~/notes", since: t - 25 * 60, viewOnly: true),
+                                  info: SessionInfo(machine: p.name, tool: "codex", name: "个人", cwd: "~/notes", since: t - 25 * 60, viewOnly: true,
+                                                    aid: DemoAccounts.aid(2)),
                                   online: true, viewers: 1),
                 ]
             case "b2":
                 sessions = [
                     RemoteSession(sid: String(repeating: "3", count: 32),
-                                  info: SessionInfo(machine: p.name, tool: "claude", name: "账号 2", cwd: "~/Projects/site", since: t - 86400 - 3600, viewOnly: false),
+                                  info: SessionInfo(machine: p.name, tool: "claude", name: "账号 2", cwd: "~/Projects/site", since: t - 86400 - 3600, viewOnly: false,
+                                                    aid: DemoAccounts.aid(4)),
                                   online: false, viewers: 0),
                 ]
             default:
                 sessions = []
             }
-            return PeerListing(peer: p, gone: false, sessions: sessions, failure: nil)
+            return PeerListing(peer: p, gone: false, sessions: sessions, failure: nil,
+                               status: DemoAccounts.status(p.pid, machine: p.name, now: Date().timeIntervalSince1970), statusServed: true)
         }
     }
 
@@ -76,8 +80,110 @@ final class DemoBackend: Backend {
 
     // 演示模式不登记推送、不碰钥匙串
     func servers() -> [ServerRef] { [] }
-    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?) async -> PushSetResult { .failed(RemoteFailure("demo")) }
+    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?, usage: Bool?) async -> PushSetResult {
+        .failed(RemoteFailure("demo"))
+    }
     func syncNoteKeys() {}
+}
+
+/// 演示的账号（「账号」页）：两台电脑上的几个账号，用量、重置时间照现在算。在用的、额度用完了的、建议先用的、登录失效的、
+/// Antigravity 的几组额度、Codex 还能重置额度，各有一个
+enum DemoAccounts {
+    /// 第 n 个账号的编号、会话说明里的账号摘要
+    static func id(_ n: Int) -> String { String(repeating: String(format: "%x", n), count: 16) }
+    static func aid(_ n: Int) -> String { String(repeating: String(format: "c%x", n), count: 16) }
+
+    static func status(_ pid: String, machine: String, now: Double) -> HostStatus? {
+        let accounts: [[String: Any]]
+        switch pid.prefix(2) {
+        case "a1": accounts = [work(now), personal(now), spare(now)]
+        case "b2": accounts = [second(now), gemini(now)]
+        default: return nil
+        }
+        // 和真的一样经 JSON 读一遍（数、true / false 的样子和服务器给的一样）
+        let doc: [String: Any] = ["v": 1, "machine": machine, "accounts": accounts, "at": now - 180]
+        guard let d = try? JSONSerialization.data(withJSONObject: doc),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return nil }
+        return HostStatus(json: j, age: 175, received: now)
+    }
+
+    private static func window(_ used: Double, in seconds: Double, _ now: Double) -> [String: Any] {
+        ["utilization": used, "resets_epoch": (now + seconds).rounded(), "reset": false]
+    }
+
+    private static func usage(_ now: Double, _ extra: [String: Any]) -> [String: Any] {
+        ["source": "live", "fetched_epoch": now - 200, "stale": false].merging(extra) { $1 }
+    }
+
+    /// 最近几周的用量：最后一周是还没过完的这一周（到 end 为止）
+    private static func weeks(_ used: [Double], current: Double, end: Double, partial: Set<Int> = [], resets: [Int: Int] = [:]) -> [String: Any] {
+        let week = 7 * 86400.0
+        var out: [[String: Any]] = []
+        for (i, p) in used.enumerated() {
+            let e = end - Double(used.count - i) * week
+            out.append(["start_epoch": e - week, "end_epoch": e, "used_percent": p, "resets": resets[i] ?? 0, "current": false,
+                        "partial": partial.contains(i)])
+        }
+        out.append(["start_epoch": end - week, "end_epoch": end, "used_percent": current, "resets": 0, "current": true, "partial": false])
+        let avg = used.isEmpty ? 0 : Int((used.reduce(0, +) / Double(used.count)).rounded())
+        return ["since_epoch": end - Double(used.count + 1) * week + 2 * 86400, "weeks": out,
+                "summary": ["weeks": used.count, "average_percent": avg, "maxed": used.filter { $0 >= 100 }.count,
+                            "under_half": used.filter { $0 < 50 }.count]]
+    }
+
+    /// 在用，Max 20x：5 小时 42%，本周 63%（Fable 另外计），记了 11 周
+    private static func work(_ now: Double) -> [String: Any] {
+        let weekly = now + 3 * 86400 + 4 * 3600
+        return ["id": id(1), "aid": aid(1), "tool": "claude", "name": "工作", "kind": "oauth", "login": "logged_in", "plan": "Max 20x",
+                "tier": "premium", "busy": true, "color": "#8E4EC6", "badge": "工",
+                "usage": usage(now, ["five_hour": window(42, in: 2 * 3600 + 13 * 60, now), "seven_day": window(63, in: weekly - now, now),
+                                     "model_scoped": [window(18, in: weekly - now, now).merging(["name": "Fable", "allowance_percent_of_weekly": 50,
+                                                                                                 "used_percent_of_weekly": 9]) { $1 }]]),
+                "weeks": weeks([58, 74, 112, 81, 66, 47, 95, 70, 39, 88, 77], current: 63, end: weekly.rounded(), partial: [8], resets: [2: 1])]
+    }
+
+    /// Codex，5 小时的额度用完了；还能重置额度 2 次
+    private static func personal(_ now: Double) -> [String: Any] {
+        let weekly = now + 4 * 86400 + 7 * 3600
+        return ["id": id(2), "aid": aid(2), "tool": "codex", "name": "个人", "kind": "oauth", "login": "logged_in", "plan": "Plus",
+                "tier": "standard", "busy": false, "color": "#30A46C", "badge": "个",
+                "usage": usage(now, ["five_hour": window(100, in: 65 * 60, now), "seven_day": window(71, in: weekly - now, now),
+                                     "reset_credits": ["availableCount": 2, "next_expires_epoch": (now + 9 * 86400).rounded()]]),
+                "weeks": weeks([45, 62, 80, 57, 91], current: 71, end: weekly.rounded())]
+    }
+
+    /// 空闲，本周快重置了、还剩不少：建议先用
+    private static func spare(_ now: Double) -> [String: Any] {
+        let weekly = now + 20 * 3600
+        return ["id": id(3), "aid": aid(3), "tool": "claude", "name": "备用", "kind": "oauth", "login": "logged_in", "plan": "Pro",
+                "tier": "standard", "busy": false, "color": "#0A84FF", "badge": "备",
+                "usage": usage(now, ["five_hour": window(8, in: 4 * 3600 + 20 * 60, now), "seven_day": window(41, in: weekly - now, now),
+                                     "use_first": ["left_percent": 59, "from_epoch": now - 3600, "until_epoch": weekly.rounded()]]),
+                "weeks": weeks([33, 52], current: 41, end: weekly.rounded())]
+    }
+
+    /// 登录失效了（用的是以前查到的）
+    private static func second(_ now: Double) -> [String: Any] {
+        let weekly = now + 2 * 86400
+        return ["id": id(4), "aid": aid(4), "tool": "claude", "name": "账号 2", "kind": "oauth", "login": "logged_in", "plan": "Max",
+                "tier": "advanced", "busy": false, "color": "#E5484D", "badge": "2",
+                "usage": ["source": "cache", "fetched_epoch": now - 5 * 3600, "stale": true, "error_code": "auth",
+                          "five_hour": window(12, in: -3600, now), "seven_day": window(35, in: weekly - now, now)],
+                "weeks": weeks([60, 44, 71], current: 35, end: weekly.rounded())]
+    }
+
+    /// Antigravity：两组额度
+    private static func gemini(_ now: Double) -> [String: Any] {
+        func bucket(_ used: Double, _ seconds: Double, _ slot: String) -> [String: Any] {
+            window(used, in: seconds, now).merging(["slot": slot]) { $1 }
+        }
+        return ["id": id(5), "tool": "agy", "name": "Gemini", "kind": "oauth", "login": "logged_in", "plan": "Google AI Pro",
+                "tier": "standard", "busy": false, "color": "#F76B15", "badge": "G",
+                "usage": usage(now, ["quota_groups": [
+                    ["name": "Gemini models", "buckets": [bucket(35, 3 * 3600, "five_hour"), bucket(52, 5 * 86400, "seven_day")]],
+                    ["name": "Claude and GPT models", "buckets": [bucket(86, 90 * 60, "five_hour"), bucket(64, 5 * 86400, "seven_day")]],
+                ]])]
+    }
 }
 
 /// 演示的终端：一段预先写好的输出（一点一点放出来），之后是一个提示符，敲的字回显，回车后答一句“这是演示”

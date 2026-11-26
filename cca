@@ -8381,7 +8381,7 @@ main() {
 	# 用 cxa、aga 调用：换成 cca codex …、cca agy …。参数里带着工具，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	case "${0##*/}" in "$CODEX_ALIAS") set -- codex "$@" ;; "$AGY_ALIAS") set -- agy "$@" ;; esac
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_team-sync|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_session-start|_remote-hook|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_team-sync|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_remote-status|_session-start|_remote-hook|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
 		install) shift; cmd_install "$@" ;;
@@ -8413,6 +8413,7 @@ main() {
 		_presence-agent) CCA_SELF="$SELF" exec "$HELPER" presence-agent ;;   # 后台：这台 Mac 的设备统计上报进程（见 py 的 presence 一节）
 		_key-sync) shift; CCA_SELF="$SELF" exec "$HELPER" key-sync "$@" ;;   # 后台：记下备查的 API key 经设备统计的服务器加密同步（见 py 的 keyshare 一节）
 		_cost-sync) shift; CCA_SELF="$SELF" CCA_VERSION="$VERSION" exec "$HELPER" cost-worker "$@" ;;   # 后台：统计折合金额、和别的设备同步（见 py 的折合金额一节）
+		_remote-status) CCA_RO=1 CCA_SELF="$SELF" CCA_VERSION="$VERSION" exec "$HELPER" remote-status ;;   # 后台：给配对的手机放这台机器上账号的状态、推额度用完的通知（辅助程序的 remote/status.rs；只读快照，CCA_RO=1）
 		_dock-tidy) shift; cmd_dock_tidy "$@" ;;   # 后台：cca 打开的 App 实例退出后整理程序坞（见 py 的程序坞一节；终端交接的脚本也调，PROTOCOL 6）
 		_dock-wait) shift; cmd_dock_wait "$@" ;;   # 后台小 App 里：等 cca 打开的实例退出，再整理程序坞
 		gui) shift; cmd_gui "$@" ;;

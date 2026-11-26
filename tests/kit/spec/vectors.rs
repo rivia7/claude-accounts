@@ -265,6 +265,27 @@ fn push_notes() {
     }
 }
 
+#[test]
+fn account_status() {
+    // 账号的状态（3.7.5 起）：密钥是照 server/README.md 用 openssl 算的（和 cli/src/cmd/remote/crypto.rs 的
+    // matches_the_reference_vectors 是同一组数）；辅助程序封的这里解不解得开在 tests/web_relay.rs 的 app_guest_sees_accounts 里核对，
+    // CcaRemoteKit 解这里封的在 tests/ios_kit.rs 的 against_the_spec
+    let p = hx(&Value::Str("7adfdd29f6b23870c135b81e6494fb6c8d24e0af30f50632ca858c5129c3c58a".into()));
+    let pid = "36ac6aaa256ba92dfa89065e98f1c4f3";
+    let k = status_keys(&p);
+    assert_eq!(hex(&k.0), "6a55edc52165b0754462b3e85e129d733c16c26d366132b3576a94c2f6a8e24a");
+    assert_eq!(hex(&k.1), "8ec54fb9ca191f90fb8fec987036170e2aa6f75ca8c5c74bea47ec85c8fc6906");
+    let doc = obj! { "v" => 1, "machine" => "书房", "accounts" => Value::List(Vec::new()), "at" => 1794000000 };
+    assert_eq!(status_plain(&doc).len(), 256);
+    let blob = status_seal(&p, pid, &doc);
+    assert_eq!(status_open(&p, pid, &blob).as_ref(), Some(&doc));
+    assert_eq!(status_open(&p, &"f".repeat(32), &blob), None, "别的配对的");
+    assert_eq!(note_open(&p, pid, &blob), None, "通知的密钥解不开它");
+    assert_eq!(status_open(&p, pid, &note_seal(&p, pid, &doc)), None, "它的密钥也解不开通知");
+    assert_ne!(status_keys(&p), note_keys(&p));
+    assert_ne!(status_keys(&p), dir_keys(&p));
+}
+
 /// 对照数据里长的那几条记录的内容（Python 那边是同一个算法）
 fn fill(n: usize) -> Vec<u8> {
     (0..n).map(|i| (i % 251) as u8).collect()

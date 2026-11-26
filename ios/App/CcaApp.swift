@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// iOS 上的 cca：接入电脑上开着的远程会话（docs/dev/ios.md）。
-/// 启动参数（截图、界面测试用，ios/test.sh）：`-demo` 进演示模式；`-screen terminal|pair|settings` 直接打开那一页（演示模式里）
+/// 启动参数（截图、界面测试用，ios/test.sh）：`-demo` 进演示模式；`-screen list|accounts|account|terminal|pair|settings` 直接打开那一页
+/// （演示模式里）
 @main
 struct CcaApp: App {
     /// 推送令牌经它来（Pusher）
@@ -48,7 +49,14 @@ struct CcaApp: App {
         let args = ProcessInfo.processInfo.arguments
         guard model.isDemo, let i = args.firstIndex(of: "-screen"), i + 1 < args.count else { return }
         await model.fetch()
-        switch args[i + 1] {
+        let screen = args[i + 1]
+        model.tab = screen.hasPrefix("account") ? .accounts : .sessions
+        switch screen {
+        case "account":
+            // -account 第几个（从 0 数，各台电脑的账号接着数）：默认第一个
+            let all = model.peers.flatMap { p in (model.status(p)?.accounts ?? []).map { AccountRef(pid: p.pid, id: $0.id) } }
+            let n = args.firstIndex(of: "-account").flatMap { $0 + 1 < args.count ? Int(args[$0 + 1]) : nil } ?? 0
+            if all.indices.contains(n) { model.accountPath = [all[n]] }
         case "terminal":
             if let p = model.peers.first, let s = model.listing(p)?.sessions.first { model.attach(s, on: p, readOnly: false) }
         case "pair": model.startPairing()

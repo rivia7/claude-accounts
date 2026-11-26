@@ -174,6 +174,9 @@ fn conclude(srv: &Server, k: &PairKeys, shown: bool, web: bool, mine: &[u8], the
             for pid in old {
                 let _ = peers::del_secret(&pid); // 以前那一把：表里已经没有它了，删不掉也只是多留一条没人用的
             }
+            if peer.web {
+                super::status::status_kick(); // 手机马上看得到这台机器上的账号（remote/status.rs）
+            }
             Ok(peer)
         }
         Err(e) => {
@@ -483,7 +486,12 @@ pub fn cmd_remote_allow(args: &[String]) -> R<()> {
     let p = all.iter_mut().find(|p| p.pid == pid).expect("刚找到的");
     p.incoming = incoming;
     crate::out!("{}", p.name);
-    peers::save(&all)
+    let web = p.web;
+    peers::save(&all)?;
+    if web {
+        super::status::status_kick(); // 手机上的账号页照新的来：不让接入了就盖掉服务器上的那一份（remote/status.rs）
+    }
+    Ok(())
 }
 
 /// 从这台机器上删掉一个配对（密钥也删），再告诉服务器。服务器没告诉成也算取消了：这边没有密钥，对方已经接不进来

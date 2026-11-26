@@ -535,7 +535,8 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 
 ### 服务器要更新（3.7.1 起）
 
-新版 cca 要靠服务器新加的东西时（3.7.0：认 iPhone 上的 cca App），旧服务器要重新部署一次。服务端有一个级别（`server::LEVEL`，
+新版 cca 要靠服务器新加的东西时（1 是 3.7.0：认 iPhone 上的 cca App；2 是 3.7.5：手机上看账号的额度、额度用完和恢复的通知，见
+docs/dev/remote.md「手机上的账号」），旧服务器要重新部署一次。服务端有一个级别（`server::LEVEL`，
 `GET /v1/version` 回 `{"v":1,"level":N}`，不用签名，3.7.1 起有；没有这个地址、回 404 的看 `GET /v1/health`：中转那一项里有 `guests`
 的是 3.7.0，算 1，没有的算 0——手动关掉了手机（`--no-guests`）的 3.7.0 也算 0，更新一次就好了），cca 这一版要的是 `team::SERVER_NEED`、少了什么是
 `SERVER_WHY`（服务端加了 cca 要靠的东西时两边一起加一、改这句话）。同步配置成功时（`sync_locked`）顺便问一次，记进 `sync.json` 的 `level`

@@ -69,6 +69,174 @@ enum Texts {
         return [day + "配对", p.team].compactMap { $0 }.joined(separator: " · ")
     }
 
+    // MARK: 账号（说法照 Mac App 的总览、账号页：macos/Sources/CcaKit/Model/Texts.swift，照实说、不用比喻）
+
+    static func percent(_ p: Double) -> String {
+        "\(Int(p.rounded()))%"
+    }
+
+    /// 重置时间：一天以内写还有多久（2 小时 13 分后重置），再远写星期几、几点（周二 09:00 重置）
+    static func resetText(epoch: Double, now: Double) -> String {
+        if epoch <= now { return "已重置" }
+        if epoch - now < 86400 { return span(epoch - now) + "后重置" }
+        return UsageText.weekdayTime(epoch) + " 重置"
+    }
+
+    /// “11 月 3 日”（不是今年的带年份：“2025 年 10 月 3 日”）
+    static func dayText(_ epoch: Double, now: Double) -> String {
+        let cal = Calendar.current
+        let c = cal.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: epoch))
+        let year = cal.component(.year, from: Date(timeIntervalSince1970: now))
+        let day = "\(c.month ?? 0) 月 \(c.day ?? 0) 日"
+        return c.year == year ? day : "\(c.year ?? 0) 年 " + day
+    }
+
+    /// 什么时候过期（重置额度的机会）：“11 月 20 日过期”，一天以内写还有多久（“5 小时 3 分后过期”）
+    static func expiryText(epoch: Double, now: Double) -> String {
+        if epoch <= now { return "已过期" }
+        if epoch - now < 86400 { return span(epoch - now) + "后过期" }
+        return dayText(epoch, now: now) + "过期"
+    }
+
+    /// 还能重置几次额度（Codex）：「还能重置额度 2 次 · 最早一次 11 月 24 日过期」（只有一次时不说最早）
+    static func resetCredits(_ rc: ResetCredits, now: Double) -> String {
+        let n = rc.availableCount ?? 0
+        var s = "还能重置额度 \(n) 次"
+        if n > 0, let e = rc.nextExpiresEpoch { s += " · " + (n > 1 ? "最早一次 " : "") + expiryText(epoch: e, now: now) }
+        return s
+    }
+
+    /// 分模型的每周额度下面那句话（Mac App 的 Texts.modelShare）：「Fable 最多占本周额度的 50%，已占 9%」；它那份用完了：
+    /// 「Fable 的份额用完了，别的模型还能用本周剩下的 49%」；cca 没认出份额时只说它的额度单独计
+    static func modelShare(_ m: ModelWindow, weekly: UsageWindow?) -> String {
+        let name = nonEmpty(m.name) ?? "这个模型"
+        guard let allowance = m.allowancePercentOfWeekly else { return "\(name) 的额度单独计" }
+        if !m.window.reset, (m.window.utilization ?? 0) >= 100 {
+            let left = weekly.flatMap { w in w.reset ? nil : w.utilization.map { 100 - $0.rounded() } }
+            return "\(name) 的份额用完了" + (left.flatMap { $0 > 0 ? "，别的模型还能用本周剩下的 \(percent($0))" : nil } ?? "")
+        }
+        return "\(name) 最多占本周额度的 \(percent(allowance))" + (m.usedPercentOfWeekly.map { "，已占 \(percent($0))" } ?? "")
+    }
+
+    /// 建议先用（cca 给的 use_first）：「本周额度还剩 59%，明天 19:55 重置，建议先用这个账号」
+    static func useFirst(_ f: UseFirst, now: Double) -> String {
+        let when = UsageText.backTime(epoch: f.untilEpoch, now: now, today: "今天 ")
+        return "本周额度还剩 \(f.leftPercent)%，\(when) 重置，建议先用这个账号"
+    }
+
+    /// 套餐档位的叫法（读屏用；界面上靠徽记的样子区分）
+    static func planTier(_ t: String) -> String? {
+        switch t {
+        case "entry": return "入门"
+        case "standard": return "标准"
+        case "advanced": return "进阶"
+        case "premium": return "尊贵"
+        default: return nil
+        }
+    }
+
+    /// 读屏念的套餐：“Ultra，尊贵套餐”
+    static func planName(_ plan: String, tier: String) -> String {
+        planTier(tier).map { "\(plan)，\($0)套餐" } ?? plan
+    }
+
+    /// 查用量没成的原因码（PROTOCOL 3.1 的 error_code）→ 一句话（和 Mac App 的 Texts.usageError 一样）
+    static func usageError(_ code: String) -> String {
+        switch code {
+        case "login": return "没登录"
+        case "mismatch": return "登录的不是这个账号"
+        case "route": return "没有可用的出口"
+        case "port": return "端口连不上"
+        case "region": return "出口在不可用地区"
+        case "trace": return "查不到出口"
+        case "unsupported": return "这个版本不支持查用量"
+        case "timeout": return "查询超时"
+        case "nolimits": return "没有拿到用量数据"
+        case "auth": return "登录已失效"
+        default: return "查询失败"
+        }
+    }
+
+    /// 用量是什么时候的（账号页「用量」右边）：10 分钟内查到的写「3 分钟前查询」，否则「缓存，2 小时前更新」，过时了的「数据已经过时，…」
+    static func freshness(_ u: AccountUsage, now: Double) -> (text: String, fresh: Bool) {
+        let age = u.fetchedEpoch.map { now - $0 }
+        if u.source == "live", let age, age < 600, !u.stale { return (agoPhrase(age) + "查询", true) }
+        let when = age.map { "，" + agoPhrase($0) + "更新" } ?? ""
+        return ((u.stale ? "数据已经过时" : "缓存") + when, false)
+    }
+
+    /// 一个账号的那句话（Mac App 的 Texts.mood）：在用时有问题，问题跟在后面（「在用 · 额度用完了，16:00 恢复」）
+    static func mood(_ m: AccountMood, now: Double, brief: Bool = true) -> String {
+        let problem = m.trouble.map { trouble($0, now: now, brief: brief) }
+        if m.busy { return "在用" + (problem.map { " · " + $0 } ?? "") }
+        return problem ?? "空闲"
+    }
+
+    static func trouble(_ t: AccountTrouble, now: Double, brief: Bool = true) -> String {
+        switch t {
+        case .loggedOut: return "还没登录"
+        case .wrongAccount: return "登录的不是这个账号"
+        case .expired: return brief ? "登录已失效" : "登录已失效，要在那台电脑上重新登录"
+        case .usedUp(let until): return "额度用完了" + (until.map { "，" + UsageText.backAt(epoch: $0, now: now) } ?? "")
+        }
+    }
+
+    /// 「账号」页顶上那一行（Mac App 的 officeSummary）：「8 个账号 · 2 个在用 · 1 个额度用完 · 1 个没登录」（0 的不写）
+    static func census(_ c: AccountCensus) -> String {
+        if c.total == 0 { return "还没有账号" }
+        let rest = [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "没登录"), (c.wrongPerson, "登错号"),
+                    (c.expired, "登录失效")]
+        return (["\(c.total) 个账号"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 个\($0.1)" }).joined(separator: " · ")
+    }
+
+    /// 在那台电脑上用这个账号开一个会话的命令
+    static func launchCommand(_ a: AccountStatus) -> String {
+        let prefix = a.tool == "codex" ? "cca codex" : a.tool == "agy" ? "cca agy" : "cca"
+        return "\(prefix) @\(nonEmpty(a.name) ?? "账号")"
+    }
+
+    // MARK: 每周用量（cca 给的 usage_weeks，说法和 Mac App 的一样）
+
+    /// 「记下的 8 周平均用到 63% · 2 周用完 · 3 周没用到一半」；一周都还没过完时是 nil
+    static func weeksSummary(_ s: UsageWeeksSummary) -> String? {
+        guard s.weeks > 0, let avg = s.averagePercent else { return nil }
+        let head = s.weeks == 1 ? "记下的 1 周用到 \(avg)%" : "记下的 \(s.weeks) 周平均用到 \(avg)%"
+        let notes = (s.maxed > 0 ? ["\(s.maxed) 周用完"] : []) + (s.underHalf > 0 ? ["\(s.underHalf) 周没用到一半"] : [])
+        return ([head] + notes).joined(separator: " · ")
+    }
+
+    /// 一周的细节（点了那根柱子、读屏）：「11 月 6 日–13 日：用到 87%，中间重置过 1 次」；还没过完的这一周：「本周到现在用了 20%，周四 10:00 重置」
+    static func weekDetail(_ w: UsageWeek, now: Double) -> String {
+        let resets = w.resets > 0 ? "中间重置过 \(w.resets) 次" : nil
+        if w.current {
+            return "本周到现在用了 \(percent(w.usedPercent))" + (resets.map { "（\($0)）" } ?? "") + "，" + resetText(epoch: w.endEpoch, now: now)
+        }
+        return weekRange(w, now: now) + "：用到 \(percent(w.usedPercent))" + (resets.map { "，" + $0 } ?? "")
+            + (w.partial ? "；结束前一天没查到，实际可能更多" : "")
+    }
+
+    /// 「11 月 6 日–13 日」、「10 月 30 日–11 月 6 日」
+    static func weekRange(_ w: UsageWeek, now: Double) -> String {
+        let cal = Calendar.current
+        let a = cal.dateComponents([.year, .month], from: Date(timeIntervalSince1970: w.startEpoch))
+        let b = cal.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: w.endEpoch))
+        let start = dayText(w.startEpoch, now: now)
+        if a.year == b.year && a.month == b.month { return start + "–\(b.day ?? 0) 日" }
+        return start + "–" + dayText(w.endEpoch, now: now)
+    }
+
+    /// 柱子下面的日期：这一周从哪天开始（「11/6」）；还没过完的写「本周」
+    static func weekLabel(_ w: UsageWeek) -> String {
+        if w.current { return "本周" }
+        let c = Calendar.current.dateComponents([.month, .day], from: Date(timeIntervalSince1970: w.startEpoch))
+        return "\(c.month ?? 0)/\(c.day ?? 0)"
+    }
+
+    /// 「从 11 月 11 日开始记」
+    static func weeksSince(_ epoch: Double, now: Double) -> String {
+        "从 " + dayText(epoch, now: now) + "开始记"
+    }
+
     // MARK: 出了什么事
 
     /// 配对没成：RemoteFailure 的 code → 一句话

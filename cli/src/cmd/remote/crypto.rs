@@ -6,6 +6,7 @@
 //! - 配对出来的密钥 P：两台机器各存一份（钥匙串 / 密钥文件）。服务器只知道它的编号（pid）
 //! - 会话的说明（目录）：用 P 派生的密钥封起来，服务器存着转交、看不到是哪个账号、哪个文件夹
 //! - 推送的通知：用 P 派生的另一对密钥封给手机，服务器、推送服务只是转交
+//! - 账号的状态（手机的「账号」页，status.rs）：用 P 派生的第三对密钥封给手机，服务器存着转交
 //! - 通道：握手时两头各出 32 个字节的随机数、用 P 互相证明，派生这一次连接的四把密钥（两个方向各一对），之后是带序号、
 //!   带认证的记录。没有前向保密：P 日后泄露的话，之前被录下的流量可以解开
 //!
@@ -142,6 +143,27 @@ pub fn note_seal(p: &[u8], pid: &str, doc: &Dict) -> R<Dict> {
 #[cfg(test)]
 pub fn note_open(p: &[u8], pid: &str, blob: &V) -> Option<Dict> {
     parse(&blob_open(&note_keys(p), &blob_ad(&["cca-remote-note", pid]).ok()?, blob)?)
+}
+
+fn status_keys(p: &[u8]) -> Keys {
+    let k = hmac_sha256(p, b"cca-remote/v1/status");
+    (hmac_sha256(&k, b"enc"), hmac_sha256(&k, b"mac"))
+}
+
+/// 这台机器上账号的状态（手机的「账号」页，status.rs 的 `status_doc`）：封给这个配对的手机，服务器存着转交、看不到里面
+pub fn status_seal(p: &[u8], pid: &str, doc: &Dict) -> R<Dict> {
+    Ok(blob_seal(&status_keys(p), &blob_ad(&["cca-remote-status", pid])?, &padded(doc)))
+}
+
+#[cfg(test)]
+pub fn status_open(p: &[u8], pid: &str, blob: &V) -> Option<Dict> {
+    parse(&blob_open(&status_keys(p), &blob_ad(&["cca-remote-status", pid]).ok()?, blob)?)
+}
+
+/// 额度的通知、到点再推的那一条在服务器上的编号（16 个十六进制字符）：用 P 算，同一件事（哪个账号、哪个窗口、哪一轮）每次算出来
+/// 都一样（服务器、推送服务照它去重），别的配对、服务器看不出是哪个账号
+pub fn usage_tag(p: &[u8], what: &str) -> String {
+    to_hex(&hmac_sha256(p, &[b"cca-remote/v1/usage\0", what.as_bytes()].concat()))[..16].to_string()
 }
 
 pub const VER: u8 = 1;
@@ -371,6 +393,10 @@ mod tests {
         let nk = note_keys(&p);
         assert_eq!(to_hex(&nk.0), "2a225ed40e8331a7423658ac6fe93f3ebe55691515cc06dc4c1e4ea56922fb14");
         assert_eq!(to_hex(&nk.1), "81ba095975dcf0ee824968b1c4addae108122a22482fa6e2440e4a0c9dae925d");
+        // 账号的状态（3.7.5 起）：openssl 照文档算的
+        let sk = status_keys(&p);
+        assert_eq!(to_hex(&sk.0), "6a55edc52165b0754462b3e85e129d733c16c26d366132b3576a94c2f6a8e24a");
+        assert_eq!(to_hex(&sk.1), "8ec54fb9ca191f90fb8fec987036170e2aa6f75ca8c5c74bea47ec85c8fc6906");
 
         let mut v = Channel::new(Role::Viewer, &p, &pid, SID, FPA, FPB).unwrap();
         let mut h = Channel::new(Role::Host, &p, &pid, SID, FPA, FPB).unwrap();
@@ -549,7 +575,17 @@ mod tests {
         assert_eq!(note_open(&p, &pid, &V::Dict(sealed.clone())).unwrap().str("body").unwrap().to_string(), "改好了");
         assert!(note_open(&p, "ffffffffffffffffffffffffffffffff", &V::Dict(sealed.clone())).is_none(), "别的配对的");
         assert!(note_open(&p, &pid, &V::Dict(blob)).is_none(), "会话的说明不是通知");
-        assert!(dir_open(&p, &pid, SID, &V::Dict(sealed)).is_none());
+        assert!(dir_open(&p, &pid, SID, &V::Dict(sealed.clone())).is_none());
+        // 账号的状态：只认这个配对的；和通知、会话的说明的密钥都不一样
+        let st = crate::dict! { "v" => 1, "machine" => "服务器", "accounts" => crate::py::obj::List::new() };
+        let sealed_st = status_seal(&p, &pid, &st).unwrap();
+        assert_eq!(status_open(&p, &pid, &V::Dict(sealed_st.clone())).unwrap().str("machine").unwrap().to_string(), "服务器");
+        assert!(status_open(&p, "ffffffffffffffffffffffffffffffff", &V::Dict(sealed_st.clone())).is_none(), "别的配对的");
+        assert!(status_open(&p, &pid, &V::Dict(sealed)).is_none(), "通知不是账号的状态");
+        assert!(note_open(&p, &pid, &V::Dict(sealed_st)).is_none());
+        assert_eq!(usage_tag(&p, "x"), usage_tag(&p, "x"));
+        assert_ne!(usage_tag(&p, "x"), usage_tag(&[0; 32], "x"));
+        assert_eq!(usage_tag(&p, "x").len(), 16);
     }
 
     impl Channel {

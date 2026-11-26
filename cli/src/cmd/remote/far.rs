@@ -52,7 +52,7 @@ pub fn clean(s: &str, max: usize) -> String {
 }
 
 /// 账号的短名字：别名；没起别名的账号名字就是邮箱，只给 @ 前面那一截
-fn short_name(name: &str) -> &str {
+pub(super) fn short_name(name: &str) -> &str {
     match name.split_once('@') {
         Some((head, _)) if !head.is_empty() => head,
         _ => name,
@@ -76,7 +76,7 @@ pub fn team_salt(hub: HubKind) -> Option<String> {
 }
 
 /// 账号摘要（和设备统计的一样：同一个 Team 里的设备各自算得出来，不知道邮箱的算不出邮箱）；没有邮箱的账号没有
-fn aid_of(salt: &str, tool: &str, key: &str) -> Option<String> {
+pub(super) fn aid_of(salt: &str, tool: &str, key: &str) -> Option<String> {
     let email = parse_key(key).1;
     if email.is_empty() {
         return None;

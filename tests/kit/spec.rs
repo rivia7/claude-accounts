@@ -44,6 +44,8 @@ pub const PAIR: &str = "cca-remote-pair";
 pub const DIR: &str = "cca-remote-dir";
 /// 推送的通知的标签
 pub const NOTE: &str = "cca-remote-note";
+/// 账号的状态的标签（手机的「账号」页，3.7.5 起）
+pub const STATUS: &str = "cca-remote-status";
 
 /// 两把密钥：（加密, 认证）
 pub type Keys = ([u8; 32], [u8; 32]);
@@ -327,6 +329,27 @@ pub fn note_seal(p: &[u8], pid: &str, doc: &Value) -> Value {
 /// 解开推送的通知；认证不过是 None
 pub fn note_open(p: &[u8], pid: &str, blob: &Value) -> Option<Value> {
     unseal(NOTE, &note_keys(p), &[pid], blob).map(|pt| loads(&pt))
+}
+
+/// 封账号的状态用的两把密钥（宿主放到服务器上、手机查会话列表时取走的那一份）
+pub fn status_keys(p: &[u8]) -> Keys {
+    let k = h(p, b"cca-remote/v1/status");
+    (h(&k, b"enc"), h(&k, b"mac"))
+}
+
+/// 账号的状态的明文：紧凑的 JSON（非 ASCII 原样写），空格补齐到 256 字节的整数倍
+pub fn status_plain(doc: &Value) -> Vec<u8> {
+    pad(doc.compact().into_bytes(), 256, b' ')
+}
+
+/// 封一份账号的状态：认证带着配对的编号
+pub fn status_seal(p: &[u8], pid: &str, doc: &Value) -> Value {
+    seal(STATUS, &status_keys(p), &[pid], &status_plain(doc))
+}
+
+/// 解开账号的状态；认证不过是 None
+pub fn status_open(p: &[u8], pid: &str, blob: &Value) -> Option<Value> {
+    unseal(STATUS, &status_keys(p), &[pid], blob).map(|pt| loads(&pt))
 }
 
 /// 两头之间的加密通道。握手：接入方发 hello()，宿主回 reply()，接入方再发 confirm()，宿主 accept()；之后两个方向各用各的密钥、

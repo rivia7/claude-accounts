@@ -66,6 +66,7 @@ pub const MODULE: Module = Module {
         case!(in_the_app),
         case!(link_in_the_terminal),
         case!(app_guest_gets_pushes),
+        case!(app_guest_sees_accounts),
         case!(no_web),
         case!(the_real_page),
         case!(the_team_name),
@@ -1705,6 +1706,105 @@ fn app_guest_gets_pushes(t: &mut Ctx) {
     assert_eq!((gw.production.complaints(), gw.sandbox.complaints()), (Vec::<String>::new(), Vec::<String>::new()));
     let said = fx.srv.proc.said();
     assert!(!said.contains(&token[..16]) && !said.contains(&gone[..16]), "服务器的日志里有令牌：{said}");
+}
+
+/// 手机经配对 pid 取到的账号的状态（relay_list 带着 have；have 是 null 时带一个空的）：这个配对的那一项，没有是 null
+fn status_of(g: &Guest, web: &Web, pid: &str, have: Option<&str>) -> Value {
+    let have = match have {
+        Some(n) => obj! { pid => n },
+        None => obj! {},
+    };
+    g.good(web, "relay_list", &obj! { "pids" => list![pid], "have" => have })["status"].get(pid).cloned().unwrap_or(Value::Null)
+}
+
+/// 手机上的「账号」页（docs/dev/remote.md「手机上的账号」）：box 上的辅助程序（remote-status，bash 的 _remote-status）把这台机器上的
+/// 账号的状态按配对封好放到服务器上，手机查会话列表时带着 have 取走、拿配对的密钥解得开：名字是别名、不带邮箱，账号摘要和会话的说明
+/// 里的一样；没变的不再给（same），也不再放。额度用完了马上推一条（只有手机解得开），恢复的那一条服务器到了重置的时候推；再放一轮
+/// 不会再推。不让手机接入了：盖掉那一份
+fn app_guest_sees_accounts(t: &mut Ctx) {
+    let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
+    let push = vec!["--push".to_string(), gw.url(), "--push-pin".to_string(), gw.pin.clone()];
+    let fx = Base::with(t, true, move |_| push);
+    let a = fx.device("box");
+    fx.machines(&[&a]);
+    let app = Web::app(&fx);
+    // alice 的 5 小时额度用完了，十来秒以后重置（等得到恢复的那一条）
+    let resets = fleet::now().floor() + 12.0;
+    relay::signed_in(&a, 100, resets);
+    let mut p = Popen::spawn(&mut relay::helper_cmd(&a, &["remote-pair-show", "--web"]));
+    let (line, _link) = (p.out_line(), p.out_line());
+    let code = line.split_whitespace().nth(1).unwrap_or_else(|| panic!("头一行该是 code 配对码：{line:?}")).to_string();
+    let mut g = Guest::new(&fx.d, "iPhone");
+    let (key, pid) = g.join(&app, &spec::code_bytes(&code).expect("配对码的样子是对的"), Some(a.fp()));
+    assert_eq!(p.communicate(secs(60)), (0, "peer iPhone\n".to_string(), String::new()));
+    wait_for("配好了手机就在后台放一轮", WAIT, || a.kicks().into_iter().find(|k| k.contains("_remote-status")));
+    let token = Gateway::token("a1");
+    let reg = obj! { "token" => &token, "env" => "sandbox", "usage" => true };
+    assert_eq!(g.good(&app, "push_set", &reg), obj! { "v" => 1, "ok" => true, "usage" => true });
+    assert!(status_of(&g, &app, &pid, None).is_null(), "还没放过");
+    // 一个会话：手机照账号摘要把它放到账号下面
+    let mut h = relay::session(&a, Device::KEY, "alice", &[]);
+    let rows = wait_for("手机看到这个会话", WAIT, || Some(listed(&g, &app, &pid)).filter(truthy));
+    let dir = spec::dir_open(&key, &pid, only(&rows)["sid"].str(), &only(&rows)["blob"]).expect("会话的说明认证得过");
+    relay::publish(&a);
+    let st = status_of(&g, &app, &pid, None);
+    let doc = spec::status_open(&key, &pid, &st["blob"]).expect("手机拿配对的密钥解得开");
+    assert!(st["age"].f64() < 30.0, "{st}");
+    assert_eq!(doc["v"].i64(), 1);
+    assert_eq!(doc["machine"], dir["machine"], "这台机器的名字和会话的说明里的一样");
+    let acct = only(&doc["accounts"]);
+    assert_eq!(cols(acct, &["tool", "name", "kind", "login"]), list!["claude", "alice", "oauth", "logged_in"]);
+    assert_eq!(acct["aid"].str(), spec::aid_of(&fx.team.salt, "claude", "alice@example.com"), "{acct}");
+    assert_eq!(acct["aid"], dir["aid"], "账号摘要和会话的说明里的一样");
+    assert_eq!(acct["id"].str().len(), 16);
+    let u = &acct["usage"];
+    assert_eq!((u["five_hour"]["utilization"].f64(), u["five_hour"]["resets_epoch"].f64()), (100.0, resets));
+    assert_eq!(u["seven_day"]["utilization"].f64(), 41.0);
+    assert!(!doc.compact().contains("example.com"), "不给邮箱：{doc}");
+    // 没变：同一份（手机带着它有的那一份的 nonce，服务器只说一样）；再放一轮也不会换（没变的半小时才再放）
+    let same = status_of(&g, &app, &pid, Some(st["blob"]["n"].str()));
+    assert_eq!(same["same"], Value::Bool(true), "{same}");
+    assert!(same.get("blob").is_none());
+    // 用完了：马上推了一条，只有手机解得开
+    let seen = gw.sandbox.wait_seen(1, WAIT).remove(0);
+    assert_eq!(seen.token(), token);
+    let note = spec::note_open(&key, &pid, &seen.json()["n"]).expect("手机拿配对的密钥解得开");
+    assert_eq!(
+        cols(&note, &["kind", "event", "window", "account", "name", "tool"]),
+        list!["usage", "used_up", "five_hour", acct["id"].str(), "alice", "claude"]
+    );
+    assert_eq!(note["resets_epoch"].f64(), resets);
+    assert_eq!(note["aid"], dir["aid"]);
+    assert_eq!(note["id"].str(), seen.header("apns-collapse-id"));
+    relay::publish(&a);
+    assert_eq!(status_of(&g, &app, &pid, Some(st["blob"]["n"].str()))["same"], Value::Bool(true), "没变的不再放");
+    // 恢复的那一条：服务器到了重置的时候推（这台机器这期间什么都不用做）
+    let back = gw.sandbox.wait_seen(2, WAIT).remove(1);
+    assert!(fleet::now() >= resets, "到了重置的时候才推");
+    let note2 = spec::note_open(&key, &pid, &back.json()["n"]).expect("手机拿配对的密钥解得开");
+    assert_eq!(cols(&note2, &["kind", "event", "window", "account"]), list!["usage", "back", "five_hour", acct["id"].str()]);
+    assert_eq!(note2["id"].str(), back.header("apns-collapse-id"));
+    // 过了重置时间：不再算用完（这一轮推过的不再推）
+    relay::publish(&a);
+    std::thread::sleep(secs(2));
+    assert_eq!(gw.sandbox.seen().len(), 2, "同一轮的不再推");
+    // 服务器、推送服务那里都看不到里面的字；这台机器记着的也没有邮箱
+    let said = fx.srv.proc.said();
+    for word in ["alice", "example.com"] {
+        assert!(!String::from_utf8_lossy(&seen.body).contains(word), "推送服务看得到通知里的字：{word}");
+        assert!(!said.contains(word), "服务器的日志里有：{word}");
+    }
+    assert!(!remote(&fx.d).compact().contains(&st["blob"]["c"].str()[..32]), "账号的状态只在服务器的内存里");
+    let kept = fsx::read_text(a.cca.join("remote/status.json"));
+    assert!(!kept.contains("example.com") && !kept.contains("alice"), "{kept}");
+    // 不让手机接入了：盖掉服务器上的那一份
+    a.ok(&["remote-allow", "iPhone", "none"]);
+    relay::publish(&a);
+    let off = spec::status_open(&key, &pid, &status_of(&g, &app, &pid, None)["blob"]).expect("解得开");
+    assert_eq!((&off["off"], off["accounts"].list().len()), (&Value::Bool(true), 0), "{off}");
+    h.send("exit 0\n");
+    assert_eq!(h.wait(), 0);
+    assert_eq!((gw.production.complaints(), gw.sandbox.complaints()), (Vec::<String>::new(), Vec::<String>::new()));
 }
 
 /// 服务器不认手机（--no-guests，或者是旧版）：cca remote pair --web 说清楚，不留下一个手机输了也没用的配对码

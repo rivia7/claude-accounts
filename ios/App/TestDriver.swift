@@ -11,7 +11,8 @@ import Foundation
 /// - `-test-sizes`：终端照多大排了 → `shown 列 行`；报给会话的这台手机的窗口大小 → `natural 列 行`
 /// - `-test-push-only`：「关掉的会话也推送」关掉（只推 App 里开着的会话）
 /// - `-test-push-token <十六进制>`：不向 Apple 要推送令牌，用这个；当作允许发通知、不弹那一问。配好以后在服务器上登记 →
-///   `push 服务器 ok|原因`（只推开着的会话时 ok 后面是 only：服务器认了，all：旧的服务器不认），通知扩展读得到的通知密钥 → `keys 几把 配对编号…`；最后等 App 的临时目录里出现 pushed.json（测试放进来的
+///   `push 服务器 ok|原因`（只推开着的会话时 ok 后面是 only：服务器认了，all：旧的服务器不认；要额度的通知时最后是 usage：服务器认了，
+///   no-usage：旧的服务器推不了），通知扩展读得到的通知密钥 → `keys 几把 配对编号…`；最后等 App 的临时目录里出现 pushed.json（测试放进来的
 ///   推送服务收到的那一份），像通知扩展那样解开 → `pushed 标题|副标题|正文|会话编号`（解不开是 `pushed fail`）
 /// 正式版没有这些（`#if DEBUG`）
 @MainActor

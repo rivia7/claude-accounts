@@ -6,6 +6,8 @@
 //!   remote-pair-show --web），手机那一头是 ios/tools/ccaguest（和 App 用的是同一份 CcaRemoteKit：钉住证书的 HTTPS、TCP 进数据
 //!   端口）：扫二维码（链接）配对、列会话、接入、敲键、只看、取消配对；登记推送，会话里的通知经服务器、推送网关（kit::apnsfake 的假网关、
 //!   假推送服务）送到，像通知扩展那样拿通知密钥解开
+//! - accounts_reach_the_phone：手机上的「账号」页和额度的通知：列会话时带回 box 上的账号（box 的辅助程序 remote-status 放的），额度用完、
+//!   恢复的通知经服务器推到，字在手机上写；登记推送时不带 usage 就不推
 //! - in_the_simulator：模拟器里真的 App（要 Xcode；先跑 `bash ios/test.sh`，再带 CCA_IOS_SIM=1）：配对、接入、敲键、通知、滚动，
 //!   登记推送、通知密钥在共用的钥匙串分组里、推来的那一份解得开
 //!
@@ -13,7 +15,7 @@
 //! 原来是 tests/ios_kit.py：数据由 spec_wire.py 出，这里换成 kit::spec，核对的一样。
 
 use kit::apnsfake::{Gateway, Knobs};
-use kit::fleet::Device;
+use kit::fleet::{self, Device};
 use kit::fsx::{self, wait_for};
 use kit::harness::{self, Ctx, Module, Need};
 use kit::json::{self, Style, Value};
@@ -41,6 +43,7 @@ pub const MODULE: Module = Module {
         case!(wrong_pin_and_used_code).needs(SWIFT).timeout(600),
         case!(session_ends).needs(SWIFT).timeout(600),
         case!(pushes_reach_the_phone).needs(SWIFT).timeout(600),
+        case!(accounts_reach_the_phone).needs(SWIFT).timeout(600),
         case!(in_the_simulator).needs(&[Need::MacOs]).timeout(600),
     ],
 };
@@ -211,6 +214,155 @@ fn against_the_spec(t: &mut Ctx) {
             "dir" => spec::dir_seal(&p, &pid, &nsid, &note(&[])),
             "want" => obj! {
                 "id" => &nid, "sid" => &nsid, "at" => 1763800000, "title" => "做完了[31m", "subtitle" => "alice · work", "body" => &body
+            }
+        },
+    );
+    // 账号的状态（辅助程序的 status_seal 封的那种，3.7.5 起）：读成模型；额度用完的规则和辅助程序 status.rs 的 exhausted 一样（下面这几种
+    // 情形和那里的 what_counts_as_used_up、antigravity_counts_the_least_used_group 是同样的）
+    let now = 1_794_000_000.0; // UTC 21:20
+    let patched = |mut doc: Value, patch: &[(&str, Value)]| {
+        let o = doc.as_obj_mut().expect("对象");
+        for (k, x) in patch {
+            if x.is_null() {
+                o.remove(k);
+            } else {
+                o.insert(*k, x.clone());
+            }
+        }
+        doc
+    };
+    let win = |u: f64, r: f64| obj! { "utilization" => u, "resets_epoch" => r, "reset" => false };
+    let usage = |five: Value, week: Value| {
+        obj! {
+            "source" => "live", "fetched_epoch" => now - 60.0, "stale" => false, "error_code" => Value::Null, "five_hour" => five,
+            "seven_day" => week, "model_scoped" => Value::List(vec![]), "use_first" => Value::Null
+        }
+    };
+    let row = |id: char, name: &str, tool: &str, login: &str, u: Value| {
+        obj! {
+            "id" => id.to_string().repeat(16), "tool" => tool, "name" => name, "kind" => "oauth", "login" => login, "plan" => "Max",
+            "tier" => "premium", "busy" => false, "usage" => u, "weeks" => Value::Null
+        }
+    };
+    let bucket = |slot: &str, u: f64, r: f64| {
+        obj! { "utilization" => u, "resets_epoch" => r, "reset" => false, "slot" => slot, "disabled" => false, "remaining_amount" => Value::Null }
+    };
+    let alice_usage = patched(
+        usage(win(100.0, now + 3600.0), win(41.0, now + 3.0 * 86400.0)),
+        &[(
+            "model_scoped",
+            list![obj! {
+                "name" => "Fable", "utilization" => 18.0, "resets_epoch" => now + 3.0 * 86400.0, "reset" => false,
+                "allowance_percent_of_weekly" => 50.0, "used_percent_of_weekly" => 9.0
+            }],
+        )],
+    );
+    let week = |start: f64, used: f64, current: bool| {
+        obj! {
+            "start_epoch" => start, "end_epoch" => start + 7.0 * 86400.0, "used_percent" => used, "resets" => 0.0, "current" => current,
+            "partial" => false
+        }
+    };
+    let alice = patched(
+        row('a', "alice", "claude", "logged_in", alice_usage),
+        &[
+            ("aid", Value::from("ab".repeat(16))),
+            ("color", Value::from("#7C3AED")),
+            ("badge", Value::from("AL")),
+            ("busy", Value::from(true)),
+            (
+                "weeks",
+                obj! {
+                    "weeks" => list![week(now - 4.0 * 86400.0, 41.0, true), week(now - 11.0 * 86400.0, 63.0, false)],
+                    "summary" => obj! { "weeks" => 1.0, "average_percent" => 63.0, "maxed" => 0.0, "under_half" => 0.0 }
+                },
+            ),
+        ],
+    );
+    let bob_usage = patched(usage(win(100.0, now + 60.0), Value::Null), &[("error_code", Value::from("auth"))]);
+    let bob = row('b', "bob", "codex", "logged_in", bob_usage);
+    let carol = row('c', "carol", "claude", "logged_out", usage(win(100.0, now + 60.0), Value::Null));
+    let dave =
+        row('d', "dave", "claude", "logged_in", usage(win(99.6, now + 600.0), obj! { "utilization" => 100.0, "reset" => true }));
+    let gem_usage = patched(
+        usage(Value::Null, Value::Null),
+        &[(
+            "quota_groups",
+            list![
+                obj! { "name" => "Gemini Models", "buckets" => list![bucket("five_hour", 100.0, now + 100.0), bucket("seven_day", 100.0, now + 5000.0)] },
+                obj! {
+                    "name" => "Claude and GPT models",
+                    "buckets" => list![bucket("five_hour", 30.0, now + 200.0), bucket("seven_day", 100.0, now + 4000.0)]
+                }
+            ],
+        )],
+    );
+    let gem = row('e', "gem", "agy", "logged_in", gem_usage);
+    let fay = row(
+        'f',
+        "fay",
+        "claude",
+        "logged_in",
+        patched(usage(win(100.0, now + 60.0), Value::Null), &[("source", Value::from("none"))]),
+    );
+    let gus = row('1', "gus", "claude", "logged_in", usage(win(100.0, now - 5.0), Value::Null));
+    let hal = row('2', "hal", "claude", "logged_in", usage(win(92.0, now + 60.0), Value::Null));
+    let ivy =
+        row('3', "ivy", "claude", "logged_in", patched(usage(win(95.0, now + 60.0), Value::Null), &[("stale", Value::from(true))]));
+    let bad = patched(row('9', "bad", "claude", "logged_in", Value::Null), &[("id", Value::from("XYZ"))]);
+    let sdoc = obj! {
+        "v" => 1, "machine" => "box\u{202e}", "more" => 3, "at" => now - 30.0,
+        "accounts" => list![alice, bob, carol, dave, gem, bad, fay, gus, hal, ivy]
+    };
+    let id = |c: char| c.to_string().repeat(16);
+    v.insert(
+        "status",
+        obj! {
+            "p" => hx(&p), "pid" => &pid, "now" => now, "key" => hx(&crypto::hmac_sha256(&p, b"cca-remote/v1/status")),
+            "other_pid" => crypto::token_hex(16),
+            "blob" => spec::status_seal(&p, &pid, &sdoc),
+            "forged" => spec::status_seal(&crypto::random(32), &pid, &sdoc),
+            "dir" => spec::dir_seal(&p, &pid, &nsid, &sdoc),
+            "note" => spec::note_seal(&p, &pid, &sdoc),
+            "v2" => spec::status_seal(&p, &pid, &patched(sdoc.clone(), &[("v", Value::from(2))])),
+            "want" => obj! {
+                "machine" => "box", "more" => 3, "at" => now - 30.0,
+                "names" => list!["alice", "bob", "carol", "dave", "gem", "fay", "gus", "hal", "ivy"],
+                "exhausted" => obj! {
+                    id('a') => list![list!["five_hour", now + 3600.0]], id('d') => list![list!["five_hour", now + 600.0]],
+                    id('e') => list![list!["seven_day", now + 4000.0]]
+                },
+                "near" => list!["hal"], "groups" => list!["Gemini 模型", "Claude、GPT 模型"],
+                "first" => obj! { "aid" => "ab".repeat(16), "color" => "#7C3AED", "badge" => "AL", "plan" => "Max", "tier" => "premium", "five_resets" => now + 3600.0 }
+            }
+        },
+    );
+    // 额度的通知（辅助程序 status.rs 的 usage_note 封的那种：kind 是 usage）：字在手机上照窗口、重置时间写，时间是手机的时区（这里用 UTC）
+    let (atag, uaid) = (crypto::token_hex(8), crypto::token_hex(16));
+    let unote = |patch: &[(&str, Value)]| {
+        let doc = obj! {
+            "v" => 1, "id" => crypto::token_hex(8), "kind" => "usage", "event" => "used_up", "at" => now, "account" => &atag,
+            "tool" => "claude", "name" => "alice", "machine" => "box", "window" => "five_hour", "resets_epoch" => now + 3600.0,
+            "title" => "额度用完了", "subtitle" => "alice · Claude Code", "body" => "宿主写的", "aid" => &uaid
+        };
+        patched(doc, patch)
+    };
+    let who = "来自「Mac mini」 · alice · Claude Code";
+    v.insert(
+        "usage",
+        obj! {
+            "p" => hx(&p), "pid" => &pid, "now" => now, "account" => &atag, "aid" => &uaid, "resets" => now + 3600.0,
+            "used" => spec::note_seal(&p, &pid, &unote(&[])),
+            "used_tomorrow" => spec::note_seal(&p, &pid, &unote(&[("window", Value::from("seven_day")), ("resets_epoch", Value::from(now + 4.0 * 3600.0))])),
+            "back" => spec::note_seal(&p, &pid, &unote(&[("event", Value::from("back")), ("at", Value::from(now + 3600.0))])),
+            "bad_window" => spec::note_seal(&p, &pid, &unote(&[("window", Value::from("fortnight"))])),
+            "other_kind" => spec::note_seal(&p, &pid, &unote(&[("kind", Value::from("weather"))])),
+            "bad_account" => spec::note_seal(&p, &pid, &unote(&[("account", Value::from("ABC"))])),
+            "no_event" => spec::note_seal(&p, &pid, &unote(&[("event", Value::Null)])),
+            "want" => obj! {
+                "used" => list!["额度用完了", who, "5 小时的额度用完了，22:20 恢复"],
+                "used_tomorrow" => list!["额度用完了", who, "本周的额度用完了，明天 01:20 恢复"],
+                "back" => list!["额度恢复了", who, "5 小时的额度恢复了，可以接着用了"]
             }
         },
     );
@@ -663,6 +815,96 @@ fn pushes_reach_the_phone(t: &mut Ctx) {
     assert_eq!((gw.production.complaints(), gw.sandbox.complaints()), (Vec::<String>::new(), Vec::<String>::new()));
 }
 
+/// 手机上的「账号」页和额度的通知（docs/dev/remote.md「手机上的账号」、docs/dev/push.md「额度的通知」）：box 上 alice 的 5 小时
+/// 额度用完了、半分钟后重置。App 的协议核心列会话时连这台机器的账号一起取回（名字、用量、用完了没有：`AccountStatus.exhausted`）；
+/// 登记推送时带着 usage，用完的那一条 box 马上推、恢复的那一条服务器到点推，像通知扩展那样解开、字在手机上写（`UsageText`）。
+/// 登记时不带 usage（手机上关掉了这种通知）就不推，再打开又推
+fn accounts_reach_the_phone(t: &mut Ctx) {
+    let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
+    let push = vec!["--push".to_string(), gw.url(), "--push-pin".to_string(), gw.pin.clone()];
+    let fx = Base::with(t, true, move |_| push);
+    let a = fx.device("box");
+    fx.machines(&[&a]);
+    let g = Guest::new(&fx, "我的 iPhone");
+    let out = pair(&a, &g).0;
+    let pid = out.split_whitespace().nth(1).expect("peer 后面是配对编号").to_string();
+    let token = Gateway::token("aa");
+    let usage_on = format!("push {} ok usage", fx.url());
+    assert_eq!(g.ok(&["push-set", &token, "sandbox", "--usage"]).trim(), usage_on);
+    let resets = fleet::now().floor() + 30.0;
+    relay::signed_in(&a, 100, resets);
+    relay::publish(&a);
+    // 列会话时带回来的这台机器的账号（这台机器上没有会话：只有配对那一行）
+    let head = wait_for("手机看到 box 上的账号", secs(30), || {
+        g.rows().into_iter().find(|r| r["pid"].str() == pid && r.get("sid").is_none() && !r["status"].is_null())
+    });
+    assert_eq!(head["served"], Value::Bool(true), "{head}");
+    let st = &head["status"];
+    // 机器名和会话的说明里的一样（这台机器的短主机名）；配对表里叫它 box
+    assert!(!st["machine"].str().is_empty() && st["off"] == Value::Bool(false), "{st}");
+    assert_eq!(head["peer"].str(), "box", "{head}");
+    let acct = relay::only(&st["accounts"]);
+    assert_eq!(relay::cols(acct, &["tool", "name", "kind", "login"]), list!["claude", "alice", "oauth", "logged_in"]);
+    assert_eq!((acct["five_hour"]["utilization"].f64(), acct["seven_day"]["utilization"].f64()), (100.0, 41.0));
+    let used = &acct["exhausted"];
+    assert_eq!((used.list().len(), used[0][0].str(), used[0][1].f64()), (1, "five_hour", resets), "{acct}");
+    assert!(!head.compact().contains("example.com"), "不给邮箱：{head}");
+    // 用完的那一条：box 马上推；推送服务那里看不到里面的字
+    let seen = gw.sandbox.wait_seen(1, secs(30)).remove(0);
+    assert_eq!(seen.token(), token);
+    assert!(!String::from_utf8_lossy(&seen.body).contains("alice"), "推送服务看得到通知里的字");
+    let n = opened(&g, &fx, &seen.body);
+    let now = fleet::now();
+    assert_eq!((n["pid"].str(), n["id"].str()), (pid.as_str(), seen.header("apns-collapse-id")));
+    let u = &n["usage"];
+    assert_eq!(
+        relay::cols(u, &["event", "window", "tool", "name", "account", "aid"]),
+        list!["used_up", "five_hour", "claude", "alice", acct["id"].str(), acct["aid"].str()]
+    );
+    assert_eq!(u["resets_epoch"].f64(), resets);
+    let body = format!("5 小时的额度用完了，{} 恢复", utc_back_time(resets, now));
+    assert_eq!(n["card"], list!["额度用完了", "来自「box」 · alice · Claude Code", body]);
+    // 恢复的那一条：服务器到点推（box 这期间什么都不用做）
+    let back = gw.sandbox.wait_seen(2, secs(60)).remove(1);
+    assert!(fleet::now() >= resets, "到了重置的时候才推");
+    let n2 = opened(&g, &fx, &back.body);
+    assert_eq!(relay::cols(&n2["usage"], &["event", "window", "account"]), list!["back", "five_hour", acct["id"].str()]);
+    assert_eq!(n2["card"], list!["额度恢复了", "来自「box」 · alice · Claude Code", "5 小时的额度恢复了，可以接着用了"]);
+    // 登记时不带 usage：下一轮用完了不推；再带上又推
+    assert_eq!(g.ok(&["push-set", &token, "sandbox"]).trim(), format!("push {} ok", fx.url()));
+    relay::signed_in(&a, 100, fleet::now().floor() + 4.0 * 3600.0);
+    relay::publish(&a);
+    std::thread::sleep(secs(2));
+    assert_eq!(gw.sandbox.seen().len(), 2, "关掉了额度的通知：不推");
+    assert_eq!(g.ok(&["push-set", &token, "sandbox", "--usage"]).trim(), usage_on);
+    relay::signed_in(&a, 100, fleet::now().floor() + 8.0 * 3600.0);
+    relay::publish(&a);
+    let third = gw.sandbox.wait_seen(3, secs(30)).remove(2);
+    assert_eq!(opened(&g, &fx, &third.body)["usage"]["event"].str(), "used_up");
+    assert_eq!((gw.production.complaints(), gw.sandbox.complaints()), (Vec::<String>::new(), Vec::<String>::new()));
+}
+
+/// 像通知扩展那样解开推来的那一份（ccaguest push-open；时区是 UTC，字里的钟点照它写）
+fn opened(g: &Guest, fx: &Base, body: &[u8]) -> Value {
+    let file = fx.d.join(format!("pushed-{}.json", crypto::token_hex(3)));
+    fsx::write(&file, body);
+    let path = text(&file);
+    let r = g.cmd(&["push-open", &path]).env("TZ", "UTC").timeout(secs(90)).output().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(r.status.py(), 0, "{} {}", r.out(), r.err());
+    relay::parsed(&r.out())
+}
+
+/// 手机上说的几点恢复（UTC）：和 now 同一天的“09:05”，第二天的“明天 09:05”（只用在半分钟以内的重置时间上）
+fn utc_back_time(epoch: f64, now: f64) -> String {
+    let (d, n) = (kit::plist::date_from_unix(epoch as i64), kit::plist::date_from_unix(now as i64));
+    let clock = format!("{:02}:{:02}", d.hour, d.minute);
+    if (d.year, d.month, d.day) == (n.year, n.month, n.day) {
+        clock
+    } else {
+        format!("明天 {clock}")
+    }
+}
+
 // ---- 模拟器里真的 App ----
 
 const BUNDLE: &str = "com.cca.remote";
@@ -764,7 +1006,8 @@ fn in_the_simulator(t: &mut Ctx) {
     assert_eq!(said("keys "), format!("keys 1 {pid}"));
     // 在服务器上登记了推送：测试给的令牌，模拟器用的是开发环境的推送服务；「关掉的会话也推送」关着（-test-push-only）：只推开着的
     let reg = said("push ");
-    assert!(reg.ends_with(" ok only"), "{reg}");
+    // 额度的通知默认开着：新的服务器认（usage）
+    assert!(reg.ends_with(" ok only usage"), "{reg}");
     let guests = remote(&fx.d)["guests"].clone();
     let regs: Vec<Value> = guests.obj().values().map(|g| relay::cols(&g["push"], &["token", "env"])).collect();
     assert_eq!(regs, [list![&token, "sandbox"]], "{guests}");

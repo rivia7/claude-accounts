@@ -42,7 +42,7 @@ public enum PairStep: Sendable, Equatable {
     case deriving, asking, confirming
 }
 
-/// 一台机器和它上面这台手机能接入的会话
+/// 一台机器和它上面这台手机能接入的会话、它放上来的账号的状态
 public struct PeerListing: Sendable {
     public let peer: Peer
     /// 对方已经取消了配对
@@ -50,12 +50,20 @@ public struct PeerListing: Sendable {
     public let sessions: [RemoteSession]
     /// 没问到这台机器所在的服务器（原因）
     public let failure: RemoteFailure?
+    /// 那台机器放上来的账号的状态（Status.swift）：还没放过（旧版的 cca、刚配好还没查过用量）、服务器重启过（它只在内存里存着）、
+    /// 解不开时是 nil
+    public let status: HostStatus?
+    /// 那台服务器转不转账号的状态（3.7.5 起的才转：旧的服务器上 status 总是 nil，要管理员更新服务器）
+    public let statusServed: Bool
 
-    public init(peer: Peer, gone: Bool, sessions: [RemoteSession], failure: RemoteFailure?) {
+    public init(peer: Peer, gone: Bool, sessions: [RemoteSession], failure: RemoteFailure?, status: HostStatus? = nil,
+                statusServed: Bool = false) {
         self.peer = peer
         self.gone = gone
         self.sessions = sessions
         self.failure = failure
+        self.status = status
+        self.statusServed = statusServed
     }
 }
 
@@ -91,6 +99,8 @@ public final class RemoteClient: @unchecked Sendable {
     private let store: RemoteStore
     private let lock = NSLock()
     private var requesters = [String: Requester]()
+    /// 解开过的账号的状态（配对编号 → 那一份的 n 和解开的）：查的时候告诉服务器手里有哪一份（have），一样的它就不再发
+    private var statuses = [String: (n: String, status: HostStatus)]()
     /// 配对时告诉对方这台设备叫什么
     public var deviceName: String
 
@@ -155,13 +165,15 @@ public final class RemoteClient: @unchecked Sendable {
 
     /// 在这台服务器上登记推送（push_set，只有手机能发）：推送服务给这台手机上这个 App 的令牌（小写的十六进制）和推送服务的环境
     /// （production / sandbox）；令牌空的是拿掉。sids：只推这几个会话（会话编号，最多 8 个；空的是一个都不推：「关掉的会话也推送」
-    /// 关着时是 App 里开着的那个），nil 是都推。没成的原因：no_push（这台服务器没接推送网关）、denied（服务器不认这台手机了）……
-    public func pushSet(on server: ServerRef, token: String, env: String, sids: [String]? = nil) async -> PushSetResult {
+    /// 关着时是 App 里开着的那个），nil 是都推。usage：也推额度的通知（额度用完了、恢复了），nil 是不说（服务器当作不推）。
+    /// 没成的原因：no_push（这台服务器没接推送网关）、denied（服务器不认这台手机了）……
+    public func pushSet(on server: ServerRef, token: String, env: String, sids: [String]? = nil, usage: Bool? = nil) async -> PushSetResult {
         var body: [String: Any] = ["token": token, "env": env]
         if let sids { body["sids"] = sids }
+        if let usage { body["usage"] = usage }
         do {
             let j = try await requester(server).post("push_set", body)
-            return .ok(filtered: sids != nil && j["sids"] as? Bool == true)
+            return .ok(filtered: sids != nil && j["sids"] as? Bool == true, usage: usage != nil && j["usage"] as? Bool == true)
         } catch {
             return .failed(error as? RemoteFailure ?? RemoteFailure("error"))
         }
@@ -272,17 +284,23 @@ public final class RemoteClient: @unchecked Sendable {
 
     private func list(on server: ServerRef, _ ps: [Peer]) async -> [PeerListing] {
         let j: [String: Any]
+        // 手里有的账号的状态是哪一份（可以是空的：带了 have 的，3.7.5 起的服务器才回 status）
+        let have = lock.withLock { Dictionary(ps.compactMap { p in statuses[p.pid].map { (p.pid, $0.n) } }, uniquingKeysWith: { a, _ in a }) }
         do {
-            j = try await requester(server).post("relay_list", ["pids": ps.map(\.pid)])
+            j = try await requester(server).post("relay_list", ["pids": ps.map(\.pid), "have": have])
         } catch {
             let f = error as? RemoteFailure ?? RemoteFailure("error")
-            return ps.map { PeerListing(peer: $0, gone: false, sessions: [], failure: f) }
+            // 没问到：账号的状态照手里那一份（界面上写着是多久以前的）
+            return ps.map { p in PeerListing(peer: p, gone: false, sessions: [], failure: f, status: lock.withLock { statuses[p.pid]?.status }) }
         }
         let known = j["peers"] as? [String: Any] ?? [:]
         let rows = j["sessions"] as? [String: Any] ?? [:]
+        let served = j["status"] is [String: Any]
+        let status = j["status"] as? [String: Any] ?? [:]
+        let now = Date().timeIntervalSince1970
         return ps.map { peer in
             guard let p = store.secret(pKey(peer.pid)) else {
-                return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: [], failure: RemoteFailure("no_key"))
+                return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: [], failure: RemoteFailure("no_key"), statusServed: served)
             }
             let keys = dirKeys(p)
             var sessions = [RemoteSession]()
@@ -293,8 +311,33 @@ public final class RemoteClient: @unchecked Sendable {
                 sessions.append(RemoteSession(sid: sid, info: info, online: r["online"] as? Bool == true, viewers: jsonInt(r["viewers"]) ?? 0))
             }
             sessions.sort { $0.info.since > $1.info.since }
-            return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: sessions, failure: nil)
+            let st = known[peer.pid] == nil ? nil : statusOf(peer.pid, p: p, row: status[peer.pid], now: now)
+            return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: sessions, failure: nil, status: st, statusServed: served)
         }
+    }
+
+    /// relay_list 回的一个配对的状态（`{"blob", "age"}`，和手里那一份一样的是 `{"same": true, "age"}`）：解开、记下；没有的（还没放过、
+    /// 服务器重启过、对方取消了配对）、解不开的把手里那一份也忘掉
+    private func statusOf(_ pid: String, p: Bytes, row: Any?, now: Double) -> HostStatus? {
+        let r = row as? [String: Any]
+        let age = r.flatMap { finiteNumber($0["age"]) } ?? 0
+        if let r, jsonBool(r["same"]) == true {
+            return lock.withLock {
+                guard var s = statuses[pid] else { return nil }
+                s.status.age = max(age, 0)
+                s.status.received = now
+                statuses[pid] = s
+                return s.status
+            }
+        }
+        guard let blob = r?["blob"] as? [String: Any], let n = blob["n"] as? String,
+              let s = statusOpen(statusKeys(p), pid: pid, blob, age: age, received: now)
+        else {
+            lock.withLock { statuses[pid] = nil }
+            return nil
+        }
+        lock.withLock { statuses[pid] = (n, s) }
+        return s
     }
 
     /// 接入一个会话（一次连接；断了要不要重新接上由调用方定，见 Attachment）
@@ -315,7 +358,8 @@ public final class RemoteClient: @unchecked Sendable {
 
 /// push_set 的结果（`RemoteClient.pushSet`）
 public enum PushSetResult: Equatable, Sendable {
-    /// 登记上了。filtered：服务器认了 sids、只推那几个会话；没带 sids 时总是 false，旧的服务器不认 sids（照旧都推）时也是 false
-    case ok(filtered: Bool)
+    /// 登记上了。filtered：服务器认了 sids、只推那几个会话；没带 sids 时总是 false，旧的服务器不认 sids（照旧都推）时也是 false。
+    /// usage：服务器认了 usage（推得了额度的通知）；没带 usage 时总是 false，旧的服务器（3.7.5 以前的）也是 false
+    case ok(filtered: Bool, usage: Bool)
     case failed(RemoteFailure)
 }

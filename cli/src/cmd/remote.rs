@@ -4,6 +4,7 @@
 //! - `remote/attach.rs`：接入端（remote-attach）：把一个终端接到宿主上；`remote/keys.rs`：从按键里认出“断开”
 //! - `remote/manage.rs`：开关、列表、结束一个会话（remote-set、remote-list、remote-end）、推通知（remote-notify）
 //! - `remote/hook.rs`：cca 自己带给 Claude Code 的钩子（remote-hook：做完了、在等你）
+//! - `remote/status.rs`：给配对的手机放账号的状态、推额度用完 / 恢复的通知（remote-status）
 //! - `remote/local.rs`：这台机器上的会话目录、socket、帧的格式
 //! - `remote/vt.rs`：终端输出的识别（查询、模式、回放）
 //! - `remote/pty.rs`：伪终端和终端模式；`remote/sig.rs`：等信号
@@ -24,12 +25,14 @@ mod peers;
 mod pty;
 mod relay;
 mod sig;
+mod status;
 mod vt;
 
 pub use hook::hooks as notify_hooks;
 pub use local::activity as hosted_activity;
 pub use manage::{hooks_on as notify_hooks_on, remote_on};
 pub use pty::restore_on_panic;
+pub use status::status_kick;
 
 use super::Cmd;
 
@@ -49,4 +52,5 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("remote-unpair", pair::cmd_remote_unpair),
     Cmd::all("remote-forget", pair::cmd_remote_forget),
     Cmd::all("remote-hubs", pair::cmd_remote_hubs),
+    Cmd::all("remote-status", status::cmd_remote_status),
 ];

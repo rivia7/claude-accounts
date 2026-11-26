@@ -5,7 +5,8 @@ import UserNotifications
 /// 会话里的通知弹成这台手机的通知，点它回到那个会话的终端。两条路来：
 /// - 接着的会话推来的（宿主转来的 NOTIFY：会话里的钩子，cca 自己带的「做完了 / 在等你」、`cca remote notify`；或者会话里的程序自己写的
 ///   OSC 777 / OSC 9）：这里弹（`post`）
-/// - 推送（APNs，Pusher）：锁着屏、App 没开着时也到；通知扩展（ios/Notify）解开、改好字再弹，App 在前台时经这里的 delegate
+/// - 推送（APNs，Pusher）：锁着屏、App 没开着时也到；通知扩展（ios/Notify）解开、改好字再弹，App 在前台时经这里的 delegate。
+///   额度的通知（配对的电脑上一个账号的额度用完了、恢复了）只经这条路来，点它打开那个账号的那一页
 /// 同一条两条路都来了（App 开着、接着那个会话时）：照宿主给的编号（Note.id）只弹一次，先到的那一份算数。
 /// 字的规矩和 Mac App 的 RemoteNotifier（PROTOCOL 9.3）一样（CcaRemoteKit 的 NoteCard）：字是别的机器写的，标题、正文清理过、限长度；
 /// 来自哪台机器写在副标题的开头（App 自己写的，对方改不了）；一个终端几秒钟最多一条（CcaRemoteKit 已经限过一次流：这里再守一道）。
@@ -110,13 +111,18 @@ enum Notifier {
             }
         }
 
-        // 点了通知：回到那个会话的终端（推来的、通知扩展没解开的没有这两项：只是打开 App）
+        // 点了通知：回到那个会话的终端，额度的通知打开那个账号的那一页（推来的、通知扩展没解开的没有这几项：只是打开 App）
         func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                     withCompletionHandler done: @escaping () -> Void) {
             let info = response.notification.request.content.userInfo
             let pid = info["peer"] as? String, sid = info["sid"] as? String, view = info["view"] as? Bool ?? false
+            let account = info["account"] as? String
             DispatchQueue.main.async {
-                if let pid, let sid { Notifier.model?.reopen(peer: pid, sid: sid, readOnly: view) }
+                if let pid, let account {
+                    Notifier.model?.openAccount(peer: pid, account: account)
+                } else if let pid, let sid {
+                    Notifier.model?.reopen(peer: pid, sid: sid, readOnly: view)
+                }
                 done()
             }
         }

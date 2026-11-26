@@ -11,7 +11,7 @@
 | M5 | 网页端：手机不装 cca，在浏览器里（iPhone 上添加到主屏幕）接入会话 | 做完了，随 3.5.3 发布（2026-11-23）。本机测过：真的服务器、真的 cca 会话，页面在无界面的 Chrome 里（iPhone 的屏幕大小、触摸）走了一遍；2026-11-22 维护者的 iPhone 在真的 Team 服务器上（Let's Encrypt 签的 IP 地址的证书）经它配上了，真机上别的没记下试过的结果（下面「网页端」的「还没做的」）；服务器要带着网页端部署（要一张浏览器信得过的证书）才用得了。3.7.0 起和手机配对的二维码给 iOS 上的 cca App（M7），不再打开网页端；网页端留给以前配好的手机，App 上了 App Store 就去掉 |
 | M6 | 每个 Team 的会话走这个 Team 自己的服务器中转；网页端的证书用 Let's Encrypt 给 IP 地址签的短期证书 | 中转这一半做完了（辅助程序、命令行、App、Team 服务器的安装脚本），3.5.3-beta.2 发布了。证书助手写好了、对着照规范核对的假证书机构测过，2026-11-22 在维护者的服务器上对着真的 Let's Encrypt（先测试环境、再正式的）
 签到了一张 IP 地址的短期证书（那时用的 `./policy.sh presence deploy --web-acme` 3.6.0 跟着维护者的服务器删掉了）；Team 的安装脚本带上了网页端和证书助手（3.5.3-beta.3 发布，那时每个 Team 自己一个 `<服务名>-acme`，一台服务器上只有一个 Team 开得了网页端；3.5.3-beta.5 起几个 Team 共用一个 `cca-team-acme`，team.md「部署」） |
-| M7 | iOS 上的 cca App：扫 Mac 上的二维码配对、像 cca 的设备一样连服务器（钉住证书、TCP 进数据端口）；做好以后去掉网页端（M5）和它的证书（M6 的证书那一半） | 在做，见 ios.md 的阶段表。3.7.0 起服务器认手机不再要网页端、`cca remote pair --web` 的二维码改成给 App 的链接（带配对码）；协议核心（`ios/CcaRemoteKit`）和真的服务器、真的 cca 对着测过，App 在模拟器里端到端测过。还没上 App Store |
+| M7 | iOS 上的 cca App：扫 Mac 上的二维码配对、像 cca 的设备一样连服务器（钉住证书、TCP 进数据端口）；做好以后去掉网页端（M5）和它的证书（M6 的证书那一半） | 在做，见 ios.md 的阶段表。3.7.0 起服务器认手机不再要网页端、`cca remote pair --web` 的二维码改成给 App 的链接（带配对码）；协议核心（`ios/CcaRemoteKit`）和真的服务器、真的 cca 对着测过，App 在模拟器里端到端测过。还没上 App Store。3.7.5：手机上的「账号」页、额度用完 / 恢复的通知（下面「手机上的账号」） |
 
 定下来的（M2 以后照它做，别重新讨论）：经服务器中转、不走 SSH；只有打开了开关的会话能接入，只接入已经开着的会话、不能远程新建；两台机器要先配对（一次性配对码），默认单向：显示配对码的那台是被接入的；端到端加密只用辅助程序已有的库（HMAC-SHA256），服务器只转发密文；数据另走一个只传密文的端口（Team 的服务器上默认是 HTTPS 那个端口的下一个空着的），凭现有的签名 HTTPS 换一次性的票据接入；App 里的终端用 SwiftTerm（`v1.20.0`，源码放进仓库，单独编成一个模块）。
 
@@ -396,6 +396,56 @@
   - 终端里长按选字（xterm.js 在触摸屏上不支持）：菜单里有「复制屏幕上的字」；没有通知（会话等着你回答时手机不会响：`NOTIFY` 帧页面不认，iPhone 上的网页要推送服务才能在后台响）
   - 终端里不画二维码（`cca remote pair --web` 只打印地址，App 里才有二维码）
 
+## 手机上的账号（3.7.5）
+
+iPhone 上的 cca App 除了接入会话，还有一页「账号」：配对过的每台电脑上的账号现在怎样（在用 / 额度用完 · 几点恢复 / 没登录 / 登错号 / 登录失效 / 先用它）、
+套餐、5 小时 / 本周 / 按模型的额度、Codex 还能重置几次、Antigravity 的几组额度；点进去是这个账号的每周用量和它的会话（点一下接入）。
+额度用完了、到了重置的时候推一条通知（push.md「额度的通知」）。只看，不在手机上操作（登录、切换、重置额度都还在电脑上做）；只给手机
+（`peer.web`），cca 的设备之间不给。用户要的（2026-11-26）：像 Mac App 那样补全 iOS App，加上额度用完、到了新周期重置的通知。线上的格式
+（密文、`status_put`、`relay_list` 的 `have` / `status`）在 server/README.md「账号的状态」，App 那一头在 ios.md「App」。Team 的服务器要 3.7.5
+（级别 2，team.md「服务器要更新」）：旧的不认 `status_put`，手机上那台电脑一栏说要管理员更新服务器。
+
+**谁放、什么时候放。** 辅助程序的 `remote-status`（`cli/src/cmd/remote/status.rs`；bash 的 `_remote-status`，在后台跑，`CCA_RO=1`：和
+`_gui state` 一样只在内存里对账、不说话）。`status_kick` 起它：查完用量（`usage-render` 的最后：`cca usage`、App 定时查的都经过这里）、配好一个手机、
+改了手机能不能接入（`remote-allow`）以后；没有手机的配对时什么都不起。同时只有一个在跑（`status.lock`），跑着的时候又有人叫（`status.again`）
+它跑完再来一轮。每个手机的配对各放一份：
+- 内容取自 `_gui state` 的那一份快照（`gui_snapshot(false)`：不读路由器端的代码、不算同步摘要），三个工具的账号照账号表的先后
+- 和会话一样分 Team：一个配对只看得到走它那台服务器的账号（`relay::session_hub`）
+- 不让这台手机接入的（`allow … none`）：放一份空的（`"off": true`）盖掉原来的、到点再推的也拿掉，之后不再放
+- 变了才放（明文去掉 `at` 的摘要，加上到点再推的那几条的编号和时间），没变的最多隔半小时（`EVERY`）放一次：服务器只在内存里存、重启就没了，
+  手机照放上来的时间说是多久以前的
+- 服务器太旧（`status_put` 回 404 `not_found`：3.7.5 以前的、没开中转的）：6 小时（`OLD_AGAIN`）以后再试
+- 记着的在 `~/.cca/remote/status.json`（600）：`{"v":1,"pids":{配对编号:{"sum","put","old","noted"}}}`，`noted` 是推过的“用完了”
+  （`{账号编号/窗口: 这一轮的时间}`）；没有邮箱、名字。配对表里没有了的配对下一轮忘掉
+
+**明文**（v1，紧凑的 JSON；手机不认的项不管，样子不对的账号丢掉）：`{"v":1,"machine","accounts":[…],"more"?,"weeks"?,"off"?,"at"}`
+- `machine`：和会话的说明里的一样（短主机名，`peers::machine_name`）；`at`：放的时间；`off`：不让接入了（`accounts` 是空的）
+- 一个账号：`{"id","aid"?,"tool","name","kind","login","plan","tier","busy","color"?,"badge"?,"usage","weeks"}`
+  - `id`：这个配对里的账号编号，`usage_tag(P, "acct\0" 工具 "\0" 账号目录名)`（`usage_tag(P, x)` 是 `hex(HMAC(P, "cca-remote/v1/usage\0" x))` 的前 16 个字符）：
+    换别名不变，别的配对、服务器认不出是哪个账号。`aid`：会话的说明里的同一个账号摘要（这个 Team 的盐、账号表的键，`far::aid_of`），手机照它把会话
+    放到账号下面
+  - `name`：别名（没起别名的是邮箱 @ 前面那一截，`far::short_name`）；不给邮箱、账号表的键
+  - `kind`、`login`、`plan`、`tier`（`plan_tier`）照 `_gui state`；`busy`：这台电脑上在用（App 或者命令行）；`color`、`badge`：启动器图标的颜色和字
+  - `usage`（没有是 null）：用量条目（PROTOCOL 3.1）里手机要的：`source`、`fetched_epoch`、`stale`、`error_code`（只给原因码：说明里有端口号这些）、
+    `five_hour`、`seven_day`（`{utilization, resets_epoch, reset}`）、`model_scoped`、`use_first`、`reset_credits`（Codex）、`quota_groups`（Antigravity）
+  - `weeks`（没有是 null）：每周用量（PROTOCOL 2.2 的 `usage_weeks`）：`{since_epoch, weeks:[{start_epoch, end_epoch, used_percent, resets, current, partial}], summary}`
+- 太大（密文超过 `STATUS_BLOB`）：先不带每周用量（各账号的 `weeks` 是 null，外面写 `"weeks": false`：手机照它说那台电脑上的账号太多、每周用量没放上来，
+  不说成还没有记录），还放不下再一个个少放账号（`more` 是少放了几个）
+
+**额度用完了。** 规则（`status.rs` 的 `exhausted`；和 Mac App 的 `Diagnosis.quotaPressure` 里用完了的那些、CcaRemoteKit 的 `AccountStatus.exhausted` 是同一条）：
+登录着、有用量（`source` 不是 none）、不是登录失效（`error_code` 不是 auth）；5 小时、本周两个窗口（Antigravity 是各组里这个窗口用得最少的那个：
+一组用完了别的组的模型照样能用），四舍五入以后到了 100%、还没到重置时间（数据旧不旧不看：没到重置时间不会降下来）；按模型的窗口不算。
+- 新用完的（同一个账号的同一个窗口这一轮没推过；两次查到的重置时间差不到一小时算同一轮，`SAME_ROUND`：Codex 的重置时间照“还有几秒”算，
+  每次差一两秒）马上 `push_note`；推过的过了重置时间一天（`FORGET`）才忘掉。手机没要额度的通知、服务器没开推送（`sent` 是 false）也记上：
+  之后打开了，也不补推以前用完的
+- 重置时间在 8 天以内的放进 `later`（先到点的在前，最多 8 条），恢复的那一条服务器到点推
+- 编号都是 `usage_tag` 算的：用完的 `"used\0" 账号编号 "\0" 窗口 "\0" 这一轮`，恢复的 `"back\0" …`，`later` 的 `slot` 是 `"slot\0" 账号编号 "\0" 窗口`
+- 通知的明文、字：push.md「额度的通知」
+
+**手机那一头**（CcaRemoteKit）：`RemoteClient.list` 查会话时带着 `have`（手里每个配对那一份的 `n`），回 `same` 的照用手里那一份、换上新的 `age`；
+`PeerListing.status`（`Status.swift` 的 `HostStatus`：解开、核对样子）、`statusServed`（回的里面有没有 `status`：没有是旧的服务器）。没问到服务器时
+照手里那一份（界面上写着是多久以前的）。
+
 ## 测试
 
 - `tests/team_relay.rs`（回归的 unit 一节）：每个 Team 各用各的中转。两个 Team 各有一台真的服务器（都开着中转）、两台都在这两个 Team 里的设备、
@@ -428,6 +478,11 @@
 - `cd cli && cargo run --profile kit -p cca-tests --bin cca-test -- web-demo [--port 端口] [-- 会话里跑的命令…]`（`tests/tool/web_demo.rs`；
   先 `cargo build --release`）：在本机把网页端跑起来自己看（真的服务器开在 `http://localhost`、一台临时的
   “电脑”、一个会话、一个配对码），在这台 Mac 的浏览器里打开。手机上试不了这个（手机要 HTTPS 和信得过的证书）
+- 手机上的账号：`tests/web_relay.rs` 的 `app_guest_sees_accounts`（box 上真的辅助程序 `remote-status` 放，照文档写的访客 `relay_list` 带 `have` 取、
+  拿配对的密钥解开：名字是别名、没有邮箱，账号摘要和会话的说明里的一样；没变的回 `same`、也不再放；额度用完了马上推、恢复的那一条服务器到点推、
+  同一轮不再推；服务器、推送服务、box 记着的都没有明文；不让接入了盖掉）、`tests/ios_kit.rs` 的 `accounts_reach_the_phone`（同一条路，手机那一头是
+  CcaRemoteKit：列会话时带回账号、通知解开、字照手机的时区写，登记推送时不带 usage 就不推）；`cargo test` 的 `remote::status`（算不算用完、
+  Antigravity 看用得最少的那组、给手机的内容、一轮一轮和到点再推的、通知的字）和服务端的 `account_status`、`usage_notes`（`cli/src/server/remote/tests.rs`）
 - 通知：`pair_list_attach` 里会话中的程序（`cca-test fake-client` 的 `run`）运行 `remote-notify`，别的机器上接着的那一端收到 OSC 777，启动它的终端上没有；
   会话外面调是 65、没有字是 64。`cargo test` 的 `remote::attach::note_tests`：序列的写法、别人写的字怎么清理、不拆开一个字、限流。App 里弹出来、点通知回到终端
   没有自动的测试（要通知的权限和真人点）

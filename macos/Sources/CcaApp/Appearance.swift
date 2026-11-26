@@ -80,7 +80,7 @@ struct AppearanceMenu: View {
     }
 }
 
-/// 设置窗口（⌘,）：外观、新手引导。
+/// 设置窗口（⌘,）：外观、终端、通知、新手引导。
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(AppearanceSetting.self) private var appearance
@@ -105,6 +105,15 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Toggle("额度用完、恢复时通知", isOn: Binding(get: { UsageNotifier.shared.enabled }, set: { UsageNotifier.shared.enabled = $0 }))
+                Text("账号的 5 小时或本周额度用完了弹一条，到了重置的时间再弹一条（那时 App 没开着也会弹）。点通知打开那个账号。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                Text("通知")
             }
             Section("新手引导") {
                 Toggle("显示细节（端口、纯净度这些明细）",

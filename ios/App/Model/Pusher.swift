@@ -7,7 +7,8 @@ import UserNotifications
 /// 每台服务器上（push_set）；会话里说一条通知时，宿主把它封给这个配对，经那台服务器、cca 的推送网关、Apple 送到这台手机，通知扩展
 /// （ios/Notify）拿通知密钥解开再弹出来。服务器、网关、Apple 都看不到里面。通知被关掉了（系统设置里）时把登记拿掉：服务器就不再推。
 /// 「关掉的会话也推送」（设置里的开关，默认开着）关着时，登记里说只推 App 里开着的那个会话（sids），开着、关掉终端时跟着改。
-/// 见 docs/dev/ios.md「推送」
+/// 设置里的「额度用完、恢复时通知」（默认开着，和 Mac App 的同名开关一样的说法）：登记里说也推额度的通知（usage）：配对的电脑上一个账号的 5 小时或本周的额度用完了、到了重置的
+/// 时间（恢复的那一条由服务器到点推：电脑睡着了也到）。见 docs/dev/ios.md「推送」
 @MainActor
 @Observable
 final class Pusher {
@@ -31,6 +32,15 @@ final class Pusher {
     }
     /// 不认这个开关的服务器（主机名，旧版）：经它配对的电脑，关掉的会话照样推（开关关着时设置里说一声）
     private(set) var unfiltered: [String] = []
+    /// 「额度用完、恢复时通知」：配对的电脑上的账号额度用完了、恢复了时推一条
+    var usageNotes = UserDefaults.standard.object(forKey: "pushUsage") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(usageNotes, forKey: "pushUsage")
+            sync()
+        }
+    }
+    /// 推不了额度的通知的服务器（主机名，旧版）：开关开着时设置里说一声
+    private(set) var usageless: [String] = []
 
     @ObservationIgnored private weak var model: AppModel?
     @ObservationIgnored private var syncing = false
@@ -132,13 +142,15 @@ final class Pusher {
         }
     }
 
-    /// 记着的：一台服务器上登记的是什么（"令牌 环境"，只推开着的会话时后面是 " only:会话编号,…"；拿掉了是空的）、什么时候登记的、
-    /// 它是不是说过还没接推送网关、是不是不认只推哪几个会话（旧版；以前的版本记的没有这一项）
+    /// 记着的：一台服务器上登记的是什么（"令牌 环境"，要额度的通知时后面是 " usage"，只推开着的会话时再后面是 " only:会话编号,…"；
+    /// 拿掉了是空的）、什么时候登记的、它是不是说过还没接推送网关、是不是不认只推哪几个会话、是不是推不了额度的通知（旧版；以前的版本
+    /// 记的没有后两项）
     private struct Memo: Codable {
         let reg: String
         let at: Double
         let unsupported: Bool
         var unfiltered: Bool? = nil
+        var usageless: Bool? = nil
     }
 
     private func memoKey(_ s: ServerRef) -> String { "push " + s.url }
@@ -171,9 +183,11 @@ final class Pusher {
         if ok != .notDetermined { allowed = can }
         // 该登记的：能发通知、拿到了令牌时是令牌和环境，不然什么都不登记（拿掉）
         let reg: (token: String, env: String)? = can ? token.map { ($0, Self.env) } : nil
-        let base = reg.map { "\($0.token) \($0.env)" } ?? ""
+        // 额度的通知：登记时总说要不要（关着也说：服务器照它不推）
+        let usage: Bool? = reg == nil ? nil : usageNotes
+        let base = reg.map { "\($0.token) \($0.env)" + (usageNotes ? " usage" : "") } ?? ""
         let now = Date().timeIntervalSince1970
-        var notYet = [String](), notOnly = [String]()
+        var notYet = [String](), notOnly = [String](), notUsage = [String]()
         for s in backend.servers() {
             let m = memo(s)
             if let m, m.unsupported, now - m.at < 86400 {
@@ -183,26 +197,34 @@ final class Pusher {
             // 关掉的会话不推：只推开着的（这台服务器上一个都没开着是空的）
             let sids: [String]? = reg != nil && !closedToo ? openSids(on: s) : nil
             let want = base + (sids.map { " only:" + $0.joined(separator: ",") } ?? "")
+            // 推不了额度的通知的服务器（旧版）：一天以后再登记一次，看它更新了没有
+            let usageless = usage == true && m?.usageless == true
             // 不认 sids 的服务器（旧版，照旧都推）：开着的会话变了不用再登记，一天以后再看它更新了没有
             if sids != nil, let m, m.unfiltered == true, m.reg == base, now - m.at < 86400 {
                 notOnly.append(s.host)
+                if usageless { notUsage.append(s.host) }
                 continue
             }
             // 一样的过一周再登记一次（服务器那边可能丢了：推送服务说令牌没用了、服务器换过）
-            if let m, !m.unsupported, m.reg == want, now - m.at < 7 * 86400 { continue }
+            if let m, !m.unsupported, m.reg == want, now - m.at < (usageless ? 86400 : 7 * 86400) {
+                if usageless { notUsage.append(s.host) }
+                continue
+            }
             if m == nil, want.isEmpty { continue }   // 没登记过：没什么可拿掉的
-            let r = await backend.pushSet(on: s, token: reg?.token ?? "", env: reg?.env ?? Self.env, sids: sids)
+            let r = await backend.pushSet(on: s, token: reg?.token ?? "", env: reg?.env ?? Self.env, sids: sids, usage: usage)
             switch r {
-            case .ok(let filtered):
+            case .ok(let filtered, let usageOK):
+                let noUsage = usage == true && !usageOK
                 #if DEBUG
-                spy?("push \(s.host) ok" + (sids == nil ? "" : filtered ? " only" : " all"))
+                spy?("push \(s.host) ok" + (sids == nil ? "" : filtered ? " only" : " all") + (usage == true ? (usageOK ? " usage" : " no-usage") : ""))
                 #endif
                 if sids == nil || filtered {
-                    remember(s, Memo(reg: want, at: now, unsupported: false))
+                    remember(s, Memo(reg: want, at: now, unsupported: false, usageless: noUsage))
                 } else {
-                    remember(s, Memo(reg: base, at: now, unsupported: false, unfiltered: true))
+                    remember(s, Memo(reg: base, at: now, unsupported: false, unfiltered: true, usageless: noUsage))
                     notOnly.append(s.host)
                 }
+                if noUsage { notUsage.append(s.host) }
             case .failed(let f):
                 #if DEBUG
                 spy?("push \(s.host) \(f.code)")
@@ -216,6 +238,7 @@ final class Pusher {
         }
         unsupported = notYet
         unfiltered = notOnly
+        usageless = notUsage
     }
 }
 

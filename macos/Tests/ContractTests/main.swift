@@ -16,6 +16,7 @@ if fullMode {
     textTests()
     await officeTests()
     useFirstTests()
+    usageAlertsTests()
     await weeklyUsageTests()
     costFixtureTests()
     hubFixtureTests()

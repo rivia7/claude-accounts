@@ -9,7 +9,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 | 服务器认手机不再要网页端（`guest`、`--no-guests`）；二维码改成给 App 的链接（带配对码）；协议核心 `ios/CcaRemoteKit`；测试用的手机 `ios/tools/ccaguest`；`tests/ios_kit.rs` | 做完了，随 3.7.0 发布（2026-11-25） |
-| 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机第一次试（第一个 TestFlight 构建）扫码必定「连不上服务器」：ATS，见下面「App」的 `Info.plist`；修好的第二个构建（20261125.183806）真机上配对、接入都成了（2026-11-26）。用户在真机上试出来的两处改了：接着的会话做完了手机不响（`Notifier`）、Claude Code 的屏幕拖不动（`SizedTerminalView`）；又加了推送（下面「推送」，模拟器里端到端测过）。这些在第三个构建里（20261126.54245，2026-11-26 传的）：真机上锁屏推送收到了、显示的是解开的字（2026-11-26，通知扩展、真的推送服务、Team 的服务器转都对）。之后用户提的两处改了：会话照最后打字的那一处排（手机接上不再让 Mac 上的变窄；下面「App」的 `TerminalBox`）、「关掉的会话也推送」开关（下面「推送」）。这两处随 cca 3.7.4 发布、在第四个构建里（20261126.72224，2026-11-26 传的），两个 Team 的服务器也部署成了 3.7.4（认 `sids`）；真机上还没试 |
+| 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机第一次试（第一个 TestFlight 构建）扫码必定「连不上服务器」：ATS，见下面「App」的 `Info.plist`；修好的第二个构建（20261125.183806）真机上配对、接入都成了（2026-11-26）。用户在真机上试出来的两处改了：接着的会话做完了手机不响（`Notifier`）、Claude Code 的屏幕拖不动（`SizedTerminalView`）；又加了推送（下面「推送」，模拟器里端到端测过）。这些在第三个构建里（20261126.54245，2026-11-26 传的）：真机上锁屏推送收到了、显示的是解开的字（2026-11-26，通知扩展、真的推送服务、Team 的服务器转都对）。之后用户提的两处改了：会话照最后打字的那一处排（手机接上不再让 Mac 上的变窄；下面「App」的 `TerminalBox`）、「关掉的会话也推送」开关（下面「推送」）。这两处随 cca 3.7.4 发布、在第四个构建里（20261126.72224，2026-11-26 传的），两个 Team 的服务器也部署成了 3.7.4（认 `sids`）；真机上还没试。3.7.5（还没传构建）：「账号」页（下面「App」，像 Mac App 的总览和账号页）、额度用完 / 恢复的通知（下面「推送」）：协议核心和真的服务器、真的 cca 端到端测过，演示模式里截图看过 |
 | 3 | TestFlight（`ios/testflight.sh`，见下面「TestFlight」）、App Store 审核（隐私清单、出口合规） | 上传脚本做好了；第一次上传 2026-11-25（1.0，构建号 20261125.110017，在一台登录着付费开发者账号的测试 Mac 上），到 2026-11-26 一共传了四个构建；App Store 审核没开始 |
 | 4 | 去掉网页端，服务器重新部署（每台都先问） | 等 App 上架 |
 
@@ -35,7 +35,11 @@
 - `Channel.swift`：握手、记录、帧、开场白
 - `Identity.swift`：Ed25519 的身份、SSHSIG 签名（命名空间 `cca-presence`）。每台服务器一把（键 `id <地址>`）
 - `PairInvite.swift`、`Net.swift`：链接、钉住证书的请求（`Requester`：时钟偏了服务器回 `clock` 时按它的时间重发一次）、TCP 连接
-- `Client.swift`：`RemoteClient`（配对、取消配对、列会话、接入）、`RemoteStore`（App 里是钥匙串；`ccaguest` 是目录里的文件）
+- `Client.swift`：`RemoteClient`（配对、取消配对、列会话、接入）、`RemoteStore`（App 里是钥匙串；`ccaguest` 是目录里的文件）。列会话时带着 `have`
+  一起取回各台电脑放上来的账号的状态（`PeerListing.status`、`statusServed`；remote.md「手机上的账号」）
+- `Status.swift`：账号的状态（`statusKeys`、`statusOpen`：解开、核对样子，编号不对、样子不对的账号丢掉）：`HostStatus`、`AccountStatus`（`exhausted`：
+  额度用完的规则，和辅助程序 `status.rs` 的 `exhausted`、Mac App 的 `Diagnosis` 一样；`nearLimit`：快用完了）、`AccountUsage`、`UsageWeeks`；额度的通知
+  （`UsageNote`）和字（`UsageText`：几点恢复、窗口和工具的叫法，和 Mac App 的 `Texts` 一样的说法）
 - `Attachment.swift`：`Link`（一条连接：开场白、握手、20 秒一次心跳、60 秒没听到对面算断、输入按 8192 字节切）、`Attachment`（断了重新接：
   间隔 1、2、4、8、15 秒，共 300 秒；服务器说没有这个会话再等 45 秒；接上不到 10 秒又断连着 5 次就不再试——和 `attach.rs`、`core.js` 的同名常量一样）；
   `nudge()`：App 回到前台时调，断着的马上再试，开着却 25 秒没听到对面的当成断了；会话推来的通知（`NOTIFY` 帧）交给 `onNote`
@@ -51,15 +55,25 @@
 `macos/Sources/CcaApp/LogoGlyph.swift` 直接引用（Logo 的形状和颜色只写在那一处），图标是 `macos/tools/make-icon --flat --opaque` 画的
 （`ios/App/Assets.xcassets`：铺满、不带透明通道，圆角系统自己裁）。
 
-- `CcaApp.swift`：入口。启动参数 `-demo`（演示模式）、`-screen terminal|pair|settings`（演示模式里直接开那一页，截图用）
-- `Model/AppModel.swift`：配对过的电脑、它们上面的会话（列表看得见时 15 秒查一次，和 Mac App 一样）、配对的进度、开着的终端；
+- `CcaApp.swift`：入口。启动参数 `-demo`（演示模式）、`-screen list|accounts|account|terminal|pair|settings`（演示模式里直接开那一页，截图用；
+  `account` 另带 `-account N`：第几个账号，各台电脑的接着数）
+- `Model/AppModel.swift`：配对过的电脑、它们上面的会话和账号的状态（同一次查到的：App 在前台、没开着终端时 15 秒查一次，和 Mac App 一样）、
+  配对的进度、开着的终端；底下两页（`AppTab`：会话、账号，记着上次选的；设置在右上角的齿轮里）。终端推到点它的那一页的导航里（`terminalTab`：
+  账号页里点的返回账号页），开着终端时底下的标签栏藏起来；`openAccount`：点了额度的通知打开那个账号；
   `TerminalSession`：一个终端的连接状态、标题，字节进出
 - `Model/Backend.swift`：`Backend`（`LiveBackend` 是 CcaRemoteKit 的 `RemoteClient`）、`KeychainStore`：密钥存钥匙串
   （`AfterFirstUnlockThisDeviceOnly`、不同步到 iCloud），配对表存 App 自己的目录；删了 App 再装时第一次打开清掉钥匙串里留下的
-- `Model/Demo.swift`：演示模式（审核用、没有电脑时自己看看）：两台模拟的电脑、三个会话（一个只看、一个不在线），终端里放一段写好的输出，
+- `Model/Accounts.swift`：账号页的模型：`AccountRef`（配对编号 + 账号编号）、`AccountTrouble`、`AccountMood`（这个账号现在怎样：在用、额度用完 · 几点恢复、
+  没登录、登错号、登录失效、先用它、快用完了，照 Mac App 总览的说法；端口、出口的问题手机上不知道）、`AccountCensus`（页头那一句：几个账号、几个在用、
+  空闲、额度用完、没登录……）、`PeerListing.sessions(of:)`（照 `aid`
+  找这个账号的会话）
+- `Model/Demo.swift`：演示模式（审核用、没有电脑时自己看看）：两台模拟的电脑、三个会话（一个只看、一个不在线）、几个账号（`DemoAccounts`），终端里放一段写好的输出，
   敲的字只在本机回显；不联网、不碰钥匙串
 - `Views/`：欢迎页（没配对过）、会话列表（一台电脑一组，点一下接入，长按选只看）、终端页、配对（相机扫码用 VisionKit，扫不了时粘贴；
-  经链接打开 App 时先问一句再配）、设置（外观、这台手机的名字、配对过的电脑和取消配对、演示模式、开源许可）
+  经链接打开 App 时先问一句再配）、设置（外观、这台手机的名字、配对过的电脑和取消配对、演示模式、开源许可）；
+  账号页（`AccountsView`：一台电脑一组，一个账号一行：头像、名字、套餐、现在怎样、5 小时 / 本周的小条；那台电脑还没放、服务器太旧、不让这台手机看、
+  账号太多没放下的各说一句，底下是多久以前放的；`AccountDetailView`：现在怎样、额度（`UsageViews`：5 小时、本周、按模型、Codex 还能重置几次、
+  Antigravity 的几组）、每周用量的图（13 周，点一根看那一周；Antigravity、第三方 API 没有）、这个账号的会话（点一下接入））
 - `Terminal/TerminalSurface.swift`：唯一 `import SwiftTerm` 的文件，规矩和 Mac App 的同名文件一样：图形协议编的时候就去掉了，
   不认 OSC 1337、不报 sixel，链接只开 http / https，剪贴板只在 App 在前台、键盘焦点在终端上时写、不给读，不响铃；终端固定黑底，
   这一页的导航栏也是深色；只看的不弹键盘；会话里的程序自己写的通知（OSC 777 的 notify、OSC 9，数字开头的是进度条不算）交给 `Notifier`。
@@ -110,21 +124,24 @@ TestFlight 先用用户自己的付费个人团队（2026-11-25），版本号�
   不让发通知了就把登记换成空的。启动、配好、取消配对、回到前台时对一遍；配了对、还没问过时问通知的权限。
   设置里的「关掉的会话也推送」（`Pusher.closedToo`，默认开着，存在 UserDefaults）：关着时登记里带 `sids`（App 里开着的那个会话；这台服务器上
   没开着的是空的：一个都不推），开、关终端时（`AppModel.terminal` 变了）跟着重新登记；记着的登记里带上它（`" only:会话编号"`）。服务器回的没有
-  `"sids": true`（旧版，照旧都推）：记成 `unfiltered`，开着的会话变了也不再登记，一天以后再试；设置里说哪台服务器还不认
+  `"sids": true`（旧版，照旧都推）：记成 `unfiltered`，开着的会话变了也不再登记，一天以后再试；设置里说哪台服务器还不认。
+  设置里的「额度用完、恢复时通知」（`Pusher.usageNotes`，默认开着，UserDefaults 的 `pushUsage`；docs/dev/push.md「额度的通知」）：登记时总说 `usage`
+  （关着是 false），记着的登记后面多一段 `" usage"`；服务器回的没有 `"usage": true`（3.7.5 以前的）记成 `usageless`，一天以后再登记，设置里说哪台服务器推不了
 - 通知密钥：`Backend.syncNoteKeys` 照配对表把每个配对的通知密钥（CcaRemoteKit 的 `NoteKey`：`HMAC(P, "cca-remote/v1/note")`，不是 P）写进和通知扩展
   共用的钥匙串分组（`NoteKeychain`：service `cca.remote.note`，`AfterFirstUnlockThisDeviceOnly`，不同步；第一次装时连同别的一起清掉）。身份、配对的
   密钥照旧在 App 自己的分组里：权限里 `keychain-access-groups` 的第一个是它，以前存的不用搬。分组名写在两边 Info.plist 的 `CcaKeychainGroup`
   （`$(AppIdentifierPrefix)com.cca.remote.shared`；模拟器里没有团队时是 `FAKETEAMID.` 开头）
 - `ios/Notify/`（通知扩展 `notify.appex`，bundle id `com.cca.remote.notify`，链 CcaRemoteKit）：`NotificationService` 拿共用分组里的通知密钥一把把试着解
   推送里的 `n`（`openPushed`），解开了换上 `NoteCard` 做的字、按会话叠在一起（`threadIdentifier` 是会话编号），userInfo 里带配对、会话、编号（点了回到
-  那个会话）；解不开、时间到了还没做完照原样给（固定的那一句）
+  那个会话）；额度的通知（`kind` 是 usage）字照这台手机的时区写（`UsageText`），同一个账号的叠在一起（`threadIdentifier` 是 `usage:<配对>:<账号编号>`），
+  userInfo 里带配对、账号编号（点了打开那个账号：`Notifier` → `AppModel.openAccount`）；解不开、时间到了还没做完照原样给（固定的那一句）
 - 去重：`Notifier.firstTime` 照编号记 10 分钟：接着的会话里收到的 `NOTIFY` 和推来的那份只弹先到的；App 在前台时推来的经 delegate 的 `willPresent`，
   弹过了就不弹。本地通知的标识也用这个编号（推送服务照它合并）
 - 权限（`ios/Entitlements/`）：App 有 `aps-environment`（工程里是 development，导出给 App Store 时换成 production）和两个钥匙串分组，扩展只有共用的那一个。
   `ios/test.sh` 查两个版本里都有通知扩展、版本号和 `CcaKeychainGroup` 和 App 的一样；`testflight.sh` 查导出的 App 的 `aps-environment` 是 production、
   两边的分组
 - 设置页的「通知」：推送登记了没有、为什么没有（不让发通知、要不到令牌、哪台服务器没开推送），不让发通知时有去系统设置的按钮；
-  「关掉的会话也推送」开关（演示模式里没有），关着时哪台服务器还不认它
+  「关掉的会话也推送」「额度用完、恢复时通知」两个开关（演示模式里没有），关着 / 开着时哪台服务器还不认它
 - 测试、没验证的：docs/dev/push.md「测试」「没验证的」（模拟器里的 `simctl push` 不经通知扩展：扩展的进程只有真机上看得到）
 
 ## TestFlight
@@ -155,9 +172,13 @@ SwiftTerm，`simctl spawn`），演示模式各页浅色 / 深色截图到 `ios/
 `bash ios/test.sh --check 派生数据目录 cca.app` 不编，只查编好的正式版那三项（SwiftTerm、TestDriver、ATS）：testflight.sh 拿它查归档。
 
 `cd cli && cargo test --profile kit -p cca-tests --test suite -- ios_kit`（`tests/ios_kit.rs`，回归的 unit 一节里也跑；要先 `cargo build --release`；没有 swiftc 时跳过）：命令行工具的 swiftc 把 CcaRemoteKit 的源码加上一个 main 编成 macOS 上的程序（编出来的在 `ios/build/test/`，源码没变不重编）。
-- `against_the_spec`：`tests/kit/spec.rs`（照文档独立写的那一份）出数据，`ios/Tests/KitTests` 逐项核对；Swift 封的配对消息、发的记录、签名再拿回 `kit::spec` 核对（签名用 `ssh-keygen -Y verify`）。证书指纹对 EC、RSA、Ed25519 三种证书和 openssl 算的比；通知的 JSON 怎么清理（和 `attach.rs` 的测试同一条）、限流
+- `against_the_spec`：`tests/kit/spec.rs`（照文档独立写的那一份）出数据，`ios/Tests/KitTests` 逐项核对；Swift 封的配对消息、发的记录、签名再拿回 `kit::spec` 核对（签名用 `ssh-keygen -Y verify`）。证书指纹对 EC、RSA、Ed25519 三种证书和 openssl 算的比；通知的 JSON 怎么清理（和 `attach.rs` 的测试同一条）、限流；
+  账号的状态（`kit::spec` 封的：解开、读成模型、哪些账号算用完了、快用完了，配对编号不对的、样子不对的不认）、额度的通知（字、恢复的那一条、不认的样子）
 - `pair_list_attach_type`、`wrong_pin_and_used_code`、`session_ends`：真的服务器、真的辅助程序（`remote-host` 里的会话、`remote-pair-show --web`），手机那一头是 `ios/tools/ccaguest`：扫链接配对、列会话、接入、敲键、会话里的钩子推通知（`remote-notify`）、只看、会话结束、取消配对；指纹不对一个请求都不发成，配对码只能用一次。
   接入时说自己能缩放（ccaguest 的 `--size 40x20`）：接上不改会话的大小、宿主说会话多大（`size 80 24`），手机打了字才照它排（`size 40 20`）
+- `accounts_reach_the_phone`：「账号」页和额度的通知那一条路（remote.md「手机上的账号」）：box 上 alice 的 5 小时额度用完了，ccaguest 列会话时带回
+  box 上的账号（名字、用量、`exhausted`）；登记推送时带 `--usage`，用完的那一条 box 马上推、恢复的那一条服务器到点推，像通知扩展那样解开、
+  字照手机的时区写（测试里是 UTC）；登记不带 `--usage` 就不推，再带上又推
 - `in_the_simulator`（`CCA_IOS_SIM=1`，先跑过 `bash ios/test.sh`：模拟器开着、App 编好了）：模拟器里真的 App（调试版），
   照 `cca remote pair --web` 给的链接配对、接入 box 上真的会话、敲键，box 上收到；会话里推一条通知，App 要弹的标题、副标题、正文对；
   会话开了鼠标上报（假客户端的 `mouse`）以后往下拖三行，box 的终端回显出三格往上的滚轮；截一张 `ios/build/shots/e2e-terminal.png`。

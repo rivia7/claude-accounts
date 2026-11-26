@@ -61,6 +61,7 @@ struct SettingsView: View {
                     LabeledContent("推送", value: pushState)
                     if !model.isDemo {
                         Toggle("关掉的会话也推送", isOn: Binding(get: { push.closedToo }, set: { push.closedToo = $0 }))
+                        Toggle("额度用完、恢复时通知", isOn: Binding(get: { push.usageNotes }, set: { push.usageNotes = $0 }))
                     }
                     if push.allowed == false, !model.isDemo, let u = URL(string: UIApplication.openNotificationSettingsURLString) {
                         Button("在系统设置里打开通知") { UIApplication.shared.open(u) }
@@ -126,9 +127,15 @@ extension SettingsView {
             : "只推 App 里开着的那个会话（锁着屏、切到别的 App 也算开着），关掉以后就不推了。")
         if push.allowed == false { lines.append("通知关着：在系统的「设置」→「通知」→「cca」里打开。") }
         if let f = push.failure, push.token == nil { lines.append("向 Apple 要推送的令牌没成：\(f)") }
+        lines.append(push.usageNotes
+            ? "额度用完、恢复的通知：配对的电脑上有账号的 5 小时或本周额度用完了推一条，到了重置的时间再推一条（那台电脑睡着了也到）。"
+            : "额度用完了、恢复了不推。")
         if !push.closedToo, !push.unfiltered.isEmpty {
             lines.append("「\(push.unfiltered.joined(separator: "」「"))」这台服务器还不认这个开关（要管理员更新服务器）：经它配对的电脑，"
                 + "关掉的会话照样推。")
+        }
+        if push.usageNotes, !push.usageless.isEmpty {
+            lines.append("「\(push.usageless.joined(separator: "」「"))」这台服务器还推不了额度的通知（要管理员更新服务器）。")
         }
         if !push.unsupported.isEmpty {
             lines.append("「\(push.unsupported.joined(separator: "」「"))」这台服务器还没接上推送（要管理员更新服务器）：经它配对的电脑，"

@@ -1,29 +1,55 @@
 import CcaRemoteKit
 import SwiftUI
 
-/// 最外面一层：没配对过时是欢迎页，配对过是会话列表；终端推进导航里，配对、设置是弹出的一页
+/// 最外面一层：没配对过时是欢迎页；配对过是底下两页，会话（可以接入的远程会话）和账号（各台电脑上账号的状态、用量）。
+/// 终端推进当时那一页的导航里（开着终端时底下那一排收起来），配对、设置是弹出的一页
 struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         @Bindable var model = model
-        NavigationStack {
-            Group {
-                if model.peers.isEmpty {
+        Group {
+            if model.peers.isEmpty {
+                NavigationStack {
                     WelcomeView()
-                } else {
-                    SessionsView()
+                }
+            } else {
+                TabView(selection: $model.tab) {
+                    Tab("会话", systemImage: "terminal", value: AppTab.sessions) {
+                        NavigationStack {
+                            SessionsView()
+                                .modifier(TerminalDestination(tab: .sessions))
+                        }
+                    }
+                    Tab("账号", systemImage: "person.2", value: AppTab.accounts) {
+                        NavigationStack(path: $model.accountPath) {
+                            AccountsView()
+                                .navigationDestination(for: AccountRef.self) { AccountDetailView(ref: $0) }
+                                .modifier(TerminalDestination(tab: .accounts))
+                        }
+                    }
                 }
             }
-            .navigationDestination(item: $model.terminal) { t in
-                TerminalScreen(session: t)
-            }
         }
+        .onAppear { model.updatePolling() }
         .sheet(isPresented: Binding(get: { model.pairing != nil }, set: { if !$0 { model.cancelPairing() } })) {
             PairSheet()
         }
         .sheet(isPresented: $model.showSettings) {
             SettingsView()
+        }
+    }
+}
+
+/// 开着的终端推在哪一页的导航里：从哪一页接入的就在哪一页（返回时回到那里）
+private struct TerminalDestination: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let tab: AppTab
+
+    func body(content: Content) -> some View {
+        content.navigationDestination(item: Binding(get: { model.terminalTab == tab ? model.terminal : nil },
+                                                     set: { if $0 == nil, model.terminalTab == tab { model.closeTerminal() } })) { t in
+            TerminalScreen(session: t)
         }
     }
 }

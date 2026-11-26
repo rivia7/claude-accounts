@@ -63,7 +63,7 @@ func teamFixtureTests() {
     let fxTeams = loadFixture(StateDoc.self, "state.json")?.config?.teams
     let odd = try? JSONDecoder().decode(TeamEntry.self, from: Data(#"{"id":"ab","name":"x","role":"member","state":"ok","server_update":"x"}"#.utf8))
     check("服务器要更新（3.7.1 起 server_update）：有时带着级别和原因；没有、旧版 cca、样子不对是 nil",
-          fxTeams?.first?.serverUpdate?.need == 1 && fxTeams?.first?.serverUpdate?.level == 0 && fxTeams?.first?.serverUpdate?.why.isEmpty == false
+          fxTeams?.first?.serverUpdate?.need == 2 && fxTeams?.first?.serverUpdate?.level == 0 && fxTeams?.first?.serverUpdate?.why.isEmpty == false
           && fxTeams?.last?.serverUpdate == nil && odd != nil && odd?.serverUpdate == nil && co?.serverUpdate == nil
           && Texts.teamServerUpdate(fxTeams!.first!, fxTeams!.first!.serverUpdate!).hasPrefix("服务器要更新：")
           && Texts.teamServerUpdate(odd!, fxTeams!.first!.serverUpdate!).hasSuffix("请建这个 Team 的管理员更新服务器"))
