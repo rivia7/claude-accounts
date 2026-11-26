@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.6", title: "手机上新建会话，Codex、Antigravity 也会通知你", points: [
+            .init(symbol: "plus.rectangle.on.rectangle",
+                  text: "在「远程会话」页存好模板（账号、文件夹、参数），给配对的手机打开「允许远程启动」，iPhone 上的 cca App 就能照模板新建会话（App 要更新）。"),
+            .init(symbol: "bell.badge",
+                  text: "cca 启动的 Codex、Antigravity 会话做完一轮、在等你时也会通知：推到配对的手机，这台 Mac 上弹系统通知。"),
+            .init(symbol: "gauge.with.dots.needle.33percent",
+                  text: "Claude、Antigravity 的额度改成在 cca 启动的会话里记下（Antigravity 的套餐也是），不再另外去查；Claude Code 输入框下面那一行写账号和用量。"),
+            .init(symbol: "chart.pie",
+                  text: "折合金额多了缓存命中率：账号页图下面那一行、按模型的列表和折合金额页的合计。"),
+        ]),
         ReleaseNote(version: "3.7.5", title: "手机上看账号的额度，用完、恢复时通知你", points: [
             .init(symbol: "person.crop.rectangle.stack",
                   text: "iPhone 上的 cca App 多了「账号」页：配对过的每台 Mac 上有哪些账号、现在怎样，5 小时和本周的额度，每周的用量和这个账号的会话。"),
