@@ -6,7 +6,7 @@
 //! 启动器起的会话里的“cca”是假客户端（启动器的 CCA_SELF 指着它）：它一启动报一行 `<ready 行 列 … args=[…]>`，看得到起它的参数；
 //! 环境、当前目录让它 `run` 一下 env、pwd 看。
 
-use kit::fleet::Device;
+use kit::fleet::{Device, Team};
 use kit::fsx::{self, wait_for};
 use kit::harness::{Ctx, Module};
 use kit::json::Value;
@@ -19,7 +19,7 @@ pub const MODULE: Module = Module {
     name: "remote_launch",
     src: include_str!("remote_launch.rs"),
     default: true,
-    tests: &[case!(a_phone_launches_a_session), case!(what_the_launcher_refuses)],
+    tests: &[case!(a_phone_launches_a_session), case!(what_the_launcher_refuses), case!(what_changed_on_the_host)],
 };
 
 /// 同一台手机两次接入启动器之间至少隔这么久（launch.rs 的 JOIN_GAP 是 3 秒：太勤的不理）
@@ -43,7 +43,12 @@ fn phone<'a>(fx: &'a Base, a: &Device, b: &'a Device) -> SpecPeer<'a> {
 
 /// a 上加一个模板（alice 的 Claude 账号，在 dir 里，带着 args）。返回 (编号, 摘要)
 fn template(a: &Device, name: &str, dir: &str, args: &[&str]) -> (String, String) {
-    let mut argv = vec!["remote-template", "add", name, "claude", "alice", dir, "--"];
+    template_for(a, name, "alice", dir, args)
+}
+
+/// 同 [`template`]，账号是 account（账号表里的别名或者邮箱）
+fn template_for(a: &Device, name: &str, account: &str, dir: &str, args: &[&str]) -> (String, String) {
+    let mut argv = vec!["remote-template", "add", name, "claude", account, dir, "--"];
     argv.extend(args);
     let out = a.ok(&argv);
     let (id, got) = out.trim_end().split_once('\t').expect("编号<TAB>名字");
@@ -253,6 +258,85 @@ fn what_the_launcher_refuses(t: &mut Ctx) {
     // 一个会话都没起
     assert!(peer.sessions().is_empty());
     assert_eq!(a.ok(&["remote-list", "--local"]), "");
+    l.signal(libc::SIGTERM);
+    assert_eq!(l.wait(secs(15)), 0);
+}
+
+/// 模板加好以后这台机器上变了的：账号走别的服务器、参数现在过不了检查、账号删了、会话已经太多；参数里已经有一句话的模板不能带开场白；
+/// 关掉一台手机的远程启动（另一台还开着、启动器接着跑）以后它接不进启动器
+fn what_changed_on_the_host(t: &mut Ctx) {
+    let fx = Base::new(t);
+    let (mut a, b, c) = (fx.device("box"), fx.device("phone"), fx.device("phone2"));
+    fx.machines(&[&a, &b, &c]);
+    // 这台机器自己的账号 dave（走加入的第一个 Team 的服务器，就是这一台）、另一个 Team 给的 bob（走那个 Team 的服务器：没起，
+    // 启动器也不连它——没有在那台上配的手机）
+    let accounts = a.cca.join("accounts.json");
+    let mut table = fsx::read_json(&accounts);
+    let rows = table.as_obj_mut().expect("账号表是对象");
+    rows.insert("dave(dave@example.com)", "US-A");
+    rows.insert("bob(bob@example.com)", "US-A");
+    fsx::write_json(&accounts, &table);
+    let other = Team::named(&fx.d, "另一个组", "root2", &"11".repeat(16));
+    let (url, pins) = ("https://127.0.0.1:9", [fx.pin.as_str()]);
+    let doc = other.doc(url, &pins, &obj! { "accounts" => obj! { "claude" => obj! { "bob@example.com" => "US-A" } } });
+    a.join_with(&other, url, &pins, Some(&doc), None);
+    let r = a.run(&["team-apply"]);
+    assert_eq!((r.code, r.out.as_str()), (0, ""), "{}", r.err);
+    let peer = phone(&fx, &a, &b);
+    let peer2 = phone(&fx, &a, &c);
+    let work = relay::work(&a);
+    let dir = work.to_str().expect("UTF-8");
+    let extra = work.join("extra.json");
+    fsx::write(&extra, "{}");
+    let (wid, wdigest) = template(&a, "工作", dir, &[]);
+    let (did, ddigest) = template_for(&a, "dave 的", "dave", dir, &[]);
+    let (oid, odigest) = template_for(&a, "bob 的", "bob", dir, &[]);
+    let (sid, sdigest) = template(&a, "带设置", dir, &["--settings", "extra.json"]);
+    let (lid, ldigest) = template(&a, "带话", dir, &["--model", "opus", "说中文"]);
+    for p in [&peer.pid, &peer2.pid] {
+        a.ok(&["remote-allow", p, "launch", "on"]);
+    }
+    let mut l = launcher(&a);
+    // 说明里没有账号走别的服务器的；参数里已经有一句话的不能带开场白（再接一句：claude 不理它，codex 起不来）
+    let (lsid, doc) = wait_for("启动器的说明", secs(30), || peer.launcher().filter(|(_, d)| d["t"].list().len() == 4));
+    let rows: Vec<(String, bool)> =
+        doc["t"].list().iter().map(|r| (r["n"].str().to_string(), r["l"].as_bool() == Some(true))).collect();
+    let want = [("工作", true), ("dave 的", true), ("带设置", true), ("带话", false)];
+    assert_eq!(rows, want.map(|(n, l)| (n.to_string(), l)));
+    // 两台手机轮流来（同一台两次接进来要隔 3 秒）
+    let tries: [(&SpecPeer, &str, &str, Option<&str>, &str); 2] = [
+        (&peer, &lid, &ldigest, Some("再说一句"), "bad"),
+        (&peer2, &oid, &odigest, None, "other_hub"), // 手机是在这台服务器上配的
+    ];
+    for (p, id, digest, line, code) in tries {
+        assert_eq!(refused(&p.launch(&lsid, &ask(id, digest, line))), (code.to_string(), true));
+    }
+    // 参数现在过不了启动前的检查（--settings 的那个文件后来写进了 apiKeyHelper）；账号表里没有这个账号了
+    fsx::write(&extra, r#"{"apiKeyHelper": "echo test"}"#);
+    let mut table = fsx::read_json(&accounts);
+    table.as_obj_mut().expect("账号表是对象").remove("dave(dave@example.com)");
+    fsx::write_json(&accounts, &table);
+    std::thread::sleep(GAP);
+    assert_eq!(refused(&peer.launch(&lsid, &ask(&sid, &sdigest, None))), ("bad_args".to_string(), true));
+    assert_eq!(refused(&peer2.launch(&lsid, &ask(&did, &ddigest, None))), ("no_account".to_string(), true));
+    // 这台机器走这台服务器的会话已经有 7 个（服务器给一台设备 8 个，启动器自己占一个）：不再起
+    let names7: Vec<String> = (1..=7).map(|i| format!("s{i}")).collect();
+    let busy: Vec<_> = names7.iter().map(|n| relay::session(&a, Device::KEY, n, &[n.as_str()])).collect();
+    std::thread::sleep(GAP);
+    assert_eq!(refused(&peer.launch(&lsid, &ask(&wid, &wdigest, None))), ("busy".to_string(), true));
+    drop(busy);
+    let log = log_of(&a);
+    for code in ["bad", "other_hub", "bad_args", "no_account", "busy"] {
+        assert!(log.contains(&format!("没起（{code}）")), "{code}：{log}");
+    }
+    // 关掉一台手机的远程启动：它不再收到说明、要不来接入启动器的票据；另一台照旧（启动器接着跑）
+    a.ok(&["remote-allow", &peer.pid, "launch", "off"]);
+    wait_for("关掉的那台手机收不到说明了", secs(30), || peer.launcher().is_none().then_some(()));
+    wait_for("另一台照旧收得到", secs(30), || peer2.launcher().filter(|(s, _)| *s == lsid));
+    let (st, j) = fx.call(&b, "relay_attach", &obj! { "sid" => lsid.as_str(), "pid" => peer.pid.as_str() });
+    assert_eq!((st, j["error"].str()), (404, "no_session"), "{j}");
+    assert!(l.poll().is_none(), "启动器还在跑");
+    assert!(!log_of(&a).contains("起了会话"), "一个会话都没起：{}", log_of(&a));
     l.signal(libc::SIGTERM);
     assert_eq!(l.wait(secs(15)), 0);
 }

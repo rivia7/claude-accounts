@@ -799,7 +799,7 @@ fn codex_notes_reach_the_other_machine(t: &mut Ctx) {
     let mut v = relay::term(&b, &["remote-attach", &row[..8]]);
     v.expect("<ready 24 80");
     let osc = |title: &str, body: &str| format!(r"\x1b\]777;notify;{title} · 工作 · work;{body}\x1b\\");
-    let popped = || fsx::try_read_text(&a.home.join("osascript.log")).unwrap_or_default();
+    let popped = || fsx::try_read_text(a.home.join("osascript.log")).unwrap_or_default();
     let said = |h: &mut Term, line: &str, back: &str| {
         let at = h.mark();
         h.send(format!("{line}\n"));

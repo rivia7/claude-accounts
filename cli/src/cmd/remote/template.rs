@@ -12,7 +12,7 @@ use super::{launch, local, peers, relay};
 use crate::cmd::agy::agy_interactive;
 use crate::cmd::codex::codex_interactive;
 use crate::cmd::hub::HubKind;
-use crate::cmd::settings::{home_tilde, launch_settings_problems_in, CLAUDE_VALUES};
+use crate::cmd::settings::{home_tilde, launch_settings_problems_in, CLAUDE_VALUES, CODEX_VALUES};
 use crate::cmd::table::account_named;
 use crate::core::base::Lock;
 use crate::core::model::parse_key;
@@ -143,10 +143,15 @@ impl Template {
         Some((key.to_string(), if a.is_empty() { e } else { a }))
     }
 
-    /// 能不能带开场白（接在参数后面：`-- 开场白`，工具当它是头一句话）：Claude Code、Codex 认；agy 还没核对过，先不给；参数里
-    /// 已经有 `--` 的也不给（后面再接一个就不是一句话了）
+    /// 能不能带开场白（接在参数后面：`-- 开场白`，工具当它是头一句话）：Claude Code、Codex 认；agy 还没核对过，先不给。参数里
+    /// 已经有一句话的（[`has_words`]）也不给：再接一句的话，Claude Code 只拿头一句、手机给的那句不理（2.1.332：多出来的参数
+    /// 它不拦也不用），Codex 起不来（0.172.0：unexpected argument）
     pub fn line_ok(&self) -> bool {
-        matches!(self.tool.as_str(), "claude" | "codex") && !self.args.iter().any(|a| a == "--")
+        match self.tool.as_str() {
+            "claude" => !has_words(&self.args, CLAUDE_VALUES),
+            "codex" => !has_words(&self.args, CODEX_VALUES),
+            _ => false,
+        }
     }
 
     /// 现在用得了用不了：`no_account`（账号表里没有了）、`no_dir`（文件夹没了）、`bad_args`（参数有问题，或者不是交互的会话）、
@@ -184,6 +189,19 @@ impl Template {
 
 /// Claude Code 的子命令（`claude mcp …` 这些不是会话）
 const CLAUDE_SUBCOMMANDS: &[&str] = &["config", "mcp", "plugin", "migrate-installer", "setup-token", "doctor", "update", "install"];
+
+/// 参数里有没有一句话：有不是选项、也不是选项的值的参数（values 是这个工具带一个值的选项：跳过它的值），或者 `--`（后面的都是话）
+fn has_words(args: &[String], values: &[&str]) -> bool {
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        match a.as_str() {
+            f if values.contains(&f) => i += 2,
+            f if f.starts_with('-') && f.len() > 1 && f != "--" => i += 1,
+            _ => return true,
+        }
+    }
+    false
+}
 
 /// 这次是不是 Claude Code 交互的会话：没有 -p / --print、--version、--help，头一个不是选项的参数不是子命令（`--` 后面的都是开场白）
 fn claude_interactive(args: &[String]) -> bool {
@@ -487,6 +505,11 @@ mod tests {
         assert!(tpl("codex", &["--model", "x"]).line_ok());
         assert!(!tpl("agy", &[]).line_ok(), "agy 还没核对过");
         assert!(!tpl("claude", &["--", "x"]).line_ok(), "已经带着 --");
+        assert!(!tpl("claude", &["--model", "opus", "说中文"]).line_ok(), "参数里已经有一句话");
+        assert!(tpl("claude", &["--append-system-prompt", "说中文", "--model=opus", "-c"]).line_ok(), "选项的值不是话");
+        assert!(!tpl("codex", &["-c", "a=1", "修一下"]).line_ok());
+        assert!(tpl("codex", &["-c", "a=1", "--search"]).line_ok());
+        assert!(!tpl("codex", &["resume"]).line_ok(), "子命令：再接一句就成了它的参数");
     }
 
     #[test]
