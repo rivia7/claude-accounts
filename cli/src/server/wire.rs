@@ -111,6 +111,16 @@ pub fn aid_re() -> &'static Re {
     re!(r"^[0-9a-f]{32}$")
 }
 
+/// 推送服务给手机上的 App 的令牌（推送的登记里的）：小写的十六进制。推送服务现在给的是 32 个字节，以后可能变长
+pub fn push_token_re() -> &'static Re {
+    re!(r"^[0-9a-f]{64,200}$")
+}
+
+/// 一条通知的编号（宿主给的；手机经推送、经接着的会话各收到一份同一条时照它认出来）：16 个小写的十六进制字符
+pub fn note_id_re() -> &'static Re {
+    re!(r"^[0-9a-f]{16}$")
+}
+
 /// 请求的 nonce（Py:91）
 pub fn nonce_re() -> &'static Re {
     re!(r"^[0-9a-f]{32}$")

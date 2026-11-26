@@ -145,11 +145,11 @@ pub fn api_env(v: &Dict) -> Dict {
 }
 
 /// 第三方 API 账号的 claude --settings：key 由 apiKeyHelper 现取（回调 cca _api-key，不进环境变量），
-/// 地址、模型写在 env 里。--settings 的优先级高于共享的 settings.json 和进程环境，谁也盖不掉它们。另带着 session_hook
+/// 地址、模型写在 env 里。--settings 的优先级高于共享的 settings.json 和进程环境，谁也盖不掉它们。另带着 claude_hooks
 pub fn api_settings(key: &str, v: &Dict) -> String {
     let helper = format!("{} _api-key {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, t())));
     let settings = dict! { "apiKeyHelper" => helper, "env" => api_env(v) };
-    if let Some(h) = session_hook(key) {
+    if let Some(h) = claude_hooks(key) {
         settings.set("hooks", h);
     }
     json::dumps(&V::Dict(settings), json::LINE)
@@ -167,6 +167,18 @@ pub fn session_hook(key: &str) -> Option<Dict> {
     let command = format!("{} _session-start {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, t())));
     let hook = dict! { "type" => "command", "command" => command, "timeout" => 10 };
     Some(dict! { "SessionStart" => crate::list![dict! { "hooks" => crate::list![hook] }] })
+}
+
+/// 经 --settings 交给 Claude Code 的全部 hooks：session_hook，远程会话开着时再加 cca 自己带的「做完了 / 在等你」
+/// （remote/hook.rs：Stop、PermissionRequest、Notification，回调 cca _remote-hook，推给接着这个会话的各处）。都没有是 None
+pub fn claude_hooks(key: &str) -> Option<Dict> {
+    let hooks = session_hook(key).unwrap_or_default();
+    if super::remote::notify_hooks_on() {
+        for (event, groups) in super::remote::notify_hooks().items() {
+            hooks.set(event, groups);
+        }
+    }
+    (!hooks.is_empty()).then_some(hooks)
 }
 
 /// ~/.cca 里绝不给 Claude 读写的（在不在工作目录里都挡，用户同意了、bypassPermissions 时也一样）：登录凭证和浏览器资料（以前拉维护者
@@ -1331,13 +1343,13 @@ impl Tool {
     /// `T.run_args(key, v)`：启动账号时加在用户参数前面的
     pub fn run_args(&self, key: &str, v: &V) -> Vec<String> {
         match self.kind {
-            // 这个账号自己的目录加成工作目录（cca_dir_args）；再加 --settings：记下会话是哪个账号的 hook（session_hook），
-            // 第三方 API 账号的还有地址、模型和 apiKeyHelper
+            // 这个账号自己的目录加成工作目录（cca_dir_args）；再加 --settings：hooks（claude_hooks：记下会话是哪个账号的，
+            // 远程会话开着时还有「做完了 / 在等你」），第三方 API 账号的还有地址、模型和 apiKeyHelper
             Kind::Claude => {
                 let mut out = cca_dir_args(key);
                 let settings = match v.as_dict() {
                     Some(d) => Some(api_settings(key, &d)),
-                    None => session_hook(key).map(|h| json::dumps(&V::Dict(dict! { "hooks" => h }), json::LINE)),
+                    None => claude_hooks(key).map(|h| json::dumps(&V::Dict(dict! { "hooks" => h }), json::LINE)),
                 };
                 if let Some(s) = settings {
                     out.push("--settings".to_string());

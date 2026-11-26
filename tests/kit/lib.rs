@@ -2,6 +2,7 @@
 //! 不用辅助程序（cli/src）的代码——把它当黑盒；协议那一头照 server/README.md 独立实现。
 
 pub mod acmefake;
+pub mod apnsfake;
 pub mod bash;
 pub mod cca_src;
 pub mod crypto;

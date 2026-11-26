@@ -322,9 +322,15 @@ fn get_health_and_not_found() {
     let relayed = Bench::with(true);
     let text = relayed.run(&request(Method::Get, "/v1/health", &[], b"")).1;
     assert!(
-        text.contains(r#""team_leave","pair_open","pair_put""#) && text.ends_with(r#","relay":{"port":18444,"guests":true}}"#),
+        text.contains(r#""team_leave","pair_open","pair_put""#)
+            && text.ends_with(r#","relay":{"port":18444,"guests":true}}"#)
+            && !text.contains("push_set"),
         "{text}"
     );
+    // 开着推送：relay 里多一项 push（ops 里不列 push_set：没开推送时和以前逐字节一样）
+    relayed.ctx.remote.as_ref().unwrap().lock().set_pusher(crate::server::push::Pusher::for_test().0);
+    let text = relayed.run(&request(Method::Get, "/v1/health", &[], b"")).1;
+    assert!(text.ends_with(r#","relay":{"port":18444,"guests":true,"push":true}}"#) && !text.contains("push_set"), "{text}");
     // GET 不扣限流的配额（health 是给监控、安装脚本一直问的）
     for _ in 0..300 {
         assert_eq!(b.run_at(&request(Method::Get, "/v1/health", &[], b""), NOW, 0.0).0, 200);

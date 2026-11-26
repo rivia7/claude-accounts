@@ -591,13 +591,13 @@ rs_pty() {   # rs_pty 一项环境：在真的终端里（script，不设 CCA_TT
 rs_last() { grep "^$1:" claude.log | tail -n 1; }   # 假 claude 最近一次记下的参数（ARGS）、环境（ENV）
 rs_pty CCA_REMOTE=
 rs_args=$(rs_last ARGS); rs_env=$(rs_last ENV)
-ok "开关没开、在终端里：照原样直接运行（没有会话目录），退出码透传" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -n "$rs_env" ] && [ ! -e "$H/.cca/remote" ]'
+ok "开关没开、在终端里：照原样直接运行（没有会话目录），退出码透传；不带 cca 自己的「做完了 / 在等你」钩子（参数里没有 _remote-hook；--settings 里照旧只有记下会话的那一个）" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -n "$rs_env" ] && [ ! -e "$H/.cca/remote" ] && ! printf "%s" "$rs_args" | grep -q -- "_remote-hook" && [ "$("$TESTBIN" fx hookless "$rs_args" "$(basename "$AD")")" != BAD ]'
 : > claude.log
 run CCA_REMOTE=1 cca @alice --version >/dev/null 2>&1; rc=$?
-ok "CCA_REMOTE=1、不在终端里（界面 App、脚本）：照原样直接运行" '[ $rc -eq 3 ] && [ "$(rs_last ARGS)" = "$rs_args" ] && [ ! -e "$H/.cca/remote" ]'
+ok "CCA_REMOTE=1、不在终端里（界面 App、脚本）：照原样直接运行；开关开着就带上 cca 自己的「做完了 / 在等你」钩子（--settings 里的 Stop、PermissionRequest、Notification，回调 cca _remote-hook：不在宿主里时它什么都不做），别的参数一样" '[ $rc -eq 3 ] && [ "$("$TESTBIN" fx notifyless "$(rs_last ARGS)")" = "$rs_args" ] && [ ! -e "$H/.cca/remote" ]'
 : > claude.log
 rs_pty CCA_REMOTE=1
-ok "CCA_REMOTE=1、在终端里：客户端跑在会话宿主里，它看到的参数、环境（代理、配置目录、fd 3 关着……）和直接运行时一样，退出码透传" '[ "$(cat "$T/rs.rc")" = 3 ] && [ "$(rs_last ARGS)" = "$rs_args" ] && [ "$(rs_last ENV)" = "$rs_env" ] && [ "$(stat -f %Lp "$H/.cca/remote")" = 700 ]'
+ok "CCA_REMOTE=1、在终端里：客户端跑在会话宿主里，它看到的参数（带着那几个钩子）、环境（代理、配置目录、fd 3 关着……）和直接运行时一样，退出码透传" '[ "$(cat "$T/rs.rc")" = 3 ] && [ "$("$TESTBIN" fx notifyless "$(rs_last ARGS)")" = "$rs_args" ] && [ "$(rs_last ENV)" = "$rs_env" ] && [ "$(stat -f %Lp "$H/.cca/remote")" = 700 ]'
 ok "会话结束：登记、socket 和说明都删掉" '! ls "$AD"/cli-*.json >/dev/null 2>&1 && [ -z "$(ls "$H/.cca/remote")" ]'
 touch "$T/hold"
 rs_pty CCA_REMOTE=1 &
@@ -639,13 +639,14 @@ out=$(run cca remote on 2>&1); rc=$?
 ok "cca remote on：记进 config.json，说明怎么接回去、怎么关" '[ $rc -eq 0 ] && cfgok "c[\"remote\"] is True" && printf "%s" "$out" | grep -q "已打开：之后在终端里启动的会话放进会话宿主里运行" && printf "%s" "$out" | grep -q "cca remote attach"'
 ok "cca remote：开着" 'run cca remote 2>&1 | grep -q "远程会话：开着"'
 rm -rf "$H/.cca/remote"
+: > claude.log
 rs_pty CCA_REMOTE=0
-ok "开关开着、这一次 CCA_REMOTE=0：直接运行" '[ "$(cat "$T/rs.rc")" = 3 ] && [ ! -e "$H/.cca/remote" ]'
+ok "开关开着、这一次 CCA_REMOTE=0：直接运行，不带 cca 自己的钩子" '[ "$(cat "$T/rs.rc")" = 3 ] && [ ! -e "$H/.cca/remote" ] && [ "$(rs_last ARGS)" = "$rs_args" ]'
 run cca @alice --version >/dev/null 2>&1; rc=$?
 ok "开关开着、不在终端里：直接运行" '[ $rc -eq 3 ] && [ ! -e "$H/.cca/remote" ]'
 : > claude.log
 rs_pty CCA_REMOTE=
-ok "开关开着、在终端里：客户端跑在会话宿主里，参数、环境照旧" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -d "$H/.cca/remote" ] && [ "$(rs_last ARGS)" = "$rs_args" ] && [ "$(rs_last ENV)" = "$rs_env" ]'
+ok "开关开着、在终端里：客户端跑在会话宿主里，参数（带着 cca 自己的钩子）、环境照旧" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -d "$H/.cca/remote" ] && [ "$("$TESTBIN" fx notifyless "$(rs_last ARGS)")" = "$rs_args" ] && [ "$(rs_last ENV)" = "$rs_env" ]'
 out=$(run cca remote off 2>&1); rc=$?
 ok "cca remote off：config.json 里不留这一项" '[ $rc -eq 0 ] && cfgok "\"remote\" not in c" && printf "%s" "$out" | grep -q "已关闭" && run cca remote 2>&1 | grep -q "远程会话：没开"'
 out=$(run cca remote bogus 2>&1); rc=$?
@@ -4446,6 +4447,7 @@ ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在�
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_ok acme'
 # 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
 ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'suite_ok web_relay'
+ok "推送网关（cca-core team-push）：对着照规范写的假推送服务（HTTP/2、HPACK，照苹果的文档核对每个请求）——ES256 的令牌、请求头、内容（只有密文和解不开时显示的两句）、推送服务回的各种结果怎么交回（410 让 Team 的服务器拿掉登记）、过期的令牌和没处理的流再试一次、一条连接接着用和换新的、流量控制、不收的请求和限流、起不来时说清楚" 'suite_ok push_gateway'
 ok "iOS App 的协议核心（ios/CcaRemoteKit，命令行工具的 swiftc 编成 macOS 上的程序；没有 swiftc 时跳过）：和 tests/kit/spec.rs 对着核对配对码、配对、会话的说明、握手、记录、开场白、证书的公钥指纹、二维码的链接、签名；手机那一头（ios/tools/ccaguest）扫 cca remote pair --web 给的链接配对、钉住服务器的证书、列会话、经数据端口接入、敲键、只看、会话结束、取消配对" 'suite_ok ios_kit'
 # suite 里平时跑的模块上面都得有一行：新加了模块（tests/suite.rs）却没在这里加一条的话，它在后台跑了、没过也没人知道
 ok "suite 的每个模块上面都有一行（tests/suite.rs 里加了模块，这一节也要加一条 suite_ok）" '[ -s "$UNITD/results.tsv" ] && [ "$(cut -f1 "$UNITD/results.tsv" | sort | tr "\n" " ")" = "$(printf "%s\n" $SUITE_SEEN | sort | tr "\n" " ")" ]'

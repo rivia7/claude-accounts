@@ -73,6 +73,11 @@ final class DemoBackend: Backend {
     }
 
     func fingerprint(on server: ServerRef) -> String? { "SHA256:demo" }
+
+    // 演示模式不登记推送、不碰钥匙串
+    func servers() -> [ServerRef] { [] }
+    func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure? { RemoteFailure("demo") }
+    func syncNoteKeys() {}
 }
 
 /// 演示的终端：一段预先写好的输出（一点一点放出来），之后是一个提示符，敲的字回显，回车后答一句“这是演示”
@@ -81,6 +86,7 @@ final class DemoLink: TerminalLink {
     var onOutput: (Bytes) -> Void = { _ in }
     var onState: (Attachment.State) -> Void = { _ in }
     var onExit: (Int32) -> Void = { _ in }
+    var onNote: (Note) -> Void = { _ in }
     private let session: RemoteSession
     private let readOnly: Bool
     private var line = ""

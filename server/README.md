@@ -372,6 +372,28 @@ CCA-RELAY/1 <角色> <编号> <cn> <mac>\n
 
 配对的密文、密钥、会话的说明、两头之间的通道都和上面写的一样：访客总是输入配对码的那一头（`b`）、接入方。
 
+### 推送
+
+手机锁着屏、App 没开着时，会话里的通知经苹果的推送服务（APNs）送过去（docs/dev/push.md）。推送服务的密钥只在维护者的服务器上的推送网关
+（`cca-core team-push`）那里；这台服务器给了 `--push https://网关[:端口]` 和 `--push-pin sha256//…`（网关证书公钥的 SHA-256；也可以用环境变量
+`CCA_PUSH_URL`、`CCA_PUSH_PIN`），开着中转、也认手机时才转，`/v1/health` 的 `relay` 里多一项 `"push": true`（没开时 health 和以前一样）。
+
+- **登记**：手机（访客）发 `push_set`：`token`（推送服务给这台手机上这个 App 的令牌，64～200 个小写十六进制字符；空的是不要推送了）、`env`
+  （`production`：App Store、TestFlight 装的；`sandbox`：Xcode 装的）。回 `{done: true}`；不是配了对的访客 403 `denied`，没开推送 404 `no_push`，
+  格式不对 400 `bad`。记在 `remote.json` 访客那一项的 `push`（`{token, env, at}`）；同一个令牌只记在一个访客上（后登记的算）；访客没了登记跟着没了
+- **宿主交来**：控制连接上宿主说 `0x0a` PUSH（JSON `{"pid", "id", "note"}`）：给 `pid` 那个配对的手机推一条。`id` 是这条通知的编号（16 个小写
+  十六进制字符；接入方收到的 NOTIFY 里也带着它：`{"title", "subtitle", "body", "id"}`，手机照它去重），`note` 是下面的密文。会话得是这条控制连接的、
+  `pid` 得是这个会话给看的配对、配对的另一头得是登记了推送的访客，才转；对不上、样子不对的不理（不断开）
+- **转给网关**：`POST /v1/push`（TLS，只认 `--push-pin` 那把公钥：证书机构、名字、有效期都不看），内容 `{"v":1,"token","env","id","note"}`。网关回
+  200 送到了、410 令牌没用了（这台服务器拿掉登记了它的访客的 `push`）、400 不收、429 太多了、502 推送服务出错、503 忙。这台服务器一条线程转，
+  排不上就丢；每台手机攒得下 20 条、3 秒回一条
+- **通知的密文**：明文 `{"v":1,"id","sid","at":秒,"title","subtitle","body"}`（紧凑的 JSON），空格补齐到 256 字节的整数倍；密钥
+  `Kn = HMAC(P, "cca-remote/v1/note")`、`HMAC(Kn, "enc")`、`HMAC(Kn, "mac")`，认证 `HMAC(mac, "cca-remote-note\0" pid "\0" nonce 密文)`，
+  照会话的说明那样封成 `{"n","c","t"}`（`c` 最长 3072 个字符）。手机上的通知扩展只拿得到 `Kn` 派生的这两把，拿不到 P
+- **网关交给推送服务的**：`{"aps":{"alert":{"title":"cca","body":"远程会话里有新的通知"},"mutable-content":1,"sound":"default"},"n":密文}`，
+  `apns-push-type: alert`、`apns-topic: com.cca.remote`、`apns-collapse-id` 是 `id`、12 小时过期；令牌是 ES256 的 JWT（`kid` 是密钥的 Key ID，
+  `iss` 是开发者账号的 Team ID）。手机上的通知扩展解开 `n`、换上真的字；解不开的照这一句显示
+
 ### 网页端
 
 手机浏览器里的那一页（仓库的 `server/web/`，iOS 上的 App 做好以后去掉）：服务器把它发给手机的浏览器，页面自己配对、自己接入，

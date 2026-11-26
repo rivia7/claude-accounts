@@ -3,9 +3,10 @@
 //! 参数、环境变量、出错时说的话都照 Python 的 argparse：
 //! - 参数：--listen、--cert、--key、--behind-proxy、--mode（只有 team）、--team-root、--state、--ttl、--idle、--retain-days、--keys、
 //!   --cost、--cost-days、--port-file、--relay-listen、--relay-port、--relay-port-file、--remote、--web-url、--web-listen、
-//!   --web-cert、--web-key、--web-root、--web-name-file、--web-port-file；`--名字 值` 和 `--名字=值` 两种写法都行
+//!   --web-cert、--web-key、--web-root、--web-name-file、--web-port-file，后加的 --push、--push-pin（推送）；`--名字 值` 和
+//!   `--名字=值` 两种写法都行
 //! - 环境变量：CCA_HUB_HOSTED=1（托管平台上的预设：等于 --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json）、
-//!   CCA_TEAM_ROOT、CCA_WEB_URL、CCA_WEB_LISTEN、CCA_WEB_CERT、CCA_WEB_KEY（命令行里写了的照命令行的）
+//!   CCA_TEAM_ROOT、CCA_WEB_URL、CCA_WEB_LISTEN、CCA_WEB_CERT、CCA_WEB_KEY、CCA_PUSH_URL、CCA_PUSH_PIN（命令行里写了的照命令行的）
 //! - 参数不对：`usage: cca-core team-server [options]` 和 `cca-core team-server: error: 原因`，退出码 2（原因的写法是 argparse 的）
 //! - 启动时出错（证书读不了、状态文件存不了、端口占着、端口文件写不了）：`cca-presence: 起不来：原因` 一句话，退出码 1
 //!   （Python 是没人接的异常：一段调用栈，退出码也是 1）
@@ -27,6 +28,7 @@
 
 use super::front::{self, Tls};
 use super::limits::{Guards, Limits};
+use super::push::{self, Gateway};
 use super::remote::{Remote, Shared};
 use super::store::{Store, StoreCfg};
 use super::tls::CertCtx;
@@ -70,7 +72,7 @@ enum Kind {
 }
 
 /// 认得的参数：名字、要什么值、说明（Py:2141-2176，先后也照它）
-const OPTS: [(&str, Kind, &str); 27] = [
+const OPTS: [(&str, Kind, &str); 29] = [
     ("--help", Kind::Help, "说明这些参数，然后退出"),
     (
         "--listen",
@@ -107,6 +109,17 @@ const OPTS: [(&str, Kind, &str); 27] = [
         Kind::Flag,
         "不认访客（手机：iOS 上的 cca App、网页端）：设备开不了给手机的配对，已经配了对的手机接入不了（记录留着）。也可以用环境变量 \
          CCA_GUESTS=0",
+    ),
+    (
+        "--push",
+        Kind::Text,
+        "推送网关（https://主机[:端口]：维护者的服务器上的 cca-core team-push，推送服务的密钥只在它那里）：手机锁着屏、App 没开着时\
+         会话里的通知经它推到手机上（只有手机解得开）。要和 --relay-listen、--push-pin 一起给；也可以用环境变量 CCA_PUSH_URL",
+    ),
+    (
+        "--push-pin",
+        Kind::Text,
+        "推送网关证书的公钥（sha256// 加 base64，curl 的 --pinnedpubkey 那种写法：只认这把公钥）；也可以用环境变量 CCA_PUSH_PIN",
     ),
     ("--remote", Kind::Text, "配对的记录（默认在状态文件旁边的 remote.json）"),
     (
@@ -328,6 +341,8 @@ struct RelayPlan {
     remote: String,
     /// 认不认访客（--no-guests、CCA_GUESTS=0 关掉）
     guests: bool,
+    /// 推送网关（--push、--push-pin）
+    push: Option<Gateway>,
 }
 
 /// 网页端另开的监听（给了 --web-listen）
@@ -442,6 +457,16 @@ fn plan(g: &Given, probe: &Probe) -> Result<Plan, String> {
         addr(given).ok_or_else(|| format!("{name} 要写成 地址:端口（端口是 0～65535 的数）：{}", repr_str(given)))
     };
     let listen = listening("--listen", &listen)?;
+    // 推送：两项一起给。没开中转时命令行里给了是参数不对，环境变量里的不管（推送是远程会话的）
+    let push = match (pick("--push", env("CCA_PUSH_URL")), pick("--push-pin", env("CCA_PUSH_PIN"))) {
+        _ if relay_listen.is_none() && (g.text("--push").is_some() || g.text("--push-pin").is_some()) => {
+            return Err("--push 要和 --relay-listen 一起给（推送是远程会话的）".into());
+        }
+        (None, None) => None,
+        (Some(url), Some(pin)) => Some(Gateway::parse(&url, &pin)?),
+        (Some(_), None) => return Err("--push 要和 --push-pin（推送网关证书的公钥）一起给".into()),
+        (None, Some(_)) => return Err("--push-pin 要和 --push 一起给".into()),
+    };
     let relay = match relay_listen {
         None => None,
         Some(given) => {
@@ -462,6 +487,7 @@ fn plan(g: &Given, probe: &Probe) -> Result<Plan, String> {
                 port_file: pick("--relay-port-file", None),
                 remote: pick("--remote", None).unwrap_or_else(|| path::join(&dir, "remote.json")),
                 guests: !(g.flag("--no-guests") || env("CCA_GUESTS").as_deref() == Some("0")),
+                push,
             })
         }
     };
@@ -594,7 +620,7 @@ fn run(p: &Plan) -> R<()> {
     store.reply_times(p.ttl, p.idle);
     let machines = store.machines();
 
-    let (mut remote, mut handle, mut web, mut relay_said) = (None, None, None, None);
+    let (mut remote, mut handle, mut web, mut relay_said, mut push_said) = (None, None, None, None, None);
     if let Some(r) = &p.relay {
         let (l, bound) = bind_or_die("数据端口", &r.listen)?;
         l.set_nonblocking(true).map_err(fatal)?;
@@ -607,6 +633,11 @@ fn run(p: &Plan) -> R<()> {
         rem.keep_only(&store.fps(), time::time()).map_err(fatal)?;
         relay_said = Some((bound.port(), rem.edges()));
         let shared = Arc::new(Shared::new(rem));
+        if let Some(gw) = &r.push {
+            let pusher = push::start(gw.clone(), Arc::clone(&shared)).map_err(fatal)?;
+            shared.lock().set_pusher(pusher);
+            push_said = Some(gw.shown());
+        }
         handle = Some(relay::start(l, Arc::clone(&shared)).map_err(fatal)?);
         remote = Some(shared);
         if let Some(w) = &p.web {
@@ -647,6 +678,9 @@ fn run(p: &Plan) -> R<()> {
     }
     let web_said = ctx.web.as_ref().map(|w| (w.url.as_str(), w.files.len(), web_port));
     crate::err!("{}", banner(&bound.ip().to_string(), bound.port(), p.proxied, machines, sig_ok, relay_said, web_said));
+    if let Some(gw) = push_said {
+        crate::err!("cca-presence: 推送：手机登记了的，会话里的通知转给推送网关 {gw}");
+    }
     front::serve(l, main_tls, p.proxied, ctx)
 }
 
@@ -938,6 +972,7 @@ mod tests {
             port_file: Some("rport".into()),
             remote: "./remote.json".into(),
             guests: true,
+            push: None,
         };
         assert_eq!(p.relay, Some(relay));
         let p = planned(
@@ -953,7 +988,14 @@ mod tests {
         );
         assert_eq!(
             p.unwrap().relay.unwrap(),
-            RelayPlan { listen: ("0.0.0.0".into(), 1), port: None, port_file: None, remote: "/x/r.json".into(), guests: true }
+            RelayPlan {
+                listen: ("0.0.0.0".into(), 1),
+                port: None,
+                port_file: None,
+                remote: "/x/r.json".into(),
+                guests: true,
+                push: None
+            }
         );
         // 不认访客：--no-guests 或者 CCA_GUESTS=0（别的值照认）
         let guests = |args: &[&str], env: &[(&str, &str)]| {
@@ -963,6 +1005,28 @@ mod tests {
         assert!(!guests(&["--no-guests"], &[]));
         assert!(!guests(&[], &[("CCA_GUESTS", "0")]));
         assert!(guests(&[], &[("CCA_GUESTS", "1")]));
+        // 推送：--push、--push-pin 一起给（也可以是环境变量 CCA_PUSH_URL、CCA_PUSH_PIN）；没开中转时命令行里给了是参数不对，
+        // 环境变量里的不管
+        let pin = format!("sha256//{}", crate::py::base64::b64encode(&[7u8; 32]));
+        let relayed = ["--behind-proxy", "--state", "s", "--relay-listen", ":1", "--team-root", ROOT];
+        let pushed = |args: &[&str], env: &[(&str, &str)]| planned(&cat(&relayed, args), env, false).unwrap().relay.unwrap().push;
+        let gw = pushed(&["--push", "https://192.0.2.10:18460", "--push-pin", &pin], &[]).unwrap();
+        assert_eq!((gw.shown(), gw.pin), ("192.0.2.10:18460".to_string(), [7u8; 32]));
+        assert_eq!(pushed(&[], &[("CCA_PUSH_URL", "https://192.0.2.10"), ("CCA_PUSH_PIN", &pin)]).unwrap().port, 443);
+        assert_eq!(pushed(&[], &[]), None);
+        assert_eq!(
+            why(&cat(&relayed, &["--push", "https://192.0.2.10"]), &[]),
+            "--push 要和 --push-pin（推送网关证书的公钥）一起给"
+        );
+        assert_eq!(why(&cat(&relayed, &["--push-pin", &pin]), &[]), "--push-pin 要和 --push 一起给");
+        assert!(why(&cat(&relayed, &["--push", "http://192.0.2.10", "--push-pin", &pin]), &[]).starts_with("--push 要写成"));
+        assert!(why(&cat(&relayed, &["--push", "https://192.0.2.10", "--push-pin", "x"]), &[]).starts_with("--push-pin 要写成"));
+        let plain = ["--behind-proxy", "--state", "s", "--team-root", ROOT];
+        assert_eq!(
+            why(&cat(&plain, &["--push", "https://192.0.2.10", "--push-pin", &pin]), &[]),
+            "--push 要和 --relay-listen 一起给（推送是远程会话的）"
+        );
+        assert!(planned(&plain, &[("CCA_PUSH_URL", "https://192.0.2.10"), ("CCA_PUSH_PIN", &pin)], false).is_ok());
 
         // 根公钥只写后面那一段（安装脚本、托管平台的环境变量里这样写：没有空格）
         let bare = ROOT.split(' ').nth(1).unwrap();

@@ -178,7 +178,7 @@ fn get(ctx: &Ctx, peer: IpAddr, proxied: bool, req: &Request, now: f64, mono: f6
     if path == "/v1/health" {
         let relay = ctx.remote.as_ref().map(|sh| {
             let r = lock(&sh.m);
-            (r.port(), r.guests_on)
+            (r.port(), r.guests_on, r.push_on())
         });
         let health = lock(&ctx.store).health(ctx.sig_ok, relay);
         if let (Some(web), Some(d)) = (&ctx.web, health.as_dict()) {

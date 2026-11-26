@@ -86,7 +86,7 @@ final class Channel {
 
 enum Frame {
     static let hello: UInt8 = 0x01, input: UInt8 = 0x02, resize: UInt8 = 0x03, detach: UInt8 = 0x04
-    static let output: UInt8 = 0x12, exit: UInt8 = 0x13
+    static let output: UInt8 = 0x12, exit: UInt8 = 0x13, notify: UInt8 = 0x16
     static let max = 1 << 20
 
     static func make(_ kind: UInt8, _ payload: Bytes) -> Bytes {

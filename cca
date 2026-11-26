@@ -6371,9 +6371,10 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team new 名字 [--device 这台设备的名字] [--accounts all|none|工具:邮箱,…]
                                                    建一个 Team（接着部署它的同步服务器）。这台设备上哪些账号放进去：不写 --accounts 时问你
       cca team deploy Team [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--web-port 端口 | --no-web]
-                      [--docker | --systemd] [--dir 目录]
+                      [--docker | --systemd] [--dir 目录] [--push 网关 --push-pin 公钥 | --no-push]
                                                    经 SSH 把它的同步服务器装到自己的 Linux 服务器上、接上（再运行是更新；--script 只打出安装脚本）。
-                                                   同时给这个 Team 的远程会话做中转，开手机的网页端（--no-web 不开）
+                                                   同时给这个 Team 的远程会话做中转，开手机的网页端（--no-web 不开）；--push：会话里的
+                                                   通知经推送网关推到 iPhone 上的 cca App（再部署照上次的）
       cca team hosted Team [railway] [--dir 目录]  没有服务器：生成部署到托管平台（Railway）的文件和步骤
       cca team attach Team https://服务器:端口 [证书公钥的指纹…]   接上（换一台）同步服务器
       cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key '公钥']   给一台设备发邀请（--key：只认这把公钥）
@@ -7156,7 +7157,7 @@ team_new_pick() {   # team_new_pick Team 的名字：问这台设备上哪些账
 }
 
 TEAM_DEPLOY_USAGE="用法: cca team deploy Team [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--web-port 端口 | --no-web]
-                       [--docker | --systemd] [--dir 目录]
+                       [--docker | --systemd] [--dir 目录] [--push 网关 --push-pin 公钥 | --no-push]
       再部署（更新）时写的就是上次部署到的那台：没写的 -p、-i、--dir 照上次的
       cca team deploy --script   只把安装脚本打到 stdout：在服务器上自己运行 sudo sh 脚本 --team-root '根公钥'（cca team new 给的那一行）"
 team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把这个 Team 的同步服务器装到自己的服务器上（一台服务器上每个 Team 一个服务：
@@ -7164,7 +7165,7 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	                # 目录）：问服务器时预填它，写的（问到的）就是它时没写的 -p、-i、--dir 照记下的（App 里没法写 -i），部署好了接着记着。
 	                # 服务器上只有 Team 的根公钥（公开的）：docs/dev/team.md「部署」
 	local sel="" target="" args=() pw="" out rc tid name role at how sport="" ident="" udir="" ptarget pport pdir saved pident
-	local mode="" state="" port="" relay="" dir="" lan="" host="" device="" members="" stored="" note="" svc="" web="" web_cert="" web_off=""
+	local mode="" state="" port="" relay="" dir="" lan="" host="" device="" members="" stored="" note="" svc="" web="" web_cert="" web_off="" push=""
 	local wport webmsg=""
 	if [ "${1:-}" = --script ]; then
 		[ $# -eq 1 ] || FAIL_CODE=team_usage die "$TEAM_DEPLOY_USAGE"
@@ -7175,11 +7176,11 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	sel=$1; shift
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			-p|-i|--port|--host|--dir|--web-port)
+			-p|-i|--port|--host|--dir|--web-port|--push|--push-pin)
 				[ $# -ge 2 ] || FAIL_CODE=team_usage die "$TEAM_DEPLOY_USAGE"
 				case "$1" in -p) sport=$2 ;; -i) ident=$2 ;; --dir) udir=$2 ;; *) args+=("$1" "$2") ;; esac
 				shift ;;
-			--no-web) args+=(--no-web) ;;
+			--no-web|--no-push) args+=("$1") ;;
 			--docker|--systemd) args+=(--mode "${1#--}") ;;
 			-*) FAIL_CODE=team_usage die "$TEAM_DEPLOY_USAGE" ;;
 			*) [ -z "$target" ] || FAIL_CODE=team_usage die "$TEAM_DEPLOY_USAGE"; target=$1 ;;
@@ -7218,7 +7219,7 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	info "部署「${name}」的同步服务器到 ${target}（${ident:+用私钥 ${ident} 登录；}要把服务端程序（约 10 MB）传过去，网慢时要一会儿）…"
 	hub_deploy_run "$target" ${args[@]+"${args[@]}"}; rc=$?
 	[ $rc -eq 0 ] || team_fail "$out" "没有部署成"
-	eval "$out"   # mode state port relay dir lan host device members stored note svc web web_cert web_off（辅助程序的 sh：键=值）
+	eval "$out"   # mode state port relay dir lan host device members stored note svc web web_cert web_off push（辅助程序的 sh：键=值）
 	case "$mode" in docker) how="Docker compose" ;; *) how="systemd" ;; esac
 	if [ "$state" = update ]; then okay "已更新 ${target} 上「${name}」的同步服务器（${dir}，${how}，端口 ${port}，服务名 ${svc}）：数据没变，照旧接着"
 	else okay "已部署「${name}」的同步服务器到 ${target}（${dir}，${how}，端口 ${port}，服务名 ${svc}），接上了：这台设备叫 ${device}，现在有 ${members} 台设备；$(team_stored "$stored")"; fi
@@ -7230,6 +7231,7 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	elif [ -n "${relay:-}" ]; then
 		say "  「${name}」的账号的远程会话经这台服务器中转（数据端口 ${relay}，iPhone 上的 cca App 也走它）：云服务商的安全组里要放行 TCP ${port} 和 ${relay}"
 	fi
+	[ -z "$push" ] || say "  推送：iPhone 上的 cca App 登记了的，会话里的通知经推送网关 ${push} 推到手机上（只有手机解得开）"
 	if [ -n "$web" ] && [ "$web_cert" = ok ]; then
 		say "  手机的网页端：${web}（证书是 Let's Encrypt 签的，到期前自己续；以前配的手机用它。新配手机用 iPhone 上的 cca App：cca remote pair --web）"
 		webmsg="；手机的网页端：${web}"
@@ -8379,7 +8381,7 @@ main() {
 	# 用 cxa、aga 调用：换成 cca codex …、cca agy …。参数里带着工具，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	case "${0##*/}" in "$CODEX_ALIAS") set -- codex "$@" ;; "$AGY_ALIAS") set -- agy "$@" ;; esac
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_team-sync|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_session-start|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_team-sync|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_session-start|_remote-hook|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
 		install) shift; cmd_install "$@" ;;
@@ -8397,6 +8399,8 @@ main() {
 		_session-start)   # Claude Code 的 SessionStart hook（启动时经 --settings 带上的；--desktop：cca cost hook 加在共享设置里的，Claude App 里的会话）：会话 id 记进账号目录（--desktop 带着 App 登录的账号记进 cost/），折合金额按它认账号。stdout 会进 Claude 的上下文：什么都不说，总是成功
 			shift
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
+		_remote-hook)   # cca 自己带的 Claude Code 钩子（远程会话开着时经 --settings 带上的 Stop、PermissionRequest、Notification）：做完了、在等你时推一条通知给接着这个会话的各处（辅助程序的 remote-hook，stdin 是钩子的输入）。Stop 的退出码 2 会拦着 Claude Code 不让停：什么都不说，总是成功
+			py remote-hook >/dev/null 2>&1 || : ;;
 		_update-fetch) cmd_update_fetch ;;
 		_policy-fetch) ;;   # 3.6.0 去掉了维护者的映射：以前的版本在后台起的（起的时候还是旧版、跑到这里已经换成新版）什么都不做
 		_team-sync) team_bg_sync ;;   # 后台：各个 Team 同步一次配置，变了马上照它改账号表、同步路由器和内置代理（team_hook 起的）

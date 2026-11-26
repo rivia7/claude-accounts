@@ -106,5 +106,6 @@
 - `mail.md` — 邮箱助手（`cca mail`）
 - `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经 Team 的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面；网页端（手机不装 cca，在浏览器里接入：访客设备、WebSocket 进中转、`server/web/` 的页面、`cca remote pair --web`、带证书的端口和部署；`cca-test web-demo` 在本机跑起来看，命令见 tests/CLAUDE.md）；每个 Team 的会话走这个 Team 自己的服务器中转（配对记在哪台服务器上、`cca remote pair --team`）；给网页端要 IP 证书的证书助手（`cca-core team-acme`）
 - `ios.md` — iOS 上的 cca App（接入远程会话的访客）：阶段表和定下来的、二维码里的链接（`cca-remote://pair?…`）、协议核心 `ios/CcaRemoteKit`（钉住证书、TCP 进数据端口、断了重新接）、`ios/cca.xcodeproj` 和 `ios/test.sh`、`tests/ios_kit.rs` 和测试用的手机 `ios/tools/ccaguest`
+- `push.md` — 推送（APNs）：手机锁着屏时会话里的通知怎么送到（宿主封给手机、Team 的服务器转、维护者的服务器上的推送网关 `cca-core team-push` 交给苹果，推送的密钥只在网关上）、谁知道什么、网关和 Team 服务器的部署（`--push`、`--push-pin`）、测试和没验证的
 - `desktop.md` — 程序坞整理、Claude App 多开、启动器图标
 - `uninstall.md` — 卸载（`cca uninstall` / `cca restore`）：先后、`~/.cca` 以外要清掉的、不删的、测试里 `defaults` 和缓存目录的坑

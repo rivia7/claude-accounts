@@ -41,6 +41,7 @@ pub const MODULE: Module = Module {
         case!(pairings_survive_a_restart),
         case!(relay_is_off_unless_asked),
         case!(pair_list_attach),
+        case!(cca_hooks_reach_the_other_machine),
         case!(what_the_other_side_may_do),
         case!(the_other_implementation_and_what_the_host_enforces),
         case!(the_link_process_is_killed),
@@ -695,6 +696,91 @@ fn pair_list_attach(t: &mut Ctx) {
     let state = json_files(&fx.d);
     for word in ["typed-on", "alice@example.com", "/work", key.as_str()] {
         assert!(!state.contains(word), "{word}");
+    }
+}
+
+/// cca 自己带的 Claude Code 钩子（remote-hook，cli/src/cmd/remote/hook.rs）：会话里的 Claude Code 照钩子的输入（stdin 上的 JSON）
+/// 调它，别的机器上接着的那一端弹出来——做完了（最后一条回复的第一行）、问了一阵没人答（PermissionRequest 时记下的那一句，
+/// Notification 的 permission_prompt 来了才推）、别的在等你的（Claude Code 的原话）。副标题是账号的别名（CCA_ACCOUNT）和项目的
+/// 文件夹。后台任务还在跑的“做完了”不推；用户自己的钩子（cca remote notify）为同一件事推的一模一样的那条不再推；会话外面调的
+/// 什么都不做。服务器看不到通知里的字
+fn cca_hooks_reach_the_other_machine(t: &mut Ctx) {
+    let (fx, mut a, b, asked) = client_fx(t);
+    let work = relay::work(&a).to_str().expect("临时目录的路径是 UTF-8").to_string();
+    a.env.insert("CCA_ACCOUNT".into(), "工作(alice@example.com)".into());
+    a.env.insert("CLAUDE_PROJECT_DIR".into(), work);
+    let mut h = session(&a);
+    pair(&a, &b);
+    let row = asked.listed(&b, "laptop 列出 box 上的会话").remove(0);
+    let mut v = relay::term(&b, &["remote-attach", &row[..8]]);
+    v.expect("<ready 24 80");
+    let helper = relay::helper(&a);
+    let ask = |sid: &str| a.cca.join("remote").join("ask").join(sid);
+    let mut n = 0;
+    let mut hook = |h: &mut Term, input: &str| {
+        n += 1;
+        let f = a.home.join(format!("hook-{n}.json"));
+        fsx::write(&f, input);
+        let m = h.mark();
+        h.send(format!("runin {} {} remote-hook\n", f.display(), helper.display()));
+        h.expect_since("<ran 0>", m);
+    };
+    let osc = |title: &str, body: &str| format!(r"\x1b\]777;notify;{title} · 工作 · work;{body}\x1b\\");
+    let m = v.mark();
+    hook(
+        &mut h,
+        r#"{"hook_event_name": "Stop", "session_id": "s-1", "last_assistant_message": "**改好了** 两处\n细节", "background_tasks": [], "session_crons": []}"#,
+    );
+    v.expect_since(&osc("Claude Code 做完了", "改好了 两处"), m);
+    // 用户自己的钩子照同样的写法也推了一条：一模一样，不再推
+    let mine = a.home.join("my-hook");
+    let said = "--title 'Claude Code 做完了' --subtitle '工作 · work' '改好了 两处'";
+    fsx::write_script(&mine, &format!("#!/bin/sh\nexec '{}' remote-notify {said}\n", helper.display()));
+    let at = h.mark();
+    h.send(format!("run {}\n", mine.display()));
+    h.expect_since("<ran 0>", at);
+    hook(
+        &mut h,
+        r#"{"hook_event_name": "Stop", "session_id": "s-1", "last_assistant_message": "不该推这一条", "background_tasks": [{"type": "shell"}], "session_crons": []}"#,
+    );
+    hook(
+        &mut h,
+        r#"{"hook_event_name": "PermissionRequest", "session_id": "s-1", "tool_name": "Bash", "tool_input": {"command": "rm -rf build", "description": "清掉编译的"}}"#,
+    );
+    assert!(ask("s-1").exists(), "问的时候只记下要说的话");
+    hook(
+        &mut h,
+        r#"{"hook_event_name": "Notification", "session_id": "s-1", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}"#,
+    );
+    v.expect_since(&osc("Claude Code 要你确认", "运行：清掉编译的"), m);
+    assert!(!ask("s-1").exists(), "推了就删掉");
+    hook(
+        &mut h,
+        r#"{"hook_event_name": "Notification", "session_id": "s-2", "notification_type": "elicitation_dialog", "message": "**github** 要你填一个值"}"#,
+    );
+    v.expect_since(&osc("Claude Code 在等你", "github 要你填一个值"), m);
+    hook(
+        &mut h,
+        r#"{"hook_event_name": "PermissionRequest", "session_id": "s-3", "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "用哪个？"}]}}"#,
+    );
+    hook(
+        &mut h,
+        r#"{"hook_event_name": "Notification", "session_id": "s-3", "notification_type": "agent_needs_input", "message": "后台的会话要你回答"}"#,
+    );
+    v.expect_since(&osc("Claude Code 在等你", "后台的会话要你回答"), m);
+    assert!(!ask("s-3").exists(), "不是在等确认的那一种：记下的那一句不拿来用，也删掉");
+    let shown = String::from_utf8_lossy(&v.out()[m..]).to_string();
+    assert_eq!(shown.matches("改好了 两处").count(), 1, "{shown:?}");
+    assert!(!shown.contains("不该推"), "后台任务还在跑：做完了会叫醒会话，那时再说");
+    assert!(!has(h.out(), "777;notify"), "启动它的终端上没有（这台机器上的钩子自己会弹）");
+    // 不在宿主里（界面 App 里启动的会话也带着这几个钩子）：什么都不做，总是成功
+    let r = a.run(&["remote-hook"]);
+    assert_eq!((r.code, r.out.as_str(), r.err.as_str()), (0, "", ""));
+    h.send("exit 0\n");
+    assert_eq!((h.wait(), v.wait()), (0, 0));
+    let seen = fx.sniff.snapshot();
+    for word in ["改好了", "清掉编译的", "github", "后台的会话", "Claude Code"] {
+        assert!(!has(&seen, word), "服务器看得到通知里的字：{word}");
     }
 }
 

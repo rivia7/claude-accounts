@@ -1,7 +1,8 @@
 //! 远程会话的中转记着的东西，和设备发来的中转的请求（RELAY_OPS）。Python 的 `Remote`（Py:952-1230）。
 //!
 //! - edges（remote.json，移除设备、180 天没用过才删）：`{配对编号: {"a", "b", "at", "used"}}`，服务器只知道是哪两台设备配了对
-//! - guests（也在 remote.json 里）：访客（手机：iOS 上的 cca App、网页端，不在名单里）的公钥
+//! - guests（也在 remote.json 里）：访客（手机：iOS 上的 cca App、网页端，不在名单里）的公钥，登记了推送的还有它的推送令牌
+//!   （`push`：`{"token", "env", "at"}`，push.rs）
 //! - 只在内存里的：slots（正在进行的配对）、tickets（进数据端口的票据）、sessions（开着的会话）
 //!
 //! Python 里是一把可重入的锁加一个条件变量；这里是 `Shared`：`Mutex<Remote>` + `Condvar`。pair_get 要等对方放密文进来：
@@ -29,8 +30,9 @@ mod tests;
 use super::disk;
 use super::limits::Limits;
 use super::omap::OMap;
+use super::push::{Job, Pusher};
 use super::wire::{self, Blob, Num};
-use super::{sshsig, API, EDGE_IDLE, GUEST_OPS, TICKET_TTL};
+use super::{sshsig, API, EDGE_IDLE, GUEST_OPS, PUSH_BLOB, TICKET_TTL};
 use crate::py::fs::open_error_text;
 use crate::py::json::{self, Fmt};
 use crate::py::obj::{Dict, V};
@@ -177,6 +179,33 @@ struct Guest {
     key: String,
     /// 什么时候记下的（没人用它，原样留着）
     at: Val,
+    /// 登记的推送（push_set）；没登记、拿掉了是 None
+    push: Option<PushReg>,
+}
+
+/// 手机登记的推送：推送服务给这台手机上这个 App 的令牌（小写的十六进制）、推送服务的哪一种环境（production / sandbox）、
+/// 什么时候登记的（没人用它，原样留着）
+#[derive(Clone, Debug)]
+struct PushReg {
+    token: String,
+    env: String,
+    at: Val,
+}
+
+impl PushReg {
+    /// remote.json 里的那一项：样子不对的不要（当没登记）
+    fn loaded(d: &Dict) -> Option<PushReg> {
+        let (token, env) = (d.str("token")?, d.str("env")?);
+        (wire::push_token_re().matches(&token) && matches!(&*env, "production" | "sandbox")).then(|| PushReg {
+            token: token.to_string(),
+            env: env.to_string(),
+            at: d.get("at").map_or_else(Val::null, |at| Val::of(&at)),
+        })
+    }
+
+    fn to_v(&self) -> V {
+        V::Dict(crate::dict! { "token" => &self.token, "env" => &self.env, "at" => self.at.v() })
+    }
 }
 
 /// 正在进行的一次配对（Py:1110-1111）
@@ -297,6 +326,8 @@ pub struct Remote {
     tickets: HashMap<String, Ticket>,
     /// 开着的会话：sid → 会话，照开的先后（relay_list 照它列）
     pub(super) sessions: OMap<Session>,
+    /// 推送（--push 给了才有）：交给推送网关的那条线程的队列
+    pub(super) pusher: Option<Pusher>,
 }
 
 /// 几个线程共用的那一份：处理请求的线程、中转的线程都经它
@@ -373,6 +404,7 @@ impl Remote {
             closed: Vec::new(),
             tickets: HashMap::new(),
             sessions: OMap::new(),
+            pusher: None,
         };
         let Some(doc) = load_doc(path, &["edges"], say) else { return r };
         for (k, v) in doc.items() {
@@ -388,8 +420,12 @@ impl Remote {
                         let x = x.as_dict()?;
                         let key = x.str("key")?;
                         let blob = base64::b64decode(wire::key_re().match_(&key)?.g(1), false).ok()?;
-                        (wire::fp_re().matches(fp) && sshsig::key_fp(&blob) == fp)
-                            .then(|| Guest { key: key.to_string(), at: x.get("at").map_or_else(Val::null, |at| Val::of(&at)) })
+                        let push = x.dict("push").and_then(|p| PushReg::loaded(&p));
+                        (wire::fp_re().matches(fp) && sshsig::key_fp(&blob) == fp).then(|| Guest {
+                            key: key.to_string(),
+                            at: x.get("at").map_or_else(Val::null, |at| Val::of(&at)),
+                            push,
+                        })
                     };
                     r.guests = g.as_dict().map_or_else(OMap::new, |g| OMap::from_dict(&g, known));
                 }
@@ -411,6 +447,47 @@ impl Remote {
         self.edges.len()
     }
 
+    /// 开推送（--push）：交给推送网关的那条线程起来以后给它
+    pub fn set_pusher(&mut self, p: Pusher) {
+        self.pusher = Some(p);
+    }
+
+    /// 手机能不能登记推送（health 的 relay.push）：开了推送、也认访客
+    pub fn push_on(&self) -> bool {
+        self.pusher.is_some() && self.guests_on
+    }
+
+    /// 宿主经控制连接交来的一帧 PUSH（relay.rs）：交给推送网关的那一条。会话得是这条控制连接的、配对得是这个会话给看的、配对的
+    /// 另一头得是登记了推送的访客，帧的样子要对（`{"pid", "id", "note"}`）；对不上的是 None（不理）
+    pub(super) fn push_job(&self, sid: &str, conn: u64, payload: &[u8]) -> Option<Job> {
+        let x = self.sessions.get(sid).filter(|x| x.conn == Some(conn))?;
+        let j = json::loads(std::str::from_utf8(payload).ok()?).ok()?.as_dict()?;
+        let pid = j.str("pid").filter(|p| wire::aid_re().matches(p))?;
+        let id = j.str("id").filter(|i| wire::note_id_re().matches(i))?;
+        let note = wire::parse_blob(&j.get("note")?, PUSH_BLOB)?;
+        if !x.pids.iter().any(|p| **p == *pid) || !self.member(&pid, &x.fp) || !self.guests_on {
+            return None;
+        }
+        let reg = self.guests.get(self.other(&pid, &x.fp)?)?.push.as_ref()?;
+        Some(Job { token: reg.token.clone(), env: reg.env.clone(), id: id.to_string(), note })
+    }
+
+    /// 推送网关说这个令牌没用了（410：App 删了、换了手机）：登记了它的都拿掉。存不了只在日志里说（下次再说 410 时再存）
+    pub fn push_gone(&mut self, token: &str) {
+        let mut changed = false;
+        self.guests.for_each_mut(|_, g| {
+            if g.push.as_ref().is_some_and(|p| p.token == token) {
+                g.push = None;
+                changed = true;
+            }
+        });
+        if changed {
+            if let Err(e) = self.save() {
+                crate::err!("cca-presence: 配对的记录存不了（{e}）");
+            }
+        }
+    }
+
     /// 网页端的地址；没开（没给、是空的）是 None
     fn web(&self) -> Option<&str> {
         self.web.as_deref().filter(|w| !w.is_empty())
@@ -421,7 +498,16 @@ impl Remote {
         let doc = Dict::new();
         doc.set("v", self.v.v());
         doc.set("edges", self.edges.to_v(Edge::to_v));
-        doc.set("guests", self.guests.to_v(|g| V::Dict(crate::dict! { "key" => &g.key, "at" => g.at.v() })));
+        doc.set(
+            "guests",
+            self.guests.to_v(|g| {
+                let d = crate::dict! { "key" => &g.key, "at" => g.at.v() };
+                if let Some(p) = &g.push {
+                    d.set("push", p.to_v());
+                }
+                V::Dict(d)
+            }),
+        );
         for (k, v) in &self.extra {
             doc.set(k.as_str(), v.v());
         }
@@ -581,6 +667,11 @@ impl Remote {
         let pids = pids.iter().map(|p| p.to_string()).collect();
         self.sessions
             .insert(sid, Session { fp: fp.to_string(), pids, blobs: OMap::new(), conn: Some(0), lost: None, viewers: 0, since });
+    }
+
+    /// 测试里放一个配了对的访客进来（不经配对的那几步）
+    pub(super) fn test_guest(&mut self, fp: &str, key: &str, at: f64) {
+        self.guests.insert(fp, Guest { key: key.to_string(), at: Val::Num(Num::Float(at)), push: None });
     }
 
     /// 测试里放一个配对进来（不经配对的那几步）

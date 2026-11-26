@@ -10,13 +10,15 @@
 //!   “只看”和“不算进窗口大小”，按键、改窗口大小的都不转；不让接入的不告诉它有这个会话。宿主发给对方的只转输出和
 //!   “会话结束了”：它的状态里有账号的邮箱、完整的路径、进程号，不给。配对表变了（`cca remote allow`、取消配对）
 //!   几秒钟内照新的来：不该再接着的子进程结束掉；
+//! - 会话里推的通知（宿主写进标准输入的 `NOTIFY` 帧）：给每个允许接入的手机（配对表里 `web` 的）封一份、一个配对一帧 PUSH，
+//!   服务器交给推送服务（手机锁着屏、App 没开着也收得到；只有手机解得开）。和服务器断着时攒几条，连上了再推；
 //! - 标准输入是宿主留着的一根管道：宿主不在了（会话结束、宿主被强行结束）读到头，告诉服务器会话结束了就退出。
 //!   这个进程自己被强行结束时，子进程看到父进程换了也跟着走（不然它们没人管着，配对表变了也照转）。
 //!
 //! 退出码 3：这台机器用不了中转（不在哪个 Team 里、用不了会话走的那台服务器、服务器没开中转），宿主不用再起它。
 
 use super::far;
-use super::local::{self, Asked, Conn, Decoder, Meta};
+use super::local::{self, Asked, Conn, Decoder, Meta, Note};
 use super::peers::{self, Incoming, Peer};
 use super::relay::{self, ctl_frame, ctl_next, Server, Tunnel, DEAD_AFTER, PING_EVERY};
 use super::sig;
@@ -25,7 +27,7 @@ use crate::cmd::arity;
 use crate::cmd::hub::HubKind;
 use crate::py::json;
 use crate::py::obj::{Dict, V};
-use crate::py::time::{monotonic, sleep};
+use crate::py::time::{monotonic, sleep, time};
 use crate::py::{exit, R};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -42,6 +44,9 @@ const FORKS_PER_10S: usize = 8;
 const HIGH: usize = 1024 * 1024;
 /// 隔多久看一眼配对表变了没有
 const PEERS_EVERY: f64 = 3.0;
+/// 和服务器断着时宿主交来的通知最多攒几条、攒多久（连上了再推；再早的推过去也没用了）
+const NOTES_KEPT: usize = 8;
+const NOTE_KEEP: f64 = 60.0;
 
 /// 一个允许接入的配对
 struct Allowed {
@@ -144,6 +149,21 @@ fn frames(ctl: &mut Ctl) -> io::Result<Vec<(u8, Vec<u8>)>> {
     }
     ctl.heard = monotonic();
     Ok(out)
+}
+
+/// 一条通知封给每个允许接入的手机：一个配对一帧 PUSH（`{"pid", "id", "note"}`，note 只有那个手机解得开；id 是宿主给的编号，
+/// 服务器交给推送服务时当它的 collapse id）。手机没登记推送、服务器没开推送的，服务器自己不理
+fn push_note(ctl: &mut Ctl, meta: &Meta, allowed: &[Allowed], n: &Note) {
+    let doc = crate::dict! {
+        "v" => 1, "id" => n.id.as_str(), "sid" => meta.sid.as_str(), "at" => time() as i64,
+        "title" => n.title.as_str(), "subtitle" => n.subtitle.as_str(), "body" => n.body.as_str(),
+    };
+    for a in allowed.iter().filter(|a| a.peer.web) {
+        if let Ok(blob) = crypto::note_seal(&a.secret, &a.peer.pid, &doc) {
+            let j = crate::dict! { "pid" => a.peer.pid.as_str(), "id" => n.id.as_str(), "note" => blob };
+            ctl.out.extend(ctl_frame(relay::F_PUSH, json::dumps(&V::Dict(j), json::Fmt::new().compact()).as_bytes()));
+        }
+    }
 }
 
 /// 告诉服务器会话结束了（写不出去就算了：它过一分钟自己也会清掉）
@@ -283,7 +303,8 @@ pub fn cmd_remote_link(args: &[String]) -> R<()> {
     let mut kids: Vec<Kid> = Vec::new();
     let mut forks: VecDeque<f64> = VecDeque::new();
     let (mut next_try, mut fails) = (0.0f64, 0u32);
-    let mut buf = [0u8; 64];
+    let (mut from_host, mut notes) = (Decoder::default(), VecDeque::<(f64, Note)>::new());
+    let mut buf = [0u8; 4096];
     'run: loop {
         let now = monotonic();
         reap(&mut kids);
@@ -310,6 +331,7 @@ pub fn cmd_remote_link(args: &[String]) -> R<()> {
             }
         }
         if ctl.is_none() && !allowed.is_empty() && now >= next_try {
+            // 连上以后先说 ANNOUNCE（connect 里），攒着的通知下面接着推
             match connect(&srv, &at.meta, &allowed, fails)? {
                 Ok(c) => {
                     ctl = Some(c);
@@ -340,8 +362,42 @@ pub fn cmd_remote_link(args: &[String]) -> R<()> {
                 break 'run;
             }
         }
-        // 宿主不在了：管道读到头（它从不往里写）
-        if fds[1].revents != 0 && !matches!(pty::read_some(0, &mut buf), Some(Ok(n)) if n > 0) {
+        // 宿主交来的通知；读到头（出错、帧不对）是宿主不在了：这一轮的推完再走
+        let mut host_gone = false;
+        if fds[1].revents != 0 {
+            match pty::read_some(0, &mut buf) {
+                Some(Ok(n)) if n > 0 => from_host.push(&buf[..n]),
+                None => {}
+                _ => host_gone = true,
+            }
+            loop {
+                match from_host.next() {
+                    Ok(Some((local::NOTIFY, p))) => {
+                        if let Some(n) = Note::parse(&p).filter(|n| Note::id_ok(&n.id)) {
+                            notes.push_back((now, n));
+                        }
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(()) => {
+                        host_gone = true;
+                        break;
+                    }
+                }
+            }
+            while notes.len() > NOTES_KEPT {
+                notes.pop_front();
+            }
+        }
+        match ctl.as_mut() {
+            Some(c) => {
+                for (_, n) in notes.drain(..) {
+                    push_note(c, &at.meta, &allowed, &n);
+                }
+            }
+            None => notes.retain(|(t, _)| now - t < NOTE_KEEP),
+        }
+        if host_gone {
             break 'run;
         }
         let mut lost = false;

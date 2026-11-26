@@ -13,6 +13,12 @@ protocol Backend: AnyObject {
     func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool) -> TerminalLink
     /// 这台手机在这台服务器上的指纹（电脑那头 `cca remote peers` 看得到同一个）
     func fingerprint(on server: ServerRef) -> String?
+    /// 配对的电脑所在的服务器（每台一次）
+    func servers() -> [ServerRef]
+    /// 在这台服务器上登记推送（Pusher）：成了是 nil
+    func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure?
+    /// 通知扩展用的通知密钥照配对表重写一遍（一样就不动）
+    func syncNoteKeys()
 }
 
 /// 接着的一个会话（Attachment 或者演示的那种）：事件在主线程上出来
@@ -21,6 +27,8 @@ protocol TerminalLink: AnyObject {
     var onOutput: (Bytes) -> Void { get set }
     var onState: (Attachment.State) -> Void { get set }
     var onExit: (Int32) -> Void { get set }
+    /// 会话推来的通知（演示的没有）
+    var onNote: (Note) -> Void { get set }
     func start()
     func nudge()
     @discardableResult func input(_ data: Bytes) -> Bool
@@ -54,10 +62,22 @@ final class LiveBackend: Backend {
     }
 
     func fingerprint(on server: ServerRef) -> String? { client.fingerprint(on: server) }
+
+    func servers() -> [ServerRef] { client.servers() }
+
+    func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure? {
+        await client.pushSet(on: server, token: token, env: env)
+    }
+
+    /// 存进 App 和通知扩展共用的钥匙串分组（NoteKeychain）：通知扩展只拿得到这几把，拿不到配对的密钥
+    func syncNoteKeys() {
+        try? NoteKeychain.write(client.noteKeys(), group: NoteKeychain.group)
+    }
 }
 
 /// 密钥（这台手机在每台服务器上的身份、每个配对的密钥）存钥匙串：只在这台设备上（不进 iCloud 钥匙串、不跟着备份到别的设备），
-/// 开机后第一次解锁以后才读得到。配对表（不是秘密：机器名、服务器地址和指纹）存在 App 自己的目录里。
+/// 开机后第一次解锁以后才读得到。配对表（不是秘密：机器名、服务器地址和指纹）存在 App 自己的目录里。这些都在 App 自己的钥匙串分组里
+/// （默认的那个：.entitlements 里 keychain-access-groups 的第一个）；通知扩展读的通知密钥另在两边共用的分组里（NoteKeychain）。
 /// 钥匙串里的东西删掉 App 以后还在：重新装的第一次打开时清掉（配对表已经没了，留着的密钥用不上）
 final class KeychainStore: RemoteStore, @unchecked Sendable {
     static let shared = KeychainStore()
@@ -74,6 +94,7 @@ final class KeychainStore: RemoteStore, @unchecked Sendable {
         let d = UserDefaults.standard
         if !d.bool(forKey: "installed") {
             SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service] as CFDictionary)
+            SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: NoteKeychain.service] as CFDictionary)
             d.set(true, forKey: "installed")
         }
     }

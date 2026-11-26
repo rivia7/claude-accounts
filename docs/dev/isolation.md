@@ -14,9 +14,9 @@
 - 这些目录要记成信任过：Claude Code 2.1.329 起，对没信任过的 `--add-dir` 目录每次启动都弹「Adding a new directory … Your answer holds for this session」，一个目录问一次（账号目录本身也问），回答只管这一次会话。信任记在 CLAUDE_CONFIG_DIR 的 `.claude.json` 的 `projects[路径].hasTrustDialogAccepted`（和在那个目录里启动、点过信任一样；信任上一层也管下面的目录），Claude Code 自己的 runner 起会话前也是这样写的（工作目录、每个 `--add-dir`，原写法和真实路径各一条）。所以 `claude_sync`（启动前 `prepare_account` 的 `py sync`，退出、删账号时也跑）合并好 `projects` 以后，给 `add_dirs(key)`（`cca_dir_args` 用的同一份：账号目录 + `shared_real_dirs`）的每一个和它的真实路径记上 `hasTrustDialogAccepted: true`（`trust_dirs`：别的字段留着；已经是 `true` 的不动；改的是拷贝，因为合并的结果可能就是账号或主目录那份里的同一个对象），写进账号的 `.claude.json`、主目录的 `~/.claude.json` 和基线（`projects` 本来就跨账号同步）。合并完再加：哪边删掉了，下次启动又记上。只记交给它的这几个，不记上一层的 ~/.claude、~/.cca（回归 10c 核对）；`claude_add_dir: false` 时不记（以前记下的不删）。`-p` 不弹这个对话框（跳过信任对话框），所以只能交互地测：真 Claude Code 2.1.329 在伪终端（`script`）里、临时的 HOME 和配置目录，假的 API key 写进 `customApiKeyResponses.approved`（它的后 20 个字符）、`hasCompletedOnboarding`、工作目录信任过，带 `py env` 给的 `ACC_ARGS` 启动：没记时停在对话框上（第一个问的是账号目录），记了直接进欢迎屏。
 - 记忆目录：账号的 `projects` 链到 ~/.claude 的 `projects` 时，`claude_env` 把 `CLAUDE_CODE_REMOTE_MEMORY_DIR` 设成 ~/.claude 的真实路径（辅助程序的 `memory_dir`，经 `py env` 的 `ACC_MEMORY_DIR`；别的工具、算不出时是空的、不设，和 `claude_add_dir` 无关）。不设时 Claude Code 把记忆目录算成 CLAUDE_CONFIG_DIR 下的 `projects/<项目>/memory`，判断权限时却先解析链接，认不出是自己的记忆：读写都要确认（落在 `.claude` 下面，算敏感路径）。这个变量是 Claude Code 内部的（给云端会话用，文档里没有）：2.1.329 里它只换记忆的上一层（`projects/<项目>/memory`、用户级 `agent-memory`），项目的目录名照旧（cca 不设 `CLAUDE_CODE_PROJECT_DIR_NAME`），两样本来就经链接放在 ~/.claude 里，位置不变；以后的版本不认它时退回原样（只是又要确认）。剩下的：plan 模式写计划文件（`plans/`，在 `.claude` 下面）照样要确认，没有参数能改。
   这两个后面再跟一个 `--settings`：折合金额记下会话的 SessionStart hook（`session_hook`，回调 `cca _session-start 账号目录名`；官方账号只有
-  `{"hooks": …}`，第三方 API 账号和 apiKeyHelper、env 在同一份里；config.json 的 `cost: false` 时不带，见 cost.md）。实测 Claude Code 2.1.328：
-  它和配置目录 settings.json 里的 hook 一起跑；用户自己再给一个 `--settings` 时只有后面那个生效（cca 的在用户参数前面，于是这次没有 hook，
-  会话照旧认不出账号；第三方 API 账号不许用户给 `--settings`）
+  `{"hooks": …}`，第三方 API 账号和 apiKeyHelper、env 在同一份里；config.json 的 `cost: false` 时不带，见 cost.md）；远程会话开着时同一份 `hooks` 里再加 cca 自己的「做完了 / 在等你」那三个（`claude_hooks`，见 remote.md「cca 自己带的钩子」）。实测 Claude Code 2.1.328：
+  它和配置目录 settings.json 里的 hook 一起跑；用户自己再给一个 `--settings` 时只有后面那个生效（cca 的在用户参数前面，于是这次没有这些 hook：
+  会话照旧认不出账号、也不推通知；第三方 API 账号不许用户给 `--settings`）
 - 共享的 `~/.claude/settings.json` cca 只在两处改：`cca settings fix`（下一节）和 `cca cost hook on`（3.6.9 起，问过同意；加一条只在 Claude App 里的会话起作用的 SessionStart hook，记下 App 登录的账号给折合金额用；关掉折合金额、`cca cost hook off`、卸载时去掉；见 cost.md）。两处都在 `Lock` 里、原子替换、保留权限，不合法的 JSON 不碰
 
 ## 共享设置的说明和修复

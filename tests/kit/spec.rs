@@ -42,6 +42,8 @@ pub const TEAM_ASTATE: &str = "cca-team-astate-v1";
 pub const PAIR: &str = "cca-remote-pair";
 /// 会话的说明的标签
 pub const DIR: &str = "cca-remote-dir";
+/// 推送的通知的标签
+pub const NOTE: &str = "cca-remote-note";
 
 /// 两把密钥：（加密, 认证）
 pub type Keys = ([u8; 32], [u8; 32]);
@@ -304,6 +306,27 @@ pub fn dir_seal(p: &[u8], pid: &str, sid: &str, doc: &Value) -> Value {
 /// 解开会话的说明；认证不过是 None
 pub fn dir_open(p: &[u8], pid: &str, sid: &str, blob: &Value) -> Option<Value> {
     unseal(DIR, &dir_keys(p), &[pid, sid], blob).map(|pt| loads(&pt))
+}
+
+/// 封推送的通知用的两把密钥（手机上解它的通知扩展只拿得到这两把，拿不到 P）
+pub fn note_keys(p: &[u8]) -> Keys {
+    let k = h(p, b"cca-remote/v1/note");
+    (h(&k, b"enc"), h(&k, b"mac"))
+}
+
+/// 推送的通知的明文：紧凑的 JSON（非 ASCII 原样写），空格补齐到 256 字节的整数倍
+pub fn note_plain(doc: &Value) -> Vec<u8> {
+    pad(doc.compact().into_bytes(), 256, b' ')
+}
+
+/// 封一条推送的通知：认证带着配对的编号
+pub fn note_seal(p: &[u8], pid: &str, doc: &Value) -> Value {
+    seal(NOTE, &note_keys(p), &[pid], &note_plain(doc))
+}
+
+/// 解开推送的通知；认证不过是 None
+pub fn note_open(p: &[u8], pid: &str, blob: &Value) -> Option<Value> {
+    unseal(NOTE, &note_keys(p), &[pid], blob).map(|pt| loads(&pt))
 }
 
 /// 两头之间的加密通道。握手：接入方发 hello()，宿主回 reply()，接入方再发 confirm()，宿主 accept()；之后两个方向各用各的密钥、

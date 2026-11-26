@@ -114,6 +114,7 @@ final class AppModel {
         fetchedAt = nil
         loading = false   // 前一个那头还没查完的，回来时看到换了就不管了（fetch 里的 b === backend）
         refresh()
+        Pusher.shared.start(self)
     }
 
     // MARK: 会话
@@ -192,6 +193,7 @@ final class AppModel {
                 guard let self, b === self.backend else { return }
                 self.pairing = .done(peer)
                 self.peers = b.peers()
+                Pusher.shared.peersChanged(on: peer.server)   // 通知密钥、在这台服务器上登记推送；头一次配好时问能不能发通知
                 await self.fetch()
             } catch is CancellationError {
             } catch {
@@ -214,6 +216,7 @@ final class AppModel {
             guard b === backend else { return }
             peers = b.peers()
             listings[p.pid] = nil
+            Pusher.shared.peersChanged(on: p.server)
         }
     }
 
@@ -229,8 +232,30 @@ final class AppModel {
         terminal = nil
     }
 
-    /// App 回到前台
+    /// 点了通知：回到那个会话的终端。正开着就不动；关了的重新接上（会话还在、那台电脑在线时）
+    func reopen(peer pid: String, sid: String, readOnly: Bool) {
+        if let t = terminal, t.peer.pid == pid, t.session.sid == sid {
+            t.nudge()
+            return
+        }
+        let b = backend
+        Task {
+            // 刚启动（点通知把 App 打开的）时列表还没查过、正在查：等一等
+            for i in 0..<5 {
+                guard b === backend else { return }
+                if let p = peers.first(where: { $0.pid == pid }), let s = listings[pid]?.sessions.first(where: { $0.sid == sid }) {
+                    if s.online, terminal?.session.sid != sid { attach(s, on: p, readOnly: readOnly) }
+                    return
+                }
+                if i > 0 { try? await Task.sleep(for: .seconds(1)) }
+                await fetch()
+            }
+        }
+    }
+
+    /// App 回到前台（系统设置里的通知开关可能改过：Pusher 对一对登记）
     func becameActive() {
+        Pusher.shared.sync()
         if let t = terminal {
             t.nudge()
         } else {
@@ -296,6 +321,7 @@ final class TerminalSession: Identifiable, Hashable {
         l.onOutput = { [weak self, weak l] b in if let self, self.link === l { self.output(b) } }
         l.onState = { [weak self, weak l] s in if let self, self.link === l { self.state = s } }
         l.onExit = { [weak self, weak l] c in if let self, self.link === l { self.exitCode = c } }
+        l.onNote = { [weak self, weak l] n in if let self, self.link === l { self.noted(n) } }
         link = l
         l.start()
     }
@@ -311,6 +337,16 @@ final class TerminalSession: Identifiable, Hashable {
     func send(_ b: Bytes) {
         guard !readOnly else { return }
         link?.input(b)
+    }
+
+    /// 会话推来一条通知（宿主转来的 NOTIFY，或者会话里的程序写的 OSC 777 / 9）：弹成这台手机的通知（Notifier）
+    func noted(_ n: Note) {
+        Notifier.post(n, from: self)
+    }
+
+    /// 会话里的程序自己写的通知（OSC 777 / 9，TerminalSurface 认出来的）
+    func noted(title: String, body: String) {
+        noted(Note(title: title, body: body))
     }
 
     func nudge() { link?.nudge() }

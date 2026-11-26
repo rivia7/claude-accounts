@@ -873,8 +873,8 @@ impl Store {
     }
 
     /// GET /v1/health 的内容（Py:525-533）。mode 总是 team、seq 总是 0（这两项留着：以前的客户端、安装脚本照它们认是不是 Team 的
-    /// 服务器）；relay（数据端口、认不认访客）给了（开着中转）才列中转的那几个 op、带 relay 那一项
-    pub fn health(&self, sig_ok: bool, relay: Option<(u16, bool)>) -> V {
+    /// 服务器）；relay（数据端口、认不认访客、手机能不能登记推送）给了（开着中转）才列中转的那几个 op、带 relay 那一项
+    pub fn health(&self, sig_ok: bool, relay: Option<(u16, bool, bool)>) -> V {
         let ops = List::new();
         for op in ["report", "view"] {
             ops.push(op);
@@ -886,9 +886,10 @@ impl Store {
         for op in TEAM_OPS.iter().filter(|op| !op.starts_with("team_astate") && !TEAM_ROOT_OPS.contains(op)) {
             ops.push(*op);
         }
+        // push_set（后加的）不列：没开推送时 /v1/health 和以前逐字节一样；开着时 relay 里有 push
         if relay.is_some() {
-            for op in RELAY_OPS {
-                ops.push(op);
+            for op in RELAY_OPS.iter().filter(|op| **op != "push_set") {
+                ops.push(*op);
             }
         }
         let out = dict! {
@@ -901,11 +902,15 @@ impl Store {
             "ops" => ops,
             "team" => &self.team_id,
         };
-        // 中转的数据端口；认访客（手机）时多一项 guests（iOS 上的 cca App 看它知道这台服务器能不能配手机）
-        if let Some((port, guests)) = relay {
+        // 中转的数据端口；认访客（手机）时多一项 guests（iOS 上的 cca App 看它知道这台服务器能不能配手机），手机能登记推送时
+        // 再多一项 push（App 看它知道要不要登记）
+        if let Some((port, guests, push)) = relay {
             let r = dict! { "port" => port };
             if guests {
                 r.set("guests", true);
+            }
+            if push {
+                r.set("push", true);
             }
             out.set("relay", r);
         }

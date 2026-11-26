@@ -1,10 +1,11 @@
 import CcaRemoteKit
 import SwiftUI
 
-/// 设置：外观、这台手机叫什么、配对过的电脑（取消配对）、演示模式、关于
+/// 设置：外观、这台手机叫什么、配对过的电脑（取消配对）、通知（推送）、演示模式、关于
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var unpairing: Peer?
+    private var push: Pusher { Pusher.shared }
 
     var body: some View {
         @Bindable var model = model
@@ -57,6 +58,16 @@ struct SettingsView: View {
                     }
                 }
                 Section {
+                    LabeledContent("推送", value: pushState)
+                    if push.allowed == false, !model.isDemo, let u = URL(string: UIApplication.openNotificationSettingsURLString) {
+                        Button("在系统设置里打开通知") { UIApplication.shared.open(u) }
+                    }
+                } header: {
+                    Text("通知")
+                } footer: {
+                    Text(pushFooter)
+                }
+                Section {
                     if model.isDemo {
                         Button("退出演示") { model.leaveDemo() }
                     } else {
@@ -89,6 +100,31 @@ struct SettingsView: View {
                 Text("这台手机就不能再接入那台电脑上的会话了，正接着的会断开。以后要用得重新配对。")
             }
         }
+    }
+}
+
+extension SettingsView {
+    /// 推送现在怎么样（一个词）
+    private var pushState: String {
+        if model.isDemo { return "演示模式里没有" }
+        switch push.allowed {
+        case false: return "关着"
+        case nil: return "还没问过"
+        default: return push.token == nil ? (push.failure == nil ? "正在打开" : "没打开") : "开着"
+        }
+    }
+
+    private var pushFooter: String {
+        var lines = ["锁着屏、App 没开着时也收得到会话里的通知（做完了、在等你）：经那台电脑所在的服务器和 cca 的推送服务转过来，"
+            + "内容封着，只有这台手机解得开。"]
+        if model.isDemo { return lines[0] }
+        if push.allowed == false { lines.append("通知关着：在系统的「设置」→「通知」→「cca」里打开。") }
+        if let f = push.failure, push.token == nil { lines.append("向 Apple 要推送的令牌没成：\(f)") }
+        if !push.unsupported.isEmpty {
+            lines.append("「\(push.unsupported.joined(separator: "」「"))」这台服务器还没接上推送（要管理员更新服务器）：经它配对的电脑，"
+                + "只在 App 开着、接着会话时收得到通知。")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 

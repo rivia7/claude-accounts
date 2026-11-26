@@ -153,6 +153,45 @@ check(clean("a\u{1b}[31mb\u{202e}c\u{7f}", 48) == "a[31mbc", "去掉控制字符
 check(clean("  一二三四五  ", 5) == "一二三", "先按码位限长、再去掉两头的空白（和 core.js 的 clean 一样）")
 check(clean(42, 10) == "", "不是字符串")
 
+// 会话推来的通知（NOTIFY 帧里的 JSON）：和辅助程序的 Note::parse 一样（attach.rs 的 notes_become_terminal_notifications 用的同一条）
+let note = Note.parse(Bytes(utf8: #"{"title": "a\u001b]52;c;x\u0007b", "subtitle": "\u202eevil", "body": "line1\nline2"}"#))
+check(note == Note(title: "a]52;c;xb", subtitle: "evil", body: "line1line2"), "通知：控制字符、双向控制字符去掉")
+check(Note.parse(Bytes(utf8: #"{"title": " ", "subtitle": "只有副标题", "body": 3}"#)) == nil, "通知：没有标题也没有正文的不算")
+check(Note.parse(Bytes(utf8: "做完了")) == nil && Note.parse(Bytes(utf8: #"["做完了"]"#)) == nil, "通知：不是 JSON 对象")
+check(Note.parse(Bytes(utf8: #"{"body": "\#(String(repeating: "字", count: 300))"}"#))?.body.count == 240, "通知：正文最多 240 个字")
+check(Note.parse(Bytes(utf8: #"{"title": "做完了", "id": "0123456789abcdef"}"#))?.id == "0123456789abcdef", "通知：带着编号")
+check(Note.parse(Bytes(utf8: #"{"title": "做完了", "id": "0123456789ABCDEF"}"#))?.id == "", "通知：编号不是那个样子的当没有")
+var budget = NoteBudget(now: 100)
+check((0..<6).map { _ in budget.take(now: 100) } == [true, true, true, true, true, false], "通知的限流：一下子最多 5 条")
+check(budget.take(now: 103) && !budget.take(now: 103), "通知的限流：之后每 3 秒一条")
+
+// 推送的通知：kit::spec 封的（和辅助程序的 note_seal 一样），这边拿通知密钥解（像通知扩展那样每一把都试）
+if let nt = v["note"] as? [String: Any] {
+    let p = hx(nt["p"]), pid = nt["pid"] as? String ?? ""
+    let key = NoteKey(pid: pid, p: p, name: "box\u{202e}")
+    check(key.raw == hx(nt["key"]), "通知密钥：HMAC(P, cca-remote/v1/note)")
+    let stranger = NoteKey(pid: nt["other_pid"] as? String ?? "", p: hx(nt["other_p"]), name: "别的")
+    let w = nt["want"] as? [String: Any] ?? [:]
+    let n = openPushed(["aps": ["mutable-content": 1], "n": nt["blob"] ?? NSNull()], keys: [stranger, key])
+    check(n?.pid == pid && n?.machine == "box\u{202e}" && n?.id == w["id"] as? String && n?.sid == w["sid"] as? String
+          && n?.at == jsonNumber(w["at"]) && n?.title == w["title"] as? String && n?.subtitle == w["subtitle"] as? String
+          && n?.body == w["body"] as? String, "解开推送的通知：\(String(describing: n))")
+    let card = n.flatMap { NoteCard($0) }
+    check(card == NoteCard(title: w["title"] as? String ?? "", body: w["body"] as? String ?? "", machine: "box", what: w["subtitle"] as? String ?? "")
+          && card?.subtitle == "来自「box」 · \(w["subtitle"] as? String ?? "")", "弹出来的字：\(String(describing: card))")
+    check(openPushed(["n": nt["blob"] ?? NSNull()], keys: [stranger]) == nil, "别的配对的密钥解不开")
+    check(openPushed(["n": nt["blob"] ?? NSNull()], keys: [NoteKey(pid: nt["other_pid"] as? String ?? "", raw: key.raw, name: "")]) == nil,
+          "配对编号不对解不开")
+    for bad in ["forged", "no_id", "bad_id", "bad_sid", "empty", "v2", "dir"] {
+        check(openPushed(["n": nt[bad] ?? NSNull()], keys: [key]) == nil, "不认：\(bad)")
+    }
+    check(openPushed(["aps": [:] as [String: Any]], keys: [key]) == nil && openPushed(["n": "x"], keys: [key]) == nil, "推送里没有封好的那一份")
+}
+check(NoteCard(title: "", body: "", machine: "m", what: "w") == nil, "弹出来的字：标题、正文都是空的不弹")
+check(NoteCard(title: "", body: "改好了", machine: "", what: "")?.title == "远程会话"
+      && NoteCard(title: "", body: "改好了", machine: "", what: "")?.subtitle == "来自另一台电脑", "弹出来的字：没写标题、不知道哪台机器")
+check(plainLine("a\u{1b}b\u{2028}c\u{202e}d  ", max: 4) == "ab c", "plainLine：控制字符、看不见的排版字符去掉，截短")
+
 // 签名：Rust 那头拿 ssh-keygen -Y verify 核对
 if let s = v["sign"] as? [String: Any], let id = Identity(raw: hx(s["raw"])) {
     out["sign"] = ["pub": id.pub, "fp": id.fp, "sig": id.sign(hx(s["data"]))]

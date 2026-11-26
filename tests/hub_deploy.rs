@@ -61,6 +61,7 @@ pub const MODULE: Module = Module {
         case!(core_checks),
         case!(no_ca_bundle),
         case!(runtime_image),
+        case!(push),
         // cca team deploy（team-deploy）：经假的 ssh 把同一个脚本交给假服务器，装好了接上
         case!(deploy),
         case!(undeploy),
@@ -474,6 +475,9 @@ fn with_docker() -> Opts {
 fn docker_any_ip() -> Opts {
     Opts { docker: true, any_ip: true, ..Opts::default() }
 }
+
+/// 推送网关证书公钥的指纹（--push-pin 的样子：32 个 0 字节的 base64）。网关的地址是 192.0.2.10：没有程序去连它
+const PUSH_PIN: &str = "sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 // ---- 夹具 ----
 
@@ -1964,6 +1968,7 @@ fn deploy(t: &mut Ctx) {
             ("web", ""),
             ("web_cert", ""),
             ("web_off", "lan"),
+            ("push", ""),
         ])
     );
     assert!(r.err.contains("Team 的同步服务器在运行"), "服务器那边的进度经 ssh 的 stderr 直接打出来");
@@ -2151,7 +2156,7 @@ fn args(t: &mut Ctx) {
     let b = fx.hub(t, &plain());
     let (a, tid, _root, _svc) = fx.team("甲组");
     // 这里的 20000 只是参数里的数：先查出写错了，没有程序去绑它
-    let cases: [&[&str]; 14] = [
+    let cases: [&[&str]; 17] = [
         &["--port", "abc"],
         &["--port", "80"],
         &["--port", "+2000"],
@@ -2166,12 +2171,85 @@ fn args(t: &mut Ctx) {
         &["--web-port", "80"],
         &["--web-port", "20000", "--port", "20000"],
         &["--no-web", "--web-port", "20000"],
+        &["--push", "https://192.0.2.10:18460"],
+        &["--push", "ftp://192.0.2.10", "--push-pin", PUSH_PIN],
+        &["--no-push", "--push", "https://192.0.2.10:18460", "--push-pin", PUSH_PIN],
     ];
     for case in cases {
         let r = try_deploy(&a, &tid, &b, case, &[]);
         assert_eq!((r.code, r.out.split('\t').next()), (1, Some("usage")), "{case:?}");
     }
     assert!(!a.home.join("ssh.argv").exists(), "不连服务器");
+}
+
+/// 推送网关（--push、--push-pin）：记在 .env 里，再运行照旧；开着中转时交给服务端——systemd 的经 EnvironmentFile，Docker 的经
+/// compose 的 environment（假的 docker 查这两样对得上）——它起来时说转给哪个网关；没开中转时记着、不交；--no-push 去掉。写错了、
+/// 和 --no-relay 一起写是 usage，什么都还没动。cca team deploy 照样传过去，结果里有 push，再部署照上次的
+fn push(t: &mut Ctx) {
+    let fx = setup(t);
+    let (url, pin) = ("https://192.0.2.10:18460", PUSH_PIN);
+    let said = "推送：手机登记了的，会话里的通知转给推送网关 192.0.2.10:18460";
+    let both = [Some(url.to_string()), Some(pin.to_string())];
+    let push_env = |b: &FakeBox, d: &Path| {
+        let e = b.envfile(Some(d));
+        [e.get("CCA_PUSH_URL").cloned(), e.get("CCA_PUSH_PIN").cloned()]
+    };
+    let started = |b: &FakeBox| b.log("server.log").matches(said).count();
+    let b = fx.hub(t, &plain());
+    let (a, tid, root, svc) = fx.team("甲组");
+    let d = opt(&b, &svc);
+    let ps = team_port().to_string();
+    let base = ["--team-root", root.as_str(), "--host", "127.0.0.1", "--port", ps.as_str()];
+    for (extra, why) in [
+        (&["--push", url][..], "--push 和 --push-pin（推送网关证书的公钥）要一起写"),
+        (&["--push-pin", pin], "--push 和 --push-pin（推送网关证书的公钥）要一起写"),
+        (&["--push", "http://192.0.2.10", "--push-pin", pin], "--push 要写成 https://主机[:端口]"),
+        (&["--push", url, "--push-pin", "sha256//abc="], "--push-pin 要写成 sha256//"),
+        (&["--push", url, "--push-pin", pin, "--no-relay"], "推送是远程会话的"),
+        (&["--no-push", "--push", url, "--push-pin", pin], "--no-push 和 --push、--push-pin 只能写一种"),
+    ] {
+        let r = fx.try_install(&b, &[&base[..], extra].concat());
+        assert_eq!(r.code, 1, "{extra:?}：{}{}", r.out, r.err);
+        assert_in(why, &r.err);
+        assert!(!d.join(".env").exists(), "什么都还没动：{extra:?}");
+    }
+    let r = fx.install(&b, &[&base[..], &["--push", url, "--push-pin", pin]].concat());
+    assert_in(&format!("推送：iPhone 上的 cca App 登记了的，会话里的通知经推送网关 {url} 推到手机上"), &r.out);
+    assert_eq!(push_env(&b, &d), both);
+    assert_eq!(started(&b), 1, "systemd：服务端经 EnvironmentFile 拿到了，起来时说了");
+    fx.install(&b, &base);
+    assert_eq!(push_env(&b, &d), both, "没写：照上次的");
+    assert_eq!(started(&b), 2);
+    let r = fx.install(&b, &[&base[..], &["--no-push"]].concat());
+    assert_not_in("推送网关", &r.out);
+    assert_eq!(push_env(&b, &d), [None, None]);
+    assert_eq!(started(&b), 2, "这一次起来的不用推送");
+
+    // Docker：开着中转时 compose 的 environment 里交给它；--no-relay 时记着、不交
+    let bd = fx.hub(t, &Opts { docker: true, ..Opts::default() });
+    let dd = opt(&bd, &svc);
+    let ps = team_port().to_string();
+    let base = ["--team-root", root.as_str(), "--host", "127.0.0.1", "--port", ps.as_str()];
+    fx.install(&bd, &[&base[..], &["--push", url, "--push-pin", pin]].concat());
+    let y = fsx::read_text(dd.join("compose.yaml"));
+    assert_in("      CCA_PUSH_URL: ${CCA_PUSH_URL:?}\n      CCA_PUSH_PIN: ${CCA_PUSH_PIN:?}\n", &y);
+    assert!(!y.contains('@'), "记号都换掉了");
+    assert_eq!(started(&bd), 1, "Docker：服务端经 environment 拿到了");
+    fx.install(&bd, &[&base[..], &["--no-relay"]].concat());
+    assert_not_in("CCA_PUSH", &fsx::read_text(dd.join("compose.yaml")));
+    assert_eq!(push_env(&bd, &dd), both, "没开中转：记着，再开中转时接着用");
+    assert_eq!(started(&bd), 1);
+
+    // cca team deploy：照样传过去，结果里有；再部署照上次的
+    let bt = fx.hub(t, &plain());
+    let pt = team_port().to_string();
+    let r = deploy_ok(&a, &tid, &bt, &["--port", &pt, "--push", url, "--push-pin", pin], &[]);
+    assert_eq!(kv(&r.out)["push"], url);
+    let r = deploy_ok(&a, &tid, &bt, &[], &[]);
+    assert_eq!(kv(&r.out)["push"], url, "再部署：服务器上照上次的");
+    let r = deploy_ok(&a, &tid, &bt, &["--no-push"], &[]);
+    assert_eq!(kv(&r.out)["push"], "");
+    assert_eq!(started(&bt), 2);
 }
 
 /// 装好了却接不上（安全组没放行）：说要放行哪个端口；放行以后再部署（服务器上是更新），接上；服务器自己的防火墙经 SSH 装时也说

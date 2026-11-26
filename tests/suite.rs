@@ -19,6 +19,7 @@ mod kit_selftest;
 mod local_udp;
 mod mail_view;
 mod presence;
+mod push_gateway;
 mod remote_host;
 mod remote_relay;
 mod router_merge;
@@ -56,6 +57,7 @@ fn main() {
             team_relay::MODULE,
             acme::MODULE,
             web_relay::MODULE,
+            push_gateway::MODULE,
             ios_kit::MODULE,
             isolation_chrome_native::MODULE,
         ],

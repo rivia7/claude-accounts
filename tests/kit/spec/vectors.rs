@@ -4,6 +4,7 @@
 //! 定下来的那些要一个字节不差；带随机数的（封出来的密文）Python 封的这里要解得开，拿同一个 nonce 再封一遍要一模一样——
 //! 明文怎么写（JSON 的写法、补齐）也就一起对上了。折合金额里压缩过的那一段两边的压缩器压得不一样：比的是解压出来的文字。
 //! 数据是冻结的（算它的那份 Python 已经删了，没有重新生成的命令）；格式要改时，这里的数据照 server/README.md 另算。
+//! 推送的通知（note 那一节）是后加的：照 server/README.md「推送」用 Node 的 crypto 另算的，同样是冻结的。
 //!
 //! 对照数据管不到的也在这里：ssh-keygen 的签名和验签，签过名的请求（对着本机现起的 TLS 服务器）。
 
@@ -246,6 +247,21 @@ fn session_notes() {
         same_seal(DIR, &dir_keys(&p), &[pid, sid], &dir_plain(doc), blob);
         assert_eq!(dir_open(&p, pid, sid, &dir_seal(&p, pid, sid, doc)).as_ref(), Some(doc));
         assert_eq!(dir_open(&p, sid, pid, blob), None, "别的会话的");
+    }
+}
+
+#[test]
+fn push_notes() {
+    for case in vectors()["note"].list() {
+        let (p, pid, doc, blob) = (hx(&case["p"]), case["pid"].str(), &case["doc"], &case["blob"]);
+        assert_eq!(note_keys(&p), keys_in(case));
+        assert_eq!(note_open(&p, pid, blob).as_ref(), Some(doc));
+        assert_eq!(note_plain(doc).len() as i64, case["plain_len"].i64());
+        same_seal(NOTE, &note_keys(&p), &[pid], &note_plain(doc), blob);
+        assert_eq!(note_open(&p, pid, &note_seal(&p, pid, doc)).as_ref(), Some(doc));
+        assert_eq!(note_open(&p, &"f".repeat(32), blob), None, "别的配对的");
+        assert_eq!(dir_open(&p, pid, doc["sid"].str(), blob), None, "会话的说明的密钥解不开它");
+        assert_ne!(note_keys(&p), dir_keys(&p));
     }
 }
 

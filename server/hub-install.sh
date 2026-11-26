@@ -5,7 +5,8 @@
 # chmod、chown、id、uname、sleep）；systemd 方式还要 useradd、userdel。ss / netstat、ip、timeout 有就用，没有也行。
 #
 #   sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…' [--host 公网地址] [--port 端口] [--relay-port 端口 | --no-relay]
-#                              [--web-port 端口 | --no-web] [--docker | --systemd] [--dir 目录] [--name Team的名字]
+#                              [--web-port 端口 | --no-web] [--push 网关 --push-pin 公钥 | --no-push] [--docker | --systemd]
+#                              [--dir 目录] [--name Team的名字]
 #       根公钥是 cca team new 给的那一行（公开的）。每个 Team 一个服务：服务名、系统用户、容器名是 cca-team-<Team 编号的前 8 位>，
 #       装在 /opt/<服务名>，端口没写时从 18445 起找一个空着的——所以一台服务器上能装几个 Team，互不相干。装好了打出管理员接上它的那一行
 #       （cca team attach …）。再运行（带 --team-root，或者 --dir 那个目录）是更新：数据、证书、端口都不变
@@ -18,6 +19,9 @@
 # 从公网连这台服务器的 80 端口，80 端口只有一个：这台服务器上的几个 Team 共用一个证书助手（服务 cca-team-acme，装在 /opt/cca-team-acme：
 # 第一个开网页端的 Team 装上它，别的 Team 在它那里登记自己的地址；同一个地址只要一张证书；最后一个 Team 卸载时连同它一起删掉）。
 # 80 端口被别的程序占着、地址是内网的，这一次就不开（说一声，再运行时再看）。--name：网页的标题、手机主屏幕上的名字带上 Team 的名字。
+# 推送（iPhone 上的 cca App 锁着屏、没开着时也收得到会话里的通知）：--push https://主机[:端口] --push-pin sha256//… 是维护者的服务器上的
+# 推送网关（cca-core team-push，docs/dev/push.md：推送服务的密钥只在它那里）。通知是只有那台手机解得开的密文，这台服务器只转给网关；
+# 要开着中转。--no-push 不用。
 # 选的都记在 .env 里，再运行照旧。没装完（起不来、被打断）时换回原来的（程序、设置），原来的服务照原来的方式重新起来。
 #
 # 也可以在管理员的电脑上运行 cca team deploy Team root@服务器：经 SSH 装上这一份，装好了自动接上。
@@ -86,7 +90,8 @@ interrupted() {   # Ctrl-C、SSH 断了（之后再往断了的管道里写是 S
 usage() {
 	cat <<'EOF'
 用法: sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…' [--host 公网地址] [--port 端口] [--relay-port 端口 | --no-relay]
-                                 [--web-port 端口 | --no-web] [--docker | --systemd] [--dir 目录] [--name Team的名字]
+                                 [--web-port 端口 | --no-web] [--push 网关 --push-pin 公钥 | --no-push] [--docker | --systemd]
+                                 [--dir 目录] [--name Team的名字]
       sudo sh cca-hub-install.sh --dir 目录 [选项…]      更新装在这个目录里的那一个
       sudo sh cca-hub-install.sh --uninstall --dir 目录
 EOF
@@ -293,6 +298,23 @@ pick_relay() {   # RELAY：给这个 Team 的远程会话做中转的数据端�
 		die port "中转的数据端口 ${RELAY} 被别的程序占着：换一个（--relay-port），或者不开中转（--no-relay）"
 	fi
 }
+pick_push() {   # PUSH、PUSHPIN：推送网关（维护者的服务器上的 cca-core team-push）的地址、它的证书公钥；空的是不用。--push、--push-pin
+	            # 照写的（一起写），--no-push 不用，都没写时照上次的（.env 的 CCA_PUSH_URL、CCA_PUSH_PIN）。服务端起来时还照 push.rs 的
+	            # Gateway::parse 查一遍：这里先查，写错了什么都还没动就停下。没开中转时记着、不用（再开中转时接着用）
+	if [ -n "$NOPUSH" ]; then
+		[ -z "$PUSH$PUSHPIN" ] || die usage "--no-push 和 --push、--push-pin 只能写一种"
+		return 0
+	fi
+	PGIVEN=$PUSH$PUSHPIN
+	[ -n "$PGIVEN" ] || { PUSH=$(env_get CCA_PUSH_URL); PUSHPIN=$(env_get CCA_PUSH_PIN); }
+	[ -n "$PUSH$PUSHPIN" ] || return 0
+	[ -n "$PUSH" ] && [ -n "$PUSHPIN" ] || die usage "--push 和 --push-pin（推送网关证书的公钥）要一起写"
+	printf '%s\n' "$PUSH" | grep -Eqx 'https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?/?' ||
+		die usage "--push 要写成 https://主机[:端口]：${PUSH}"
+	printf '%s\n' "$PUSHPIN" | grep -Eqx 'sha256//[A-Za-z0-9+/]{43}=' ||
+		die usage "--push-pin 要写成 sha256// 加推送网关证书公钥的 SHA-256（base64，44 个字符）：${PUSHPIN}"
+	[ -z "$PGIVEN" ] || relay_on || die usage "推送是远程会话的：--push 要开着中转（不能和 --no-relay 一起写）"
+}
 pick_host() {   # HOST：各台设备、手机经它连过来的地址（--host；没写时照上次记下的，再是 cca team deploy 放进的 ssh 的主机名、这台机器上
 	            # 看得到的公网 IP，都没有时在终端里问）。HP 是网址里的写法。$1 是 1：一定要有（要打出管理员接上它的那一行），问不到就停下
 	[ -n "$HOST" ] || HOST=$(env_get CCA_HUB_HOST)
@@ -427,6 +449,7 @@ env_file() {
 	printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_TEAM_ROOT=%s\nCCA_HUB_RELAY=%s\nCCA_HUB_WEB=%s\n' "$MODE" "$PORT" "$TEAMROOT" "$RELAY" "$WEB"
 	[ -z "$HOST" ] || printf 'CCA_HUB_HOST=%s\n' "$HOST"
 	[ -z "$WEBON" ] || printf 'CCA_HUB_WEB_URL=%s\n' "$WEBURL"
+	[ -z "$PUSH" ] || printf 'CCA_PUSH_URL=%s\nCCA_PUSH_PIN=%s\n' "$PUSH" "$PUSHPIN"
 	[ -z "$VERSION" ] || printf 'CCA_HUB_VERSION=%s\n' "$VERSION"
 }
 write_env() { put "$ROOT$D/.env" 600 env_file; }   # .env 换成这一次的（起服务之前；原来的 save_prev 留了一份）
@@ -492,9 +515,11 @@ compose_yaml() {   # @SVC@ 换成服务名（容器名）、@AD@ 换成证书助
 	if relay_on; then relay='s/@RELAY@\([^@]*\)@@/\1/g'; else relay='/^@RELAY@[^@]*@@$/d;s/@RELAY@[^@]*@@//g'; fi
 	if [ -n "$WEBON" ]; then web='s/@WEB@\([^@]*\)@@/\1/g'; else web='/^@WEB@[^@]*@@$/d;s/@WEB@[^@]*@@//g'; fi
 	if [ -n "$WEBON" ] && named; then name='s/@NAME@\([^@]*\)@@/\1/g'; else name='s/@NAME@[^@]*@@//g'; fi
+	# 推送（开着中转、有推送网关时）：@PUSH@ 那两行把网关的地址、公钥交给服务端（systemd 的经 EnvironmentFile 自己就有）
+	if relay_on && [ -n "$PUSH" ]; then push='s/@PUSH@\([^@]*\)@@/\1/g'; else push='/^@PUSH@[^@]*@@$/d'; fi
 	# 容器里：HTTPS 听 18445，中转的数据端口 18446，网页端 18447；对外是 .env 里的 CCA_HUB_PORT、CCA_HUB_RELAY、CCA_HUB_WEB。
 	# 镜像是本机建的空镜像（RIMG），程序是只读挂进去的 app/cca-core
-	sed -e "s/@SVC@/$SVC/g" -e "s|@AD@|$AD|g" -e "s/@PIDS@/$(tasks)/" -e "$relay" -e "$name" -e "$web" <<'EOF'
+	sed -e "s/@SVC@/$SVC/g" -e "s|@AD@|$AD|g" -e "s/@PIDS@/$(tasks)/" -e "$relay" -e "$name" -e "$web" -e "$push" <<'EOF'
 # cca 的 Team 的同步服务器（@SVC@）：安装脚本写的，再运行安装脚本时会换掉。设置在 .env 里
 services:
   @SVC@:
@@ -509,6 +534,8 @@ services:
 @WEB@      - "${CCA_HUB_WEB:?}:18447"@@
     environment:
       CCA_TEAM_ROOT: ${CCA_TEAM_ROOT:?}
+@PUSH@      CCA_PUSH_URL: ${CCA_PUSH_URL:?}@@
+@PUSH@      CCA_PUSH_PIN: ${CCA_PUSH_PIN:?}@@
     volumes:
       - ./app:/app:ro,z
       - ./certs:/certs:ro,z
@@ -785,6 +812,7 @@ report_managed() {   # 给 cca team deploy：一行一项（deploy.rs 的 report
 	note "port $PORT"
 	[ -z "$HOST" ] || note "host $HOST"
 	! relay_on || note "relay $RELAY"
+	! relay_on || [ -z "$PUSH" ] || note "push $PUSH"
 	if [ -n "$WEBON" ]; then
 		note "web $WEBURL"
 		if [ -n "$CERTOK" ]; then note "web_cert ok"; else note "web_cert wait"; fi
@@ -794,6 +822,9 @@ report_managed() {   # 给 cca team deploy：一行一项（deploy.rs 的 report
 	note "pin sha256//$PIN"
 	note "state $STATE"
 	note ok
+}
+push_say() {   # 直接在服务器上运行的：开着推送的话说一声
+	! relay_on || [ -z "$PUSH" ] || say "推送：iPhone 上的 cca App 登记了的，会话里的通知经推送网关 ${PUSH} 推到手机上（只有手机解得开）"
 }
 web_say() {   # 直接在服务器上运行的：手机的网页端怎么样了
 	if [ -n "$WEBON" ] && [ -n "$CERTOK" ]; then
@@ -817,6 +848,7 @@ report() {   # 直接在服务器上运行的：打出管理员接上它的那�
 		[ -z "$NEWCERT" ] || say "! 证书是新生成的（原来的不见了）：管理员要照下面这一行重新接上，各台设备同步到新的配置以后才连得上"
 		if [ -z "$NEWCERT" ] && [ "$PORT" = "$OLDPORT" ]; then
 			web_say
+			push_say
 			fw_hint
 			[ -z "$WEBON" ] || [ -n "$OLDWEBURL" ] || say "云服务商的安全组（或轻量应用服务器的防火墙）里要放行 $(ports_say)。"
 			return 0
@@ -829,6 +861,7 @@ report() {   # 直接在服务器上运行的：打出管理员接上它的那�
 	say "  cca team attach Team https://${HP}:${PORT} sha256//${PIN}"
 	say ""
 	web_say
+	push_say
 	fw_hint
 	say "云服务商的安全组（或轻量应用服务器的防火墙）里要放行 $(ports_say)。"
 }
@@ -859,19 +892,20 @@ port_arg() {   # port_arg 选项 值：1024～65535 的端口
 
 main() {
 	HOST="" PORT="" MODE="" UNINSTALL="" AUTO="" NEWCERT="" HP="" RELAY="" WEB="" WEBSET="" WEBON="" WEB_WHY="" WEBURL="" CERTOK=""
-	OLD="" OLDPORT="" OLDWEBURL="" OLDACME="" ACMEGONE=""
+	OLD="" OLDPORT="" OLDWEBURL="" OLDACME="" ACMEGONE="" PUSH="" PUSHPIN="" NOPUSH="" PGIVEN=""
 	trap interrupted HUP INT TERM PIPE
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--host|--port|--dir|--team-root|--relay-port|--web-port|--name)
+			--host|--port|--dir|--team-root|--relay-port|--web-port|--name|--push|--push-pin)
 				[ $# -ge 2 ] || { usage >&2; exit 2; }
 				case "$1" in
 					--host) HOST=$2 ;; --port) PORT=$2 ;; --team-root) TEAMROOT=$2 ;; --relay-port) RELAY=$2 ;;
-					--web-port) WEB=$2 WEBSET=1 ;; --name) NAME=$2 ;; *) D=$2 DIRSET=1 ;;
+					--web-port) WEB=$2 WEBSET=1 ;; --name) NAME=$2 ;; --push) PUSH=$2 ;; --push-pin) PUSHPIN=$2 ;; *) D=$2 DIRSET=1 ;;
 				esac
 				shift ;;
 			--no-relay) RELAY=off ;;
 			--no-web) WEB=off WEBSET=1 ;;
+			--no-push) NOPUSH=1 ;;
 			--docker) MODE=docker ;;
 			--systemd) MODE=systemd ;;
 			--reset) die usage "Team 的同步服务器没有 --reset：设备、邀请都由管理员的设备管（cca team）" ;;
@@ -921,6 +955,7 @@ main() {
 	pick_state
 	pick_port
 	pick_relay
+	pick_push
 	# 直接在服务器上运行的，要打出管理员接上它的那一行时一定要有地址：第一次装、换了端口（证书重新生成时没有地址也行：说「这台服务器的地址」）
 	need=""
 	[ -n "$MANAGED" ] || { [ "$STATE" = update ] && [ "$PORT" = "$OLDPORT" ]; } || need=1

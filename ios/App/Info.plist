@@ -12,6 +12,10 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<!-- 通知密钥在哪个钥匙串分组里（CcaRemoteKit 的 NoteKeychain）：和两份 .entitlements 的 keychain-access-groups 里那一项一样，
+	     通知扩展的 Info.plist（ios/Notify）里也有 -->
+	<key>CcaKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)com.cca.remote.shared</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -2,7 +2,7 @@
 //!
 //! 各个 op 回什么（状态码、error 的那个词）照 Python 一个不差；先查什么后查什么也照它（同一个请求两处都不对时回的是先查的那一处）。
 
-use super::{Edge, Guest, Remote, Role, Shared, Slot, Val};
+use super::{Edge, Guest, PushReg, Remote, Role, Shared, Slot, Val};
 use crate::py::obj::{Dict, V};
 use crate::py::time::monotonic;
 use crate::py::{num, R};
@@ -88,6 +88,7 @@ pub(super) fn handle(
         "relay_host" => r.relay_host(fp, &j, now),
         "relay_attach" => r.relay_attach(fp, &j, now),
         "relay_list" => Ok(r.relay_list(fp, &j, now, name_of)),
+        "push_set" => r.push_set(fp, gkey.is_some(), &j, now),
         _ => Ok(fail(404, "not_found")),
     }
 }
@@ -150,6 +151,51 @@ fn pair_get<'a>(
 }
 
 impl Remote {
+    /// push_set：手机登记它的推送令牌（换掉、拿掉；push.rs）。token：推送服务给这台手机上这个 App 的（小写的十六进制，64～200 个
+    /// 字符），空的是不要推送了；env：production（App Store、TestFlight 装的）或者 sandbox（Xcode 装的）。只有配了对的访客能登记
+    /// （名单里的设备、正在配对的是 403 denied）；这台服务器没开推送是 404 no_push。一个令牌只记在一个访客上（App 删了重装、
+    /// 换了身份：旧的那一项不再推）。和记着的一样时不存
+    fn push_set(&mut self, fp: &str, guest: bool, j: &Dict, now: f64) -> R<Reply> {
+        if !guest || !self.guests.contains(fp) {
+            return Ok(fail(403, "denied"));
+        }
+        if self.pusher.is_none() {
+            return Ok(fail(404, "no_push"));
+        }
+        // token 要是字符串（空的是拿掉）；不是空的时 env 要是那两种之一
+        let Some(token) = j.str("token") else {
+            return Ok(fail(400, "bad"));
+        };
+        let env = j.str("env").unwrap_or_default();
+        let reg = match token.is_empty() {
+            true => None,
+            false if wire::push_token_re().matches(&token) && matches!(&*env, "production" | "sandbox") => {
+                Some(PushReg { token: token.to_string(), env: env.to_string(), at: Val::Num(Num::Float(now)) })
+            }
+            false => return Ok(fail(400, "bad")),
+        };
+        let mut changed = false;
+        if let Some(new) = &reg {
+            self.guests.for_each_mut(|other, g| {
+                if other != fp && g.push.as_ref().is_some_and(|p| p.token == new.token) {
+                    g.push = None;
+                    changed = true;
+                }
+            });
+        }
+        if let Some(g) = self.guests.get_mut(fp) {
+            let key = |r: &Option<PushReg>| r.as_ref().map(|p| (p.token.clone(), p.env.clone()));
+            if key(&g.push) != key(&reg) {
+                g.push = reg;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save()?;
+        }
+        Ok(done())
+    }
+
     /// pair_open（Py:1102-1112）：显示配对码的设备开一次配对
     fn pair_open(&mut self, rid: &str, fp: &str, j: &Dict, now: f64) -> Reply {
         if self.slots.contains_key(rid) {
@@ -252,7 +298,7 @@ impl Remote {
         self.edges.insert(pid.to_string(), Edge::new(&owner, &joiner, now));
         // 输入配对码的是访客：两边算出了同一把密钥（它确实知道配对码），这才记下它
         if let Some(key) = gkey.filter(|k| !k.is_empty()) {
-            self.guests.insert(joiner, Guest { key, at: Val::Num(Num::Float(now)) });
+            self.guests.insert(joiner, Guest { key, at: Val::Num(Num::Float(now)), push: None });
         }
         if let Some(s) = self.slots.get_mut(rid) {
             s.done = true;

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 和 Xcode 生成的那一份合在一起（GENERATE_INFOPLIST_FILE）：这里只放生成不了的 -->
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.usernotifications.service</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).NotificationService</string>
+	</dict>
+	<!-- 通知密钥在哪个钥匙串分组里（CcaRemoteKit 的 NoteKeychain）：和两份 .entitlements 的 keychain-access-groups 里那一项一样，App 的 Info.plist 里也有 -->
+	<key>CcaKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)com.cca.remote.shared</string>
+</dict>
+</plist>

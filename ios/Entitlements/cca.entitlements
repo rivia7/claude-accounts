@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 推送（APNs）：Xcode 照描述文件签，导出给 App Store / TestFlight 时换成 production -->
+	<key>aps-environment</key>
+	<string>development</string>
+	<!-- 第一项是 App 自己的分组（没有这一项时的默认那个：身份、配对的密钥照旧存在这里，通知扩展读不到）；
+	     第二项是和通知扩展共用的，只放通知密钥（CcaRemoteKit 的 NoteKeychain，名字也写在 Info.plist 的 CcaKeychainGroup） -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.cca.remote</string>
+		<string>$(AppIdentifierPrefix)com.cca.remote.shared</string>
+	</array>
+</dict>
+</plist>

@@ -954,6 +954,14 @@ fn compose_up(boxd: &Path, a: &[String], proj: &str, cwd: &Path) -> Result<(), F
                 return Err("AssertionError: 开着网页端：命令里有那几个参数、ports 里有它的端口、只读挂着共用的证书助手放给它的证书；没开：都没有"
                     .to_string());
             }
+            // 推送：开着中转、.env 里有推送网关时 environment 里交给服务端那两个（systemd 的经 EnvironmentFile 自己就有）；不然都没有
+            let push = [
+                block.contains("CCA_PUSH_URL: ${CCA_PUSH_URL:?}") && block.contains("CCA_PUSH_PIN: ${CCA_PUSH_PIN:?}"),
+                relay[1] && env.contains_key("CCA_PUSH_URL") && env.contains_key("CCA_PUSH_PIN"),
+            ];
+            if !same(&push) {
+                return Err("AssertionError: 开着推送：environment 里有 CCA_PUSH_URL、CCA_PUSH_PIN；没开：都没有".to_string());
+            }
         } else if core_sub(&argv) == Some("team-acme") {
             if !(ports.len() == 1 && ports[0].0 == "18080" && ports[0].1 == "80") {
                 return Err("AssertionError: 证书助手：80 端口对到容器里的 18080".to_string());

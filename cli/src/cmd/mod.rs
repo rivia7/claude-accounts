@@ -295,7 +295,7 @@ mod tests {
     /// main 一开头就分出去的那几条（不认当前是哪种工具、不读账号表）：服务端的两条和 pack，都也登记在平常的表里
     #[test]
     fn standalone_commands() {
-        for name in ["team-server", "team-acme", "pack"] {
+        for name in ["team-server", "team-acme", "team-push", "pack"] {
             assert_eq!(standalone(name).unwrap().name, name);
             assert!(find(name).is_some(), "{name}");
         }

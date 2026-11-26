@@ -3,7 +3,7 @@
 #   bash ios/test.sh               编（模拟器、调试版）、查 SwiftTerm 编进去的是去掉了图形协议的那一份、在模拟器里跑 SwiftTerm 的自检、
 #                                  演示模式各页浅色 / 深色截图（ios/build/shots/）
 #   bash ios/test.sh --build       只编（模拟器的调试版 + 真机的正式版，不签名），不开模拟器
-#   bash ios/test.sh --check 派生数据目录 cca.app   不编，只查编好的正式版（SwiftTerm、TestDriver、ATS 那三项）：testflight.sh 拿它查归档
+#   bash ios/test.sh --check 派生数据目录 cca.app   不编，只查编好的正式版（SwiftTerm、TestDriver、ATS、通知扩展那四项）：testflight.sh 拿它查归档
 # 端到端（真的服务器、真的 cca、模拟器里的 App 配对、接入、敲键）在 tests/ios_kit.rs 的 in_the_simulator：它先跑这里的编译那一步
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -15,7 +15,7 @@ BUNDLE=com.cca.remote
 fail() { echo "✗ $*" >&2; exit 1; }
 ok() { echo "✓ $*"; }
 
-# 查正式版的三项，testflight.sh 拿它们（--check）再查一遍归档：
+# 查正式版的四项，testflight.sh 拿它们（--check）再查一遍归档：
 # SwiftTerm 编进去的是 swiftterm-parser.sh 换过那两行的那一份，不是上游原样的（macos/Vendor/SwiftTerm/README.md「不要的功能」）
 swiftterm_patched() {   # 派生数据目录
 	local lists list
@@ -36,7 +36,20 @@ ats_lets_us_pin() {   # cca.app
 	[ "$(plutil -extract NSAppTransportSecurity.NSAllowsArbitraryLoads raw -o - "$1/Info.plist" 2>/dev/null)" = true ] ||
 		fail "Info.plist 里没有 NSAppTransportSecurity.NSAllowsArbitraryLoads：钉住的自签证书会被 ATS 拒掉（${1}）"
 }
-if [ "${1:-}" = --check ]; then swiftterm_patched "$2"; no_test_driver "$3"; ats_lets_us_pin "$3"; exit 0; fi
+# 通知扩展（ios/Notify）编进去了：推来的通知靠它解开（没有它时锁屏上只有推送里写的「远程会话里有新的通知」那一句）；版本号、构建号
+# 和 App 的一样（App Store Connect 不收不一样的）；两边的 Info.plist 写着同一个共用的钥匙串分组（通知密钥在那里，docs/dev/ios.md「推送」）
+notify_embedded() {   # cca.app
+	local x="$1/PlugIns/notify.appex" k v
+	[ -f "$x/Info.plist" ] || fail "App 里没有通知扩展（${x}）"
+	[ "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$x/Info.plist" 2>/dev/null)" = com.apple.usernotifications.service ] ||
+		fail "通知扩展的 NSExtensionPointIdentifier 不是 com.apple.usernotifications.service（${x}）"
+	for k in CFBundleShortVersionString CFBundleVersion CcaKeychainGroup; do
+		v=$(plutil -extract "$k" raw -o - "$1/Info.plist" 2>/dev/null) || fail "App 的 Info.plist 里没有 ${k}"
+		[ "$(plutil -extract "$k" raw -o - "$x/Info.plist" 2>/dev/null)" = "$v" ] || fail "通知扩展的 ${k} 和 App 的不一样"
+	done
+	case "$v" in *com.cca.remote.shared) ;; *) fail "CcaKeychainGroup 不是 …com.cca.remote.shared：${v}" ;; esac
+}
+if [ "${1:-}" = --check ]; then swiftterm_patched "$2"; no_test_driver "$3"; ats_lets_us_pin "$3"; notify_embedded "$3"; exit 0; fi
 
 command -v xcodebuild >/dev/null && xcodebuild -version >/dev/null 2>&1 || fail "要 Xcode（只有命令行工具编不了 iOS App）"
 mkdir -p "$OUT"
@@ -64,6 +77,9 @@ ok "正式版里没有测试用的 TestDriver"
 ats_lets_us_pin "$DD/Build/Products/Debug-iphonesimulator/cca.app"
 ats_lets_us_pin "$DD/Build/Products/Release-iphoneos/cca.app"
 ok "两个版本的 Info.plist 都关了 ATS（钉住自签证书要它）"
+notify_embedded "$DD/Build/Products/Debug-iphonesimulator/cca.app"
+notify_embedded "$DD/Build/Products/Release-iphoneos/cca.app"
+ok "两个版本里都有通知扩展，版本号、钥匙串分组和 App 的一样"
 [ "${1:-}" = "--build" ] && exit 0
 
 # ---- 模拟器 ----

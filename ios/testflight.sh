@@ -53,7 +53,7 @@ plist() { plutil -extract "$2" raw "$1"; }   # 文件 键
 [ "$(plist "$APP/Info.plist" CFBundleIdentifier)" = "$BUNDLE" ] || fail "套装 ID 不是 ${BUNDLE}"
 [ "$(plist "$APP/Info.plist" CFBundleVersion)" = "$BUILD" ] || fail "构建号没换上（${BUILD}）"
 VERSION=$(plist "$APP/Info.plist" CFBundleShortVersionString)
-# 归档是另编的：test.sh 查正式版的那三项（SwiftTerm 编的是换过的那一份、没有 TestDriver、关了 ATS）在它上面再查一遍
+# 归档是另编的：test.sh 查正式版的那四项（SwiftTerm 编的是换过的那一份、没有 TestDriver、关了 ATS、通知扩展）在它上面再查一遍
 bash "$HERE/test.sh" --check "$DD" "$APP"
 ok "归档好了：${VERSION}（${BUILD}），团队 ${TEAM}"
 
@@ -93,6 +93,18 @@ security cms -D -i "$A/embedded.mobileprovision" >"$X/profile.plist" 2>/dev/null
 if plist "$X/profile.plist" ProvisionedDevices >/dev/null 2>&1; then fail "描述文件带着设备列表：不是 App Store 的"; fi
 codesign -d --entitlements - --xml "$A" >"$X/ent.plist" 2>/dev/null || fail "读不了导出的 App 的权限"
 [ "$(plist "$X/ent.plist" get-task-allow 2>/dev/null || echo false)" = false ] || fail "导出的 App 允许调试器接上（get-task-allow）"
+# 推送：App Store 的签名把 aps-environment 换成了 production；App 的钥匙串分组第一个是它自己的（身份、配对的密钥照旧在那里），
+# 第二个和通知扩展共用；通知扩展只有共用的那一个，和两边 Info.plist 的 CcaKeychainGroup 一样（docs/dev/ios.md「推送」）
+[ "$(plist "$X/ent.plist" aps-environment 2>/dev/null)" = production ] || fail "导出的 App 没有 aps-environment = production（推送收不到）"
+SHARED="${TEAM}.com.cca.remote.shared"
+[ "$(plist "$X/ent.plist" keychain-access-groups.0 2>/dev/null)" = "${TEAM}.${BUNDLE}" ] &&
+	[ "$(plist "$X/ent.plist" keychain-access-groups.1 2>/dev/null)" = "$SHARED" ] || fail "导出的 App 的钥匙串分组不对（$X/ent.plist）"
+N="$A/PlugIns/notify.appex"
+codesign -d --entitlements - --xml "$N" >"$X/notify-ent.plist" 2>/dev/null || fail "读不了通知扩展的权限"
+[ "$(plist "$X/notify-ent.plist" keychain-access-groups.0 2>/dev/null)" = "$SHARED" ] &&
+	! plist "$X/notify-ent.plist" keychain-access-groups.1 >/dev/null 2>&1 || fail "通知扩展的钥匙串分组不对（$X/notify-ent.plist）"
+[ "$(plist "$A/Info.plist" CcaKeychainGroup)" = "$SHARED" ] && [ "$(plist "$N/Info.plist" CcaKeychainGroup)" = "$SHARED" ] ||
+	fail "Info.plist 里的 CcaKeychainGroup 不是 ${SHARED}（团队 ID 的前缀 AppIdentifierPrefix 没换上？）"
 ok "导出、查过签名：${IPA}"
 if [ -z "$UPLOAD" ]; then
 	echo "没上传（要传到 TestFlight 加 --upload）"

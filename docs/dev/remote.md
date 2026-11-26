@@ -50,15 +50,35 @@
 - `cca codex remote …`、`cxa remote …` 不是这个命令：照旧当成给 codex 的参数（只有第一个参数是 `remote` 才是）
 - 终端的内容可能有密钥和源码：只在内存里转，不写文件、不进日志、不进任何进程的命令行和环境变量
 - 通知推到接着的别的机器（`cca remote notify [--title 标题] [--subtitle 副标题] 正文`，`manage.rs` 的 `remote-notify`）：给会话里的钩子用
-  （Claude Code 做完一轮、等着回答时，维护者本机的 `~/.claude/hooks/cca-notify-*.sh` 在 `osascript` 之后调它）。宿主不给客户端加环境变量，
+  （cca 自己带的钩子走的也是这一条路，见下一条；用户自己的钩子也可以调它：维护者本机的 `~/.claude/hooks/cca-notify-*.sh` 在 `osascript` 之后调它）。宿主不给客户端加环境变量，
   所以它照进程往上找（`parent_of`：macOS 的 `proc_pidinfo`，Linux 的 `/proc/进程号/stat`），哪一个是某个会话说明里的宿主进程号，就在那个会话的
   socket 上说一个 `NOTIFY_REQ`（0x08，JSON `{title, subtitle, body}`）；不在哪个宿主里（远程会话没开、不是 cca 启动的）退出码 65、什么都不说，
-  什么字都没有 64。宿主（`local::Note::parse`：去掉控制字符和看不见的排版字符，标题 64 个字、正文 240 个字；`NoteBudget`：一下子 5 条、之后每 3 秒一条）
+  什么字都没有 64。宿主（`local::Note::parse`：去掉控制字符和看不见的排版字符，标题 64 个字、正文 240 个字；`NoteBudget`：一下子 5 条、之后每 3 秒一条；一模一样的一条 10 秒以内只推一次，`NOTE_SAME`）
   把它变成 `NOTIFY`（0x16）发给说过 HELLO 的各个接入方，启动它的终端不给（这台机器上的钩子自己会弹）。转接进程只把 `NOTIFY` 往别的机器转
   （`NOTIFY_REQ` 和 `END` 一样不转：别的机器推不了通知到这台的会话里）。接入端只认经中转接上的（`Wire::Far`；这台机器上接着的不弹，免得一条通知
   弹两次），再清理、限流一遍，攒着等终端上不在一条序列、一个字的半中间（`Scanner::idle`、`mid_char`）时写成终端的通知序列（`note_seq`：
   `TERM_PROGRAM` 是 iTerm2 时 OSC 9，别的 OSC 777 的 notify；标题里的分号换成全角的）。界面 App 的终端认 OSC 777 / OSC 9，弹成 macOS 通知（PROTOCOL 9.3，
-  `RemoteNotifier`）。网页端（手机）还不弹：页面不认这个帧，照旧
+  `RemoteNotifier`）。iOS 的 App 直接认 `NOTIFY`（CcaRemoteKit 的 `Note`、`NoteBudget`，和这里一样清理、限流），在前台时也弹（docs/dev/ios.md「App」的
+  `Notifier`）；App 被挂起（锁屏、切到别的 App）、没开着时经推送到（APNs，docs/dev/push.md：宿主封给手机，Team 的服务器转给维护者的服务器上的推送网关）。网页端（手机）还不弹：页面不认这个帧，照旧
+- cca 自己带的钩子（`hook.rs`，辅助程序的 `remote-hook`；bash 的 `_remote-hook` 原样交给它、什么都不打印、总是成功）：远程会话开着时
+  （`manage.rs` 的 `hooks_on`：`CCA_REMOTE` 有值时照它，没有时看 config.json 的 `remote`），cca 启动 Claude Code 时经 `--settings` 带上
+  `Stop`、`PermissionRequest`、`Notification` 三个钩子（matcher 是 `MATCHER`：`permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt`；
+  `idle_prompt` 不要，Stop 已经说了），命令都是 `<cca> _remote-hook`、超时 10 秒（`accounts.rs` 的 `claude_hooks` 把它们和记下会话的 SessionStart
+  并成一份，官方、第三方 API 账号都带；Claude Code 只认最后一个 `--settings`，见 isolation.md）。启动时不看在不在终端里（界面 App 里启动的、
+  `CCA_REMOTE=1` 但不在终端里的也带上）：钩子里照进程往上找宿主（`host_of_me`，和 `cca remote notify` 同一个），找不到就什么都不做；stdin 是终端时不读。
+  总是退出码 0、什么都不打印：Stop 的钩子退出码 2 会拦着 Claude Code 不让它停，有的钩子的 stdout 会进 Claude 的上下文。照维护者本机原来的那两个
+  个人钩子（`cca-notify-done.sh`、`cca-notify-ask.sh`）写的，字一模一样：
+  - Stop：还有后台任务（`background_tasks`；Claude Code 自己的 `dream`、`auto_mode_scan` 不算：做完不叫醒会话）、到点会醒来的（`session_crons`）时不推
+    （做完了会叫醒会话，那一轮结束时还有一次 Stop）；标题「Claude Code 做完了」，正文是 `last_assistant_message` 第一行不空的（`line`：去掉
+    `*`、反引号、`#`、`>`、`|`，开头的空白和横线、结尾的空白；`clip`：超过 110 个字截掉、加「…」），没有时「这一轮做完了」
+  - PermissionRequest：实测（2.1.331）提问、确认一出来马上就有它，6 秒后还没人答 Claude Code 才发 Notification 的 `permission_prompt`（只有一句
+    "Claude needs your permission"）。所以这时不推，把要说的那一句记进 `~/.cca/remote/ask/<会话 id>`（目录 700、文件 600、原子写；记的时候顺手删掉
+    一天以前的）：AskUserQuestion 是「Claude Code 在问你」+ 第一个问题（几个时加「（一共 N 个问题）」），ExitPlanMode 是「Claude Code 等你批准计划」+
+    计划的第一行，别的都是「Claude Code 要你确认」+「运行：说明或者命令」「写文件：文件名」「改文件：文件名」「访问：网址」「搜索：…」「用 服务器 的 工具」（MCP）「用 工具名」
+  - Notification：`permission_prompt` 时拿 120 秒以内记下的那一句；没有（或者是别的几种）时「Claude Code 在等你」+ Claude Code 的原话（空的、
+    "Claude needs your permission…" 换成「要你确认一个操作」）。记下的那一句用没用都删掉：马上答了的那次留下的不拿来配别的通知
+  - 副标题：`CCA_ACCOUNT`（bash 给会话设的「别名(邮箱)」）括号前那一段 · 项目文件夹的名字（`CLAUDE_PROJECT_DIR`，没有时是钩子输入里的 `cwd`）
+  - 个人钩子还在调 `cca remote notify` 的话，同一件事会来两条一模一样的：宿主 10 秒以内只推一次（`NOTE_SAME`）。装了带这些钩子的版本以后，个人钩子里调它的那一行可以去掉
 
 ### 和直接运行不一样的地方
 
@@ -408,6 +428,10 @@
 - 通知：`pair_list_attach` 里会话中的程序（`cca-test fake-client` 的 `run`）运行 `remote-notify`，别的机器上接着的那一端收到 OSC 777，启动它的终端上没有；
   会话外面调是 65、没有字是 64。`cargo test` 的 `remote::attach::note_tests`：序列的写法、别人写的字怎么清理、不拆开一个字、限流。App 里弹出来、点通知回到终端
   没有自动的测试（要通知的权限和真人点）
+- cca 自己带的钩子：`tests/remote_relay.rs` 的 `cca_hooks_reach_the_other_machine`（会话里的程序照 Claude Code 的样子把钩子的输入写进 stdin 调
+  `remote-hook`：`cca-test fake-client` 的 `runin`；laptop 上接着的那一端收到做完了、要你确认、在等你，后台任务还在跑的不推，照个人钩子的写法调的
+  `remote-notify` 那一条不重复，会话外面调什么都不做，服务器看不到通知里的字）；`cargo test` 的 `remote::hook`：文字的规则；回归 3e：开关开着、
+  `CCA_REMOTE=1` 时启动参数里多了这三个钩子（`cca-test fx notifyless` 认出、去掉以后和没开时一样），`CCA_REMOTE=0` 时没有
 - `tests/remote_relay.rs`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：真的 Team 的服务器进程（开着中转）、每台设备一个临时 HOME 和
   登记在这个 Team 里的密钥（`team_enroll`）、会话在真的伪终端上。前五条（`pairing` 到 `pairings_survive_a_restart`）两头都照文档自己说话（配对的各种先后和拒绝、票据只能用一次、认证码不对的不算用掉、
   对接后大块的一个字节不丢、宿主说完就关时最后几个字节也到、宿主不来接时接入方等到 `nohost`、取消配对 / 撤销设备后正接着的被断开、

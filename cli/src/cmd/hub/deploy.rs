@@ -27,7 +27,8 @@ const EMBED: &str = "# @CCA-HUB-EMBED@\n";
 /// 外面再包一层 sh -c：登录 shell 不一定是 sh（fish、csh）
 const REMOTE: &str = r#"sh -c 'if [ "$(id -u)" = 0 ]; then exec sh -s; elif sudo -n true 2>/dev/null; then exec sudo -n sh -s; else echo "CCA-HUB fail sudo"; exit 1; fi'"#;
 const USAGE: &str = "用法: py team-deploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--port 端口] [--host 地址] \
-                     [--web-port 端口 | --no-web] [--mode docker|systemd] [--dir 目录] [--batch] [--askpass] [--check]";
+                     [--web-port 端口 | --no-web] [--push 网关 --push-pin 公钥 | --no-push] [--mode docker|systemd] [--dir 目录] \
+                     [--batch] [--askpass] [--check]";
 const UNDEPLOY_USAGE: &str =
     "用法: py team-undeploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--dir 目录] [--batch] [--askpass] [--check]";
 
@@ -135,6 +136,9 @@ struct Opts {
     host: Option<String>,
     /// 手机的网页端：端口（--web-port）；Some(0) 是不开（--no-web）
     web: Option<i64>,
+    /// 推送网关（--push、--push-pin：照服务端的规矩核对过的）；no_push 是 --no-push。都没有时服务器上照上次的
+    push: Option<(String, String)>,
+    no_push: bool,
     mode: Option<String>,
     dir: String,
     /// 没有终端：ssh 不问密码、不问要不要认这台主机
@@ -150,16 +154,22 @@ struct Opts {
 fn opts(args: &[String], def_dir: &str, job: Job) -> R<Opts> {
     let usage = job.usage();
     let mut o = Opts { dir: def_dir.into(), job, ..Default::default() };
-    let (mut port, mut web) = (None, None);
+    let (mut port, mut web, mut push_url, mut push_pin) = (None, None, None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--batch" => o.batch = true,
             "--askpass" => o.askpass = true,
             "--check" => o.check = true,
-            "--no-web" | "--port" | "--host" | "--web-port" | "--mode" if job == Job::Undeploy => return fail("usage", usage),
+            "--no-web" | "--port" | "--host" | "--web-port" | "--mode" | "--push" | "--push-pin" | "--no-push"
+                if job == Job::Undeploy =>
+            {
+                return fail("usage", usage)
+            }
             "--no-web" if web.is_none() => web = Some(String::new()),
-            f @ ("--ssh-port" | "--identity" | "--port" | "--host" | "--web-port" | "--mode" | "--dir") => {
+            "--no-push" => o.no_push = true,
+            f @ ("--ssh-port" | "--identity" | "--port" | "--host" | "--web-port" | "--mode" | "--dir" | "--push"
+            | "--push-pin") => {
                 let Some(v) = it.next().cloned() else { return fail("usage", usage) };
                 match f {
                     "--ssh-port" => o.ssh_port = Some(v),
@@ -169,6 +179,8 @@ fn opts(args: &[String], def_dir: &str, job: Job) -> R<Opts> {
                     "--web-port" => return fail("usage", "--web-port 和 --no-web 只能写一个"),
                     "--host" => o.host = Some(v),
                     "--mode" => o.mode = Some(v),
+                    "--push" => push_url = Some(v),
+                    "--push-pin" => push_pin = Some(v),
                     _ => o.dir = v,
                 }
             }
@@ -202,6 +214,16 @@ fn opts(args: &[String], def_dir: &str, job: Job) -> R<Opts> {
     if o.mode.as_deref().is_some_and(|m| m != "docker" && m != "systemd") {
         return fail("usage", "--mode 是 docker 或者 systemd");
     }
+    // 推送网关：--push、--push-pin 一起写，照服务端的规矩查（server/push.rs 的 Gateway::parse：安装脚本的 pick_push 也查）；--no-push 不用
+    o.push = match (push_url, push_pin) {
+        (None, None) => None,
+        _ if o.no_push => return fail("usage", "--no-push 和 --push、--push-pin 只能写一种"),
+        (Some(url), Some(pin)) => match crate::server::push::Gateway::parse(&url, &pin) {
+            Ok(_) => Some((url, pin)),
+            Err(why) => return fail("usage", &why),
+        },
+        _ => return fail("usage", "--push 和 --push-pin（推送网关证书的公钥）要一起写"),
+    };
     o.dir = match dir_of(&o.dir) {
         Ok(d) => d,
         Err(why) => return fail("usage", why),
@@ -339,6 +361,8 @@ struct Report {
     web: String,
     web_cert: String,
     web_off: String,
+    /// 推送网关的地址（开着中转、用着推送时；旧的安装脚本不说这一项）
+    push: String,
     pin: String,
     state: String,
     ok: bool,
@@ -358,6 +382,7 @@ fn report(stdout: &str) -> Report {
             "web" => r.web = v.to_string(),
             "web_cert" => r.web_cert = v.to_string(),
             "web_off" => r.web_off = v.to_string(),
+            "push" => r.push = v.to_string(),
             "pin" => r.pin = v.to_string(),
             "state" => r.state = v.to_string(),
             "ok" => r.ok = true,
@@ -408,6 +433,8 @@ pub struct TeamInstalled {
     pub web: String,
     pub web_cert: String,
     pub web_off: String,
+    /// 推送网关的地址（会话里的通知经它推到手机上；没用推送是空的）
+    pub push: String,
     pub dir: String,
     /// 地址是内网的：别的网络里的设备连不上
     pub lan: bool,
@@ -472,6 +499,11 @@ pub fn team_install(
         Some(p) => pre.push_str(&format!(" --web-port {p}")),
         None => {}
     }
+    match &o.push {
+        Some((url, pin)) => pre.push_str(&format!(" --push {} --push-pin {}", shq(url), shq(pin))),
+        None if o.no_push => pre.push_str(" --no-push"),
+        None => {}
+    }
     if let Some(h) = o.host.as_ref().filter(|h| HOST_RE.fullmatch(h).is_some()) {
         pre.push_str(&format!(" --host {}", sq(h)));
     }
@@ -500,6 +532,7 @@ pub fn team_install(
         web: r.web,
         web_cert: r.web_cert,
         web_off: r.web_off,
+        push: r.push,
         dir: o.dir.clone(),
         lan: lan_only(&host),
         target: o.target.clone(),
@@ -779,6 +812,7 @@ mod tests {
         let r = report("CCA-HUB web https://192.0.2.10:18447/\nCCA-HUB web_cert wait\nCCA-HUB ok\n");
         assert_eq!((r.web.as_str(), r.web_cert.as_str(), r.web_off.as_str()), ("https://192.0.2.10:18447/", "wait", ""));
         assert_eq!(report("CCA-HUB web_off port80\n").web_off, "port80");
+        assert_eq!(report("CCA-HUB push https://192.0.2.10:18460\nCCA-HUB ok\n").push, "https://192.0.2.10:18460");
         let r = report("CCA-HUB fail port 端口 18445 被别的程序占着\n");
         assert_eq!(r.fail, Some(("port".into(), "端口 18445 被别的程序占着".into())));
         assert!(!r.ok);
@@ -859,6 +893,26 @@ mod tests {
         ] {
             assert!(o(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn push_options() {
+        let o = |a: &[&str], job| opts(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "/opt/cca-team-0123abcd", job);
+        let push = |a: &[&str]| o(a, Job::Deploy).map(|o| (o.push, o.no_push)).ok();
+        let (url, pin) = ("https://192.0.2.10:18460", "sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+        assert_eq!(push(&["root@192.0.2.10"]), Some((None, false)), "没写：服务器上照上次的");
+        assert_eq!(push(&["root@192.0.2.10", "--no-push"]), Some((None, true)));
+        assert_eq!(push(&["root@192.0.2.10", "--push", url, "--push-pin", pin]), Some((Some((url.into(), pin.into())), false)));
+        for bad in [
+            &["root@192.0.2.10", "--push", url][..],
+            &["root@192.0.2.10", "--push-pin", pin],
+            &["root@192.0.2.10", "--push", "http://192.0.2.10", "--push-pin", pin],
+            &["root@192.0.2.10", "--push", url, "--push-pin", "sha256//abc="],
+            &["root@192.0.2.10", "--no-push", "--push", url, "--push-pin", pin],
+        ] {
+            assert!(push(bad).is_none(), "{bad:?}");
+        }
+        assert!(o(&["root@192.0.2.10", "--no-push"], Job::Undeploy).is_err(), "卸载不收");
     }
 
     #[test]

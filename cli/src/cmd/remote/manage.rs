@@ -21,6 +21,15 @@ pub fn remote_on(c: &Dict) -> bool {
     c.get("remote").is_some_and(|v| v.as_bool() == Some(true))
 }
 
+/// 这次启动的会话会放进宿主里运行（bash `remote_prepare` 的头一个条件）：`CCA_REMOTE` 不空时照它（1 是，别的不是），
+/// 空着照 config.json 的开关。cca 自己带的钩子（hook.rs）照它加不加；在不在终端里这里看不到，不在的话钩子什么都不做
+pub fn hooks_on() -> bool {
+    match crate::py::proc::getenv("CCA_REMOTE").filter(|v| !v.is_empty()) {
+        Some(v) => v == "1",
+        None => crate::py::fs::load_quiet(&crate::core::base::CFG).and_then(|c| c.as_dict()).is_some_and(|c| remote_on(&c)),
+    }
+}
+
 /// `remote-set on|off`：off 时把这一项删掉（不留一个 false）。读了再写整份 config.json：拿着锁
 pub fn cmd_remote_set(args: &[String]) -> R<()> {
     arity("cmd_remote_set", args, 1, 1)?;
@@ -173,30 +182,42 @@ pub fn cmd_remote_notify(args: &[String]) -> R<()> {
             _ => body.push(a.clone()),
         }
     }
-    let note = Note { title, subtitle, body: body.join(" ") };
+    let note = Note::new(title, subtitle, body.join(" "));
     let Some(note) = Note::parse(&note.to_json()) else {
         crate::err!("用法：cca remote notify [--title 标题] [--subtitle 副标题] 正文");
         return exit(64);
     };
+    let Some(sid) = host_of_me() else { return exit(65) };
+    match notify_host(&sid, &note) {
+        Ok(()) => Ok(()),
+        Err(code) => exit(code),
+    }
+}
+
+/// 这个进程在哪个会话宿主里：往上一层层找父进程，是哪个会话的宿主（会话说明里的进程号）就是哪个会话的编号；
+/// 不在哪个会话宿主里（远程会话没开、不是经 cca 启动的）是 None
+pub fn host_of_me() -> Option<String> {
     let hosts: std::collections::HashMap<i64, String> =
         local::sessions(false).into_iter().map(|s| (s.meta.pid, s.meta.sid)).collect();
     let mut pid = i64::from(std::process::id());
-    let mut sid = None;
     for _ in 0..64 {
         match parent_of(pid) {
             Some(p) if p > 1 => pid = p,
-            _ => break,
+            _ => return None,
         }
         if let Some(s) = hosts.get(&pid) {
-            sid = Some(s.clone());
-            break;
+            return Some(s.clone());
         }
     }
-    let Some(sid) = sid else { return exit(65) };
-    let Ok(mut s) = local::connect(&local::dir(), &format!("{}.sock", local::short(&sid))) else { return exit(65) };
+    None
+}
+
+/// 在会话宿主的 socket 上说一声：推一条通知（`NOTIFY_REQ`）。连不上（宿主刚走）是 Err(65)，写不出去是 Err(1)
+pub fn notify_host(sid: &str, note: &Note) -> Result<(), i32> {
+    let Ok(mut s) = local::connect(&local::dir(), &format!("{}.sock", local::short(sid))) else { return Err(65) };
     let _ = s.set_write_timeout(Some(Duration::from_secs(1)));
     if s.write_all(&local::frame(local::NOTIFY_REQ, &note.to_json())).is_err() {
-        return exit(1);
+        return Err(1);
     }
     // 等宿主读完再关（它读到这一帧、再读到头）：不然连接一关，没读的就丢了
     let _ = s.shutdown(std::net::Shutdown::Write);

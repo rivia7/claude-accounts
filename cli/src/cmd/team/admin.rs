@@ -1350,7 +1350,7 @@ fn attach(t: Team, a: &Dict, url: String, pins: &[String]) -> R<Result<Attached,
 /// --check：只看登录得上不（什么都不装）。stdout 是 sh 的 键=值：mode、state（new | update）、port、relay（中转的数据端口，没开是空的）、
 /// dir、lan、host（地址:端口）、device、members、stored、note（换服务器时原来那台没存上的原因）、svc（服务名）、web（手机的网页端的网址，
 /// 没开是空的）、web_cert（ok | wait：证书拿到了没有）、web_off（这一次没开网页端的原因：port80 | acme_old | lan | host | web_port；
-/// 自己关的是空的）。
+/// 自己关的是空的）、push（推送网关的地址：会话里的通知经它推到手机上；没用推送是空的）。
 /// 原因码：安装那一步的那些（ssh…、root、deps、image、port、taken、start、host、install、usage），加上 no_team、not_admin、key，
 /// 装好了没接上的是 attach 的那些
 pub fn cmd_team_deploy(args: &[String]) -> R<()> {
@@ -1409,6 +1409,7 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
         ("web", inst.web.as_str()),
         ("web_cert", inst.web_cert.as_str()),
         ("web_off", inst.web_off.as_str()),
+        ("push", inst.push.as_str()),
     ]);
     Ok(())
 }

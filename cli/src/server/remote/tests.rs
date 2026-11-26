@@ -1107,3 +1107,144 @@ fn shared_is_sendable() {
     fn sendable<X: Send + Sync>() {}
     sendable::<Shared>();
 }
+
+// ---------------------------------------------------------------- 推送（push.rs）
+
+/// push_set：配了对的访客（手机）登记、换掉、拿掉它的推送令牌。服务器没开推送是 no_push；名单里的设备、没配过对的是 denied；
+/// 一个令牌只记在一个访客上；记进 remote.json（和记着的一样时不写），重启还在，样子不对的读的时候丢掉
+#[test]
+fn push_registration() {
+    let mut t = Rig::new();
+    let ((g, gpub), (g2, g2pub), (g3, g3pub)) = (guest(1), guest(2), guest(3));
+    {
+        let mut r = t.sh.lock();
+        r.test_guest(&g, &gpub, NOW);
+        r.test_guest(&g2, &g2pub, NOW);
+        r.test_edge(&hex(11), &fp(1), &g, NOW);
+        r.test_edge(&hex(12), &fp(1), &g2, NOW);
+    }
+    let tok = "ab".repeat(32);
+    let reg = |token: &str, env: &str| dict! { "token" => token, "env" => env };
+    let set = |t: &Rig, who: &str, key: &str, j: Dict| t.op_as("push_set", who, j, Some(key));
+    assert_eq!(set(&t, &g, &gpub, reg(&tok, "production")), bad(404, "no_push"), "没开推送");
+    assert!(!t.sh.lock().push_on());
+    t.sh.lock().set_pusher(Pusher::for_test().0);
+    assert!(t.sh.lock().push_on());
+    t.sh.lock().guests_on = false;
+    assert!(!t.sh.lock().push_on(), "不认访客：手机登记不了");
+    t.sh.lock().guests_on = true;
+    // 名单里的设备、没配过对的：不让登记
+    assert_eq!(t.op("push_set", 1, reg(&tok, "production")), bad(403, "denied"));
+    assert_eq!(set(&t, &g3, &g3pub, reg(&tok, "production")), bad(403, "denied"));
+    // 样子不对
+    for j in [
+        reg(&"AB".repeat(32), "production"),
+        reg(&"ab".repeat(31), "production"),
+        reg(&"a".repeat(201), "production"),
+        reg(&format!("{tok} "), "production"),
+        reg(&tok, "development"),
+        reg(&tok, ""),
+        dict! { "token" => &tok },
+        dict! { "token" => 5, "env" => "production" },
+        dict! { "env" => "production" },
+    ] {
+        let shown = json::dumps(&V::Dict(j.clone()), COMPACT);
+        assert_eq!(set(&t, &g, &gpub, j), bad(400, "bad"), "{shown}");
+    }
+    // 登记上：记进 remote.json 里这个访客的那一项
+    assert_eq!(set(&t, &g, &gpub, reg(&tok, "production")), (200, OK.to_string()));
+    let entry =
+        format!(r#""{g}":{{"key":"{gpub}","at":1794000000.0,"push":{{"token":"{tok}","env":"production","at":1794000000.0}}}}"#);
+    assert!(t.file().contains(&entry), "{}", t.file());
+    // 一样的再来一次（过了一会儿）：不写盘
+    let saved = (mtime(&t.path()), t.file());
+    t.now += 30.0;
+    assert_eq!(set(&t, &g, &gpub, reg(&tok, "production")), (200, OK.to_string()));
+    assert_eq!((mtime(&t.path()), t.file()), saved);
+    // 换了环境（Xcode 装的）：换掉
+    assert_eq!(set(&t, &g, &gpub, reg(&tok, "sandbox")), (200, OK.to_string()));
+    assert!(t.file().contains(&format!(r#""push":{{"token":"{tok}","env":"sandbox","at":1794000030.0}}"#)), "{}", t.file());
+    // 同一个令牌换了访客（App 删了重装、换了身份）：原来那一项拿掉
+    assert_eq!(set(&t, &g2, &g2pub, reg(&tok, "production")), (200, OK.to_string()));
+    let regs = |t: &Rig| {
+        let r = t.sh.lock();
+        [&g, &g2].map(|who| r.guests.get(who).and_then(|x| x.push.as_ref().map(|p| format!("{} {}", p.token, p.env))))
+    };
+    assert_eq!(regs(&t), [None, Some(format!("{tok} production"))]);
+    // 重启：还在（推送要再开：--push 是命令行里的）
+    t.reopen(None);
+    assert_eq!(regs(&t), [None, Some(format!("{tok} production"))]);
+    assert!(!t.sh.lock().push_on());
+    assert_eq!(set(&t, &g2, &g2pub, reg(&tok, "production")), bad(404, "no_push"));
+    // 空的令牌：不要推送了
+    t.sh.lock().set_pusher(Pusher::for_test().0);
+    assert_eq!(set(&t, &g2, &g2pub, dict! { "token" => "" }), (200, OK.to_string()));
+    assert_eq!(regs(&t), [None, None]);
+    assert!(!t.file().contains(r#""push""#), "{}", t.file());
+    // 样子不对的登记：读的时候丢掉，访客留着
+    assert_eq!(set(&t, &g2, &g2pub, reg(&tok, "production")), (200, OK.to_string()));
+    std::fs::write(t.path(), t.file().replace(r#""env":"production""#, r#""env":"nope""#)).unwrap();
+    t.reopen(None);
+    assert_eq!(regs(&t), [None, None]);
+    assert_eq!(t.sh.lock().guests.len(), 2);
+}
+
+/// 宿主交来的 PUSH（push_job）：会话是这条控制连接的、配对是这个会话给看的、另一头是登记了推送的访客，样子也对，才交给推送网关；
+/// 网关说令牌没用了（push_gone）：拿掉登记、存盘
+#[test]
+fn push_jobs() {
+    let t = Rig::new();
+    let ((g, gpub), (g2, g2pub)) = (guest(1), guest(2));
+    let (pid, p2, p3) = (hex(11), hex(12), hex(13));
+    let (sid, id) = (hex(50), "0123456789abcdef");
+    {
+        let mut r = t.sh.lock();
+        r.test_guest(&g, &gpub, NOW);
+        r.test_guest(&g2, &g2pub, NOW);
+        r.test_edge(&pid, &fp(1), &g, NOW);
+        r.test_edge(&p2, &fp(1), &g2, NOW);
+        r.test_edge(&p3, &fp(1), &fp(2), NOW);
+        r.set_pusher(Pusher::for_test().0);
+    }
+    t.session(&sid, 1, &[&pid, &p2, &p3]);
+    t.session(&hex(51), 1, &[&p2]);
+    let tok = "cd".repeat(32);
+    assert_eq!(t.op_as("push_set", &g, dict! { "token" => &tok, "env" => "sandbox" }, Some(&gpub)), (200, OK.to_string()));
+    let frame = |pid: &str, id: &str, note: &str| format!(r#"{{"pid":"{pid}","id":"{id}","note":{note}}}"#);
+    let job = |sid: &str, conn: u64, payload: &str| t.sh.lock().push_job(sid, conn, payload.as_bytes());
+    let got = job(&sid, 0, &frame(&pid, id, BLOB)).unwrap();
+    assert_eq!((got.token.as_str(), got.env.as_str(), got.id.as_str()), (tok.as_str(), "sandbox", id));
+    assert_eq!(json::dumps(&got.note.to_v(), COMPACT), BLOB);
+    // 最长的通知收得下
+    let blob_of = |n: usize| format!(r#"{{"n":"{}==","c":"{}","t":"{}="}}"#, "A".repeat(22), "A".repeat(n), "A".repeat(43));
+    assert!(job(&sid, 0, &frame(&pid, id, &blob_of(PUSH_BLOB))).is_some());
+    // 对不上的、样子不对的：不交
+    for (s, conn, payload, why) in [
+        (sid.clone(), 1, frame(&pid, id, BLOB), "不是这个会话现在的控制连接"),
+        (hex(52), 0, frame(&pid, id, BLOB), "没有这个会话"),
+        (hex(51), 0, frame(&pid, id, BLOB), "这个会话不给这个配对看"),
+        (sid.clone(), 0, frame(&p2, id, BLOB), "另一头没登记推送"),
+        (sid.clone(), 0, frame(&p3, id, BLOB), "另一头不是访客"),
+        (sid.clone(), 0, frame(&hex(14), id, BLOB), "没有这个配对"),
+        (sid.clone(), 0, frame(&pid, "0123456789ABCDEF", BLOB), "编号要小写"),
+        (sid.clone(), 0, frame(&pid, "0123456789abcde", BLOB), "编号短了"),
+        (sid.clone(), 0, frame(&pid, id, r#""junk""#), "密文不对"),
+        (sid.clone(), 0, frame(&pid, id, &blob_of(PUSH_BLOB + 4)), "密文太长"),
+        (sid.clone(), 0, format!(r#"{{"pid":"{pid}","note":{BLOB}}}"#), "没有编号"),
+        (sid.clone(), 0, "[]".to_string(), "不是字典"),
+        (sid.clone(), 0, "{".to_string(), "不是 JSON"),
+    ] {
+        assert_eq!(job(&s, conn, &payload), None, "{why}");
+    }
+    // 不认访客（--no-guests）：不交
+    t.sh.lock().guests_on = false;
+    assert_eq!(job(&sid, 0, &frame(&pid, id, BLOB)), None);
+    t.sh.lock().guests_on = true;
+    // 推送网关说这个令牌没用了：拿掉登记、存盘；别的令牌什么都不动
+    let saved = (mtime(&t.path()), t.file());
+    t.sh.lock().push_gone(&"ef".repeat(32));
+    assert_eq!((mtime(&t.path()), t.file()), saved);
+    t.sh.lock().push_gone(&tok);
+    assert_eq!(job(&sid, 0, &frame(&pid, id, BLOB)), None);
+    assert!(!t.file().contains(r#""push""#), "{}", t.file());
+}

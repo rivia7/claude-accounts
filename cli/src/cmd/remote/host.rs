@@ -9,7 +9,8 @@
 //! 终端的内容只在内存里（回放留最近的 256 KB），不写文件、不进日志；这个进程自己什么都不往终端上说。
 //!
 //! 这个进程不碰网络。配对过别的机器时（有配对表），它让一个转接进程（`remote-link`，link.rs）跑着：那个进程连服务器、
-//! 把远处的接入方像这台机器上的接入方一样接到 socket 上；它退出了过一会儿再起，会话本身不受影响。
+//! 把远处的接入方像这台机器上的接入方一样接到 socket 上，会话里推的通知也经它推给配对的手机；它退出了过一会儿再起，会话本身
+//! 不受影响。
 
 use super::link;
 use super::local::{self, Decoder, Meta, Note, NoteBudget, Status};
@@ -46,6 +47,9 @@ const MAX_VIEWERS: usize = 8;
 /// 会话里的钩子推通知：一下子最多几条，之后每几秒一条（Claude Code 一轮做完、等你回答时各推一条，用不了更多）
 pub const NOTE_BURST: f64 = 5.0;
 pub const NOTE_GAP: f64 = 3.0;
+/// 一模一样的一条（标题、副标题、正文都一样）这么久（秒）以内又来了不再推：cca 自己带的钩子（hook.rs）和用户自己照着同样的写法
+/// 写的钩子（调 `cca remote notify`）会为同一件事各推一条
+const NOTE_SAME: f64 = 10.0;
 
 /// 最近一次输入是谁的（终端的回答也算输入：查询只发给它，免得每个接入方的终端都答一遍）
 #[derive(Clone, Copy, PartialEq)]
@@ -84,8 +88,11 @@ struct Viewer {
 /// 转接进程（`remote-link`）
 #[derive(Default)]
 struct LinkProc {
-    /// 它的标准输入是一根管道，写的那头在这里留着不写：这个进程不在了它读到头，自己退出
+    /// 它的标准输入是一根管道（写的那头不阻塞）：宿主往里写推出去的通知（`NOTIFY` 帧，它封给配对的手机、经服务器推过去）；
+    /// 这个进程不在了它读到头，自己退出
     child: Option<Child>,
+    /// 还没写进那根管道的（写不动时攒着，到 `LINK_HIGH` 为止）
+    out: VecDeque<u8>,
     started: f64,
     /// 什么时候再看一眼
     next: f64,
@@ -104,8 +111,15 @@ fn spawn_link(sid: &str) -> Option<Child> {
             Ok(())
         });
     }
-    c.spawn().ok()
+    let child = c.spawn().ok()?;
+    if let Some(stdin) = child.stdin.as_ref() {
+        pty::set_nonblock(stdin.as_raw_fd()); // 只是写的这一头：它读的那一头照旧
+    }
+    Some(child)
 }
+
+/// 给转接进程的通知还没写出去的到了这么多，新的不再给它（它卡住了：退出以后宿主再起一个）
+const LINK_HIGH: usize = 64 * 1024;
 
 struct Host {
     meta: Meta,
@@ -138,6 +152,8 @@ struct Host {
     link: LinkProc,
     /// 会话里的钩子推通知（`NOTIFY_REQ`）的限流
     notes: NoteBudget,
+    /// 上一条推出去的通知和什么时候（NOTE_SAME）
+    last_note: Option<(Note, f64)>,
 }
 
 fn push(q: &mut VecDeque<u8>, data: &[u8]) {
@@ -225,6 +241,7 @@ impl Host {
             touched: now,
             link: LinkProc::default(),
             notes: NoteBudget::new(NOTE_BURST, NOTE_GAP),
+            last_note: None,
         })
     }
 
@@ -537,14 +554,24 @@ impl Host {
                 }
                 // 这条 socket 上都是这台机器上的同一个用户（别的机器经转接进程来，它不转这一种）
                 local::END => self.end(),
-                // 会话里的钩子推一条通知（`cca remote notify`）：交给已经接上的各处（说过 HELLO 的），别的机器上的那边弹出来。
-                // 启动它的终端不给：这台机器上的钩子自己会弹
+                // 会话里的钩子推一条通知（`cca remote notify`、cca 自己带的钩子）：交给已经接上的各处（说过 HELLO 的），别的机器上
+                // 的那边弹出来。启动它的终端不给：这台机器上的钩子自己会弹。刚推过一模一样的不再推（NOTE_SAME）
+                // 宿主给每一条一个编号：手机经推送、经接着的会话各收到一份时认得出是同一条。转接进程也给一份：封给配对的
+                // 手机，经服务器推过去（锁着屏、App 没开着也收得到）
                 local::NOTIFY_REQ => {
-                    if let Some(n) = Note::parse(&payload) {
-                        if self.notes.take() {
+                    if let Some(mut n) = Note::parse(&payload) {
+                        let now = monotonic();
+                        let again = self.last_note.as_ref().is_some_and(|(last, at)| last.same_text(&n) && now - at < NOTE_SAME);
+                        if !again && self.notes.take() {
+                            n.id = token_hex(Note::ID_LEN / 2);
                             let f = local::frame(local::NOTIFY, &n.to_json());
+                            self.last_note = Some((n, now));
                             for v in self.viewers.iter_mut().filter(|v| v.size.is_some() && !v.dead) {
                                 push(&mut v.out, &f);
+                            }
+                            let l = &mut self.link;
+                            if l.child.is_some() && l.out.len() + f.len() <= LINK_HIGH {
+                                push(&mut l.out, &f);
                             }
                         }
                     }
@@ -571,6 +598,7 @@ impl Host {
                 }
             }
             l.child = None;
+            l.out.clear(); // 是给那根管道的（可能写了半帧）：下一个转接进程从头来
             return;
         }
         if peers::stamp().is_some() {
@@ -581,6 +609,18 @@ impl Host {
                 l.fails += 1;
                 l.next = now + (5.0 * f64::from(1u32 << l.fails.min(4))).min(60.0);
             }
+        }
+    }
+
+    /// 给转接进程的通知写进它的标准输入：写不动的留到下一轮（最多等 1 秒，主循环至少这么久醒一次）；它不在了的不要了
+    fn link_flush(&mut self) {
+        let l = &mut self.link;
+        if l.out.is_empty() {
+            return;
+        }
+        match l.child.as_ref().and_then(|c| c.stdin.as_ref()) {
+            Some(stdin) if flush(stdin.as_raw_fd(), &mut l.out).is_ok() => {}
+            _ => l.out.clear(),
         }
     }
 
@@ -595,6 +635,7 @@ impl Host {
                 self.signal_session(libc::SIGKILL);
             }
             self.link_tick(now);
+            self.link_flush();
             if self.restore_at.is_some_and(|t| now >= t) {
                 self.restore_at = None;
                 pty::set_size(self.master.as_raw_fd(), self.size);
@@ -734,7 +775,8 @@ impl Host {
     /// 收场：告诉各个接入方会话结束了、把还没写出去的写完（各等最多 1 秒）、还原终端、删掉 socket 和说明
     fn finish(mut self, code: i32) {
         self.meta.remove(&self.dir); // 先删：收场的这一会儿不再有人接进来
-        drop(self.link.child.take()); // 管道关了：转接进程告诉服务器会话结束了，把最后的输出转完自己退出（不等它）
+        self.link_flush(); // 最后那一条通知（多半是「做完了」）也交给它；管道里已经有的关了以后它照样读得到
+        drop(self.link.child.take()); // 管道关了：转接进程推完、告诉服务器会话结束了，把最后的输出转完自己退出（不等它）
                                       // 启动它的终端：只要还写得动就写完（直接运行时客户端也是等终端收完才退出的）；2 秒一个字节都写不进去才算了
         if let Some(tty) = self.local.tty.as_ref().map(|t| t.as_raw_fd()) {
             let mut moved = monotonic();

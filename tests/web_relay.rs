@@ -18,6 +18,7 @@
 //! - iOS 上的 App 当访客的那几条（app_guest_without_the_web_side、link_in_the_terminal）不经 WebSocket：服务器只在开着网页端时
 //!   才有 /v1/relay/ws，App 只走数据端口
 
+use kit::apnsfake::{Gateway, Knobs};
 use kit::fleet::{self, Device, WAIT};
 use kit::fsx::{self, wait_for};
 use kit::harness::{self, Ctx, Module};
@@ -29,6 +30,7 @@ use kit::relay::{self, ctl, dial, read_ctl, read_exact, read_line, recv, sendall
 use kit::relay::{cols, has, matches, named_like, names, only, parsed, rows_of, secs, walk};
 use kit::relay::{Base, Popen, RelayOpts, RelayServer, F_ANNOUNCE, F_JOIN};
 use kit::spec::{self, Channel};
+use kit::term::Term;
 use kit::{case, crypto, list, obj, pki, tls};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -63,6 +65,7 @@ pub const MODULE: Module = Module {
         case!(terminal),
         case!(in_the_app),
         case!(link_in_the_terminal),
+        case!(app_guest_gets_pushes),
         case!(no_web),
         case!(the_real_page),
         case!(the_team_name),
@@ -1629,6 +1632,79 @@ fn link_in_the_terminal(t: &mut Ctx) {
     let app = Web::app(&fx);
     Guest::new(&fx.d, "iPhone").join(&app, &spec::code_bytes(&code).expect("配对码的样子是对的"), Some(a.fp()));
     assert_eq!(p.communicate(secs(60)), (0, "peer iPhone\n".to_string(), String::new()));
+}
+
+/// 手机（iOS 上的 App，经设备的那个端口说话：[`Web::app`]）登记了推送：宿主里的会话说的通知经 Team 的服务器（--push）、推送网关
+/// （真的 cca-core team-push）交给推送服务（kit::apnsfake），到那里是只有手机解得开的密文，路上（转发器记下的）、推送服务那里都没有
+/// 明文；点开通知要接入的会话就是说话的那一个。电脑那一头（Team 里的设备）登记不了。推送服务说令牌没用了：Team 的服务器拿掉
+/// 那条登记，以后不再推
+fn app_guest_gets_pushes(t: &mut Ctx) {
+    let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
+    let push = vec!["--push".to_string(), gw.url(), "--push-pin".to_string(), gw.pin.clone()];
+    let fx = Base::with(t, true, move |_| push);
+    let a = fx.device("box");
+    fx.machines(&[&a]);
+    let app = Web::app(&fx);
+    assert_eq!(app.get("/v1/health", &[]).json()["relay"]["push"], Value::Bool(true));
+    let mut p = Popen::spawn(&mut relay::helper_cmd(&a, &["remote-pair-show", "--web"]));
+    let (line, _link) = (p.out_line(), p.out_line());
+    let code = line.split_whitespace().nth(1).unwrap_or_else(|| panic!("头一行该是 code 配对码：{line:?}")).to_string();
+    let mut g = Guest::new(&fx.d, "iPhone");
+    let (key, pid) = g.join(&app, &spec::code_bytes(&code).expect("配对码的样子是对的"), Some(a.fp()));
+    assert_eq!(p.communicate(secs(60)), (0, "peer iPhone\n".to_string(), String::new()));
+    // 登记：只有手机（访客）能登记；令牌、环境不对的不收
+    let token = Gateway::token("aa");
+    let reg = obj! { "token" => &token, "env" => "sandbox" };
+    assert_eq!(fx.call(&a, "push_set", &reg), (403, obj! { "error" => "denied" }));
+    for bad in
+        [obj! { "token" => "AB", "env" => "sandbox" }, obj! { "token" => &token, "env" => "test" }, obj! { "env" => "sandbox" }]
+    {
+        assert_eq!(g.post(&app, "push_set", &bad), (400, obj! { "error" => "bad" }), "{bad}");
+    }
+    assert_eq!(g.good(&app, "push_set", &reg), obj! { "v" => 1, "ok" => true });
+    let kept = remote(&fx.d)["guests"][g.fp.as_str()]["push"].clone();
+    assert_eq!(cols(&kept, &["token", "env"]), list![&token, "sandbox"]);
+    // 宿主里的会话说一条通知（像 cca 自己带的钩子那样，经 remote-notify）
+    let mut h = relay::session(&a, Device::KEY, "alice", &[]);
+    let helper = relay::helper(&a);
+    let mut n = 0;
+    let mut notify = |h: &mut Term, body: &str| {
+        n += 1;
+        let script = a.home.join(format!("notify-{n}"));
+        let said = format!("--title 'Claude Code 做完了' --subtitle '工作 · work' '{body}'");
+        fsx::write_script(&script, &format!("#!/bin/sh\nexec '{}' remote-notify {said}\n", helper.display()));
+        let at = h.mark();
+        h.send(format!("run {}\n", script.display()));
+        h.expect_since("<ran 0>", at);
+    };
+    notify(&mut h, "改好了 两处");
+    let seen = gw.sandbox.wait_seen(1, WAIT).remove(0);
+    assert_eq!(seen.token(), token);
+    let doc = spec::note_open(&key, &pid, &seen.json()["n"]).expect("手机拿配对的密钥解得开");
+    assert_eq!(cols(&doc, &["v", "title", "subtitle", "body"]), list![1, "Claude Code 做完了", "工作 · work", "改好了 两处"]);
+    assert_eq!(doc["id"].str(), seen.header("apns-collapse-id"), "推送服务照通知的编号合并");
+    let rows = wait_for("手机看到这个会话", WAIT, || Some(listed(&g, &app, &pid)).filter(truthy));
+    assert_eq!(doc["sid"], rows[0]["sid"], "点开通知接入的就是说话的这个会话");
+    assert!(gw.production.seen().is_empty(), "开发环境的令牌交给开发环境的推送服务");
+    let wire = fx.sniff.snapshot();
+    for word in ["改好了", "Claude Code", "工作"] {
+        assert!(!has(&wire, word), "服务器看得到通知里的字：{word}");
+        assert!(!String::from_utf8_lossy(&seen.body).contains(word), "推送服务看得到通知里的字：{word}");
+    }
+    // 令牌没用了（推送服务回 410）：Team 的服务器拿掉登记，以后的不再推
+    let gone = Gateway::token("bb");
+    g.good(&app, "push_set", &obj! { "token" => &gone, "env" => "sandbox" });
+    notify(&mut h, "第二条");
+    assert_eq!(gw.sandbox.wait_seen(2, WAIT)[1].token(), gone);
+    wait_for("Team 的服务器拿掉登记", WAIT, || remote(&fx.d)["guests"][g.fp.as_str()].get("push").is_none());
+    notify(&mut h, "第三条");
+    std::thread::sleep(secs(2));
+    assert_eq!(gw.sandbox.seen().len(), 2, "没有登记了：不推");
+    h.send("exit 0\n");
+    assert_eq!(h.wait(), 0);
+    assert_eq!((gw.production.complaints(), gw.sandbox.complaints()), (Vec::<String>::new(), Vec::<String>::new()));
+    let said = fx.srv.proc.said();
+    assert!(!said.contains(&token[..16]) && !said.contains(&gone[..16]), "服务器的日志里有令牌：{said}");
 }
 
 /// 服务器不认手机（--no-guests，或者是旧版）：cca remote pair --web 说清楚，不留下一个手机输了也没用的配对码

@@ -56,24 +56,36 @@ pub fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 一条通知：标题、副标题、正文。哪一样都是别人写的字（会话里的程序、别的机器）：`parse` 去掉控制字符和看不见的排版字符、限长度
+/// 一条通知：标题、副标题、正文，和宿主给它的编号。字都是别人写的（会话里的程序、别的机器）：`parse` 去掉控制字符和看不见的
+/// 排版字符、限长度
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
     pub title: String,
     pub subtitle: String,
     pub body: String,
+    /// 宿主推出去时给的编号（`ID_LEN` 个小写的十六进制字符）：手机经推送、经接着的会话各收到一份同一条时认得出来。
+    /// 会话里推来的（`NOTIFY_REQ`）没有，有也换掉；旧版的宿主推来的没有（空的）
+    pub id: String,
 }
 
 impl Note {
     pub const TITLE_MAX: usize = 64;
     pub const BODY_MAX: usize = 240;
+    pub const ID_LEN: usize = 16;
+
+    pub fn new(title: impl Into<String>, subtitle: impl Into<String>, body: impl Into<String>) -> Note {
+        Note { title: title.into(), subtitle: subtitle.into(), body: body.into(), id: String::new() }
+    }
 
     pub fn to_json(&self) -> Vec<u8> {
         let d = dict! { "title" => self.title.as_str(), "subtitle" => self.subtitle.as_str(), "body" => self.body.as_str() };
+        if !self.id.is_empty() {
+            d.set("id", self.id.as_str());
+        }
         json::dumps(&V::Dict(d), json::LINE).into_bytes()
     }
 
-    /// 帧里的 JSON → 通知；不是 JSON、什么字都没有的不算
+    /// 帧里的 JSON → 通知；不是 JSON、什么字都没有的不算。编号不是那个样子的不要（当没有）
     pub fn parse(p: &[u8]) -> Option<Note> {
         let d = json::loads(std::str::from_utf8(p).ok()?).ok()?.as_dict()?;
         let get = |k: &str, max: usize| super::far::clean(&d.str(k).unwrap_or_default(), max).trim().to_string();
@@ -81,8 +93,19 @@ impl Note {
             title: get("title", Note::TITLE_MAX),
             subtitle: get("subtitle", Note::TITLE_MAX),
             body: get("body", Note::BODY_MAX),
+            id: d.str("id").filter(|i| Note::id_ok(i)).map(|i| i.to_string()).unwrap_or_default(),
         };
         (!n.title.is_empty() || !n.body.is_empty()).then_some(n)
+    }
+
+    /// 编号的样子：`ID_LEN` 个小写的十六进制字符
+    pub fn id_ok(id: &str) -> bool {
+        id.len() == Note::ID_LEN && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }
+
+    /// 说的一样（编号不比）
+    pub fn same_text(&self, o: &Note) -> bool {
+        (&self.title, &self.subtitle, &self.body) == (&o.title, &o.subtitle, &o.body)
     }
 }
 

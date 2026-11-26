@@ -4,12 +4,16 @@ import SwiftUI
 /// 启动参数（截图、界面测试用，ios/test.sh）：`-demo` 进演示模式；`-screen terminal|pair|settings` 直接打开那一页（演示模式里）
 @main
 struct CcaApp: App {
+    /// 推送令牌经它来（Pusher）
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model: AppModel
     @Environment(\.scenePhase) private var phase
 
     init() {
         let args = ProcessInfo.processInfo.arguments
-        _model = State(initialValue: AppModel(demo: args.contains("-demo")))
+        let model = AppModel(demo: args.contains("-demo"))
+        _model = State(initialValue: model)
+        Notifier.start(model)
     }
 
     var body: some Scene {
@@ -19,6 +23,10 @@ struct CcaApp: App {
                 .preferredColorScheme(model.appearance.scheme)
                 .onOpenURL { model.open($0) }
                 .task {
+                    #if DEBUG
+                    TestDriver.prepare()
+                    #endif
+                    Pusher.shared.start(model)
                     await Self.openScreen(model)
                     #if DEBUG
                     await TestDriver.run(model)

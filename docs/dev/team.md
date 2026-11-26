@@ -324,9 +324,9 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   命令都卡着等）：先读出根公钥、现在接着哪台就放锁，装好了再取锁、重新读一遍，接上。装好了接不上（`unreachable`：多半是云服务商的安全组没放行）
   时说放行哪个端口、放行以后再运行一次（服务器上是更新）。
 - **在服务器上自己运行安装脚本**（`cca team deploy --script`、发布页上的 `cca-hub-install.sh`）：
-  `sudo sh 脚本 --team-root 'ssh-ed25519 AAAA…' [--host …] [--port …] [--relay-port … | --no-relay] [--web-port … | --no-web] [--docker | --systemd] [--dir …]`，
+  `sudo sh 脚本 --team-root 'ssh-ed25519 AAAA…' [--host …] [--port …] [--relay-port … | --no-relay] [--web-port … | --no-web] [--push … --push-pin … | --no-push] [--docker | --systemd] [--dir …]`，
   最后打出管理员接上它的那一行（`cca team attach Team https://地址:端口 sha256//指纹`，地址和指纹都是公开的）。`--relay-port`、`--no-relay`
-  只有这样运行时写得了：`cca team deploy` 不传它们。
+  只有这样运行时写得了：`cca team deploy` 不传它们。推送网关（`--push`、`--push-pin`、`--no-push`，两种运行都写得了）见 docs/dev/push.md「Team 的服务器」。
 - **托管平台**（`cca team hosted Team [railway] [--dir 目录]`，只在终端里；只有 Railway）：见下面「托管平台」。
 
 **一台服务器上几个 Team**（用户定的：每个 Team 一个服务，服务端进程还是只管一个）：安装脚本（`server/hub-install.sh` 的 `team_setup`）里
@@ -473,7 +473,7 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 
 - 安装脚本从 ssh 的 stdin 给过去，前面放进 `CCA_HUB_MANAGED=1`、`CCA_HUB_TEAM_ROOT='根公钥后面那一段'`，命令里没写 `--host` 时
   `CCA_HUB_HOST_HINT='ssh -G 的 hostname'`（服务器上没记着地址——第一次装、搬过去——才用它：更新时不拿 ssh 的主机名盖掉记着的，ssh 走的
-  可能是内网地址、别名），和 `set -- --dir … [--name '名字'] [--port …] [--no-web | --web-port …] [--host '…'] [--docker|--systemd]`（`--host` 只是命令里写的：
+  可能是内网地址、别名），和 `set -- --dir … [--name '名字'] [--port …] [--no-web | --web-port …] [--push '…' --push-pin '…' | --no-push] [--host '…'] [--docker|--systemd]`（`--host` 只是命令里写的：
   网页端的证书要在装之前定下地址，地址由安装脚本定）。ssh 带 `-T`（不要伪终端：脚本从 stdin 过去，ssh 配置里写了 `RequestTTY` 也不要）和 `ServerAliveInterval=30`
   （网慢时传约 10 MB 的安装脚本、等服务起来，都可能一阵没有输出）。在服务器上运行的是 `sh -c '…'`（登录 shell 不一定是 sh）：root 直接 `sh -s`，别的用户能免密码 sudo 就
   `sudo -n sh -s`，要密码时什么都不运行、说用 root 登录（`root`）。

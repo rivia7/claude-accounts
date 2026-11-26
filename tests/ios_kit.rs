@@ -2,14 +2,17 @@
 //! （docs/dev/ios.md「测试」）。
 //! - against_the_spec：kit::spec（照 server/README.md 独立写的那一份）出数据，Swift 那边逐项核对（ios/Tests/KitTests）；
 //!   Swift 封的配对消息、发的记录、签名再拿回这边核对（签名用 ssh-keygen -Y verify）
-//! - pair_list_attach_type、wrong_pin_and_used_code、session_ends：整条路。box 上是真的 cca（辅助程序：在宿主里运行的会话、
+//! - pair_list_attach_type、wrong_pin_and_used_code、session_ends、pushes_reach_the_phone：整条路。box 上是真的 cca（辅助程序：在宿主里运行的会话、
 //!   remote-pair-show --web），手机那一头是 ios/tools/ccaguest（和 App 用的是同一份 CcaRemoteKit：钉住证书的 HTTPS、TCP 进数据
-//!   端口）：扫二维码（链接）配对、列会话、接入、敲键、只看、取消配对
-//! - in_the_simulator：模拟器里真的 App（要 Xcode；先跑 `bash ios/test.sh`，再带 CCA_IOS_SIM=1）
+//!   端口）：扫二维码（链接）配对、列会话、接入、敲键、只看、取消配对；登记推送，会话里的通知经服务器、推送网关（kit::apnsfake 的假网关、
+//!   假推送服务）送到，像通知扩展那样拿通知密钥解开
+//! - in_the_simulator：模拟器里真的 App（要 Xcode；先跑 `bash ios/test.sh`，再带 CCA_IOS_SIM=1）：配对、接入、敲键、通知、滚动，
+//!   登记推送、通知密钥在共用的钥匙串分组里、推来的那一份解得开
 //!
 //! 没有 swiftc（不是 macOS）时跳过。编出来的程序放在 ios/build/test/（源码没变时用上次的）。夹具（Base、服务器）在 kit::relay 里。
 //! 原来是 tests/ios_kit.py：数据由 spec_wire.py 出，这里换成 kit::spec，核对的一样。
 
+use kit::apnsfake::{Gateway, Knobs};
 use kit::fleet::Device;
 use kit::fsx::{self, wait_for};
 use kit::harness::{self, Ctx, Module, Need};
@@ -37,6 +40,7 @@ pub const MODULE: Module = Module {
         case!(pair_list_attach_type).needs(SWIFT).timeout(600),
         case!(wrong_pin_and_used_code).needs(SWIFT).timeout(600),
         case!(session_ends).needs(SWIFT).timeout(600),
+        case!(pushes_reach_the_phone).needs(SWIFT).timeout(600),
         case!(in_the_simulator).needs(&[Need::MacOs]).timeout(600),
     ],
 };
@@ -170,6 +174,43 @@ fn against_the_spec(t: &mut Ctx) {
             "control" => spec::dir_seal(&p, &pid, &sid, &obj! { "v" => 1, "machine" => "m", "since" => true }),
             "want" => obj! {
                 "machine" => "box", "tool" => "claude", "name" => "账号 1", "cwd" => &cwd[..200], "since" => 1763800000.5, "view" => true
+            }
+        },
+    );
+    // 推送的通知（辅助程序的 note_seal 封的那种）：标题、副标题、正文清理过、限长度；别的配对的、别的密钥封的、样子不对的都不认
+    let (nid, nsid) = (crypto::token_hex(8), crypto::token_hex(16));
+    let long = format!("改好了\n两处{}", "字".repeat(300));
+    let note = |patch: &[(&str, Value)]| {
+        let mut doc = obj! {
+            "v" => 1, "id" => &nid, "sid" => &nsid, "at" => 1763800000, "title" => "做完了\u{1b}[31m", "subtitle" => "alice · work\u{202e}",
+            "body" => &long
+        };
+        let o = doc.as_obj_mut().expect("对象");
+        for (k, x) in patch {
+            if x.is_null() {
+                o.remove(k);
+            } else {
+                o.insert(*k, x.clone());
+            }
+        }
+        doc
+    };
+    let body: String = format!("改好了两处{}", "字".repeat(300)).chars().take(240).collect();
+    v.insert(
+        "note",
+        obj! {
+            "p" => hx(&p), "pid" => &pid, "key" => hx(&crypto::hmac_sha256(&p, b"cca-remote/v1/note")),
+            "other_pid" => crypto::token_hex(16), "other_p" => hx(&crypto::random(32)),
+            "blob" => spec::note_seal(&p, &pid, &note(&[])),
+            "forged" => spec::note_seal(&crypto::random(32), &pid, &note(&[])),
+            "no_id" => spec::note_seal(&p, &pid, &note(&[("id", Value::Null)])),
+            "bad_id" => spec::note_seal(&p, &pid, &note(&[("id", Value::from("0123456789ABCDEF"))])),
+            "bad_sid" => spec::note_seal(&p, &pid, &note(&[("sid", Value::from("xyz"))])),
+            "empty" => spec::note_seal(&p, &pid, &note(&[("title", Value::from("")), ("body", Value::from(" \u{1b}"))])),
+            "v2" => spec::note_seal(&p, &pid, &note(&[("v", Value::from(2))])),
+            "dir" => spec::dir_seal(&p, &pid, &nsid, &note(&[])),
+            "want" => obj! {
+                "id" => &nid, "sid" => &nsid, "at" => 1763800000, "title" => "做完了[31m", "subtitle" => "alice · work", "body" => &body
             }
         },
     );
@@ -461,6 +502,11 @@ fn pair_list_attach_type(t: &mut Ctx) {
     p.type_in(b"say hello-from-the-phone\r");
     h.expect("<hello-from-the-phone>"); // 会话程序收到了（宿主那边的终端里看得到它的回答）
     wait_for("手机收到会话的输出", secs(20), || has(&p.out(), "<hello-from-the-phone>"));
+    // 会话里的钩子推一条通知（cca remote notify）：手机收到 CcaRemoteKit 解好的
+    h.send(format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复\n", relay::helper(&a).display()));
+    // 新版的宿主给每一条一个编号（经推送也来了一份时照它只弹一次）
+    let note = r#"note \{"body":"第一行回复","id":"[0-9a-f]{16}","subtitle":"alice","title":"做完了"\}"#;
+    wait_for("手机收到通知", secs(20), || relay::matches(note, &String::from_utf8_lossy(&p.err())));
     assert_eq!(p.finish(), 0, "{}", String::from_utf8_lossy(&p.err())); // 读到头：断开（会话接着运行）
     assert!(has(&p.err(), "closed detached"), "{}", String::from_utf8_lossy(&p.err()));
     h.send(b"say still-here\r");
@@ -517,6 +563,62 @@ fn session_ends(t: &mut Ctx) {
     assert!(r2.err.contains("closed gone"), "{}", r2.err);
 }
 
+/// 推送：手机（ccaguest，和 App、通知扩展同一份 CcaRemoteKit）在服务器上登记推送令牌；box、mini 两台都和它配了对，mini 上的会话
+/// 说一条通知，经服务器、推送网关（假的，kit::apnsfake）到推送服务（假的）；推送服务收到的那一份，手机拿每个配对的通知密钥试着解：
+/// 解开的是 mini 的、说话的是那个会话。取消和 mini 的配对以后解不开了（通知扩展照推送里写的那句「有新的通知」说）
+fn pushes_reach_the_phone(t: &mut Ctx) {
+    let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
+    let push = vec!["--push".to_string(), gw.url(), "--push-pin".to_string(), gw.pin.clone()];
+    let fx = Base::with(t, true, move |_| push);
+    let (a, b) = (fx.device("box"), fx.device("mini"));
+    fx.machines(&[&a, &b]);
+    let g = Guest::new(&fx, "我的 iPhone");
+    let token = Gateway::token("cc");
+    // 还没配对：没有服务器可登记
+    assert_eq!(g.ok(&["push-set", &token, "sandbox"]), "");
+    let pid_of = |out: &str| out.split_whitespace().nth(1).expect("peer 后面是配对编号").to_string();
+    let pid_a = pid_of(&pair(&a, &g).0);
+    let pid_b = pid_of(&pair(&b, &g).0);
+    // 两台机器在同一台服务器上：登记一次
+    let said = g.ok(&["push-set", &token, "sandbox"]);
+    assert_eq!(said.trim(), format!("push {} ok", fx.url()), "{said}");
+    let guests = remote(&fx.d)["guests"].clone();
+    let regs: Vec<Value> = guests.obj().values().map(|g| relay::cols(&g["push"], &["token", "env"])).collect();
+    assert_eq!(regs, [list![&token, "sandbox"]], "{guests}");
+    let mut h = relay::session(&b, Device::KEY, "alice", &[]);
+    let rows = wait_for("手机看到 mini 上的会话", secs(30), || {
+        let rows: Vec<Value> = g.rows().into_iter().filter(|r| r.get("sid").is_some() && r["pid"].str() == pid_b).collect();
+        (!rows.is_empty()).then_some(rows)
+    });
+    h.send(format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复\n", relay::helper(&b).display()));
+    let seen = gw.sandbox.wait_seen(1, secs(30)).remove(0);
+    assert_eq!(seen.token(), token);
+    let file = fx.d.join("pushed.json");
+    fsx::write(&file, &seen.body);
+    let file = text(&file);
+    let n = relay::parsed(&g.ok(&["push-open", &file]));
+    assert_eq!(
+        relay::cols(&n, &["pid", "machine", "title", "subtitle", "body"]),
+        list![&pid_b, "mini", "做完了", "alice", "第一行回复"]
+    );
+    assert_eq!(n["card"], list!["做完了", "来自「mini」 · alice", "第一行回复"]);
+    assert_eq!(n["id"].str(), seen.header("apns-collapse-id"), "推送服务照通知的编号合并");
+    assert_eq!(n["sid"], rows[0]["sid"], "点开通知接入的就是说话的这个会话");
+    assert!(!String::from_utf8_lossy(&seen.body).contains("第一行回复"), "推送服务看得到通知里的字");
+    // 取消和 mini 的配对：它推来的这一份手机就解不开了（box 的那把通知密钥解不开 mini 封的）
+    assert_eq!(g.ok(&["unpair", &pid_b]).trim(), "unpaired");
+    let r = g.run(&["push-open", &file]);
+    assert_eq!((r.code, r.out.trim()), (1, "fail"), "{}", r.err);
+    assert!(g.rows().iter().any(|r| r["pid"].str() == pid_a), "box 的配对还在");
+    // 拿掉登记（通知被关掉了）：服务器上没有了
+    assert_eq!(g.ok(&["push-set", "", "sandbox"]).trim(), format!("push {} ok", fx.url()));
+    let guests = remote(&fx.d)["guests"].clone();
+    assert!(guests.obj().values().all(|g| g.get("push").is_none()), "{guests}");
+    h.send("exit 0\n");
+    assert_eq!(h.wait(), 0);
+    assert_eq!((gw.production.complaints(), gw.sandbox.complaints()), (Vec::<String>::new(), Vec::<String>::new()));
+}
+
 // ---- 模拟器里真的 App ----
 
 const BUNDLE: &str = "com.cca.remote";
@@ -548,7 +650,13 @@ fn in_the_simulator(t: &mut Ctx) {
         t.skip("模拟器里的端到端要先跑 bash ios/test.sh（开好模拟器、装上 App），再带 CCA_IOS_SIM=1");
     }
     let Some(udid) = simulator() else { t.skip("ios/test.sh 建的模拟器没开着") };
-    let (fx, a) = guest_fx(t);
+    // 服务器接着假的推送网关（kit::apnsfake）：App 登记推送、会话里的通知也推一份
+    let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
+    let push = vec!["--push".to_string(), gw.url(), "--push-pin".to_string(), gw.pin.clone()];
+    let fx = Base::with(t, true, move |_| push);
+    let a = fx.device("box");
+    fx.machines(&[&a]);
+    let token = Gateway::token("dd");
     let ios = harness::repo().join("ios").join("build");
     let app = ios.join("dd").join("Build").join("Products").join("Debug-iphonesimulator").join("cca.app");
     // 每次重新装：上一次的配对表、钥匙串都不留（App 第一次打开时清钥匙串）
@@ -563,23 +671,29 @@ fn in_the_simulator(t: &mut Ctx) {
     let (mut p, link) = show(&a);
     let mut cmd = Cmd::new("xcrun");
     cmd.args(["simctl", "launch", "--console-pty", "--terminate-running-process", &udid, BUNDLE]);
-    cmd.args(["-test-pair", &link, "-test-attach", "-test-type", "say from-the-iphone"]);
+    cmd.args(["-test-pair", &link, "-test-attach", "-test-type", "say from-the-iphone", "-test-note", "-test-wheel"]);
+    cmd.args(["-test-push-token", &token]);
     cmd.env_inherit().stdin(Stdio::Null).stdout(Stdio::Piped).stderr(Stdio::Null);
     let mut child = cmd.spawn().unwrap_or_else(|e| panic!("{e}"));
     let lines = app_lines(child.stdout.take().expect("管道"));
-    let mut seen = Vec::new();
-    let mut said = |word: &str| {
+    // 等 App 说某一句：先到的、还没问到的几句留着（登记推送的那一句和接入的几句谁先谁后不一定）
+    let (mut seen, mut unread) = (Vec::new(), Vec::<String>::new());
+    let mut said = |word: &str| -> String {
+        if let Some(i) = unread.iter().position(|l| l.starts_with(word)) {
+            return unread.remove(i);
+        }
         let end = Instant::now() + secs(90);
         while let Some(left) = end.checked_duration_since(Instant::now()) {
             match lines.recv_timeout(left) {
                 Ok(line) => {
                     seen.push(line.clone());
                     if line.starts_with(word) {
-                        return;
+                        return line;
                     }
                     if format!(" {line}").contains(" fail") || line.starts_with("state closed") {
                         break;
                     }
+                    unread.push(line);
                 }
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -587,20 +701,56 @@ fn in_the_simulator(t: &mut Ctx) {
         }
         panic!("App 没说「{word}」：{seen:?}");
     };
-    said("pair ok");
+    let pid = said("pair ok ").trim_start_matches("pair ok ").to_string();
     assert_eq!(p.wait(secs(60)), 0);
     let peers = relay::peers(&a);
     let rows: Vec<Value> = peers.obj().values().map(|r| relay::cols(r, &["name", "web"])).collect();
     assert_eq!(rows, [list!["我的 iPhone", true]]);
+    // 通知扩展那样读（只在共用的钥匙串分组里找）：正好这个配对的一把通知密钥
+    assert_eq!(said("keys "), format!("keys 1 {pid}"));
+    // 在服务器上登记了推送：测试给的令牌，模拟器用的是开发环境的推送服务
+    let reg = said("push ");
+    assert!(reg.ends_with(" ok"), "{reg}");
+    let guests = remote(&fx.d)["guests"].clone();
+    let regs: Vec<Value> = guests.obj().values().map(|g| relay::cols(&g["push"], &["token", "env"])).collect();
+    assert_eq!(regs, [list![&token, "sandbox"]], "{guests}");
+    let sid = said("session ").trim_start_matches("session ").to_string();
     said("state open");
     said("typed");
     h.expect("<from-the-iphone>"); // box 上的会话收到了手机上敲的
+
+    // 会话里的钩子推一条通知：App 弹出来（调试版交给 TestDriver 说出来，不真的弹）；来自哪台机器是 App 自己写在副标题开头的
+    h.send(format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复\n", relay::helper(&a).display()));
+    let note = said("note ");
+    assert!(note.starts_with("note 做完了|来自「") && note.ends_with("」 · alice|第一行回复"), "{note}");
+    // 会话开了鼠标上报（像 Claude Code 的全屏界面）：手指往下拖三行是三格往上的滚轮（SGR 64），box 上的终端把它回显出来
+    h.send(b"mouse\n");
+    said("wheel");
+    h.expect(r"(\^\[|\x1b)\[<64;\d+;\d+M(\^\[|\x1b)\[<64;\d+;\d+M(\^\[|\x1b)\[<64;\d+;\d+M");
     std::thread::sleep(Duration::from_millis(1500));
     let shots = ios.join("shots");
     let _ = std::fs::create_dir_all(&shots);
     simctl(&["io", &udid, "screenshot", &text(&shots.join("e2e-terminal.png"))]);
+    // 同一条通知也推了一份（宿主不知道手机在不在前台）：推送服务收到的那一份放进 App 的临时目录，App 像通知扩展那样解开
+    let pushed = gw.sandbox.wait_seen(1, secs(30)).remove(0);
+    assert_eq!(pushed.token(), token);
+    let tmp = app_data(&udid).join("tmp");
+    let _ = std::fs::create_dir_all(&tmp);
+    fsx::write(tmp.join("pushed.part"), &pushed.body);
+    std::fs::rename(tmp.join("pushed.part"), tmp.join("pushed.json")).unwrap_or_else(|e| panic!("{e}"));
+    let card = said("pushed ");
+    assert!(card.starts_with("pushed 做完了|来自「") && card.ends_with(&format!("」 · alice|第一行回复|{sid}")), "{card}");
     let _ = child.stop();
     drop(fx);
+}
+
+/// App 在模拟器里的数据目录（宿主机上的路径）
+fn app_data(udid: &str) -> PathBuf {
+    let mut cmd = Cmd::new("xcrun");
+    cmd.args(["simctl", "get_app_container", udid, BUNDLE, "data"]).env_inherit().timeout(secs(60));
+    let r = cmd.output().unwrap_or_else(|e| panic!("{e}"));
+    assert!(r.status.success(), "{}", r.err());
+    PathBuf::from(r.out().trim())
 }
 
 /// App 在控制台上说的、带 `cca-test: ` 的那几行（去掉前缀），一行一条送过来

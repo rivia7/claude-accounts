@@ -6,8 +6,8 @@
 //! 线上来的字节（开场白那一行、控制帧）都经 `wire::Cur` 读；开场白的样子是 `wire::relay_line()`。
 //!
 //! 连上来先说一行开场白（可见的 ASCII），凭票据进来（Py:1243-1247）：
-//! - host：会话的控制连接（一个会话一条）。之后是帧：类型(1) 长度(2) 内容——宿主说 ANNOUNCE（各个配对的说明密文）、PING、BYE，
-//!   服务器说 JOIN（有接入方来了：带一个令牌）、PONG
+//! - host：会话的控制连接（一个会话一条）。之后是帧：类型(1) 长度(2) 内容——宿主说 ANNOUNCE（各个配对的说明密文）、PING、BYE、
+//!   PUSH（一条通知封给一个配对的手机：交给推送网关，push.rs），服务器说 JOIN（有接入方来了：带一个令牌）、PONG
 //! - view：接入方。服务器给宿主的控制连接发 JOIN，等宿主拿着令牌另连一条（join）上来，再回 OK
 //! - join：宿主为这个接入方连上来的那一条。对上以后两条连接原样对接：服务器只转字节，里面是两头之间端到端加密的内容
 //!
@@ -30,7 +30,7 @@ use super::omap::OMap;
 use super::remote::{self, Remote, Role, Session, Shared};
 use super::wire::{self, Blob, Cur};
 use super::{
-    CTL_FRAME, DIR_BLOB, F_ANNOUNCE, F_BYE, F_JOIN, F_PING, F_PONG, JOIN_WAIT, PREAMBLE_WAIT, RELAY_CONN, RELAY_CONN_IP,
+    CTL_FRAME, DIR_BLOB, F_ANNOUNCE, F_BYE, F_JOIN, F_PING, F_PONG, F_PUSH, JOIN_WAIT, PREAMBLE_WAIT, RELAY_CONN, RELAY_CONN_IP,
     RELAY_GRACE, RELAY_IDLE, RELAY_QUEUE,
 };
 use crate::py::json::{self, Fmt};
@@ -636,6 +636,16 @@ impl Relay {
                 });
                 if good.is_none() {
                     self.close(lz, id, None, now);
+                }
+            }
+            // 一条通知封给一个配对的手机（push.rs）：那台手机登记过推送才交给推送网关。样子不对的、对不上的不理，不断开（只是一条
+            // 通知；以后的版本可能多带东西）
+            F_PUSH => {
+                let r = lz.get();
+                if let Some(p) = r.pusher.as_ref() {
+                    if let Some(job) = r.push_job(&sid, id, payload) {
+                        p.send(job);
+                    }
                 }
             }
             _ => {} // 不认识的帧不理

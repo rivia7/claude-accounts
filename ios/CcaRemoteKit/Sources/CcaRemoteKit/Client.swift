@@ -140,6 +140,30 @@ public final class RemoteClient: @unchecked Sendable {
         try? identity(for: server).fp
     }
 
+    // MARK: 推送
+
+    /// 这台手机上每个配对的通知密钥（App 把它们存进和通知扩展共用的钥匙串分组：NoteKeychain）
+    public func noteKeys() -> [NoteKey] {
+        peers().compactMap { p in store.secret(pKey(p.pid)).map { NoteKey(pid: p.pid, p: $0, name: p.name) } }
+    }
+
+    /// 配对的机器所在的服务器，每台一次（照配对表的先后）
+    public func servers() -> [ServerRef] {
+        var seen = Set<String>()
+        return peers().map(\.server).filter { seen.insert($0.url).inserted }
+    }
+
+    /// 在这台服务器上登记推送（push_set，只有手机能发）：推送服务给这台手机上这个 App 的令牌（小写的十六进制）和推送服务的环境
+    /// （production / sandbox）；令牌空的是拿掉。成了是 nil，没成是原因（no_push：这台服务器没接推送网关；denied：服务器不认这台手机了）
+    public func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure? {
+        do {
+            _ = try await requester(server).post("push_set", ["token": token, "env": env])
+            return nil
+        } catch {
+            return error as? RemoteFailure ?? RemoteFailure("error")
+        }
+    }
+
     // MARK: 配对
 
     /// 扫到的二维码（或者粘贴的链接）里的配对码：和那台机器配对。回配对表里新的那一项

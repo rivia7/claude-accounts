@@ -412,11 +412,13 @@ impl Tunnel {
 }
 
 /// 控制连接上的帧：`类型(1) 长度(2) 内容`。服务器说 JOIN（有接入方来了）和 PONG（0x07：PING 的回答，
-/// 收到什么都算它还在，不用单独认）；宿主这头说 PING、ANNOUNCE、BYE
+/// 收到什么都算它还在，不用单独认）；宿主这头说 PING、ANNOUNCE、BYE、PUSH（一条通知封给一个配对的手机：服务器交给推送服务，
+/// 不认的旧服务器不理它）
 pub const F_JOIN: u8 = 0x02;
 pub const F_PING: u8 = 0x06;
 pub const F_ANNOUNCE: u8 = 0x08;
 pub const F_BYE: u8 = 0x09;
+pub const F_PUSH: u8 = 0x0a;
 
 pub fn ctl_frame(kind: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = vec![kind];

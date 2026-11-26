@@ -8,17 +8,10 @@ enum Texts {
         return s
     }
 
-    /// 别的机器上的程序写的一行字（终端的标题）显示之前：控制字符、看不见的排版字符去掉，截短
+    /// 别的机器上的程序写的一行字（终端的标题）显示之前：控制字符、看不见的排版字符去掉，截短（CcaRemoteKit 的 plainLine：
+    /// 通知扩展弹推来的通知也用它）
     static func plainLine(_ s: String, max: Int) -> String {
-        var out = String.UnicodeScalarView()
-        for u in s.unicodeScalars {
-            switch u.properties.generalCategory {
-            case .control, .format, .surrogate, .privateUse, .unassigned: continue
-            case .lineSeparator, .paragraphSeparator: out.append(" ")
-            default: out.append(u)
-            }
-        }
-        return String(String(out).trimmingCharacters(in: .whitespaces).prefix(max))
+        CcaRemoteKit.plainLine(s, max: max)
     }
 
     /// 会话里跑的是哪个命令行工具

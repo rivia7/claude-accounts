@@ -5,6 +5,7 @@
 //!   服务器只见得到 rid 和密文，不知道配对码
 //! - 配对出来的密钥 P：两台机器各存一份（钥匙串 / 密钥文件）。服务器只知道它的编号（pid）
 //! - 会话的说明（目录）：用 P 派生的密钥封起来，服务器存着转交、看不到是哪个账号、哪个文件夹
+//! - 推送的通知：用 P 派生的另一对密钥封给手机，服务器、推送服务只是转交
 //! - 通道：握手时两头各出 32 个字节的随机数、用 P 互相证明，派生这一次连接的四把密钥（两个方向各一对），之后是带序号、
 //!   带认证的记录。没有前向保密：P 日后泄露的话，之前被录下的流量可以解开
 //!
@@ -125,6 +126,22 @@ pub fn dir_seal(p: &[u8], pid: &str, sid: &str, doc: &Dict) -> R<Dict> {
 
 pub fn dir_open(p: &[u8], pid: &str, sid: &str, blob: &V) -> Option<Dict> {
     parse(&blob_open(&dir_keys(p), &blob_ad(&["cca-remote-dir", pid, sid]).ok()?, blob)?)
+}
+
+fn note_keys(p: &[u8]) -> Keys {
+    let k = hmac_sha256(p, b"cca-remote/v1/note");
+    (hmac_sha256(&k, b"enc"), hmac_sha256(&k, b"mac"))
+}
+
+/// 推送的通知（手机锁着屏、App 没开着时经服务器、推送服务送到手机上）：封给这个配对的手机，服务器、推送服务都看不到里面。
+/// 手机上解它的是通知扩展，它只拿得到这两把派生出来的密钥（拿不到 P）
+pub fn note_seal(p: &[u8], pid: &str, doc: &Dict) -> R<Dict> {
+    Ok(blob_seal(&note_keys(p), &blob_ad(&["cca-remote-note", pid])?, &padded(doc)))
+}
+
+#[cfg(test)]
+pub fn note_open(p: &[u8], pid: &str, blob: &V) -> Option<Dict> {
+    parse(&blob_open(&note_keys(p), &blob_ad(&["cca-remote-note", pid]).ok()?, blob)?)
 }
 
 pub const VER: u8 = 1;
@@ -351,6 +368,9 @@ mod tests {
         let dk = dir_keys(&p);
         assert_eq!(to_hex(&dk.0), "2b41224850f5c0cbee2ae495409489722980a9f539333ef5267740d13b00fb4d");
         assert_eq!(to_hex(&dk.1), "5fb66881d76be202cbc0f5701a371a05034e6c103522832cd5d4e32a1f78e40e");
+        let nk = note_keys(&p);
+        assert_eq!(to_hex(&nk.0), "2a225ed40e8331a7423658ac6fe93f3ebe55691515cc06dc4c1e4ea56922fb14");
+        assert_eq!(to_hex(&nk.1), "81ba095975dcf0ee824968b1c4addae108122a22482fa6e2440e4a0c9dae925d");
 
         let mut v = Channel::new(Role::Viewer, &p, &pid, SID, FPA, FPB).unwrap();
         let mut h = Channel::new(Role::Host, &p, &pid, SID, FPA, FPB).unwrap();
@@ -522,7 +542,14 @@ mod tests {
             ("服务器".into(), "~/项目".into())
         );
         assert!(dir_open(&p, &pid, "ffffffffffffffffffffffffffffffff", &V::Dict(blob.clone())).is_none(), "挪到别的会话上不认");
-        assert!(dir_open(&[0; 32], &pid, SID, &V::Dict(blob)).is_none());
+        assert!(dir_open(&[0; 32], &pid, SID, &V::Dict(blob.clone())).is_none());
+        // 推送的通知：只认这个配对的；会话的说明和它的密钥不一样，拿不来顶替
+        let note = crate::dict! { "v" => 1, "id" => "0123456789abcdef", "sid" => SID, "title" => "做完了", "subtitle" => "工作", "body" => "改好了" };
+        let sealed = note_seal(&p, &pid, &note).unwrap();
+        assert_eq!(note_open(&p, &pid, &V::Dict(sealed.clone())).unwrap().str("body").unwrap().to_string(), "改好了");
+        assert!(note_open(&p, "ffffffffffffffffffffffffffffffff", &V::Dict(sealed.clone())).is_none(), "别的配对的");
+        assert!(note_open(&p, &pid, &V::Dict(blob)).is_none(), "会话的说明不是通知");
+        assert!(dir_open(&p, &pid, SID, &V::Dict(sealed)).is_none());
     }
 
     impl Channel {

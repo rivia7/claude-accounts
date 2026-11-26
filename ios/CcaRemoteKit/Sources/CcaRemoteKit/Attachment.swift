@@ -10,6 +10,7 @@ final class Link: @unchecked Sendable {
         var open: () -> Void = {}
         var output: (Bytes) -> Void = { _ in }
         var exit: (Int32) -> Void = { _ in }
+        var note: (Note) -> Void = { _ in }
         var close: (String) -> Void = { _ in }
     }
 
@@ -158,6 +159,9 @@ final class Link: @unchecked Sendable {
                 let code = payload.count >= 4 ? Int32(bitPattern: UInt32(readU32(payload[0..<4]))) : 0
                 events.exit(code)
                 finish("ended")
+            } else if kind == Frame.notify {
+                // 会话推来的通知：解不开、什么字都没有的不算
+                if let n = Note.parse(payload) { events.note(n) }
             }
             // 别的帧（宿主那头已经滤掉了）不理
         }
@@ -261,10 +265,14 @@ public final class Attachment: @unchecked Sendable {
     private var timer: DispatchWorkItem?
     private var stateNow = State.connecting
 
-    /// 终端的字节、状态、退出码（主线程上）
+    /// 会话推来的通知限流（几次重新接上算一处，和辅助程序的接入端一样）
+    private var notes = NoteBudget()
+
+    /// 终端的字节、状态、退出码、会话推来的通知（主线程上）
     public var onOutput: (Bytes) -> Void = { _ in }
     public var onState: (State) -> Void = { _ in }
     public var onExit: (Int32) -> Void = { _ in }
+    public var onNote: (Note) -> Void = { _ in }
 
     public init(client: RemoteClient, peer: Peer, sid: String, cols: Int, rows: Int, readOnly: Bool) {
         self.client = client
@@ -306,6 +314,13 @@ public final class Attachment: @unchecked Sendable {
                 self.queue.async {
                     guard self.attempt == me else { return }
                     DispatchQueue.main.async { self.onExit(code) }
+                }
+            },
+            note: { [weak self] n in
+                guard let self else { return }
+                self.queue.async {
+                    guard self.attempt == me, self.notes.take() else { return }
+                    DispatchQueue.main.async { self.onNote(n) }
                 }
             },
             close: { [weak self] why in self?.queue.async { self?.closed(me, why) } })

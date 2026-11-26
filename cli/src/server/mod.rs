@@ -44,10 +44,12 @@ pub mod acme;
 pub mod cli;
 pub mod disk;
 pub mod front;
+pub mod gateway;
 pub mod handler;
 pub mod http;
 pub mod limits;
 pub mod omap;
+pub mod push;
 pub mod relay;
 pub mod remote;
 pub mod sshsig;
@@ -141,10 +143,21 @@ pub const MAX_ASTATE: usize = 524_288;
 // ---- 远程会话的中转、网页端（Py:901-941） ----
 
 /// 中转的 op（开了中转才认）（Py:901）
-pub const RELAY_OPS: [&str; 9] =
-    ["pair_open", "pair_put", "pair_get", "pair_commit", "pair_close", "pair_drop", "relay_host", "relay_attach", "relay_list"];
-/// 访客（手机上的网页端）能发的（Py:904）
-pub const GUEST_OPS: [&str; 7] = ["pair_put", "pair_get", "pair_commit", "pair_close", "pair_drop", "relay_attach", "relay_list"];
+pub const RELAY_OPS: [&str; 10] = [
+    "pair_open",
+    "pair_put",
+    "pair_get",
+    "pair_commit",
+    "pair_close",
+    "pair_drop",
+    "relay_host",
+    "relay_attach",
+    "relay_list",
+    "push_set",
+];
+/// 访客（手机：iOS 上的 cca App、网页端）能发的（Py:904）；push_set（登记推送）是后加的、只有访客能发
+pub const GUEST_OPS: [&str; 8] =
+    ["pair_put", "pair_get", "pair_commit", "pair_close", "pair_drop", "relay_attach", "relay_list", "push_set"];
 /// 配对码多久过期（Py:905）
 pub const PAIR_TTL: i64 = 600;
 /// pair_get 最多等对方多久，要比 CONN_DEADLINE 短（Py:907）
@@ -181,6 +194,11 @@ pub const F_PING: u8 = 0x06;
 pub const F_PONG: u8 = 0x07;
 pub const F_ANNOUNCE: u8 = 0x08;
 pub const F_BYE: u8 = 0x09;
+/// 宿主交来的一条推送的通知（push.rs）：Python 那一份没有，后加的
+pub const F_PUSH: u8 = 0x0a;
+/// 推送的通知（密文，base64）最长多少个字符：最长的一条（标题、副标题各 64 个字，正文 240 个字，都是 4 个字节的字）补齐以后是
+/// 1792 个字节，base64 是 2392 个字符。推送服务一条最多 4 KB：网关照这个数留着余地
+pub const PUSH_BLOB: usize = 3072;
 /// 网页端同时几条 WebSocket（Py:927）
 pub const WS_CONN: usize = 64;
 /// 网页端同一个 IP 同时几条 WebSocket（Py:928）
@@ -221,8 +239,12 @@ pub struct Ctx {
     pub sig_ok: bool,
 }
 
-/// 这两条子命令
-pub const CMDS: &[Cmd] = &[Cmd::all("team-server", cli::cmd_team_server), Cmd::all("team-acme", acme::cmd_team_acme)];
+/// 这三条子命令
+pub const CMDS: &[Cmd] = &[
+    Cmd::all("team-server", cli::cmd_team_server),
+    Cmd::all("team-acme", acme::cmd_team_acme),
+    Cmd::all("team-push", gateway::cmd_team_push),
+];
 
 /// 是不是这里的子命令：是的话 main 直接运行它，不做辅助程序平常开头的那几步（认当前是哪种工具、读账号表里的模型名——
 /// 那些都要读 HOME 下 cca 的文件，服务器上跑它的那个用户没有、也不该有）。只是比两次名字
@@ -235,14 +257,15 @@ pub fn standalone(name: &str) -> Option<&'static Cmd> {
 mod tests {
     use super::*;
 
-    /// 两条子命令都登记了，别的名字不归这里
+    /// 三条子命令都登记了，别的名字不归这里
     #[test]
-    fn standalone_knows_only_its_two_commands() {
+    fn standalone_knows_only_its_three_commands() {
         assert_eq!(standalone("team-server").unwrap().name, "team-server");
         assert_eq!(standalone("team-acme").unwrap().name, "team-acme");
+        assert_eq!(standalone("team-push").unwrap().name, "team-push");
         assert!(standalone("team-join").is_none() && standalone("env").is_none() && standalone("").is_none());
         // 平常的那张表里也查得到（`cca-core 不认识的名字` 的报错、名字不重复的检查都照它）
-        assert!(crate::cmd::find("team-server").is_some() && crate::cmd::find("team-acme").is_some());
+        assert!(["team-server", "team-acme", "team-push"].iter().all(|name| crate::cmd::find(name).is_some()));
     }
 
     /// 成组的常量和 Python 的一样：TEAM_OPS 是管理员的那几个加上设备的三个

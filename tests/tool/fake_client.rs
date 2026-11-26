@@ -17,11 +17,13 @@
 //!   evil       一串不怀好意的字节，最后 <done>：去掉中间那条查询以后，前后两截不能在别的终端上拼成 ESC ] 52…（写剪贴板）
 //!   clip       写剪贴板（OSC 52），再回 <clipped>
 //!   alt        进备用屏幕、藏光标、开括号粘贴，再回 <alt>
+//!   mouse      进备用屏幕、开鼠标上报（按下、拖动，SGR 的写法：像 Claude Code 的全屏界面），再回 <mouse>
 //!   kill       拿 SIGKILL 杀掉自己
 //!   flood      两万行，最后 <flooded>（一次 write）
 //!   dump       四万行（两兆多），最后 <dumped>，马上退出，退出码 6
 //!   closetty   回 <closing>，把 0/1/2 都关掉，过 1.5 秒退出，退出码 4
 //!   run 程序 参数…  起这个程序（会话里的钩子那样，是客户端的子进程；参数按空白分开），等它结束，回 <ran 退出码>
+//!   runin 文件 程序 参数…  一样，程序的标准输入是这个文件（Claude Code 把钩子的输入写进 stdin）
 //!
 //! 别的行不理。标准输入读到头：回 <eof>，退出码 9。窗口大小变了（SIGWINCH）：回 <size 行 列>。收到 SIGTERM：回 <term>，
 //! 退出码 5。每句话一次 write、以 \r\n 结尾（它的终端是行模式，到了外面是 \r\r\n）。
@@ -199,13 +201,15 @@ fn command(line: &[u8], pipe: libc::c_int) {
             die("UnicodeEncodeError: 'utf-8' codec can't encode character: surrogates not allowed");
         }
         say(format!("<{words}>\r\n"));
-    } else if let Some(rest) = cmd.strip_prefix("run ") {
-        // 在会话里起一个程序（会话里的钩子那样：它是这个客户端的子进程），等它结束，回它的退出码
+    } else if let Some(rest) = cmd.strip_prefix("run ").or_else(|| cmd.strip_prefix("runin ")) {
+        // 在会话里起一个程序（会话里的钩子那样：它是这个客户端的子进程），等它结束，回它的退出码。runin 的第一个词是给它当
+        // 标准输入的文件（Claude Code 把钩子的输入写进 stdin）
         let mut words = py::split(rest);
+        let input = if cmd.starts_with("runin ") { words.next().and_then(|f| std::fs::File::open(f).ok()) } else { None };
         let code = words.next().map_or(-1, |prog| {
             let st = std::process::Command::new(prog)
                 .args(words)
-                .stdin(std::process::Stdio::null())
+                .stdin(input.map_or_else(std::process::Stdio::null, std::process::Stdio::from))
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
@@ -221,6 +225,8 @@ fn command(line: &[u8], pipe: libc::c_int) {
         say("\x1b]52;c;Y2xpcA==\x07<clipped>\r\n");
     } else if cmd == "alt" {
         say("\x1b[?1049h\x1b[?25l\x1b[?2004h<alt>\r\n");
+    } else if cmd == "mouse" {
+        say("\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h<mouse>\r\n");
     } else if cmd == "kill" {
         // SAFETY: 给自己发 SIGKILL
         unsafe { libc::kill(libc::getpid(), libc::SIGKILL) };

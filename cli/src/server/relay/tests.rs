@@ -9,6 +9,7 @@ use crate::dict;
 use crate::py::fs::TempDir;
 use crate::py::obj::Dict;
 use crate::server::limits::Limits;
+use crate::server::push::Pusher;
 use crate::server::remote::handle_op;
 use std::net::{Shutdown, SocketAddr};
 use std::path::Path;
@@ -647,6 +648,38 @@ fn control_frames() {
     wait_for("会话没了", || net.session(&sid).is_none());
     assert!(net.rows(2, &p1).is_empty());
     assert_eq!(net.op("relay_attach", 2, dict! { "sid" => &sid, "pid" => &p1 }).0, 404);
+}
+
+/// PUSH：一条通知封给一个配对的手机。那台手机登记了推送才交给推送网关（这里是测试的队列）；样子不对的、对不上的不理，不断开
+#[test]
+fn push_frames_go_to_the_gateway_queue() {
+    let net = Net::new();
+    let (g, gkey) = (fp(9), "ssh-ed25519 AAAA");
+    let (pid, sid, id) = (hex(1), hex(50), "00112233445566ff");
+    let now = time::time();
+    {
+        let mut r = net.sh.lock();
+        r.test_guest(&g, gkey, now);
+        r.test_edge(&pid, &fp(1), &g, now);
+    }
+    let (p, rx) = Pusher::for_test();
+    net.sh.lock().set_pusher(p);
+    let tok = "ef".repeat(32);
+    let reg = V::Dict(dict! { "token" => &tok, "env" => "production" });
+    assert_eq!(handle_op(&net.sh, "push_set", &g, &reg, now, Some(gkey), &name_of).unwrap().0, 200);
+    let (mut host, _) = net.host(1, &sid, &[&pid]);
+    let push = |pid: &str| frame(F_PUSH, format!(r#"{{"pid":"{pid}","id":"{id}","note":{BLOB}}}"#).as_bytes());
+    for raw in [frame(F_PUSH, b"{"), frame(F_PUSH, b"\xff"), frame(F_PUSH, b"[]"), push(&hex(2)), push(&pid)] {
+        host.write_all(&raw).unwrap();
+    }
+    let job = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!((job.token.as_str(), job.env.as_str(), job.id.as_str()), (tok.as_str(), "production", id));
+    assert_eq!(json::dumps(&job.note.to_v(), Fmt::new().compact()), BLOB);
+    assert!(rx.try_recv().is_err(), "不对的那几帧不交");
+    // 连接照旧
+    host.write_all(&frame(F_PING, b"still")).unwrap();
+    assert_eq!(read_ctl(&mut host), (F_PONG, b"still".to_vec()));
+    assert_eq!(net.session(&sid), Some((0, true)));
 }
 
 #[test]

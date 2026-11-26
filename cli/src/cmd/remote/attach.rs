@@ -789,7 +789,7 @@ mod note_tests {
     use super::*;
 
     fn note(title: &str, subtitle: &str, body: &str) -> Note {
-        Note { title: title.into(), subtitle: subtitle.into(), body: body.into() }
+        Note::new(title, subtitle, body)
     }
 
     #[test]
@@ -813,6 +813,16 @@ mod note_tests {
         assert_eq!(Note::parse(br#"{"title": " ", "body": ""}"#), None);
         assert_eq!(Note::parse(b"not json"), None);
         assert_eq!(Note::parse(&n.to_json()), Some(n));
+        // 宿主给的编号：照样留着；不是 16 个小写的十六进制字符的当没有
+        let id = |raw: &[u8]| Note::parse(raw).expect("通知").id;
+        assert_eq!(id(br#"{"title": "a", "id": "0123456789abcdef"}"#), "0123456789abcdef");
+        for bad in ["0123456789ABCDEF", "0123456789abcde", "0123456789abcdefa", "0123456789abcdeg"] {
+            assert_eq!(id(format!(r#"{{"title": "a", "id": "{bad}"}}"#).as_bytes()), "", "{bad}");
+        }
+        let mut with = note("a", "b", "c");
+        with.id = "0123456789abcdef".into();
+        assert_eq!(Note::parse(&with.to_json()), Some(with.clone()));
+        assert!(with.same_text(&note("a", "b", "c")) && !with.same_text(&note("a", "b", "d")));
     }
 
     #[test]

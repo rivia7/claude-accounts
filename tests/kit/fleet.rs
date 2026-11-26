@@ -167,7 +167,12 @@ impl ServerProc {
     /// 起服务器：`server_argv() + args`；环境只有 env 给的（服务器自己只看 CCA_TEAM_ROOT、CCA_HUB_HOSTED、CCA_WEB_* 这几个）
     /// 和 LC_ALL=en_US.UTF-8（它在 stderr 上说中文）。标准输入、输出是 /dev/null。起不来就 panic
     pub fn spawn<S: AsRef<str>>(args: &[S], env: &[(&str, &str)]) -> ServerProc {
-        let mut argv = server::server_argv();
+        ServerProc::spawn_with(server::server_argv(), args, env)
+    }
+
+    /// 同 [`ServerProc::spawn`]，命令的开头另给（[`server::push_argv`] 这样的）
+    pub fn spawn_with<S: AsRef<str>>(head: Vec<String>, args: &[S], env: &[(&str, &str)]) -> ServerProc {
+        let mut argv = head;
         let head = argv.join(" ");
         argv.extend(args.iter().map(|a| a.as_ref().to_string()));
         let mut cmd = Cmd::new(&argv[0]);

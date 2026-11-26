@@ -3,8 +3,11 @@
 //   pair <链接>             配对；stdout：peer 配对编号 名字，没成是 fail 原因（退出码 1）
 //   list                    一行一个 JSON：配对过的机器（没有 sid）、它上面的会话（有 sid）
 //   attach 配对编号 会话编号 [--view]   接入：stdin 是敲的键（读到头就断开），stdout 是终端的字节；
-//                           stderr：state open|retrying、exit 退出码、closed 原因。detached、ended 退出码 0，别的 1
+//                           stderr：state open|retrying、exit 退出码、note 通知的 JSON、closed 原因。detached、ended 退出码 0，别的 1
 //   unpair 配对编号          取消配对；stdout：unpaired（服务器没问到也删本地的：told-no）
+//   push-set 令牌 环境        在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉）；stdout 一台一行：push 服务器 ok|fail 原因
+//   push-open 文件           文件里是推来的内容（推送服务收到的那份 JSON）：像通知扩展那样拿每个配对的通知密钥试着解开；
+//                           stdout：解开的通知和弹出来的字（一行 JSON），解不开是 fail（退出码 1）
 // 密钥存在目录里的文件里（只给测试用；App 里存钥匙串）
 import Foundation
 
@@ -51,7 +54,7 @@ while args.count >= 2, args[0].hasPrefix("--") {
     args.removeFirst(2)
 }
 guard !store.isEmpty, let cmd = args.first else {
-    say("用法：ccaguest --store 目录 [--name 名字] pair|list|attach|unpair …")
+    say("用法：ccaguest --store 目录 [--name 名字] pair|list|attach|unpair|push-set|push-open …")
     exit(64)
 }
 let client = RemoteClient(store: DirStore(URL(fileURLWithPath: store)), deviceName: name)
@@ -99,6 +102,38 @@ case "unpair":
         print(await client.unpair(peer) ? "unpaired" : "told-no")
         finish(0)
     }
+case "push-set":
+    guard args.count == 3 else {
+        print("fail usage")
+        finish(1)
+    }
+    Task {
+        var all = true
+        for s in client.servers() {
+            if let f = await client.pushSet(on: s, token: args[1], env: args[2]) {
+                print("push \(s.url) fail \(f.code)")
+                all = false
+            } else {
+                print("push \(s.url) ok")
+            }
+        }
+        finish(all ? 0 : 1)
+    }
+case "push-open":
+    guard args.count == 2, let raw = FileManager.default.contents(atPath: args[1]),
+          let info = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any]
+    else {
+        print("fail usage")
+        finish(1)
+    }
+    guard let n = openPushed(info, keys: client.noteKeys()), let card = NoteCard(n) else {
+        print("fail")
+        finish(1)
+    }
+    let j: [String: Any] = ["pid": n.pid, "machine": n.machine, "id": n.id, "sid": n.sid, "at": n.at, "title": n.title,
+                            "subtitle": n.subtitle, "body": n.body, "card": [card.title, card.subtitle, card.body]]
+    print(String(decoding: try! JSONSerialization.data(withJSONObject: j, options: [.sortedKeys]), as: UTF8.self))
+    finish(0)
 case "attach":
     guard args.count >= 3, let peer = client.peers().first(where: { $0.pid == args[1] }) else {
         print("fail no_peer")
@@ -109,6 +144,11 @@ case "attach":
         FileHandle.standardOutput.write(Data(b))
     }
     att.onExit = { say("exit \($0)") }
+    att.onNote = { n in
+        var j = ["title": n.title, "subtitle": n.subtitle, "body": n.body]
+        if !n.id.isEmpty { j["id"] = n.id }
+        say("note " + String(decoding: try! JSONSerialization.data(withJSONObject: j, options: [.sortedKeys]), as: UTF8.self))
+    }
     var reading = false
     att.onState = { st in
         switch st {

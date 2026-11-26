@@ -43,6 +43,18 @@ final class TerminalSurface {
         let engine = view.getTerminal()
         engine.options.enableSixelReported = false
         engine.registerOscHandler(code: 1337) { _ in }
+        // 会话里的程序自己写的通知：OSC 777 的 notify（标题;正文）、OSC 9（只有一段字：iTerm2 的写法；数字开头的是进度条，不算）。
+        // 宿主转来的 NOTIFY 帧 CcaRemoteKit 解好了交给 TerminalSession；两样都经 Notifier 弹（和 Mac App 的 TerminalSurface 一样认这两种）
+        engine.registerOscHandler(code: 777) { [weak self] data in
+            guard let text = String(bytes: data, encoding: .utf8) else { return }
+            let parts = text.components(separatedBy: ";")
+            guard parts.count >= 3, parts[0] == "notify" else { return }
+            MainActor.assumeIsolated { self?.notified(title: parts[1], body: parts[2...].joined(separator: ";")) }
+        }
+        engine.registerOscHandler(code: 9) { [weak self] data in
+            guard let text = String(bytes: data, encoding: .utf8), let first = text.first, !first.isNumber else { return }
+            MainActor.assumeIsolated { self?.notified(title: "", body: text) }
+        }
         view.terminalDelegate = bridge
         bridge.surface = self
         view.onLayout = { [weak self] in self?.measure() }
@@ -98,6 +110,17 @@ final class TerminalSurface {
         UIApplication.shared.open(url)
     }
 
+    fileprivate func notified(title: String, body: String) {
+        session?.noted(title: title, body: body)
+    }
+
+    #if DEBUG
+    /// TestDriver 用（见 SizedTerminalView.testDrag）
+    func testDrag(rows: Int) -> Bool {
+        view.testDrag(rows: rows)
+    }
+    #endif
+
     /// 会话里的程序要往剪贴板放东西（OSC 52）：只在 App 在前台、键盘焦点在这块终端上时放（不然那台机器上的任何输出都能在背后
     /// 把这台手机的剪贴板换掉）。读剪贴板不给
     fileprivate func copied(_ content: Data) {
@@ -107,10 +130,33 @@ final class TerminalSurface {
     }
 }
 
-/// SwiftTerm 的终端视图，多报一件事：大小变了；只看的不弹键盘
+/// SwiftTerm 的终端视图，多管几件事：大小变了报一声；只看的不弹键盘；手指上下拖动是滚动。
+///
+/// 滚动照 Mac 上 SwiftTerm 的 scrollWheel 分三种（`scrollTarget`）：会话开着鼠标上报时（Claude Code 的全屏界面：备用屏幕，
+/// 往回翻由它自己做）发滚轮，手指每移一行的高度发一格（Claude Code 2.1.332 实测：隔开的一格滚一行，连着来的加速到两行左右）；
+/// 备用屏幕、没开鼠标上报（less、man 这类）发方向键；别的时候是 SwiftTerm 自己的回滚（UIScrollView）。松手时手指还在动的照惯性
+/// 再滑一段，手指一按下就停。SwiftTerm 自己在会话开鼠标上报时装一个把拖动当成按住鼠标拖的手势（电脑上拖着选字的那种），手机上
+/// 就滚不动了：不要它（`mouseModeChanged` 不调 super）
 final class SizedTerminalView: TerminalView {
     var onLayout: (() -> Void)?
     var readOnly = false
+
+    enum ScrollTarget { case native, wheel, arrows }
+
+    /// 松手后的惯性每毫秒剩下多少（UIScrollView 的 .normal 是 0.998、.fast 是 0.99）：Claude Code 连着来的滚轮一格滚两行左右，
+    /// 照 .normal 滑得太远
+    static let deceleration: CGFloat = 0.996
+    /// 一次最多发几格：手指再快、卡了一下，也不一下子灌进去一大串
+    static let stepMax = 8
+
+    private var wheelPan: UIPanGestureRecognizer?
+    private let gate = WheelGate()
+    /// 还没凑够一行的那一截（点）
+    private var rest: CGFloat = 0
+    private var glide: CADisplayLink?
+    private var glideSpeed: CGFloat = 0
+    private var glideAt = CGPoint.zero
+    private var glideLast: CFTimeInterval = 0
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -119,11 +165,156 @@ final class SizedTerminalView: TerminalView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window != nil { onLayout?() }
+        if window != nil {
+            installWheel()
+            onLayout?()
+        } else {
+            stopGlide()
+        }
     }
 
     override var canBecomeFirstResponder: Bool {
         !readOnly
+    }
+
+    override func mouseModeChanged(source: Terminal) {
+        // 不调 super（见上）。会话关了鼠标上报：还在滑的停下
+        if source.mouseMode == .off { stopGlide() }
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        stopGlide()   // 手指按下：惯性停住（和列表一样）
+        super.touchesBegan(touches, with: event)
+    }
+
+    /// 现在上下拖是什么
+    var scrollTarget: ScrollTarget {
+        let t = getTerminal()
+        if readOnly { return .native }   // 只看：发不了键，滚轮、方向键都送不过去
+        if allowMouseReporting && t.mouseMode != .off { return .wheel }
+        if t.isCurrentBufferAlternate && t.alternateScrollMode && !selectionActive { return .arrows }
+        return .native
+    }
+
+    private func installWheel() {
+        guard wheelPan == nil else { return }
+        let g = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
+        g.maximumNumberOfTouches = 1
+        gate.view = self
+        g.delegate = gate
+        addGestureRecognizer(g)
+        panGestureRecognizer.require(toFail: g)   // SwiftTerm 自己的回滚：等它不接手了再动
+        wheelPan = g
+    }
+
+    @objc private func panned(_ g: UIPanGestureRecognizer) {
+        switch g.state {
+        case .began, .changed:
+            if g.state == .began {
+                stopGlide()
+                rest = 0
+            }
+            let dy = g.translation(in: self).y
+            g.setTranslation(.zero, in: self)
+            scroll(by: dy, at: g.location(in: self))
+        case .ended:
+            glideFrom(speed: g.velocity(in: self).y, at: g.location(in: self))
+        default:
+            rest = 0
+        }
+    }
+
+    /// 手指（或者惯性）往下移了 dy 点：凑够一行发一格。往下拖是往回看（滚轮往上），和列表一样
+    private func scroll(by dy: CGFloat, at point: CGPoint) {
+        let target = scrollTarget
+        guard target != .native, let cell = cellSize() else {
+            rest = 0
+            stopGlide()
+            return
+        }
+        rest += dy
+        var n = Int(rest / cell.height)
+        rest -= CGFloat(n) * cell.height
+        if abs(n) > Self.stepMax {
+            n = n > 0 ? Self.stepMax : -Self.stepMax
+            rest = 0
+        }
+        guard n != 0 else { return }
+        let t = getTerminal()
+        if target == .wheel {
+            // 手指在哪一格（程序可能按位置认滚的是哪一块）。UIScrollView 的坐标带着滚过的距离：减掉，是屏幕上的第几行
+            let x = max(0, min(point.x - contentOffset.x, bounds.width - 1))
+            let y = max(0, min(point.y - contentOffset.y, bounds.height - 1))
+            let col = min(t.cols - 1, Int(x / cell.width)), row = min(t.rows - 1, Int(y / cell.height))
+            let scale = window?.contentScaleFactor ?? 1
+            let flags = t.encodeButton(button: n > 0 ? 4 : 5, release: false, shift: false, meta: false, control: false)
+            for _ in 0..<abs(n) {
+                t.sendEvent(buttonFlags: flags, x: col, y: row, pixelX: Int(x * scale), pixelY: Int(y * scale))
+            }
+        } else {
+            let key = n > 0 ? (t.applicationCursor ? EscapeSequences.moveUpApp : EscapeSequences.moveUpNormal)
+                : (t.applicationCursor ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal)
+            let keys = Array(Array(repeating: key, count: abs(n)).joined())
+            send(data: keys[...])
+        }
+    }
+
+    /// 一格多大（点）：SwiftTerm 只给出按窗口的缩放取整过的像素
+    private func cellSize() -> CGSize? {
+        guard let px = cellSizeInPixels(source: getTerminal()), px.width > 0, px.height > 0 else { return nil }
+        let scale = window?.contentScaleFactor ?? 1
+        return CGSize(width: CGFloat(px.width) / scale, height: CGFloat(px.height) / scale)
+    }
+
+    /// 松手时手指还在动：照惯性接着滑，越来越慢；慢下来、手指按下、会话关了鼠标上报、视图不在了就停
+    private func glideFrom(speed: CGFloat, at point: CGPoint) {
+        stopGlide()
+        guard abs(speed) > 150, scrollTarget != .native else { return }
+        glideSpeed = speed
+        glideAt = point
+        glideLast = CACurrentMediaTime()
+        let link = CADisplayLink(target: self, selector: #selector(glideStep(_:)))
+        link.add(to: .main, forMode: .common)
+        glide = link
+    }
+
+    @objc private func glideStep(_ link: CADisplayLink) {
+        let now = link.timestamp
+        let dt = CGFloat(min(max(now - glideLast, 0), 0.1))
+        glideLast = now
+        scroll(by: glideSpeed * dt, at: glideAt)
+        glideSpeed *= pow(Self.deceleration, dt * 1000)
+        if abs(glideSpeed) < 40 { stopGlide() }
+    }
+
+    private func stopGlide() {
+        glide?.invalidate()   // CADisplayLink 留着 self：停的时候一定放掉
+        glide = nil
+        glideSpeed = 0
+    }
+}
+
+#if DEBUG
+extension SizedTerminalView {
+    /// TestDriver 用：会话开着鼠标上报时，当成手指在当中往下拖了 rows 行（发 rows 格往上的滚轮）；没开是 false
+    func testDrag(rows: Int) -> Bool {
+        guard scrollTarget == .wheel, let cell = cellSize() else { return false }
+        rest = 0
+        scroll(by: (CGFloat(rows) + 0.5) * cell.height, at: CGPoint(x: bounds.midX, y: bounds.midY))
+        rest = 0
+        return true
+    }
+}
+#endif
+
+/// 自己的拖动手势什么时候接手：会话要滚轮、方向键的时候，并且是上下拖（左右拖的不管）
+private final class WheelGate: NSObject, UIGestureRecognizerDelegate {
+    weak var view: SizedTerminalView?
+
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard let view, let pan = g as? UIPanGestureRecognizer, view.scrollTarget != .native else { return false }
+        let v = pan.velocity(in: view)
+        return abs(v.y) > abs(v.x)
     }
 }
 

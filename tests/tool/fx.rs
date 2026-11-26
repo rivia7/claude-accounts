@@ -11,6 +11,11 @@
 //!                                三层都没有别的键、别的项；command 照 shlex 拆开，第一段（cca 的路径）不看）。是：打出去掉
 //!                                “ --settings {…}” 的那一行；不是、或者这一行根本没有 --settings：打出 BAD。退出码都是 0。
 //!                                什么都不写。（10c 的 hookless）
+//! notifyless ARGS行              同一行里 --settings 的 hooks 最后是不是正好接着 cca 自己带的「做完了 / 在等你」那三个钩子（远程会话
+//!                                开着时："Stop": […], "PermissionRequest": […], "Notification": [{"matcher": "permission_prompt|…", "hooks": […]}]，
+//!                                每一项都是 {"type": "command", "command": "… _remote-hook", "timeout": 10}；cca 的路径不看）。是：打出
+//!                                拿掉它们的那一行——hooks 里前面别的（记下会话的 SessionStart）照辅助程序的写法（json.dumps 加
+//!                                ensure_ascii=False）写回去，什么都不剩了连 “ --settings {…}” 一起去掉；不是：打出 BAD。退出码都是 0。（3e）
 //! claude-usage 文件 5小时% 本周% 订阅 额外的窗口
 //!                                写假 claude 给一个账号的 get_usage 回应（10d 的 canned）：
 //!                                {"subscription_type": 订阅, "rate_limits_available": true, "rate_limits": {"five_hour": {"utilization":
@@ -64,6 +69,7 @@ pub type Sub = fn(&[String], &mut String) -> R<i32>;
 const SUBS: &[(&str, Sub)] = &[
     ("sha1", sha1),
     ("hookless", hookless),
+    ("notifyless", notifyless),
     ("claude-usage", claude_usage),
     ("text-prepend", text_prepend),
     ("costlog", costlog),
@@ -479,6 +485,94 @@ fn hookless(a: &[String], out: &mut String) -> R<i32> {
     Ok(0)
 }
 
+// ---- notifyless ----
+
+/// 一段 JSON 对象（从 s 的开头，s 以 { 开头）有多长：照括号配对，字符串里的不算
+fn object_len(s: &str) -> Option<usize> {
+    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    for (i, c) in s.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            '{' if !quoted => depth += 1,
+            '}' if !quoted => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// cca 自己带的那三个钩子（cli/src/cmd/remote/hook.rs 的 `hooks`）：接在 hooks 的最后，先后、键、值都要正好是这样。是的话交回拿掉
+/// 它们以后的 settings（hooks 空了连它也拿掉）
+fn without_notify(settings: &Value) -> Option<Obj> {
+    let one = |groups: &Value, matcher: Option<&str>| -> bool {
+        let Some([g]) = groups.as_list() else { return false };
+        let Some(o) = g.as_obj() else { return false };
+        let want: Vec<&str> = if matcher.is_some() { vec!["matcher", "hooks"] } else { vec!["hooks"] };
+        if o.keys().collect::<Vec<_>>() != want || matcher.is_some_and(|m| g["matcher"] != Value::from(m)) {
+            return false;
+        }
+        let Some([h]) = g["hooks"].as_list() else { return false };
+        let Some(o) = h.as_obj() else { return false };
+        o.keys().collect::<Vec<_>>() == ["type", "command", "timeout"]
+            && h["type"] == Value::from("command")
+            && h["timeout"] == Value::from(10)
+            && h["command"].as_str().is_some_and(|c| c.ends_with(" _remote-hook"))
+    };
+    const NOTIFY: [&str; 3] = ["Stop", "PermissionRequest", "Notification"];
+    let top = settings.as_obj()?;
+    let hooks = top.get("hooks")?.as_obj()?;
+    let keys: Vec<&str> = hooks.keys().collect();
+    let good = keys.len() >= NOTIFY.len()
+        && keys[keys.len() - NOTIFY.len()..] == NOTIFY
+        && one(&settings["hooks"]["Stop"], None)
+        && one(&settings["hooks"]["PermissionRequest"], None)
+        && one(
+            &settings["hooks"]["Notification"],
+            Some("permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt"),
+        );
+    if !good {
+        return None;
+    }
+    let (mut rest, mut left) = (top.clone(), hooks.clone());
+    for k in NOTIFY {
+        left.remove(k);
+    }
+    if left.is_empty() {
+        rest.remove("hooks");
+    } else {
+        rest.insert("hooks", Value::Obj(left));
+    }
+    Some(rest)
+}
+
+fn notifyless(a: &[String], out: &mut String) -> R<i32> {
+    let line = arg(a, 0)?.trim_end_matches('\n');
+    let shown = line
+        .find(" --settings {")
+        .and_then(|at| {
+            let start = at + " --settings ".len();
+            let n = object_len(&line[start..])?;
+            let rest = without_notify(&json::parse(&line[start..start + n]).ok()?)?;
+            let (head, tail) = (&line[..at], &line[start + n..]);
+            Some(if rest.is_empty() {
+                format!("{head}{tail}")
+            } else {
+                format!("{head} --settings {}{tail}", json::dumps(&Value::Obj(rest), &Style::default().unicode()))
+            })
+        })
+        .unwrap_or_else(|| "BAD".to_string());
+    out.push_str(&shown);
+    out.push('\n');
+    Ok(0)
+}
+
 // ---- claude-usage ----
 
 fn claude_usage(a: &[String], _out: &mut String) -> R<i32> {
@@ -848,6 +942,39 @@ mod tests {
             let got: Result<Vec<&str>, &str> = got.as_ref().map(|v| v.iter().map(String::as_str).collect()).map_err(|e| *e);
             assert_eq!(got, want.map(<[&str]>::to_vec), "{text:?}");
         }
+    }
+
+    #[test]
+    fn notifyless_takes_out_only_the_notify_hooks() {
+        let h = r#"{"type": "command", "command": "'/p a/cca' _remote-hook", "timeout": 10}"#;
+        let m = "permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt";
+        let good = format!(
+            r#"{{"hooks": {{"Stop": [{{"hooks": [{h}]}}], "PermissionRequest": [{{"hooks": [{h}]}}], "Notification": [{{"matcher": "{m}", "hooks": [{h}]}}]}}}}"#
+        );
+        let run = |line: &str| {
+            let mut out = String::new();
+            assert_eq!(notifyless(&[line.to_string()], &mut out).ok(), Some(0));
+            out
+        };
+        assert_eq!(run(&format!("ARGS: --add-dir=/a --settings {good} --version")), "ARGS: --add-dir=/a --version\n");
+        assert_eq!(run(&format!("ARGS: --settings {good}")), "ARGS:\n");
+        assert_eq!(run("ARGS: --add-dir=/a --version"), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {}", good.replace("_remote-hook", "_session-start x"))), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {}", good.replace("\"Stop\"", "\"SubagentStop\""))), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {}", good.replace(m, "permission_prompt"))), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {}", good.replace("10}", "11}"))), "BAD\n");
+        // 前面还有记下会话的那一个（折合金额开着）：只拿掉那三个，剩下的照辅助程序的写法写回去
+        let start =
+            r#""SessionStart": [{"hooks": [{"type": "command", "command": "/p/cca _session-start 工作-x", "timeout": 10}]}]"#;
+        let both = good.replacen(r#"{"hooks": {"#, &format!(r#"{{"hooks": {{{start}, "#), 1);
+        assert_eq!(
+            run(&format!("ARGS: --add-dir=/a --settings {both} -p x")),
+            format!("ARGS: --add-dir=/a --settings {{\"hooks\": {{{start}}}}} -p x\n")
+        );
+        // 那三个不在最后（中间夹着别的）、只有 SessionStart：不是
+        let mixed = good.replacen(r#""Notification""#, &format!(r#"{start}, "Notification""#), 1);
+        assert_eq!(run(&format!("ARGS: --settings {mixed}")), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {{\"hooks\": {{{start}}}}}")), "BAD\n");
     }
 
     #[test]
