@@ -7,8 +7,8 @@
 //!   配对的密钥），然后像这台机器上的接入方一样连宿主的 socket，两头对转。一个接入方一个进程：握手是阻塞着做的，
 //!   一个慢的、捣乱的拖不住别人；
 //! - 两个方向的帧都一个个看过再转（`bridge`）。对方能做什么照配对表（`peers.json`）里写的：只让看的，HELLO 上加
-//!   “只看”和“不算进窗口大小”，按键、改窗口大小的都不转；不让接入的不告诉它有这个会话。宿主发给对方的只转输出和
-//!   “会话结束了”：它的状态里有账号的邮箱、完整的路径、进程号，不给。配对表变了（`cca remote allow`、取消配对）
+//!   “只看”和“不算进窗口大小”，按键、改窗口大小的都不转；不让接入的不告诉它有这个会话。宿主发给对方的只转输出、
+//!   “会话结束了”、通知和会话的大小（`SIZE`：只有说过能缩放的才收得到）：它的状态里有账号的邮箱、完整的路径、进程号，不给。配对表变了（`cca remote allow`、取消配对）
 //!   几秒钟内照新的来：不该再接着的子进程结束掉；
 //! - 会话里推的通知（宿主写进标准输入的 `NOTIFY` 帧）：给每个允许接入的手机（配对表里 `web` 的）封一份、一个配对一帧 PUSH，
 //!   服务器交给推送服务（手机锁着屏、App 没开着也收得到；只有手机解得开）。和服务器断着时攒几条，连上了再推；
@@ -233,7 +233,7 @@ fn bridge(srv: &Server, ctl: &Ctl, token: &str, a: &Allowed, at: &Session, paren
                 }
             }
         }
-        // 宿主发来的：只转输出、“会话结束了”和通知（会话里的钩子推的，宿主清理过）
+        // 宿主发来的：只转输出、“会话结束了”、通知（会话里的钩子推的，宿主清理过）和会话的大小（给能缩放的接入方）
         if fds[1].revents & (libc::POLLIN | BAD) != 0 {
             match conn.recv() {
                 Ok(Some(data)) => from_host.push(&data),
@@ -241,7 +241,9 @@ fn bridge(srv: &Server, ctl: &Ctl, token: &str, a: &Allowed, at: &Session, paren
             }
             loop {
                 match from_host.next() {
-                    Ok(Some((kind @ (local::OUTPUT | local::EXIT | local::NOTIFY), p))) => tun.send(&local::frame(kind, &p)),
+                    Ok(Some((kind @ (local::OUTPUT | local::EXIT | local::NOTIFY | local::SIZE), p))) => {
+                        tun.send(&local::frame(kind, &p))
+                    }
                     Ok(Some(_)) => {}
                     Ok(None) => break,
                     Err(()) => return host_gone(&mut tun),

@@ -497,11 +497,22 @@ fn pair_list_attach_type(t: &mut Ctx) {
     assert_eq!(relay::cols(&r, &["pid", "tool", "online", "view"]), list![&pid, "claude", true, false], "{r}");
     assert!(!r["machine"].str().is_empty(), "{r}");
     let sid = r["sid"].str().to_string();
-    let mut p = g.attach(&pid, &sid, &[]);
+    let mark = h.mark();
+    let mut p = g.attach(&pid, &sid, &["--size", "40x20"]);
     p.wait_open();
+    // App 说自己能缩放：接上、看着不改会话的大小（只有让客户端重画的那一下），宿主告诉它会话多大；它打了字才照它的窗口排
+    wait_for("手机知道会话多大", secs(20), || has(&p.err(), "size 80 24"));
+    h.send(b"say sync\r");
+    h.expect_since("<sync>", mark);
+    let re = regex::bytes::Regex::new(r"(?-u)<size (\d+ \d+)>").expect("正则");
+    let sizes: Vec<String> = re.captures_iter(&h.out()[mark..]).map(|c| String::from_utf8_lossy(&c[1]).into_owned()).collect();
+    assert!(sizes.iter().all(|s| s == "23 80" || s == "24 80"), "{sizes:?}");
+    let mark = h.mark();
     p.type_in(b"say hello-from-the-phone\r");
     h.expect("<hello-from-the-phone>"); // 会话程序收到了（宿主那边的终端里看得到它的回答）
+    h.expect_since("<size 20 40>", mark);
     wait_for("手机收到会话的输出", secs(20), || has(&p.out(), "<hello-from-the-phone>"));
+    wait_for("手机知道会话照它排了", secs(20), || has(&p.err(), "size 40 20"));
     // 会话里的钩子推一条通知（cca remote notify）：手机收到 CcaRemoteKit 解好的
     h.send(format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复\n", relay::helper(&a).display()));
     // 新版的宿主给每一条一个编号（经推送也来了一份时照它只弹一次）
@@ -565,7 +576,8 @@ fn session_ends(t: &mut Ctx) {
 
 /// 推送：手机（ccaguest，和 App、通知扩展同一份 CcaRemoteKit）在服务器上登记推送令牌；box、mini 两台都和它配了对，mini 上的会话
 /// 说一条通知，经服务器、推送网关（假的，kit::apnsfake）到推送服务（假的）；推送服务收到的那一份，手机拿每个配对的通知密钥试着解：
-/// 解开的是 mini 的、说话的是那个会话。取消和 mini 的配对以后解不开了（通知扩展照推送里写的那句「有新的通知」说）
+/// 解开的是 mini 的、说话的是那个会话。登记里说了只推哪几个会话（「关掉的会话也推送」关着）：别的会话的不推，说了的照推。
+/// 取消和 mini 的配对以后解不开了（通知扩展照推送里写的那句「有新的通知」说）
 fn pushes_reach_the_phone(t: &mut Ctx) {
     let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
     let push = vec!["--push".to_string(), gw.url(), "--push-pin".to_string(), gw.pin.clone()];
@@ -573,7 +585,8 @@ fn pushes_reach_the_phone(t: &mut Ctx) {
     let (a, b) = (fx.device("box"), fx.device("mini"));
     fx.machines(&[&a, &b]);
     let g = Guest::new(&fx, "我的 iPhone");
-    let token = Gateway::token("cc");
+    // 推送服务都回 200（最后两个字符定它回什么：kit::apnsfake 的 by_tail）
+    let token = Gateway::token("aa");
     // 还没配对：没有服务器可登记
     assert_eq!(g.ok(&["push-set", &token, "sandbox"]), "");
     let pid_of = |out: &str| out.split_whitespace().nth(1).expect("peer 后面是配对编号").to_string();
@@ -605,6 +618,36 @@ fn pushes_reach_the_phone(t: &mut Ctx) {
     assert_eq!(n["id"].str(), seen.header("apns-collapse-id"), "推送服务照通知的编号合并");
     assert_eq!(n["sid"], rows[0]["sid"], "点开通知接入的就是说话的这个会话");
     assert!(!String::from_utf8_lossy(&seen.body).contains("第一行回复"), "推送服务看得到通知里的字");
+    // 只推 App 里开着的会话（push_set 带 sids）：另一台手机（g2）说开着的是别的会话，这一条不推给它；g（没带 sids）照推。g 那一份
+    // 到了时推不推给 g2 已经定了（宿主一下子交给服务器的，服务器一条线程照先后转），再等一会儿还是只多了 g 那一份
+    let sid_b = rows[0]["sid"].str().to_string();
+    let g2 = Guest::new(&fx, "另一台 iPhone");
+    let pid_b2 = pid_of(&pair(&b, &g2).0);
+    // 转接进程每 3 秒看一眼配对表：等 g2 看得到这个会话（它也就在推给谁的里面了）。隔得开一点问：服务器给每台设备限了流
+    let end = Instant::now() + secs(30);
+    while !g2.rows().iter().any(|r| r.get("sid").is_some() && r["pid"].str() == pid_b2) {
+        assert!(Instant::now() < end, "另一台手机一直看不到 mini 上的会话");
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let token2 = Gateway::token("aa");
+    let only = |sids: &str| g2.ok(&["push-set", &token2, "sandbox", "--only", sids]).trim().to_string();
+    let elsewhere = "0".repeat(32);
+    assert_eq!(only(&elsewhere), format!("push {} ok only", fx.url()));
+    let guests = remote(&fx.d)["guests"].clone();
+    let sids: Vec<Option<&Value>> = guests.obj().values().map(|g| g.get("push").and_then(|p| p.get("sids"))).collect();
+    assert!(sids.contains(&Some(&list![&elsewhere])), "{guests}");
+    h.send(format!("run {} remote-notify --title 第二条 --subtitle alice 只推开着的\n", relay::helper(&b).display()));
+    assert_eq!(gw.sandbox.wait_seen(2, secs(30))[1].token(), token);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(gw.sandbox.seen().len(), 2, "开着的不是这个会话：不该推给 g2");
+    // 开着的就是这个会话：推
+    assert_eq!(only(&sid_b), format!("push {} ok only", fx.url()));
+    h.send(format!("run {} remote-notify --title 第三条 --subtitle alice 开着的会话\n", relay::helper(&b).display()));
+    let mut tokens: Vec<String> = gw.sandbox.wait_seen(4, secs(30))[2..].iter().map(|s| s.token().to_string()).collect();
+    tokens.sort();
+    let mut both = vec![token.clone(), token2.clone()];
+    both.sort();
+    assert_eq!(tokens, both);
     // 取消和 mini 的配对：它推来的这一份手机就解不开了（box 的那把通知密钥解不开 mini 封的）
     assert_eq!(g.ok(&["unpair", &pid_b]).trim(), "unpaired");
     let r = g.run(&["push-open", &file]);
@@ -612,6 +655,7 @@ fn pushes_reach_the_phone(t: &mut Ctx) {
     assert!(g.rows().iter().any(|r| r["pid"].str() == pid_a), "box 的配对还在");
     // 拿掉登记（通知被关掉了）：服务器上没有了
     assert_eq!(g.ok(&["push-set", "", "sandbox"]).trim(), format!("push {} ok", fx.url()));
+    assert_eq!(g2.ok(&["push-set", "", "sandbox"]).trim(), format!("push {} ok", fx.url()));
     let guests = remote(&fx.d)["guests"].clone();
     assert!(guests.obj().values().all(|g| g.get("push").is_none()), "{guests}");
     h.send("exit 0\n");
@@ -671,7 +715,17 @@ fn in_the_simulator(t: &mut Ctx) {
     let (mut p, link) = show(&a);
     let mut cmd = Cmd::new("xcrun");
     cmd.args(["simctl", "launch", "--console-pty", "--terminate-running-process", &udid, BUNDLE]);
-    cmd.args(["-test-pair", &link, "-test-attach", "-test-type", "say from-the-iphone", "-test-note", "-test-wheel"]);
+    cmd.args([
+        "-test-pair",
+        &link,
+        "-test-attach",
+        "-test-type",
+        "say from-the-iphone",
+        "-test-note",
+        "-test-wheel",
+        "-test-sizes",
+        "-test-push-only",
+    ]);
     cmd.args(["-test-push-token", &token]);
     cmd.env_inherit().stdin(Stdio::Null).stdout(Stdio::Piped).stderr(Stdio::Null);
     let mut child = cmd.spawn().unwrap_or_else(|e| panic!("{e}"));
@@ -708,26 +762,46 @@ fn in_the_simulator(t: &mut Ctx) {
     assert_eq!(rows, [list!["我的 iPhone", true]]);
     // 通知扩展那样读（只在共用的钥匙串分组里找）：正好这个配对的一把通知密钥
     assert_eq!(said("keys "), format!("keys 1 {pid}"));
-    // 在服务器上登记了推送：测试给的令牌，模拟器用的是开发环境的推送服务
+    // 在服务器上登记了推送：测试给的令牌，模拟器用的是开发环境的推送服务；「关掉的会话也推送」关着（-test-push-only）：只推开着的
     let reg = said("push ");
-    assert!(reg.ends_with(" ok"), "{reg}");
+    assert!(reg.ends_with(" ok only"), "{reg}");
     let guests = remote(&fx.d)["guests"].clone();
     let regs: Vec<Value> = guests.obj().values().map(|g| relay::cols(&g["push"], &["token", "env"])).collect();
     assert_eq!(regs, [list![&token, "sandbox"]], "{guests}");
     let sid = said("session ").trim_start_matches("session ").to_string();
+    let mark = h.mark();
     said("state open");
+    // 开了这个会话：登记跟着改成只推它（推送那一段要它）
+    wait_for("登记里只推开着的会话", secs(30), || {
+        remote(&fx.d)["guests"].obj().values().any(|g| g.get("push").and_then(|p| p.get("sids")) == Some(&list![&sid]))
+    });
+    // App 说自己能缩放：接上不改会话的大小，终端照 box 上的终端排（比手机的屏幕宽：缩小了画）
+    said("shown 80 24");
     said("typed");
     h.expect("<from-the-iphone>"); // box 上的会话收到了手机上敲的
+
+    // 手机上打了字：会话照手机排（列数是手机的；行数是两边都画得下的），App 的终端也照它排
+    let re = regex::Regex::new(r"<size (\d+) (\d+)>").expect("正则");
+    let end = h.expect_since(r"<size \d+ (\d|[0-7]\d)>", mark);
+    let got = String::from_utf8_lossy(&h.out()[mark..end]).into_owned();
+    let last = re.captures_iter(&got).last().expect("会话改了大小");
+    said(&format!("shown {} {}", &last[2], &last[1]));
+    let mark = h.mark();
 
     // 会话里的钩子推一条通知：App 弹出来（调试版交给 TestDriver 说出来，不真的弹）；来自哪台机器是 App 自己写在副标题开头的
     h.send(format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复\n", relay::helper(&a).display()));
     let note = said("note ");
     assert!(note.starts_with("note 做完了|来自「") && note.ends_with("」 · alice|第一行回复"), "{note}");
     // 会话开了鼠标上报（像 Claude Code 的全屏界面）：手指往下拖三行是三格往上的滚轮（SGR 64），box 上的终端把它回显出来
+    // 这边打了字（box 上的终端）：会话又照 box 上的终端排，App 缩小了画
     h.send(b"mouse\n");
+    h.expect_since("<size 24 80>", mark);
+    said("shown 80 24");
     said("wheel");
-    h.expect(r"(\^\[|\x1b)\[<64;\d+;\d+M(\^\[|\x1b)\[<64;\d+;\d+M(\^\[|\x1b)\[<64;\d+;\d+M");
+    let wheel_at = h.expect_since(r"(\^\[|\x1b)\[<64;\d+;\d+M(\^\[|\x1b)\[<64;\d+;\d+M(\^\[|\x1b)\[<64;\d+;\d+M", mark);
     std::thread::sleep(Duration::from_millis(1500));
+    // 滚轮不算打字：会话的大小没跟着手机变
+    assert!(!has(&h.out()[wheel_at..], "<size"), "{:?}", String::from_utf8_lossy(&h.out()[wheel_at..]));
     let shots = ios.join("shots");
     let _ = std::fs::create_dir_all(&shots);
     simctl(&["io", &udid, "screenshot", &text(&shots.join("e2e-terminal.png"))]);

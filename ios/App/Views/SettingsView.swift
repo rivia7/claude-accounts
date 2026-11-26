@@ -59,6 +59,9 @@ struct SettingsView: View {
                 }
                 Section {
                     LabeledContent("推送", value: pushState)
+                    if !model.isDemo {
+                        Toggle("关掉的会话也推送", isOn: Binding(get: { push.closedToo }, set: { push.closedToo = $0 }))
+                    }
                     if push.allowed == false, !model.isDemo, let u = URL(string: UIApplication.openNotificationSettingsURLString) {
                         Button("在系统设置里打开通知") { UIApplication.shared.open(u) }
                     }
@@ -118,8 +121,15 @@ extension SettingsView {
         var lines = ["锁着屏、App 没开着时也收得到会话里的通知（做完了、在等你）：经那台电脑所在的服务器和 cca 的推送服务转过来，"
             + "内容封着，只有这台手机解得开。"]
         if model.isDemo { return lines[0] }
+        lines.append(push.closedToo
+            ? "关掉的会话也推送：配对的电脑上的会话都推，在 App 里关掉了的也推。关掉这一项就只推 App 里开着的那个会话。"
+            : "只推 App 里开着的那个会话（锁着屏、切到别的 App 也算开着），关掉以后就不推了。")
         if push.allowed == false { lines.append("通知关着：在系统的「设置」→「通知」→「cca」里打开。") }
         if let f = push.failure, push.token == nil { lines.append("向 Apple 要推送的令牌没成：\(f)") }
+        if !push.closedToo, !push.unfiltered.isEmpty {
+            lines.append("「\(push.unfiltered.joined(separator: "」「"))」这台服务器还不认这个开关（要管理员更新服务器）：经它配对的电脑，"
+                + "关掉的会话照样推。")
+        }
         if !push.unsupported.isEmpty {
             lines.append("「\(push.unsupported.joined(separator: "」「"))」这台服务器还没接上推送（要管理员更新服务器）：经它配对的电脑，"
                 + "只在 App 开着、接着会话时收得到通知。")

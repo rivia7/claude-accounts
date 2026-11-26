@@ -154,13 +154,16 @@ public final class RemoteClient: @unchecked Sendable {
     }
 
     /// 在这台服务器上登记推送（push_set，只有手机能发）：推送服务给这台手机上这个 App 的令牌（小写的十六进制）和推送服务的环境
-    /// （production / sandbox）；令牌空的是拿掉。成了是 nil，没成是原因（no_push：这台服务器没接推送网关；denied：服务器不认这台手机了）
-    public func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure? {
+    /// （production / sandbox）；令牌空的是拿掉。sids：只推这几个会话（会话编号，最多 8 个；空的是一个都不推：「关掉的会话也推送」
+    /// 关着时是 App 里开着的那个），nil 是都推。没成的原因：no_push（这台服务器没接推送网关）、denied（服务器不认这台手机了）……
+    public func pushSet(on server: ServerRef, token: String, env: String, sids: [String]? = nil) async -> PushSetResult {
+        var body: [String: Any] = ["token": token, "env": env]
+        if let sids { body["sids"] = sids }
         do {
-            _ = try await requester(server).post("push_set", ["token": token, "env": env])
-            return nil
+            let j = try await requester(server).post("push_set", body)
+            return .ok(filtered: sids != nil && j["sids"] as? Bool == true)
         } catch {
-            return error as? RemoteFailure ?? RemoteFailure("error")
+            return .failed(error as? RemoteFailure ?? RemoteFailure("error"))
         }
     }
 
@@ -308,4 +311,11 @@ public final class RemoteClient: @unchecked Sendable {
         link.start()
         return link
     }
+}
+
+/// push_set 的结果（`RemoteClient.pushSet`）
+public enum PushSetResult: Equatable, Sendable {
+    /// 登记上了。filtered：服务器认了 sids、只推那几个会话；没带 sids 时总是 false，旧的服务器不认 sids（照旧都推）时也是 false
+    case ok(filtered: Bool)
+    case failed(RemoteFailure)
 }

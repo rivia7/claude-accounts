@@ -2,7 +2,7 @@
 //!
 //! 各个 op 回什么（状态码、error 的那个词）照 Python 一个不差；先查什么后查什么也照它（同一个请求两处都不对时回的是先查的那一处）。
 
-use super::{Edge, Guest, PushReg, Remote, Role, Shared, Slot, Val};
+use super::{sids_of, Edge, Guest, PushReg, Remote, Role, Shared, Slot, Val};
 use crate::py::obj::{Dict, V};
 use crate::py::time::monotonic;
 use crate::py::{num, R};
@@ -154,7 +154,9 @@ impl Remote {
     /// push_set：手机登记它的推送令牌（换掉、拿掉；push.rs）。token：推送服务给这台手机上这个 App 的（小写的十六进制，64～200 个
     /// 字符），空的是不要推送了；env：production（App Store、TestFlight 装的）或者 sandbox（Xcode 装的）。只有配了对的访客能登记
     /// （名单里的设备、正在配对的是 403 denied）；这台服务器没开推送是 404 no_push。一个令牌只记在一个访客上（App 删了重装、
-    /// 换了身份：旧的那一项不再推）。和记着的一样时不存
+    /// 换了身份：旧的那一项不再推）。和记着的一样时不存。sids（可以不带）：只推这几个会话（`PUSH_SIDS` 个以内的会话编号；手机上
+    /// 「关掉的会话也推送」关着时是 App 里正开着的那个），不带、null 是都推；带了的回的里面多一项 `"sids": true`——旧的服务器不认
+    /// 它、照旧都推，手机看这一项知道
     fn push_set(&mut self, fp: &str, guest: bool, j: &Dict, now: f64) -> R<Reply> {
         if !guest || !self.guests.contains(fp) {
             return Ok(fail(403, "denied"));
@@ -167,10 +169,18 @@ impl Remote {
             return Ok(fail(400, "bad"));
         };
         let env = j.str("env").unwrap_or_default();
+        let sids = match j.get("sids") {
+            None | Some(V::None) => None,
+            Some(v) => match sids_of(&v) {
+                Some(s) => Some(s),
+                None => return Ok(fail(400, "bad")),
+            },
+        };
+        let told = sids.is_some();
         let reg = match token.is_empty() {
             true => None,
             false if wire::push_token_re().matches(&token) && matches!(&*env, "production" | "sandbox") => {
-                Some(PushReg { token: token.to_string(), env: env.to_string(), at: Val::Num(Num::Float(now)) })
+                Some(PushReg { token: token.to_string(), env: env.to_string(), sids, at: Val::Num(Num::Float(now)) })
             }
             false => return Ok(fail(400, "bad")),
         };
@@ -184,7 +194,7 @@ impl Remote {
             });
         }
         if let Some(g) = self.guests.get_mut(fp) {
-            let key = |r: &Option<PushReg>| r.as_ref().map(|p| (p.token.clone(), p.env.clone()));
+            let key = |r: &Option<PushReg>| r.as_ref().map(|p| (p.token.clone(), p.env.clone(), p.sids.clone()));
             if key(&g.push) != key(&reg) {
                 g.push = reg;
                 changed = true;
@@ -193,7 +203,10 @@ impl Remote {
         if changed {
             self.save()?;
         }
-        Ok(done())
+        Ok(match told {
+            true => (200, V::Dict(crate::dict! { "v" => API, "ok" => true, "sids" => true })),
+            false => done(),
+        })
     }
 
     /// pair_open（Py:1102-1112）：显示配对码的设备开一次配对

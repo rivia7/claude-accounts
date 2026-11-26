@@ -61,7 +61,10 @@ final class AppModel {
     /// 配对的那一页（nil 是没开）
     var pairing: PairPhase?
     /// 开着的终端（推到导航里的那一页）
-    var terminal: TerminalSession?
+    var terminal: TerminalSession? {
+        // 开着的会话变了：「关掉的会话也推送」关着时，服务器上登记的只推哪个会话跟着变
+        didSet { if oldValue !== terminal { Pusher.shared.openChanged() } }
+    }
     var showSettings = false
 
     var appearance: AppearanceMode {
@@ -294,6 +297,10 @@ final class TerminalSession: Identifiable, Hashable {
     }
     @ObservationIgnored private var pending = Bytes()
     @ObservationIgnored var surface: AnyObject?
+    /// 会话现在的大小（新的宿主说的）：nil 是没说，会话照这台手机的窗口排
+    @ObservationIgnored private(set) var hostSize: (cols: Int, rows: Int)?
+    /// 宿主说了会话的大小交给谁（TerminalSurface 接上以后设）
+    @ObservationIgnored var sizeSink: ((Int, Int) -> Void)?
 
     init(backend: Backend, peer: Peer, session: RemoteSession, readOnly: Bool) {
         self.backend = backend
@@ -319,11 +326,17 @@ final class TerminalSession: Identifiable, Hashable {
         let l = backend.link(peer: peer, session: session, cols: cols, rows: rows, readOnly: readOnly)
         // 换掉了的那一条（重新接入、关掉以后）再来的事件不算数
         l.onOutput = { [weak self, weak l] b in if let self, self.link === l { self.output(b) } }
+        l.onSize = { [weak self, weak l] c, r in if let self, self.link === l { self.hostSized(c, r) } }
         l.onState = { [weak self, weak l] s in if let self, self.link === l { self.state = s } }
         l.onExit = { [weak self, weak l] c in if let self, self.link === l { self.exitCode = c } }
         l.onNote = { [weak self, weak l] n in if let self, self.link === l { self.noted(n) } }
         link = l
         l.start()
+    }
+
+    private func hostSized(_ c: Int, _ r: Int) {
+        hostSize = (c, r)
+        sizeSink?(c, r)
     }
 
     private func output(_ b: Bytes) {

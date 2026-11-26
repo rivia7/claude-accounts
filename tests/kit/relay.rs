@@ -68,6 +68,8 @@ pub const DETACH: u8 = 0x04;
 pub const WELCOME: u8 = 0x11;
 pub const OUTPUT: u8 = 0x12;
 pub const EXIT: u8 = 0x13;
+/// 会话现在的大小（列数、行数，各两个字节）：只给 HELLO 的标志带了 4（能缩放）的接入方
+pub const SIZE: u8 = 0x17;
 
 /// [`dial`] 的连接等多久算超时（原来 create_connection 的 timeout=20）
 pub const DIAL_WAIT: Duration = Duration::from_secs(20);
@@ -1054,7 +1056,7 @@ impl<'a> SpecPeer<'a> {
     }
 }
 
-/// 照文档自己说话的接入方：在握过手的通道上收发帧。out 是收到的输出（会话结束记成 `<EXIT 码>`），kinds 是收到过的帧的类型，
+/// 照文档自己说话的接入方：在握过手的通道上收发帧。out 是收到的输出（会话结束记成 `<EXIT 码>`，会话的大小记成 `<SIZE 列 行>`），kinds 是收到过的帧的类型，
 /// raw 是解出来的全部明文。连接和通道归它管（`r.s`、`r.ch` 照样拿得到）：它离开作用域连接就关了
 pub struct Reader {
     /// 连接
@@ -1123,6 +1125,9 @@ impl Reader {
                     // 退出码是内容的头 4 个字节（大端）；不够 4 个就是有的那些
                     let code = payload.iter().take(4).fold(0u32, |acc, b| acc << 8 | *b as u32);
                     self.out.extend_from_slice(format!("<EXIT {code}>").as_bytes());
+                } else if kind == SIZE && payload.len() >= 4 {
+                    let (c, r) = (u16::from_be_bytes([payload[0], payload[1]]), u16::from_be_bytes([payload[2], payload[3]]));
+                    self.out.extend_from_slice(format!("<SIZE {c} {r}>").as_bytes());
                 }
             }
         }

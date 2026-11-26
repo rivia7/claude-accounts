@@ -8,8 +8,10 @@ import Foundation
 /// - `-test-type <文字>`：接上以后敲进去（\r 结尾）
 /// - `-test-note`：会话推来的通知不真的弹（不要权限），说出来 → `note 标题|副标题|正文`
 /// - `-test-wheel`：（敲完以后）等会话开了鼠标上报，当成手指往下拖了三行 → `wheel`（会话那头收到三格往上的滚轮）
+/// - `-test-sizes`：终端照多大排了 → `shown 列 行`；报给会话的这台手机的窗口大小 → `natural 列 行`
+/// - `-test-push-only`：「关掉的会话也推送」关掉（只推 App 里开着的会话）
 /// - `-test-push-token <十六进制>`：不向 Apple 要推送令牌，用这个；当作允许发通知、不弹那一问。配好以后在服务器上登记 →
-///   `push 服务器 ok|原因`，通知扩展读得到的通知密钥 → `keys 几把 配对编号…`；最后等 App 的临时目录里出现 pushed.json（测试放进来的
+///   `push 服务器 ok|原因`（只推开着的会话时 ok 后面是 only：服务器认了，all：旧的服务器不认），通知扩展读得到的通知密钥 → `keys 几把 配对编号…`；最后等 App 的临时目录里出现 pushed.json（测试放进来的
 ///   推送服务收到的那一份），像通知扩展那样解开 → `pushed 标题|副标题|正文|会话编号`（解不开是 `pushed fail`）
 /// 正式版没有这些（`#if DEBUG`）
 @MainActor
@@ -26,9 +28,13 @@ enum TestDriver {
         guard value("-test-push-token") != nil else { return }
         Pusher.shared.testing = true
         Pusher.shared.spy = { say($0) }
+        Pusher.shared.closedToo = !args.contains("-test-push-only")
     }
 
     static func run(_ model: AppModel) async {
+        if args.contains("-test-sizes") {
+            TerminalSurface.sizeSpy = { say($0) }
+        }
         if args.contains("-test-note") {
             Notifier.spy = { say("note \($0)|\($1)|\($2)") }
         }

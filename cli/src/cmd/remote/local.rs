@@ -35,6 +35,8 @@ pub const EXIT: u8 = 0x13;
 pub const STATUS: u8 = 0x15;
 /// 一条通知（`Note` 的 JSON，宿主清理过、限过长度）：转接那头转给别的机器上的接入方，那边弹出来
 pub const NOTIFY: u8 = 0x16;
+/// 会话现在的大小（`size_bytes`）：只给说过 `FLAG_ZOOM` 的，接入时说一次（在回放前面），变了再说。转接那头照转
+pub const SIZE: u8 = 0x17;
 
 /// 这一版的帧格式
 pub const PROTO: u8 = 1;
@@ -43,6 +45,10 @@ pub const FLAG_READ_ONLY: u8 = 1;
 /// HELLO 的标志：不算进窗口大小。别的机器上只让看的接入方带着它（转接那头加的）：它的窗口多小都不该让会话跟着变，
 /// 比会话小的话它那边画不全，是它的事
 pub const FLAG_PASSIVE: u8 = 2;
+/// HELLO 的标志：画得了和自己的窗口不一样大的会话（缩小了画、拖着看：iOS 上的 cca App）。它的窗口不算进会话的大小，等它
+/// 打了字才照它的排（宿主的 `lead`）：手机接上、看着，电脑上的不跟着变窄。会话的大小宿主告诉它（`SIZE`）。旧的宿主不认
+/// 这一位，照旧算进去
+pub const FLAG_ZOOM: u8 = 4;
 /// 结束会话（`END`）：里面的程序收到 SIGHUP 以后这么久（秒）还没退出就强行结束
 pub const END_GRACE: f64 = 5.0;
 /// 一帧最多这么大（多了就是对面乱了，断开）
@@ -137,15 +143,18 @@ impl NoteBudget {
 
 pub fn hello(size: Size, read_only: bool) -> Vec<u8> {
     let mut p = vec![PROTO, if read_only { FLAG_READ_ONLY } else { 0 }];
-    p.extend_from_slice(&size.cols.to_be_bytes());
-    p.extend_from_slice(&size.rows.to_be_bytes());
+    p.extend_from_slice(&size_bytes(size));
     frame(HELLO, &p)
 }
 
 pub fn resize(size: Size) -> Vec<u8> {
-    let mut p = size.cols.to_be_bytes().to_vec();
-    p.extend_from_slice(&size.rows.to_be_bytes());
-    frame(RESIZE, &p)
+    frame(RESIZE, &size_bytes(size))
+}
+
+/// 帧里的大小：列数、行数，各两个字节（大端）。HELLO（从第 2 个字节起）、RESIZE、SIZE 里都是这样
+pub fn size_bytes(size: Size) -> [u8; 4] {
+    let (c, r) = (size.cols.to_be_bytes(), size.rows.to_be_bytes());
+    [c[0], c[1], r[0], r[1]]
 }
 
 /// HELLO、RESIZE 里的大小（从第 at 个字节起的 4 个字节）

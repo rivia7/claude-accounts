@@ -1248,3 +1248,68 @@ fn push_jobs() {
     assert_eq!(job(&sid, 0, &frame(&pid, id, BLOB)), None);
     assert!(!t.file().contains(r#""push""#), "{}", t.file());
 }
+
+/// push_set 带 sids（手机上「关掉的会话也推送」关着）：只推这几个会话，回的里面多一项 sids；记进 remote.json；空的是一个都不推；
+/// 样子不对的不要；再登记不带 sids 是又都推。remote.json 里的 sids 样子不对：当成一个都不推
+#[test]
+fn push_only_some_sessions() {
+    let t = Rig::new();
+    let (g, gpub) = guest(1);
+    let pid = hex(11);
+    let (sid, other) = (hex(50), hex(51));
+    {
+        let mut r = t.sh.lock();
+        r.test_guest(&g, &gpub, NOW);
+        r.test_edge(&pid, &fp(1), &g, NOW);
+        r.set_pusher(Pusher::for_test().0);
+    }
+    t.session(&sid, 1, &[&pid]);
+    t.session(&other, 1, &[&pid]);
+    let tok = "cd".repeat(32);
+    let set = |sids: Option<V>| {
+        let j = dict! { "token" => &tok, "env" => "sandbox" };
+        if let Some(s) = sids {
+            j.set("sids", s);
+        }
+        t.op_as("push_set", &g, j, Some(&gpub))
+    };
+    let list = |items: &[&str]| V::from(items.iter().map(|s| V::from(*s)).collect::<Vec<V>>());
+    let frame = format!(r#"{{"pid":"{pid}","id":"0123456789abcdef","note":{BLOB}}}"#);
+    let pushed = |s: &str| t.sh.lock().push_job(s, 0, frame.as_bytes()).is_some();
+    let told = r#"{"v":1,"ok":true,"sids":true}"#.to_string();
+    // 不带：都推，回的和以前一样
+    assert_eq!(set(None), (200, OK.to_string()));
+    assert_eq!((pushed(&sid), pushed(&other)), (true, true));
+    // 只推这一个
+    assert_eq!(set(Some(list(&[&sid]))), (200, told.clone()));
+    assert_eq!((pushed(&sid), pushed(&other)), (true, false));
+    assert!(t.file().contains(&format!(r#""sids":["{sid}"]"#)), "{}", t.file());
+    // 一个都没开着
+    assert_eq!(set(Some(list(&[]))), (200, told.clone()));
+    assert_eq!((pushed(&sid), pushed(&other)), (false, false));
+    // null 和不带一样
+    assert_eq!(set(Some(V::None)), (200, OK.to_string()));
+    assert_eq!((pushed(&sid), pushed(&other)), (true, true));
+    // 样子不对的：不要，记着的不变
+    assert_eq!(set(Some(list(&[&other]))), (200, told));
+    let nine = [sid.as_str(); PUSH_SIDS + 1];
+    for v in [V::from(5), list(&["nope"]), list(&[&"AB".repeat(16)]), V::from(vec![V::from(5)]), list(&nine)] {
+        let shown = json::dumps(&v, COMPACT);
+        assert_eq!(set(Some(v)), bad(400, "bad"), "{shown}");
+    }
+    assert_eq!((pushed(&sid), pushed(&other)), (false, true));
+    // 再登记不带 sids：又都推，remote.json 里也没有了
+    assert_eq!(set(None), (200, OK.to_string()));
+    assert_eq!((pushed(&sid), pushed(&other)), (true, true));
+    assert!(!t.file().contains("sids"), "{}", t.file());
+    // remote.json 里的：没有、null 是都推；样子不对的当成一个都不推（宁可少推）
+    let load = |extra: &str| {
+        let doc = json::loads(&format!(r#"{{"token":"{tok}","env":"sandbox","at":1.0{extra}}}"#)).unwrap();
+        PushReg::loaded(&doc.as_dict().unwrap()).map(|p| p.sids)
+    };
+    assert_eq!(load(""), Some(None));
+    assert_eq!(load(r#","sids":null"#), Some(None));
+    assert_eq!(load(&format!(r#","sids":["{sid}"]"#)), Some(Some(vec![sid.clone()])));
+    assert_eq!(load(r#","sids":["nope"]"#), Some(Some(vec![])));
+    assert_eq!(load(r#","sids":5"#), Some(Some(vec![])));
+}

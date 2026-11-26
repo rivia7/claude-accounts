@@ -4,7 +4,7 @@
 //! 退出码当成自己的退出码，所以 cca 后面的收尾什么都不用改。多出来的是：
 //! - 启动它的那个终端没了（关了窗口、SSH 断了）会话照样运行；
 //! - 别的接入方经 `~/.cca/remote/` 里的 socket 接进来看和操作（`cca remote attach`），后接入的先收到一段回放；
-//! - 几个接入方的窗口大小不一样时，按都画得下的大小算。
+//! - 几个接入方的窗口大小不一样时，按都画得下的大小算；画得了大会话的（iOS 上的 App：缩小了画）只在最后打字的是它时算进来。
 //!
 //! 终端的内容只在内存里（回放留最近的 256 KB），不写文件、不进日志；这个进程自己什么都不往终端上说。
 //!
@@ -17,7 +17,7 @@ use super::local::{self, Decoder, Meta, Note, NoteBudget, Status};
 use super::peers;
 use super::pty::{self, Raw, Size};
 use super::sig;
-use super::vt::{replay_bytes, Class, Modes, Part, Ring, Route, Scanner, Seg};
+use super::vt::{replay_bytes, typing, Class, Modes, Part, Ring, Route, Scanner, Seg};
 use crate::py::fs;
 use crate::py::rand::token_hex;
 use crate::py::time::{monotonic, time};
@@ -81,6 +81,8 @@ struct Viewer {
     read_only: bool,
     /// 不算进窗口大小（`FLAG_PASSIVE`）
     passive: bool,
+    /// 画得了和自己的窗口不一样大的会话（`FLAG_ZOOM`）：最后打字的是它时才算进窗口大小；会话的大小告诉它（`SIZE`）
+    zoom: bool,
     dead: bool,
     route: Route,
 }
@@ -140,6 +142,8 @@ struct Host {
     /// pty 现在的大小
     size: Size,
     primary: Who,
+    /// 最后打字的（鼠标上报、焦点进出不算：`vt::typing`）。能缩放的接入方只在是它时算进窗口大小
+    lead: Who,
     /// 为了让客户端重画把行数减了一：到这个时候改回来
     restore_at: Option<f64>,
     /// 客户端退出了：(退出码, 什么时候)
@@ -233,6 +237,7 @@ impl Host {
             ring_route: Route::default(),
             size,
             primary: Who::Local,
+            lead: Who::Local,
             restore_at: None,
             ended: None,
             kill_at: None,
@@ -325,10 +330,22 @@ impl Host {
         }
     }
 
-    /// 按现在的接入方重新定 pty 的大小（都画得下的）。true：变了（客户端会自己重画）
+    /// 按现在的接入方重新定 pty 的大小（`fit`），变了告诉能缩放的那几处。true：变了（客户端会自己重画）
     fn apply_size(&mut self) -> bool {
+        let changed = self.fit();
+        if changed {
+            self.tell_size();
+        }
+        changed
+    }
+
+    /// 定 pty 的大小。普通的终端（启动它的那个、`cca remote attach`、Mac App 里的终端）画不了比自己大的会话：都算进来，列、行
+    /// 各取最小。能缩放的（`FLAG_ZOOM`：iOS 上的 App）只在最后打字的是它时算——谁最后打字就照谁的排，手机接上、看着、滚着看，
+    /// 电脑上的都不跟着变窄。一个算得上的都没有（只剩手机，都还没打过字）就不动。true：变了
+    fn fit(&mut self) -> bool {
+        let lead = self.lead;
         let mut want: Option<Size> = self.local.tty.is_some().then_some(self.local.size);
-        for v in self.viewers.iter().filter(|v| !v.dead && !v.passive) {
+        for v in self.viewers.iter().filter(|v| !v.dead && !v.passive && (!v.zoom || lead == Who::Viewer(v.id))) {
             if let Some(s) = v.size {
                 want = Some(want.map_or(s, |w| w.min(s)));
             }
@@ -342,6 +359,22 @@ impl Host {
         self.restore_at = None;
         pty::set_size(self.master.as_raw_fd(), want);
         changed
+    }
+
+    /// 告诉能缩放的接入方会话现在的大小
+    fn tell_size(&mut self) {
+        let f = local::frame(local::SIZE, &local::size_bytes(self.size));
+        for v in self.viewers.iter_mut().filter(|v| v.zoom && v.size.is_some() && !v.dead) {
+            push(&mut v.out, &f);
+        }
+    }
+
+    /// 有人打了字：会话照它排（它是能缩放的接入方时才有变化）
+    fn typed(&mut self, who: Who) {
+        if self.lead != who {
+            self.lead = who;
+            self.apply_size();
+        }
     }
 
     /// 启动它的终端没了：会话照样运行
@@ -475,6 +508,7 @@ impl Host {
                         size: None,
                         read_only: false,
                         passive: false,
+                        zoom: false,
                         dead: false,
                         route: Route::default(),
                     });
@@ -522,12 +556,19 @@ impl Host {
                     self.viewers[i].size = size;
                     self.viewers[i].read_only = payload[1] & local::FLAG_READ_ONLY != 0;
                     self.viewers[i].passive = payload[1] & local::FLAG_PASSIVE != 0;
-                    let changed = self.apply_size();
+                    self.viewers[i].zoom = payload[1] & local::FLAG_ZOOM != 0;
+                    let changed = self.fit();
                     let welcome = local::frame(local::WELCOME, self.status().to_json().as_bytes());
                     let replay = local::frame(local::OUTPUT, &self.replay());
-                    let v = &mut self.viewers[i];
-                    push(&mut v.out, &welcome);
-                    push(&mut v.out, &replay);
+                    push(&mut self.viewers[i].out, &welcome);
+                    // 能缩放的先知道会话多大，再收回放（照这个大小画的）；大小变了的话别的能缩放的也要知道
+                    if changed {
+                        self.tell_size();
+                    } else if self.viewers[i].zoom {
+                        let f = local::frame(local::SIZE, &local::size_bytes(self.size));
+                        push(&mut self.viewers[i].out, &f);
+                    }
+                    push(&mut self.viewers[i].out, &replay);
                     if !changed {
                         self.repaint();
                     }
@@ -536,7 +577,11 @@ impl Host {
                     if self.input.len() + payload.len() <= INPUT_HIGH {
                         push(&mut self.input, &payload);
                     }
-                    self.primary = Who::Viewer(self.viewers[i].id);
+                    let who = Who::Viewer(self.viewers[i].id);
+                    self.primary = who;
+                    if typing(&payload) {
+                        self.typed(who);
+                    }
                 }
                 local::RESIZE if self.viewers[i].size.is_some() => {
                     if let Some(s) = local::size_at(&payload, 0) {
@@ -728,6 +773,9 @@ impl Host {
                                 push(&mut self.input, &buf[..n]);
                             }
                             self.primary = Who::Local;
+                            if typing(&buf[..n]) {
+                                self.typed(Who::Local);
+                            }
                             self.touch();
                         }
                         None => {}

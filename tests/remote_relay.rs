@@ -19,7 +19,7 @@ use kit::py::splitlines;
 use kit::relay::{self, connect, ctl, dial, frame, read_all, read_ctl, read_exact, read_line, recv, sendall};
 use kit::relay::{cols, has, matches, named_like, names, only, parsed, rows_of, secs, walk};
 use kit::relay::{Base, Popen, Reader, RelayOpts, RelayServer, SpecPeer};
-use kit::relay::{EXIT, F_ANNOUNCE, F_BYE, F_JOIN, F_PING, F_PONG, HELLO, INPUT, OUTPUT, RESIZE};
+use kit::relay::{DETACH, EXIT, F_ANNOUNCE, F_BYE, F_JOIN, F_PING, F_PONG, HELLO, INPUT, OUTPUT, RESIZE};
 use kit::term::{self, Term};
 use kit::{case, crypto, list, obj, spec};
 use std::cell::RefCell;
@@ -44,6 +44,7 @@ pub const MODULE: Module = Module {
         case!(cca_hooks_reach_the_other_machine),
         case!(what_the_other_side_may_do),
         case!(the_other_implementation_and_what_the_host_enforces),
+        case!(a_phone_sets_the_size_only_when_it_types),
         case!(the_link_process_is_killed),
         case!(the_server_restarts_and_the_session_ends_meanwhile),
         case!(local_sessions_never_touch_the_network),
@@ -951,6 +952,70 @@ fn the_other_implementation_and_what_the_host_enforces(t: &mut Ctx) {
     assert_eq!(h.wait(), 3);
     assert!(has(r.until(|out| has(out, "<EXIT")), "<EXIT 3>"));
     assert_eq!(r.kinds, BTreeSet::from([OUTPUT, EXIT]));
+}
+
+/// 能缩放的接入方（HELLO 的标志 4：iOS 上的 App，会话比它的屏幕大时缩小了画）：接上、看着不改会话的大小，会话多大宿主告诉它
+/// （SIZE，在回放前面）。它打了字会话照它排，这边的终端打了字又照这边排；它改窗口大小、滚着看、切进来不算打字；它打过字以后
+/// 走了，回到这边的终端的大小
+fn a_phone_sets_the_size_only_when_it_types(t: &mut Ctx) {
+    let (fx, a, b, _asked) = client_fx(t);
+    let other = fx.device("other");
+    fx.machines(&[&a, &b, &other]);
+    let mut peer = SpecPeer::new(&fx, &other);
+    let mut p = Popen::spawn(&mut relay::helper_cmd(&a, &["remote-pair-show"]));
+    let line = p.out_line();
+    peer.join(line.split_whitespace().nth(1).expect("配对码"));
+    let (rc, out, said) = p.communicate(secs(60));
+    assert_eq!((rc, out.as_str()), (0, "peer other\n"), "{said}");
+    let mut h = session(&a);
+    let found = wait_for("会话的说明", secs(30), || Some(peer.sessions()).filter(|found| !found.is_empty()));
+    let sid = found[0]["sid"].str();
+    let re = regex::bytes::Regex::new(r"(?-u)<size (\d+ \d+)>").expect("正则");
+    let sizes = |h: &Term, mark: usize| -> Vec<String> {
+        re.captures_iter(&h.out()[mark..]).map(|c| String::from_utf8_lossy(&c[1]).into_owned()).collect()
+    };
+
+    // 接上、看着：会话照旧是这边的终端的大小（只有接入时让客户端重画的那一下：23 行再回到 24 行）
+    let mark = h.mark();
+    let (sock, ch) = peer.attach(sid);
+    let mut r = Reader::new(sock, ch.expect("握手：宿主的证明对得上"));
+    r.send(&frame(HELLO, &[1, 4, 0, 40, 0, 20])); // 能缩放，窗口 40 列 20 行
+    let first = r.until(|out| has(out, "<ready 24 80")).to_vec();
+    assert!(first.starts_with(b"<SIZE 80 24>"), "{:?}", String::from_utf8_lossy(&first[..first.len().min(60)]));
+    h.send("say host-sync\n");
+    r.until(|out| has(out, "<host-sync>"));
+    h.expect_since("<host-sync>", mark);
+    assert!(sizes(&h, mark).iter().all(|s| s == "23 80" || s == "24 80"), "{:?}", sizes(&h, mark));
+
+    // 它打了字：照它的窗口排，也告诉它；这边打了字：又照这边的终端排
+    let (mark, seen) = (h.mark(), r.out.len());
+    r.send(&frame(INPUT, b"say from-the-phone\n"));
+    h.expect_since("<size 20 40>", mark);
+    r.until(|out| has(&out[seen..], "<SIZE 40 20>"));
+    let (mark, seen) = (h.mark(), r.out.len());
+    h.send("say from-the-host\n");
+    h.expect_since("<size 24 80>", mark);
+    r.until(|out| has(&out[seen..], "<SIZE 80 24>"));
+
+    // 它改了窗口大小、滚着看、切进来（滚轮、焦点进出）：都不算打字，会话不动。这边的终端回显了收到的滚轮：宿主已经看过这几帧了
+    let mark = h.mark();
+    r.send(&frame(RESIZE, &[0, 50, 0, 30]));
+    r.send(&frame(INPUT, b"\x1b[<64;5;5M\x1b[I"));
+    h.expect_since(r"(\^\[|\x1b)\[<64;5;5M", mark);
+    h.send("\x15say after-the-wheel\n"); // 先清掉这一行里回显的那一截（行模式：不清的话这一行不是 say 开头）
+    h.expect_since("<after-the-wheel>", mark);
+    assert_eq!(sizes(&h, mark), no_rows());
+
+    // 它又打了字（照它现在的窗口：比这边的终端高，行数取这边的），然后走了：回到这边的终端的大小
+    let mark = h.mark();
+    r.send(&frame(INPUT, b"say phone-again\n"));
+    h.expect_since("<size 24 50>", mark);
+    let mark = h.mark();
+    r.send(&frame(DETACH, b""));
+    h.expect_since("<size 24 80>", mark);
+    drop(r);
+    h.send("exit 0\n");
+    assert_eq!(h.wait(), 0);
 }
 
 fn the_link_process_is_killed(t: &mut Ctx) {

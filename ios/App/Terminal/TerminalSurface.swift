@@ -13,11 +13,17 @@ import UIKit
 /// 剪贴板只在 App 在前台、用户正看着这块终端时才写，不给读；不响铃。和 Mac App 的 TerminalSurface 是同一套规矩
 @MainActor
 final class TerminalSurface {
+    /// 放进界面的那一层：能缩放、拖动，终端在它里面
+    let box: TerminalBox
     let view: SizedTerminalView
     private weak var session: TerminalSession?
     private let bridge = TerminalBridge()
     private var reported: (cols: Int, rows: Int)?
     private var sizing: DispatchWorkItem?
+    #if DEBUG
+    /// TestDriver 用：终端照多大排了（`shown 列 行`）、报给会话的这台手机的窗口大小（`natural 列 行`）
+    static var sizeSpy: ((String) -> Void)?
+    #endif
 
     static func of(_ s: TerminalSession) -> TerminalSurface {
         if let t = s.surface as? TerminalSurface { return t }
@@ -34,6 +40,7 @@ final class TerminalSurface {
         session = s
         view = SizedTerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 480),
                                  font: UIFont.monospacedSystemFont(ofSize: UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12, weight: .regular))
+        box = TerminalBox(terminal: view)
         view.readOnly = s.readOnly
         view.keyboardAppearance = .dark
         view.overrideUserInterfaceStyle = .dark
@@ -57,31 +64,33 @@ final class TerminalSurface {
         }
         view.terminalDelegate = bridge
         bridge.surface = self
-        view.onLayout = { [weak self] in self?.measure() }
+        box.onLayout = { [weak self] in self?.measure() }
         s.sink = { [weak view] b in view?.feed(byteArray: b[...]) }
+        s.sizeSink = { [weak box] c, r in box?.hostSized(cols: c, rows: r) }
+        if let h = s.hostSize { box.hostSized(cols: h.cols, rows: h.rows) }
     }
 
-    /// 视图的大小定了：告诉 TerminalSession 现在几列几行（头一次就是接入）。键盘弹出、收起、转屏时一路在变，等停一下再说
+    /// 这块地方的大小定了：告诉 TerminalSession 照平常的字号放得下几列几行（头一次就是接入）。键盘弹出、收起、转屏时一路在变，
+    /// 等停一下再说。新的宿主不拿它定会话的大小，等这台手机上打了字才照它排；会话多大它另外说（TerminalBox.hostSized）
     private func measure() {
-        guard view.window != nil, view.bounds.width > 1, view.bounds.height > 1 else { return }
+        guard box.window != nil, box.natural() != nil else { return }
         sizing?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, let s = self.session else { return }
-            let t = self.view.getTerminal()
-            let cols = t.cols, rows = t.rows
-            guard cols >= 2, rows >= 2 else { return }
-            if let r = self.reported, r.cols == cols, r.rows == rows { return }
-            self.reported = (cols, rows)
-            s.sized(cols: cols, rows: rows)
+            guard let self, let s = self.session, let n = self.box.natural() else { return }
+            if let r = self.reported, r.cols == n.cols, r.rows == n.rows { return }
+            self.reported = n
+            #if DEBUG
+            Self.sizeSpy?("natural \(n.cols) \(n.rows)")
+            #endif
+            s.sized(cols: n.cols, rows: n.rows)
         }
         sizing = work
         DispatchQueue.main.asyncAfter(deadline: .now() + (reported == nil ? 0.05 : 0.15), execute: work)
     }
 
-    /// 现在的大小（重新接入时用）
+    /// 这台手机的窗口大小（重新接入时用）
     var size: (cols: Int, rows: Int) {
-        let t = view.getTerminal()
-        return (max(t.cols, 2), max(t.rows, 2))
+        box.natural() ?? (80, 24)
     }
 
     func focus() {
@@ -130,7 +139,127 @@ final class TerminalSurface {
     }
 }
 
-/// SwiftTerm 的终端视图，多管几件事：大小变了报一声；只看的不弹键盘；手指上下拖动是滚动。
+/// 终端外面的一层（UIScrollView）：终端照会话的大小排——宿主说的（`hostSized`；旧的宿主不说，照这块地方排）。会话比这块地方宽时
+/// （电脑上最后打的字：会话照电脑的窗口排）缩小到正好放得下宽度，双指捏着放大（最大到平常的字号）、双指拖着看；手机上打了字，
+/// 会话照这台手机排，正好放得下，不缩放。一个手指的还是终端自己的（上下拖是滚动、长按选字、点一下弹键盘）
+final class TerminalBox: UIScrollView, UIScrollViewDelegate {
+    let terminal: SizedTerminalView
+    /// 这块地方的大小变了（报给会话的窗口大小跟着变）
+    var onLayout: (() -> Void)?
+    /// 宿主说的会话的大小；nil：没说（旧的宿主），照这块地方排
+    private var host: (cols: Int, rows: Int)?
+    /// 终端现在排成的
+    private var shown: (cols: Int, rows: Int)?
+    private var laidOut = CGSize.zero
+    /// 终端画得最细的那一层不超过这么多像素：特别大的会话放大到平常的字号时，一层也不会占掉几十兆内存
+    static let pixelsMax: CGFloat = 8_000_000
+
+    init(terminal: SizedTerminalView) {
+        self.terminal = terminal
+        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        delegate = self
+        backgroundColor = TerminalSurface.background
+        contentInsetAdjustmentBehavior = .never
+        indicatorStyle = .white
+        bounces = false
+        bouncesZoom = true
+        delaysContentTouches = false
+        panGestureRecognizer.minimumNumberOfTouches = 2   // 一个手指的是终端自己的
+        terminal.panGestureRecognizer.maximumNumberOfTouches = 1   // 两个手指的是这一层的
+        addSubview(terminal)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("不从 storyboard 建")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.size != laidOut else { return }   // 拖着、缩放着的时候也一直来：只管大小变了的
+        laidOut = bounds.size
+        arrange()
+        onLayout?()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            arrange()
+            onLayout?()
+        }
+    }
+
+    /// 一格多大（点）：SwiftTerm 照字体算的
+    private var cell: CGSize? {
+        let t = terminal.getTerminal()
+        let f = terminal.getOptimalFrameSize()
+        guard t.cols > 0, t.rows > 0, f.width > 0, f.height > 0 else { return nil }
+        return CGSize(width: f.width / CGFloat(t.cols), height: f.height / CGFloat(t.rows))
+    }
+
+    /// 这块地方照平常的字号放得下几列几行：报给宿主的这台手机的窗口大小
+    func natural() -> (cols: Int, rows: Int)? {
+        guard let cell, bounds.width >= 1, bounds.height >= 1 else { return nil }
+        let c = Int(bounds.width / cell.width), r = Int(bounds.height / cell.height)
+        return c >= 2 && r >= 2 ? (c, r) : nil
+    }
+
+    /// 宿主说了会话现在的大小
+    func hostSized(cols: Int, rows: Int) {
+        host = (cols, rows)
+        arrange()
+    }
+
+    /// 终端照会话的大小排，马上排好（之后到的输出是照这个大小画的）；比这块地方宽就缩小到正好放得下宽度。会话的大小变了才重新定
+    /// 缩放、看最下面那一截（Claude Code 这些等你输入的地方在最下面）；只是这块地方变了（键盘、转屏）的留着现在的缩放
+    private func arrange() {
+        guard let cell, bounds.width >= 1, bounds.height >= 1, let want = host ?? natural() else { return }
+        // 多给半个点：SwiftTerm 拿这块的大小除以一格的大小再取整，算出来正好是 want，不会差一
+        let size = CGSize(width: CGFloat(want.cols) * cell.width + 0.5, height: CGFloat(want.rows) * cell.height + 0.5)
+        let changed = shown.map { $0.cols != want.cols || $0.rows != want.rows } ?? true
+        if changed {
+            zoomScale = 1
+            terminal.frame = CGRect(origin: .zero, size: size)
+            contentSize = size
+            terminal.layoutIfNeeded()
+            shown = want
+            #if DEBUG
+            TerminalSurface.sizeSpy?("shown \(want.cols) \(want.rows)")
+            #endif
+        }
+        let fit = min(1, bounds.width / size.width)
+        minimumZoomScale = min(fit, bounds.height / size.height)
+        maximumZoomScale = 1
+        if changed {
+            zoomScale = fit
+            contentOffset = CGPoint(x: 0, y: max(0, contentSize.height - bounds.height))
+        } else if zoomScale < minimumZoomScale {
+            zoomScale = minimumZoomScale
+        }
+        sharpen()
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+        terminal
+    }
+
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+        sharpen()
+    }
+
+    /// 终端画得多细：正好是屏幕上的像素（缩小了的不用画那么细：省内存、画得快），一层最多 `pixelsMax` 个像素
+    private func sharpen() {
+        let screen = traitCollection.displayScale > 0 ? traitCollection.displayScale : 2
+        let s = terminal.bounds.size
+        let cap = (Self.pixelsMax / max(1, s.width * s.height)).squareRoot()
+        let want = max(1, min(screen, screen * zoomScale, cap))
+        guard abs(terminal.contentScaleFactor - want) > 0.01 else { return }
+        terminal.contentScaleFactor = want
+        terminal.setNeedsDisplay()
+    }
+}
+
+/// SwiftTerm 的终端视图，多管几件事：只看的不弹键盘；手指上下拖动是滚动。
 ///
 /// 滚动照 Mac 上 SwiftTerm 的 scrollWheel 分三种（`scrollTarget`）：会话开着鼠标上报时（Claude Code 的全屏界面：备用屏幕，
 /// 往回翻由它自己做）发滚轮，手指每移一行的高度发一格（Claude Code 2.1.332 实测：隔开的一格滚一行，连着来的加速到两行左右）；
@@ -138,7 +267,6 @@ final class TerminalSurface {
 /// 再滑一段，手指一按下就停。SwiftTerm 自己在会话开鼠标上报时装一个把拖动当成按住鼠标拖的手势（电脑上拖着选字的那种），手机上
 /// 就滚不动了：不要它（`mouseModeChanged` 不调 super）
 final class SizedTerminalView: TerminalView {
-    var onLayout: (() -> Void)?
     var readOnly = false
 
     enum ScrollTarget { case native, wheel, arrows }
@@ -158,16 +286,10 @@ final class SizedTerminalView: TerminalView {
     private var glideAt = CGPoint.zero
     private var glideLast: CFTimeInterval = 0
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        onLayout?()
-    }
-
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
             installWheel()
-            onLayout?()
         } else {
             stopGlide()
         }
@@ -354,7 +476,7 @@ struct TerminalHost: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let s = TerminalSurface.of(session)
         DispatchQueue.main.async { s.focus() }
-        return s.view
+        return s.box
     }
 
     func updateUIView(_ view: UIView, context: Context) {}

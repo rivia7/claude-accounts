@@ -35,7 +35,7 @@ use super::wire::{self, Blob, Num};
 use super::{sshsig, API, EDGE_IDLE, GUEST_OPS, PUSH_BLOB, TICKET_TTL};
 use crate::py::fs::open_error_text;
 use crate::py::json::{self, Fmt};
-use crate::py::obj::{Dict, V};
+use crate::py::obj::{str_list, Dict, V};
 use crate::py::{base64, Fail, R};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -184,27 +184,52 @@ struct Guest {
 }
 
 /// 手机登记的推送：推送服务给这台手机上这个 App 的令牌（小写的十六进制）、推送服务的哪一种环境（production / sandbox）、
-/// 什么时候登记的（没人用它，原样留着）
+/// 只推哪几个会话、什么时候登记的（没人用它，原样留着）
 #[derive(Clone, Debug)]
 struct PushReg {
     token: String,
     env: String,
+    /// 只推这几个会话（会话的编号）：手机上「关掉的会话也推送」关着时是 App 里正开着的那个，一个都没开着是空的；None 是都推
+    sids: Option<Vec<String>>,
     at: Val,
 }
 
+/// push_set 的 sids 最多几个
+pub const PUSH_SIDS: usize = 8;
+
+/// push_set 的 sids：会话的编号（32 个小写的十六进制字符）的列表，最多 `PUSH_SIDS` 个；样子不对是 None
+fn sids_of(v: &V) -> Option<Vec<String>> {
+    let list = v.as_list()?;
+    if list.len() > PUSH_SIDS {
+        return None;
+    }
+    (0..list.len()).map(|i| list.get(i)?.rc_str().filter(|s| wire::aid_re().matches(s)).map(|s| s.to_string())).collect()
+}
+
 impl PushReg {
-    /// remote.json 里的那一项：样子不对的不要（当没登记）
+    /// remote.json 里的那一项：样子不对的不要（当没登记）。sids 样子不对的当成一个都不推（宁可少推）
     fn loaded(d: &Dict) -> Option<PushReg> {
         let (token, env) = (d.str("token")?, d.str("env")?);
+        let sids = d.get("sids").filter(|v| !matches!(v, V::None)).map(|v| sids_of(&v).unwrap_or_default());
         (wire::push_token_re().matches(&token) && matches!(&*env, "production" | "sandbox")).then(|| PushReg {
             token: token.to_string(),
             env: env.to_string(),
+            sids,
             at: d.get("at").map_or_else(Val::null, |at| Val::of(&at)),
         })
     }
 
     fn to_v(&self) -> V {
-        V::Dict(crate::dict! { "token" => &self.token, "env" => &self.env, "at" => self.at.v() })
+        let d = crate::dict! { "token" => &self.token, "env" => &self.env, "at" => self.at.v() };
+        if let Some(sids) = &self.sids {
+            d.set("sids", str_list(sids));
+        }
+        V::Dict(d)
+    }
+
+    /// 这个会话推不推
+    fn wants(&self, sid: &str) -> bool {
+        self.sids.as_ref().is_none_or(|only| only.iter().any(|s| s == sid))
     }
 }
 
@@ -458,7 +483,8 @@ impl Remote {
     }
 
     /// 宿主经控制连接交来的一帧 PUSH（relay.rs）：交给推送网关的那一条。会话得是这条控制连接的、配对得是这个会话给看的、配对的
-    /// 另一头得是登记了推送的访客，帧的样子要对（`{"pid", "id", "note"}`）；对不上的是 None（不理）
+    /// 另一头得是登记了推送的访客（它说了只推哪几个会话时，得是其中的一个），帧的样子要对（`{"pid", "id", "note"}`）；对不上的是
+    /// None（不理）
     pub(super) fn push_job(&self, sid: &str, conn: u64, payload: &[u8]) -> Option<Job> {
         let x = self.sessions.get(sid).filter(|x| x.conn == Some(conn))?;
         let j = json::loads(std::str::from_utf8(payload).ok()?).ok()?.as_dict()?;
@@ -468,7 +494,7 @@ impl Remote {
         if !x.pids.iter().any(|p| **p == *pid) || !self.member(&pid, &x.fp) || !self.guests_on {
             return None;
         }
-        let reg = self.guests.get(self.other(&pid, &x.fp)?)?.push.as_ref()?;
+        let reg = self.guests.get(self.other(&pid, &x.fp)?)?.push.as_ref().filter(|r| r.wants(sid))?;
         Some(Job { token: reg.token.clone(), env: reg.env.clone(), id: id.to_string(), note })
     }
 

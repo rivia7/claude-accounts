@@ -660,6 +660,40 @@ pub fn replay_bytes(seg: Seg, bytes: &[u8]) -> Vec<u8> {
     }
 }
 
+/// 接入方（或者启动它的终端）的一块输入是不是在打字：整块都是鼠标上报（点、拖、移动、滚轮）和焦点进出（`CSI I`、`CSI O`）
+/// 的不算——手机上滚着看、鼠标从窗口上划过、切到这个窗口，都不该让会话改成照它的大小排（宿主的 `lead`）。认不出来的都算打字
+pub fn typing(input: &[u8]) -> bool {
+    let mut rest = input;
+    while !rest.is_empty() {
+        match report_len(rest) {
+            Some(n) => rest = &rest[n..],
+            None => return true,
+        }
+    }
+    false
+}
+
+/// 开头是一条鼠标上报、焦点进出时它有几个字节。鼠标上报三种写法：SGR（`CSI < 键 ; 列 ; 行` 加 `M` 按下、`m` 松开；
+/// Claude Code 这些用的）、urxvt（`CSI 键 ; 列 ; 行 M`）、X10（`CSI M` 后面三个字节，各是 32 加上键、列、行）
+fn report_len(b: &[u8]) -> Option<usize> {
+    let body = b.strip_prefix(b"\x1b[")?;
+    match *body.first()? {
+        b'I' | b'O' => Some(3),
+        b'M' => body.get(1..4).filter(|xyz| xyz.iter().all(|c| *c >= 0x20)).map(|_| 6),
+        first @ (b'<' | b'0'..=b'9') => {
+            let sgr = first == b'<';
+            let nums = &body[usize::from(sgr)..];
+            let end = nums.iter().position(|c| !c.is_ascii_digit() && *c != b';')?;
+            let fields = &nums[..end];
+            let three = fields.split(|c| *c == b';').filter(|f| !f.is_empty() && f.len() <= 5).count() == 3
+                && fields.iter().filter(|c| **c == b';').count() == 2;
+            let fin = nums[end];
+            (three && (fin == b'M' || (sgr && fin == b'm'))).then_some(2 + usize::from(sgr) + end + 1)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,5 +1084,38 @@ mod tests {
         r.push(&"你".as_bytes()[1..]);
         r.push(b"ok");
         assert_eq!(r.replay(), b"ok");
+    }
+
+    #[test]
+    fn what_counts_as_typing() {
+        let cases: &[(&[u8], bool)] = &[
+            (b"a", true),
+            (b"\r", true),
+            (b"\x1b", true),
+            (b"\x1b[A", true),                  // 方向键
+            (b"\x1b[200~paste\x1b[201~", true), // 粘贴
+            (b"\x1b[97;5u", true),              // kitty 键盘协议
+            (b"\x1b[15~", true),                // F5
+            (b"\x1b[<64;10;5M", false),         // 滚轮往上（SGR）
+            (b"\x1b[<65;10;5M\x1b[<65;10;5M", false),
+            (b"\x1b[<35;80;24M", false),          // 鼠标移动
+            (b"\x1b[<0;3;4M\x1b[<0;3;4m", false), // 点一下
+            (b"\x1b[I", false),                   // 焦点进来、出去
+            (b"\x1b[O\x1b[I", false),
+            (b"\x1b[Ma!!", false),      // X10 的滚轮往下
+            (b"\x1b[97;10;5M", false),  // urxvt 的
+            (b"\x1b[<64;10;5Mx", true), // 滚轮后面跟着字
+            (b"x\x1b[<64;10;5M", true),
+            (b"\x1b[<64;10M", true), // 不完整的、样子不对的
+            (b"\x1b[<64;10;5", true),
+            (b"\x1b[<64;;5M", true),
+            (b"\x1b[<64;1;2;3M", true),
+            (b"\x1b[97;10;5m", true),
+            (b"\x1b[M!!", true),
+            (b"", false),
+        ];
+        for (input, typed) in cases {
+            assert_eq!(typing(input), *typed, "{:?}", String::from_utf8_lossy(input));
+        }
     }
 }

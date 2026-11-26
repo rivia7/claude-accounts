@@ -6,6 +6,7 @@ import UserNotifications
 /// 推送（APNs）：锁着屏、App 没开着时也收得到会话里的通知（做完了、在等你）。向 Apple 要这台手机的推送令牌，登记到配对的电脑所在的
 /// 每台服务器上（push_set）；会话里说一条通知时，宿主把它封给这个配对，经那台服务器、cca 的推送网关、Apple 送到这台手机，通知扩展
 /// （ios/Notify）拿通知密钥解开再弹出来。服务器、网关、Apple 都看不到里面。通知被关掉了（系统设置里）时把登记拿掉：服务器就不再推。
+/// 「关掉的会话也推送」（设置里的开关，默认开着）关着时，登记里说只推 App 里开着的那个会话（sids），开着、关掉终端时跟着改。
 /// 见 docs/dev/ios.md「推送」
 @MainActor
 @Observable
@@ -20,6 +21,16 @@ final class Pusher {
     private(set) var allowed: Bool?
     /// 还没接推送网关的服务器（主机名）：那里配的电脑只在 App 开着、接着会话时才收得到通知
     private(set) var unsupported: [String] = []
+    /// 「关掉的会话也推送」：开着（默认）时配对的电脑上的会话都推；关着时只推 App 里开着的那个会话（锁着屏、切到别的 App 也算开着），
+    /// 一个都没开着就都不推
+    var closedToo = UserDefaults.standard.object(forKey: "pushClosedToo") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(closedToo, forKey: "pushClosedToo")
+            sync()
+        }
+    }
+    /// 不认这个开关的服务器（主机名，旧版）：经它配对的电脑，关掉的会话照样推（开关关着时设置里说一声）
+    private(set) var unfiltered: [String] = []
 
     @ObservationIgnored private weak var model: AppModel?
     @ObservationIgnored private var syncing = false
@@ -83,6 +94,11 @@ final class Pusher {
         sync()
     }
 
+    /// App 里开着的会话变了（开了、关了一个终端）：只推开着的会话时，登记跟着改
+    func openChanged() {
+        if !closedToo { sync() }
+    }
+
     /// 有配对过的电脑、还没问过时问一次能不能发通知（问过了系统记着，不再问）
     func askIfNeeded() {
         guard let model, !model.isDemo, !model.peers.isEmpty else { return }
@@ -116,11 +132,13 @@ final class Pusher {
         }
     }
 
-    /// 记着的：一台服务器上登记的是什么（"令牌 环境"，拿掉了是空的）、什么时候登记的、它是不是说过还没接推送网关
+    /// 记着的：一台服务器上登记的是什么（"令牌 环境"，只推开着的会话时后面是 " only:会话编号,…"；拿掉了是空的）、什么时候登记的、
+    /// 它是不是说过还没接推送网关、是不是不认只推哪几个会话（旧版；以前的版本记的没有这一项）
     private struct Memo: Codable {
         let reg: String
         let at: Double
         let unsupported: Bool
+        var unfiltered: Bool? = nil
     }
 
     private func memoKey(_ s: ServerRef) -> String { "push " + s.url }
@@ -141,37 +159,63 @@ final class Pusher {
         return await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    /// App 里开着的、在这台服务器上的会话（只推开着的会话时登记的就是它们）
+    private func openSids(on s: ServerRef) -> [String] {
+        guard let t = model?.terminal, t.peer.server.url == s.url else { return [] }
+        return [t.session.sid]
+    }
+
     private func syncNow(_ backend: Backend) async {
         let ok = await status()
         let can = ok == .authorized || ok == .provisional || ok == .ephemeral
         if ok != .notDetermined { allowed = can }
         // 该登记的：能发通知、拿到了令牌时是令牌和环境，不然什么都不登记（拿掉）
         let reg: (token: String, env: String)? = can ? token.map { ($0, Self.env) } : nil
-        let want = reg.map { "\($0.token) \($0.env)" } ?? ""
+        let base = reg.map { "\($0.token) \($0.env)" } ?? ""
         let now = Date().timeIntervalSince1970
-        var notYet = [String]()
+        var notYet = [String](), notOnly = [String]()
         for s in backend.servers() {
             let m = memo(s)
             if let m, m.unsupported, now - m.at < 86400 {
                 notYet.append(s.host)
                 continue
             }
+            // 关掉的会话不推：只推开着的（这台服务器上一个都没开着是空的）
+            let sids: [String]? = reg != nil && !closedToo ? openSids(on: s) : nil
+            let want = base + (sids.map { " only:" + $0.joined(separator: ",") } ?? "")
+            // 不认 sids 的服务器（旧版，照旧都推）：开着的会话变了不用再登记，一天以后再看它更新了没有
+            if sids != nil, let m, m.unfiltered == true, m.reg == base, now - m.at < 86400 {
+                notOnly.append(s.host)
+                continue
+            }
             // 一样的过一周再登记一次（服务器那边可能丢了：推送服务说令牌没用了、服务器换过）
             if let m, !m.unsupported, m.reg == want, now - m.at < 7 * 86400 { continue }
             if m == nil, want.isEmpty { continue }   // 没登记过：没什么可拿掉的
-            let failure = await backend.pushSet(on: s, token: reg?.token ?? "", env: reg?.env ?? Self.env)
-            #if DEBUG
-            spy?("push \(s.host) \(failure?.code ?? "ok")")
-            #endif
-            switch failure?.code {
-            case nil: remember(s, Memo(reg: want, at: now, unsupported: false))
-            case "no_push":
-                remember(s, Memo(reg: "", at: now, unsupported: true))
-                notYet.append(s.host)
-            default: break   // 没问到、服务器这会儿忙：下次再说
+            let r = await backend.pushSet(on: s, token: reg?.token ?? "", env: reg?.env ?? Self.env, sids: sids)
+            switch r {
+            case .ok(let filtered):
+                #if DEBUG
+                spy?("push \(s.host) ok" + (sids == nil ? "" : filtered ? " only" : " all"))
+                #endif
+                if sids == nil || filtered {
+                    remember(s, Memo(reg: want, at: now, unsupported: false))
+                } else {
+                    remember(s, Memo(reg: base, at: now, unsupported: false, unfiltered: true))
+                    notOnly.append(s.host)
+                }
+            case .failed(let f):
+                #if DEBUG
+                spy?("push \(s.host) \(f.code)")
+                #endif
+                if f.code == "no_push" {
+                    remember(s, Memo(reg: "", at: now, unsupported: true))
+                    notYet.append(s.host)
+                }
+                // 别的（没问到、服务器这会儿忙）：下次再说
             }
         }
         unsupported = notYet
+        unfiltered = notOnly
     }
 }
 

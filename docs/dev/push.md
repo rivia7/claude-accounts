@@ -15,7 +15,8 @@ docs/dev/ios.md「推送」。
 2. 转接进程（`link.rs` 的 `push_note`）给每个让看这个会话、对方是手机（`peer.web`）的配对封一份（`crypto.rs` 的 `note_seal`：只有这个配对的
    P 派生的通知密钥解得开），控制连接上发 `PUSH`（`0x0a`，`{"pid","id","note"}`）给这个会话走的 Team 的服务器。手机这时接没接着都发：
    接着的那份（`NOTIFY`）和推来的那份带着同一个编号，手机上只弹先到的那一份
-3. Team 的服务器（`cli/src/server/push.rs`）：会话、配对对得上，配对的另一头是登记了推送的手机（`push_set`），就 POST 给推送网关（`--push`，
+3. Team 的服务器（`cli/src/server/push.rs`）：会话、配对对得上，配对的另一头是登记了推送的手机（`push_set`；登记里说了只推哪几个会话的——
+   `sids`，手机上「关掉的会话也推送」关着时是 App 里开着的那个——得是其中一个，`remote.rs` 的 `push_job`），就 POST 给推送网关（`--push`，
    钉住 `--push-pin` 的公钥）。一条线程、有界的队列（中转的线程不等它，满了丢）；每台手机限流（`PHONE_BURST`、`PHONE_GAP`）；网关回 410
    （令牌没用了）就拿掉那个登记
 4. 推送网关（`cli/src/server/gateway.rs`、`gateway/apns.rs`、`gateway/h2.rs`）：签好令牌（JWT，ES256，45 分钟换一次）交给推送服务（HTTP/2，
@@ -26,7 +27,8 @@ docs/dev/ios.md「推送」。
 
 谁知道什么：
 - 宿主：明文（本来就是它的）
-- Team 的服务器：哪台手机（推送令牌、环境）、哪个配对、什么时候、多长（明文补齐到 256 字节的整数倍）；解不开
+- Team 的服务器：哪台手机（推送令牌、环境）、哪个配对、什么时候、多长（明文补齐到 256 字节的整数倍）；「关掉的会话也推送」关着时还有手机上
+  开着哪个会话（会话编号）；解不开
 - 推送网关：令牌、环境、编号、密文；不知道是哪个 Team、哪个会话（只看得到来的是哪台服务器）；解不开
 - 苹果：令牌、固定的那一句、密文
 - 手机上的通知扩展：只拿得到通知密钥（`Kn = HMAC(P, "cca-remote/v1/note")` 派生的两把），拿不到 P：解得开通知，解不开终端、冒充不了配对
@@ -112,8 +114,9 @@ services:
   ALPN、头、JWT 的签名、内容；故意用几种写法回头；回的结果由令牌的最后两个十六进制字符定）
 - `tests/web_relay.rs` 的 `app_guest_gets_pushes`：真的宿主 → Team 的服务器 → 网关 → 假的推送服务那一整条
 - `tests/ios_kit.rs`：`against_the_spec` 的 note 向量（CcaRemoteKit ↔ `kit::spec` 的 `note_seal`）；`pushes_reach_the_phone`（ccaguest 登记、
-  会话里 `remote-notify`、假的推送服务收到、CcaRemoteKit 解开，取消配对以后解不开）；`in_the_simulator`（`CCA_IOS_SIM=1`：真的 App 登记、
+  会话里 `remote-notify`、假的推送服务收到、CcaRemoteKit 解开，登记里的 `sids` 没有这个会话的那台手机收不到、有的收得到，取消配对以后解不开）；`in_the_simulator`（`CCA_IOS_SIM=1`：真的 App 登记、
   通知密钥写进共用的钥匙串分组，App 照通知扩展的读法解开真的宿主封的那一份）
+- `server/remote/tests.rs` 的 `push_registration`、`push_jobs`、`push_only_some_sessions`（`sids`：存、读、样子不对的、只推哪几个）
 - `tests/hub_deploy.rs` 的 `push`：安装脚本、`cca team deploy` 的 `--push`、`--push-pin`、`--no-push`，`.env`，交给服务端的两种方式
 - `tests/remote_relay.rs` 的 `cca_hooks_reach_the_other_machine`：cca 自己带的钩子推到别的机器
 
@@ -121,10 +124,11 @@ services:
 
 - 真的推送服务：2026-11-26 维护者的服务器上装好了网关（只听内网地址），两个 Team 的服务器（3.7.3）带上了 `--push`。验证过的：网关对着
   真的推送服务，正式、开发两种环境拿随便一个令牌 POST 都回 410（苹果回 400 BadDeviceToken：自己写的 HTTP/2、ES256 的令牌、Key ID、Team ID
-  苹果都认了）；Team 的容器里连得到网关、钉住的公钥对得上；两台服务器的 `/v1/health` 里 `relay.push` 是 true。还没验证：Team 的服务器
-  真的转过去、推到真机上（要手机装了第三个 TestFlight 构建、登记了令牌）
+  苹果都认了）；Team 的容器里连得到网关、钉住的公钥对得上；两台服务器的 `/v1/health` 里 `relay.push` 是 true。真机上也到了（2026-11-26）：
+  装了第三个 TestFlight 构建的 iPhone 在两台服务器上都登记成 production，锁着屏收到了推送、显示的是解开的字——Team 的服务器转、网关、
+  推送服务、通知扩展这一整条都对
 - 通知扩展这个进程：模拟器里的 `xcrun simctl push` 不经它（2026-11-26 试过：系统日志里是 CoreSimulatorBridge 直接把通知加进通知中心，
   `mutableContent: YES` 也不调扩展，到 App 的还是固定的那一句）。扩展里解开的那一段和 `in_the_simulator` 里 App 照扩展的读法解开的是同一份代码
   （CcaRemoteKit 的 `openPushed`、`NoteCard`、`NoteKeychain.read`），可扩展的进程读不读得到共用分组的钥匙串、时限内做没做完，要真的推送
-  到真机（TestFlight 的构建）上才看得到：第三个构建（1.0，20261126.54245，2026-11-26 传的）带着它，真机上还没试
-- 环境：TestFlight / App Store 装的照描述文件的 `aps-environment` 认成 production，Xcode 装的是 sandbox；传给 TestFlight 的那一份里是 production（testflight.sh 查过）。真机上登记成什么还没看过
+  到真机（TestFlight 的构建）上才看得到：第三个构建（1.0，20261126.54245）真机上解开了（上一条）
+- 环境：TestFlight / App Store 装的照描述文件的 `aps-environment` 认成 production，Xcode 装的是 sandbox；传给 TestFlight 的那一份里是 production（testflight.sh 查过），真机上登记的也是 production（上面那一条）

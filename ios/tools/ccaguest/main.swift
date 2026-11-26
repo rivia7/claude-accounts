@@ -2,10 +2,13 @@
 // 用法：ccaguest --store 目录 --name 名字 <命令>
 //   pair <链接>             配对；stdout：peer 配对编号 名字，没成是 fail 原因（退出码 1）
 //   list                    一行一个 JSON：配对过的机器（没有 sid）、它上面的会话（有 sid）
-//   attach 配对编号 会话编号 [--view]   接入：stdin 是敲的键（读到头就断开），stdout 是终端的字节；
-//                           stderr：state open|retrying、exit 退出码、note 通知的 JSON、closed 原因。detached、ended 退出码 0，别的 1
+//   attach 配对编号 会话编号 [--view] [--size 列x行]   接入（窗口大小默认 80x24）：stdin 是敲的键（读到头就断开），stdout 是终端的字节；
+//                           stderr：state open|retrying、size 会话的列 行（宿主说的）、exit 退出码、note 通知的 JSON、closed 原因。
+//                           detached、ended 退出码 0，别的 1
 //   unpair 配对编号          取消配对；stdout：unpaired（服务器没问到也删本地的：told-no）
-//   push-set 令牌 环境        在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉）；stdout 一台一行：push 服务器 ok|fail 原因
+//   push-set 令牌 环境 [--only 会话编号,…]   在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉；--only：只推这几个会话，
+//                           空的是一个都不推）；stdout 一台一行：push 服务器 ok|fail 原因（带了 --only 时 ok 后面是 only：服务器认了，
+//                           all：旧的服务器不认、照旧都推）
 //   push-open 文件           文件里是推来的内容（推送服务收到的那份 JSON）：像通知扩展那样拿每个配对的通知密钥试着解开；
 //                           stdout：解开的通知和弹出来的字（一行 JSON），解不开是 fail（退出码 1）
 // 密钥存在目录里的文件里（只给测试用；App 里存钥匙串）
@@ -103,18 +106,20 @@ case "unpair":
         finish(0)
     }
 case "push-set":
-    guard args.count == 3 else {
+    guard args.count == 3 || (args.count == 5 && args[3] == "--only") else {
         print("fail usage")
         finish(1)
     }
+    let sids: [String]? = args.count == 5 ? args[4].split(separator: ",").map(String.init) : nil
     Task {
         var all = true
         for s in client.servers() {
-            if let f = await client.pushSet(on: s, token: args[1], env: args[2]) {
+            switch await client.pushSet(on: s, token: args[1], env: args[2], sids: sids) {
+            case .ok(let filtered):
+                print("push \(s.url) ok" + (sids == nil ? "" : filtered ? " only" : " all"))
+            case .failed(let f):
                 print("push \(s.url) fail \(f.code)")
                 all = false
-            } else {
-                print("push \(s.url) ok")
             }
         }
         finish(all ? 0 : 1)
@@ -139,10 +144,16 @@ case "attach":
         print("fail no_peer")
         finish(1)
     }
-    let att = Attachment(client: client, peer: peer, sid: args[2], cols: 80, rows: 24, readOnly: args.contains("--view"))
+    var (cols, rows) = (80, 24)
+    if let i = args.firstIndex(of: "--size"), i + 1 < args.count {
+        let p = args[i + 1].split(separator: "x").compactMap { Int($0) }
+        if p.count == 2 { (cols, rows) = (p[0], p[1]) }
+    }
+    let att = Attachment(client: client, peer: peer, sid: args[2], cols: cols, rows: rows, readOnly: args.contains("--view"))
     att.onOutput = { b in
         FileHandle.standardOutput.write(Data(b))
     }
+    att.onSize = { c, r in say("size \(c) \(r)") }
     att.onExit = { say("exit \($0)") }
     att.onNote = { n in
         var j = ["title": n.title, "subtitle": n.subtitle, "body": n.body]

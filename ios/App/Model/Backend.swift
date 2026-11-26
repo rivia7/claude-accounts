@@ -15,8 +15,8 @@ protocol Backend: AnyObject {
     func fingerprint(on server: ServerRef) -> String?
     /// 配对的电脑所在的服务器（每台一次）
     func servers() -> [ServerRef]
-    /// 在这台服务器上登记推送（Pusher）：成了是 nil
-    func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure?
+    /// 在这台服务器上登记推送（Pusher）；sids：只推这几个会话，nil 是都推
+    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?) async -> PushSetResult
     /// 通知扩展用的通知密钥照配对表重写一遍（一样就不动）
     func syncNoteKeys()
 }
@@ -25,6 +25,8 @@ protocol Backend: AnyObject {
 @MainActor
 protocol TerminalLink: AnyObject {
     var onOutput: (Bytes) -> Void { get set }
+    /// 会话现在的大小（新的宿主说的；演示的不说）
+    var onSize: (Int, Int) -> Void { get set }
     var onState: (Attachment.State) -> Void { get set }
     var onExit: (Int32) -> Void { get set }
     /// 会话推来的通知（演示的没有）
@@ -65,8 +67,8 @@ final class LiveBackend: Backend {
 
     func servers() -> [ServerRef] { client.servers() }
 
-    func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure? {
-        await client.pushSet(on: server, token: token, env: env)
+    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?) async -> PushSetResult {
+        await client.pushSet(on: server, token: token, env: env, sids: sids)
     }
 
     /// 存进 App 和通知扩展共用的钥匙串分组（NoteKeychain）：通知扩展只拿得到这几把，拿不到配对的密钥

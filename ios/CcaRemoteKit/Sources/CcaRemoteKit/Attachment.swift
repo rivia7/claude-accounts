@@ -9,6 +9,8 @@ final class Link: @unchecked Sendable {
     struct Events {
         var open: () -> Void = {}
         var output: (Bytes) -> Void = { _ in }
+        /// 会话现在的大小（列数、行数）
+        var size: (Int, Int) -> Void = { _, _ in }
         var exit: (Int32) -> Void = { _ in }
         var note: (Note) -> Void = { _ in }
         var close: (String) -> Void = { _ in }
@@ -122,7 +124,7 @@ final class Link: @unchecked Sendable {
             phase = .open
             timer?.cancel()
             timer = nil
-            try write(Frame.make(Frame.hello, [1, readOnly ? 1 : 0] + Frame.size(cols, rows)))
+            try write(Frame.make(Frame.hello, [1, (readOnly ? Frame.readOnly : 0) | Frame.zoom] + Frame.size(cols, rows)))
             // 两头每 20 秒说一声（空的记录），60 秒没听到对面就算断了
             beat = after(20, repeating: 20) { [weak self] in
                 guard let self else { return }
@@ -162,6 +164,10 @@ final class Link: @unchecked Sendable {
             } else if kind == Frame.notify {
                 // 会话推来的通知：解不开、什么字都没有的不算
                 if let n = Note.parse(payload) { events.note(n) }
+            } else if kind == Frame.sessionSize, payload.count >= 4 {
+                // 会话现在的大小：不在范围里的不理
+                let c = Int(payload[0]) << 8 | Int(payload[1]), r = Int(payload[2]) << 8 | Int(payload[3])
+                if Frame.validSize(c, r) { events.size(c, r) }
             }
             // 别的帧（宿主那头已经滤掉了）不理
         }
@@ -270,6 +276,9 @@ public final class Attachment: @unchecked Sendable {
 
     /// 终端的字节、状态、退出码、会话推来的通知（主线程上）
     public var onOutput: (Bytes) -> Void = { _ in }
+    /// 会话现在的大小（列数、行数；主线程上，和终端的字节一样按到的先后）：新的宿主接上时说一次、变了再说。旧的宿主不说——
+    /// 它照旧把这台手机的窗口算进会话的大小，会话不会比这块屏幕大
+    public var onSize: (Int, Int) -> Void = { _, _ in }
     public var onState: (State) -> Void = { _ in }
     public var onExit: (Int32) -> Void = { _ in }
     public var onNote: (Note) -> Void = { _ in }
@@ -307,6 +316,13 @@ public final class Attachment: @unchecked Sendable {
                 self.queue.async {
                     guard self.attempt == me else { return }
                     DispatchQueue.main.async { self.onOutput(b) }
+                }
+            },
+            size: { [weak self] c, r in
+                guard let self else { return }
+                self.queue.async {
+                    guard self.attempt == me else { return }
+                    DispatchQueue.main.async { self.onSize(c, r) }
                 }
             },
             exit: { [weak self] code in

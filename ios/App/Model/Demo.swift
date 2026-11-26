@@ -76,7 +76,7 @@ final class DemoBackend: Backend {
 
     // 演示模式不登记推送、不碰钥匙串
     func servers() -> [ServerRef] { [] }
-    func pushSet(on server: ServerRef, token: String, env: String) async -> RemoteFailure? { RemoteFailure("demo") }
+    func pushSet(on server: ServerRef, token: String, env: String, sids: [String]?) async -> PushSetResult { .failed(RemoteFailure("demo")) }
     func syncNoteKeys() {}
 }
 
@@ -84,6 +84,7 @@ final class DemoBackend: Backend {
 @MainActor
 final class DemoLink: TerminalLink {
     var onOutput: (Bytes) -> Void = { _ in }
+    var onSize: (Int, Int) -> Void = { _, _ in }
     var onState: (Attachment.State) -> Void = { _ in }
     var onExit: (Int32) -> Void = { _ in }
     var onNote: (Note) -> Void = { _ in }

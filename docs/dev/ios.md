@@ -9,7 +9,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 | 服务器认手机不再要网页端（`guest`、`--no-guests`）；二维码改成给 App 的链接（带配对码）；协议核心 `ios/CcaRemoteKit`；测试用的手机 `ios/tools/ccaguest`；`tests/ios_kit.rs` | 做完了，还没提交、没发布 |
-| 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机第一次试（第一个 TestFlight 构建）扫码必定「连不上服务器」：ATS，见下面「App」的 `Info.plist`；修好的第二个构建（20261125.183806）真机上配对、接入都成了（2026-11-26）。用户在真机上试出来的两处改了：接着的会话做完了手机不响（`Notifier`）、Claude Code 的屏幕拖不动（`SizedTerminalView`）；又加了推送（下面「推送」，模拟器里端到端测过）。这些在第三个构建里（20261126.54245，2026-11-26 传的）；真的推送服务、通知扩展的进程要在真机上验证 |
+| 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机第一次试（第一个 TestFlight 构建）扫码必定「连不上服务器」：ATS，见下面「App」的 `Info.plist`；修好的第二个构建（20261125.183806）真机上配对、接入都成了（2026-11-26）。用户在真机上试出来的两处改了：接着的会话做完了手机不响（`Notifier`）、Claude Code 的屏幕拖不动（`SizedTerminalView`）；又加了推送（下面「推送」，模拟器里端到端测过）。这些在第三个构建里（20261126.54245，2026-11-26 传的）：真机上锁屏推送收到了、显示的是解开的字（2026-11-26，通知扩展、真的推送服务、Team 的服务器转都对）。之后用户提的两处改了、还没传构建：会话照最后打字的那一处排（手机接上不再让 Mac 上的变窄；下面「App」的 `TerminalBox`）、「关掉的会话也推送」开关（下面「推送」） |
 | 3 | TestFlight（`ios/testflight.sh`，见下面「TestFlight」）、App Store 审核（隐私清单、出口合规） | 上传脚本做好了；第一次上传 2026-11-25（1.0，构建号 20261125.110017，在一台登录着付费开发者账号的测试 Mac 上）；App Store 审核没开始 |
 | 4 | 去掉网页端，服务器重新部署（每台都先问） | 等 App 上架 |
 
@@ -68,7 +68,13 @@
   照惯性再滑一段（每毫秒剩 0.996），手指一按下就停；只看的照旧（发不了键）。Claude Code 2.1.332 一启动就进备用屏幕、开鼠标上报（`?1049h`、
   `?1000h`、`?1002h`、`?1003h`、`?1006h`），往回翻由它自己做，SwiftTerm 在这时装的手势把拖动当成按住鼠标拖着选字，手机上就滚不动了：
   `mouseModeChanged` 不调 super，不要那个手势（2026-11-26 真机上发现）。实测（假的 Messages API、伪终端里真的 Claude Code，50×30）：隔开的滚轮
-  一格滚一行，连着来的（16 毫秒一格）加速到两行左右；滚轮在输入框、状态栏那几行上也滚对话记录
+  一格滚一行，连着来的（16 毫秒一格）加速到两行左右；滚轮在输入框、状态栏那几行上也滚对话记录。
+  终端放在 `TerminalBox`（UIScrollView）里，照会话的大小排：HELLO 说自己能缩放（标志 4），宿主说会话多大（`SIZE` → CcaRemoteKit 的 `onSize` →
+  `TerminalSession.hostSize`），终端定成正好那么多列、行（一格多大照 `getOptimalFrameSize` 算，多给半个点免得 SwiftTerm 取整差一；排完马上
+  `layoutIfNeeded`，之后到的输出照新的大小画）。比这块地方宽时缩小到正好放得下宽度（放不下时看最下面那一截），双指捏着放大（最大到平常的字号）、
+  双指拖着看；一个手指的照旧是终端的（上下拖滚动、长按选字、点一下弹键盘）。缩小了画时终端的 `contentScaleFactor` 跟着降（一层最多 800 万个像素）。
+  报给会话的窗口大小是这块地方照平常的字号放得下几列几行（`natural`）：手机上打了字会话就照它排（remote.md「几个终端接着同一个会话」），
+  正好放得下、不缩放。旧的宿主不说 `SIZE`：照这块地方排，和以前一样。不用 SwiftTerm 的 `resize(cols:rows:)`：它会软重置终端
 - `Model/Notifier.swift`：会话推来的通知（`TerminalSession` 收到 CcaRemoteKit 解好的 `NOTIFY`，或者 OSC 777 / 9）弹成本地通知，点它回到
   那个会话的终端（关了的重新接上：`AppModel.reopen`）。和 Mac App 的 `RemoteNotifier`（PROTOCOL 9.3）同一套规矩：标题、正文过 `Texts.plainLine`、
   限长度；来自哪台机器 App 自己写在副标题开头（「来自「机器名」 · 会话说的副标题或者会话的名字」）；一个终端 3 秒最多一条；头一次要弹时才问
@@ -77,7 +83,8 @@
   谁来推：cca 自己带的钩子（远程会话开着时启动 Claude Code 就带上：做完了、要你确认、在等你；remote.md「cca 自己带的钩子」），用户自己的钩子也可以调
   `cca remote notify`（remote.md「通知推到接着的别的机器」）
 - `TestDriver.swift`：只在调试版里（`#if DEBUG`；`ios/test.sh` 查正式版里没有它）：端到端测试用启动参数让 App 自己配对、接入、敲键；
-  `-test-note`：通知不真的弹（不要权限），说出来；`-test-wheel`：会话开了鼠标上报以后当成手指往下拖了三行；`-test-push-token 十六进制`：不向苹果要令牌，用这个登记、说出登记的结果和共用分组里的
+  `-test-note`：通知不真的弹（不要权限），说出来；`-test-wheel`：会话开了鼠标上报以后当成手指往下拖了三行；`-test-sizes`：说出终端照多大排了
+  （`shown`）、报给会话的窗口大小（`natural`）；`-test-push-only`：「关掉的会话也推送」关掉；`-test-push-token 十六进制`：不向苹果要令牌，用这个登记、说出登记的结果和共用分组里的
   通知密钥，最后像通知扩展那样解开测试放进临时目录的 `pushed.json`
 - `Design.swift`、`Texts.swift`：从 Mac App 搬过来的几样（`Brand`、`Surface`、`BrandMark`、`RemoteMark`、`Tag`、`Banner`、`Card`，玻璃只给按钮）和文字
 - `PrivacyInfo.xcprivacy`：不追踪、不收集；用到的要说明原因的接口只有 UserDefaults（CA92.1）
@@ -100,7 +107,10 @@ TestFlight 先用用户自己的付费个人团队（2026-11-25），版本号�
 - `Model/Pusher.swift`：向系统要推送令牌（`registerForRemoteNotifications`，`AppDelegate` 收），在配了对的每台服务器上登记（`push_set`，CcaRemoteKit
   的 `Client.pushSet`）：令牌、环境（照 App 里的描述文件 `embedded.mobileprovision` 的 `aps-environment`：development 是 sandbox，别的是 production；
   模拟器是 sandbox）。每台服务器登记过什么记在 UserDefaults（`push <服务器>`）：一样的 7 天里不再登记；回 `no_push`（那台服务器没开推送）的一天以后再试；
-  不让发通知了就把登记换成空的。启动、配好、取消配对、回到前台时对一遍；配了对、还没问过时问通知的权限
+  不让发通知了就把登记换成空的。启动、配好、取消配对、回到前台时对一遍；配了对、还没问过时问通知的权限。
+  设置里的「关掉的会话也推送」（`Pusher.closedToo`，默认开着，存在 UserDefaults）：关着时登记里带 `sids`（App 里开着的那个会话；这台服务器上
+  没开着的是空的：一个都不推），开、关终端时（`AppModel.terminal` 变了）跟着重新登记；记着的登记里带上它（`" only:会话编号"`）。服务器回的没有
+  `"sids": true`（旧版，照旧都推）：记成 `unfiltered`，开着的会话变了也不再登记，一天以后再试；设置里说哪台服务器还不认
 - 通知密钥：`Backend.syncNoteKeys` 照配对表把每个配对的通知密钥（CcaRemoteKit 的 `NoteKey`：`HMAC(P, "cca-remote/v1/note")`，不是 P）写进和通知扩展
   共用的钥匙串分组（`NoteKeychain`：service `cca.remote.note`，`AfterFirstUnlockThisDeviceOnly`，不同步；第一次装时连同别的一起清掉）。身份、配对的
   密钥照旧在 App 自己的分组里：权限里 `keychain-access-groups` 的第一个是它，以前存的不用搬。分组名写在两边 Info.plist 的 `CcaKeychainGroup`
@@ -113,7 +123,8 @@ TestFlight 先用用户自己的付费个人团队（2026-11-25），版本号�
 - 权限（`ios/Entitlements/`）：App 有 `aps-environment`（工程里是 development，导出给 App Store 时换成 production）和两个钥匙串分组，扩展只有共用的那一个。
   `ios/test.sh` 查两个版本里都有通知扩展、版本号和 `CcaKeychainGroup` 和 App 的一样；`testflight.sh` 查导出的 App 的 `aps-environment` 是 production、
   两边的分组
-- 设置页的「通知」：推送登记了没有、为什么没有（不让发通知、要不到令牌、哪台服务器没开推送），不让发通知时有去系统设置的按钮
+- 设置页的「通知」：推送登记了没有、为什么没有（不让发通知、要不到令牌、哪台服务器没开推送），不让发通知时有去系统设置的按钮；
+  「关掉的会话也推送」开关（演示模式里没有），关着时哪台服务器还不认它
 - 测试、没验证的：docs/dev/push.md「测试」「没验证的」（模拟器里的 `simctl push` 不经通知扩展：扩展的进程只有真机上看得到）
 
 ## TestFlight
@@ -145,10 +156,13 @@ SwiftTerm，`simctl spawn`），演示模式各页浅色 / 深色截图到 `ios/
 
 `cd cli && cargo test --profile kit -p cca-tests --test suite -- ios_kit`（`tests/ios_kit.rs`，回归的 unit 一节里也跑；要先 `cargo build --release`；没有 swiftc 时跳过）：命令行工具的 swiftc 把 CcaRemoteKit 的源码加上一个 main 编成 macOS 上的程序（编出来的在 `ios/build/test/`，源码没变不重编）。
 - `against_the_spec`：`tests/kit/spec.rs`（照文档独立写的那一份）出数据，`ios/Tests/KitTests` 逐项核对；Swift 封的配对消息、发的记录、签名再拿回 `kit::spec` 核对（签名用 `ssh-keygen -Y verify`）。证书指纹对 EC、RSA、Ed25519 三种证书和 openssl 算的比；通知的 JSON 怎么清理（和 `attach.rs` 的测试同一条）、限流
-- `pair_list_attach_type`、`wrong_pin_and_used_code`、`session_ends`：真的服务器、真的辅助程序（`remote-host` 里的会话、`remote-pair-show --web`），手机那一头是 `ios/tools/ccaguest`：扫链接配对、列会话、接入、敲键、会话里的钩子推通知（`remote-notify`）、只看、会话结束、取消配对；指纹不对一个请求都不发成，配对码只能用一次
+- `pair_list_attach_type`、`wrong_pin_and_used_code`、`session_ends`：真的服务器、真的辅助程序（`remote-host` 里的会话、`remote-pair-show --web`），手机那一头是 `ios/tools/ccaguest`：扫链接配对、列会话、接入、敲键、会话里的钩子推通知（`remote-notify`）、只看、会话结束、取消配对；指纹不对一个请求都不发成，配对码只能用一次。
+  接入时说自己能缩放（ccaguest 的 `--size 40x20`）：接上不改会话的大小、宿主说会话多大（`size 80 24`），手机打了字才照它排（`size 40 20`）
 - `in_the_simulator`（`CCA_IOS_SIM=1`，先跑过 `bash ios/test.sh`：模拟器开着、App 编好了）：模拟器里真的 App（调试版），
   照 `cca remote pair --web` 给的链接配对、接入 box 上真的会话、敲键，box 上收到；会话里推一条通知，App 要弹的标题、副标题、正文对；
   会话开了鼠标上报（假客户端的 `mouse`）以后往下拖三行，box 的终端回显出三格往上的滚轮；截一张 `ios/build/shots/e2e-terminal.png`。
+  大小（`-test-sizes`）：接上时终端照 box 上的 80×24 排（缩小了画），手机上打了字会话照手机排、App 跟着排，box 上打了字又变回 80×24，
+  拖着滚动不改大小。推送带 `-test-push-only`：登记回的是 `ok only`，开了会话以后服务器上的登记只推这个会话，通知照样推到。
   拖动的手势本身（`WheelGate`、惯性）没有自动的测试：模拟器里注入不了触摸，要真机上手指试
   box 在 127.0.0.1 上，ATS 不管本机地址：ATS 拦不拦这里看不出来（见「App」的 `Info.plist`）
 - 改了 CcaRemoteKit 故意弄错一处（比如帧的类型）跑一遍，看测试挂不挂
