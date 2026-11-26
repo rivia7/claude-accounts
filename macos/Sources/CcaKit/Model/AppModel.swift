@@ -730,18 +730,23 @@ final class AppModel {
         return a.login != .loggedIn || usage(for: a)?.errorCode != nil || usage(for: a)?.outdatedLoginPlan != nil
     }
 
+    /// 有没有要主动查用量的工具（开着、有用量、不是 usage_passive 的）：菜单栏面板的「刷新用量」只在有时显示
+    var hasQueryableUsage: Bool {
+        visibleTools.contains { t in (toolState(t)?.enabled ?? (t == .claude)) && features(t).usage && !features(t).usagePassive }
+    }
+
     /// 登录好了能不能查用量：除了“没登录”没有别的原因挡着。旧版 cca 给的 Antigravity 查不了（`unsupported`），
-    /// 没装命令的（`tool_missing`）登录了也查不了。
+    /// 没装命令的（`tool_missing`）登录了也查不了；不查的工具（`usage_passive`：用量在会话里记下，state 里就有）不查。
     private func usageAfterLogin(_ a: Account) -> Bool {
-        guard features(a.tool).usage else { return false }
+        guard features(a.tool).usage, !features(a.tool).usagePassive else { return false }
         let why = a.canWhy["usage"]
         return why == nil || why == .notLoggedIn
     }
 
     private func startDueUsageRuns(lowPower: Bool) {
         let now = Date().timeIntervalSince1970
-        // 在等登录、登录好了也查不了用量的账号（旧版 cca 给的 Antigravity）：不跑 cca … usage（只会失败，留下一条“后台刷新没有成功”），
-        // 按同样的间隔只重读 state，看登录好了没有
+        // 在等登录、登录好了也查不了用量的账号（旧版 cca 给的 Antigravity）和不查用量的工具（usage_passive）：不跑 cca … usage
+        // （只会失败，留下一条“后台刷新没有成功”；不查的只是读一遍记下的），按同样的间隔只重读 state，看登录好了没有
         var watchOnly: [AccountRef] = []
         for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
             let items = accounts(t).filter { isRelogging($0, now: now) && !usageAfterLogin($0) }.map { a in
@@ -753,7 +758,8 @@ final class AppModel {
             for r in watchOnly { usageAttempted[r] = now }
             track { [weak self] in await self?.loadState() }
         }
-        for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
+        // 不查用量的工具（usage_passive：Claude、Antigravity 的用量是 cca 启动的会话里记下的，usage.json 变了 state 就跟着变）不定时跑
+        for t in visibleTools where (toolState(t)?.enabled ?? (t == .claude)) && !features(t).usagePassive {
             // 同一个工具一次只查一批；看不见时，等着用户同意的不白跑
             guard !usageRefreshing.contains(t), !usageRefreshingKeys.contains(where: { $0.tool == t }),
                   isVisible || usageNeedsConsent[t] == nil else { continue }
@@ -809,12 +815,14 @@ final class AppModel {
     }
 
     /// 刷新用量。manual 为真时（用户点的）要同意的事弹框问；自动刷新不弹框，只记下来显示一条提示。
-    /// key 为 nil 时查这个工具的全部账号；tool 为 nil 时 Claude 和 ChatGPT 一起（各走各的闸门，并行）。
+    /// key 为 nil 时查这个工具的全部账号；tool 为 nil 时各个工具一起（各走各的闸门，并行）。不查用量的工具（usage_passive）跳过：
+    /// 它们的用量是 cca 启动的会话里记下的，读 state 就有。
     func refreshUsage(tool only: ToolID? = nil, key: String? = nil, manual: Bool) {
         guard phase == .ready, let client else { return }
         let tools = only.map { [$0] } ?? visibleTools
         for t in tools {
-            guard toolState(t)?.enabled ?? (t == .claude), accounts(t).contains(where: { $0.can.usage }) else { continue }
+            guard toolState(t)?.enabled ?? (t == .claude), !features(t).usagePassive,
+                  accounts(t).contains(where: { $0.can.usage }) else { continue }
             if let key {
                 usageRefreshingKeys.insert(AccountRef(tool: t, key: key))
             } else {

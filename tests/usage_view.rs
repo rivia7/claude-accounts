@@ -24,6 +24,7 @@ pub const MODULE: Module = Module {
         case!(weeks_record_file),
         case!(usage_weeks_view),
         case!(usage_cached_keeps_model_scoped),
+        case!(passive_rows_use_what_sessions_noted),
     ],
 };
 
@@ -190,8 +191,13 @@ impl Fx {
 
     /// cca usage 最后那一步：把后台查询的结果整理成表格（mode 是 table）或 JSON；退出码要是 rc、stderr 是空的，给出 stdout
     fn render(&self, keys: &[String], mode: &str, cols: u32, rc: i32) -> String {
-        let (out, cols) = (self.out.display().to_string(), cols.to_string());
-        let mut args = vec!["usage-render", out.as_str(), mode, cols.as_str(), ""];
+        self.render_from(&self.out.display().to_string(), keys, mode, cols, rc)
+    }
+
+    /// 同上，后台查询的结果在 tmp 目录里；不查的工具（Claude、agy）bash 给的 tmp 是空的：都用记下的
+    fn render_from(&self, tmp: &str, keys: &[String], mode: &str, cols: u32, rc: i32) -> String {
+        let cols = cols.to_string();
+        let mut args = vec!["usage-render", tmp, mode, cols.as_str(), ""];
         args.extend(keys.iter().map(String::as_str));
         let r = self.run(&args, "", &[]);
         assert_eq!(r.code, rc, "{}", r.err);
@@ -617,4 +623,53 @@ fn usage_cached_keeps_model_scoped(t: &mut Ctx) {
     );
     let e = pick([None, None]); // 哪边都没有：没有用量可给
     assert_eq!((&e["source"], &e["fetched_epoch"], &e["seven_day"]), (&Value::from("none"), &Value::Null, &Value::Null));
+}
+
+/// 不查的工具（Claude、agy：bash 不起后台查询，给的 tmp 是空的）：登录着的账号用记下的（cca 启动的会话里状态栏的命令记进 usage.json）。
+/// 刚记下的不说多久前，旧了说“N 前记下”；还没记下的说怎么记下（--json 里没有数、也不算出错）；没登录的照旧；表格下面一行说这些数
+/// 是从哪来的；有一个登录着就是退出码 0
+fn passive_rows_use_what_sessions_noted(t: &mut Ctx) {
+    let mut fx = Fx::new(t);
+    fx.now = now_secs();
+    let keys: Vec<String> =
+        ["alice@example.com", "bob@example.com", "carol@example.com", "dave@example.com"].map(String::from).to_vec();
+    let mut table = json::Obj::new();
+    for key in &keys {
+        table.insert(key, "US-A");
+    }
+    write_json(fx.sb.cca.join("accounts.json"), &Value::Obj(table), None);
+    for key in &keys[..3] {
+        fx.login(key, None, None, &obj! {});
+    }
+    let noted = |ago: f64, who: &str, five: i64| {
+        obj! { "fetchedAtMs" => ((fx.now - ago) * 1000.0) as i64, "accountUuid" => who, "utilization" => fx.rl(five, 41, &obj! {}) }
+    };
+    fx.cache(&keys[0], Some(&noted(5.0, "uuid-alice", 13)), "claude");
+    fx.cache(&keys[1], Some(&noted(2.0 * 3600.0 + 30.0, "uuid-bob", 98)), "claude");
+    let lines: Vec<String> = py::splitlines(&fx.render_from("", &keys, "table", 160, 0)).into_iter().map(str::to_string).collect();
+    let row = |email: &str| {
+        lines.iter().find(|l| l.contains(email)).cloned().unwrap_or_else(|| panic!("没有 {email} 那一行：{lines:#?}"))
+    };
+    assert_match(&row("alice@example.com"), r"^ {2}alice@example.com +Max +13% 2小时13分后 +41% 周. \d\d:\d\d$");
+    assert_match(&row("bob@example.com"), r"^ {2}bob@example.com +Max +98% .* +41% .*  2 小时前记下$");
+    assert_match(&row("carol@example.com"), r"还没记下（cca @carol@example.com 开一次会话、发一句话以后就有）$");
+    assert_match(&row("dave@example.com"), r"还没登录（cca @dave@example.com 登录）$");
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("  cca 不主动查 Claude Code 的用量：这些是 cca 启动的会话里记下的，最近没用的账号是上次记下的")
+    );
+    let doc = json::parse(&fx.render_from("", &keys, "json", 120, 0)).expect("JSON");
+    let a = doc["accounts"].list();
+    let got: Vec<Value> = a.iter().map(|x| list![&x["source"], &x["stale"], &x["error_code"]]).collect();
+    assert_eq!(
+        got,
+        [
+            list!["cache", false, Value::Null],
+            list!["cache", true, Value::Null],
+            list!["none", false, Value::Null],
+            list!["none", false, "login"]
+        ]
+    );
+    // 一个都没登录：退出码 1
+    fx.render_from("", &keys[3..], "table", 80, 1);
 }

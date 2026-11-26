@@ -1,21 +1,19 @@
 //! 用量（`cmd_usage_query` 到 `cmd_reset_done`）：usage-query、login-plan-forget、usage-render、reset-plan、reset-done，
-//! 以及时间的写法、套餐的叫法和档位、用量缓存、每周用量。
+//! 以及时间的写法、套餐的叫法和档位、用量缓存、每周用量、被动记下的用量（`usage_note`）。
 //!
-//! 这一块的子命令都移植了。`Tool` 里按工具分派、和用量 / 套餐有关的几个方法（who、plan、plan_tier、outdated_login_plan、
-//! usage_query、usage_caches）也在这里；Codex 那一半（app-server、登录身份）在 codex.rs。
+//! 只有 Codex 的用量是查的（usage-query：codex 的 app-server）。Claude、agy 的不查（cca 不用打印模式）：cca 启动的交互会话里
+//! 状态栏的命令把会话里看到的额度记进 usage.json（statusline.rs、agy.rs → `usage_note`），cca usage 只读记下的。
+//! `Tool` 里按工具分派、和用量 / 套餐有关的几个方法（who、plan、plan_tier、outdated_login_plan、usage_query、usage_passive、
+//! usage_caches）也在这里；Codex 那一半（app-server、登录身份）在 codex.rs。
 
-use super::agy::{
-    agy_cell, agy_table_lines, agy_usage_query, agy_week, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups,
-};
-use super::codex::{
-    agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query, json_loads_bytes, temp_file, Got, Piped,
-};
+use super::agy::{agy_cell, agy_table_lines, agy_week, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups};
+use super::codex::{agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query};
 use super::cost::cost_kick;
 use super::keyshare::{is_num, keyshare_kick};
 use super::{arg, arity, Cmd};
-use crate::core::base::{sh, str_or_empty, CCA_HOME};
+use crate::core::base::{sh, str_or_empty};
 use crate::core::ctx::{acct_json, ctx, oauth_of};
-use crate::core::model::{adir, is_api, name_of, parse_key};
+use crate::core::model::{acct_id, adir, is_api, name_of, parse_key};
 use crate::core::tool::{t, Kind, Tool, AGY_TIERS};
 use crate::py::fs::{load_quiet, read_text, save_json};
 use crate::py::io;
@@ -23,11 +21,10 @@ use crate::py::json;
 use crate::py::num::{float_repr, half_up, round_to};
 use crate::py::obj::{repr_str, Dict, V};
 use crate::py::path;
-use crate::py::proc::env_or_empty;
 use crate::py::text::{self, fit};
 use crate::py::time::{self, timegm, Tm};
 use crate::py::uni;
-use crate::py::{exit, Fail, R};
+use crate::py::{die, exit, Fail, R};
 use crate::{dict, out, re};
 
 /// 这个模块移植好的子命令
@@ -39,9 +36,8 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("reset-done", cmd_reset_done),
 ];
 
-// --- 订阅用量（cca usage、菜单）：让 Claude Code 自己查（get_usage 控制请求），cca 不碰登录凭证 ---------------
-// （Codex 账号：让 codex 的 app-server 查，account/rateLimits/read，见 codex.rs 的 codex_usage_query）
-pub const USAGE_REQ: &str = "cca-usage";
+// --- 订阅用量（cca usage、菜单）：Codex 让 codex 的 app-server 查（account/rateLimits/read，codex.rs 的 codex_usage_query），
+// cca 不碰登录凭证。Claude、agy 不查：用 cca 启动的会话里记下的（usage_note）-----------------------------------------
 pub const WEEKDAYS: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
 /// 查不了的原因 → 给人看的说明（花括号里的由 usage_why 填）
 const USAGE_WHY: &[(&str, &str)] = &[
@@ -56,6 +52,8 @@ const USAGE_WHY: &[(&str, &str)] = &[
     ("nolimits", "没有订阅用量（按量计费的账号，或者登录已失效：{cmd} login {name} 重新登录）"),
     ("auth", "登录已失效（比如改过密码）：{cmd} login {name} 重新登录"),
     ("error", "查询失败：{msg}"),
+    // 不查的工具（Claude、agy）还没记下过：cca 启动的会话里收到回应以后才有
+    ("passive", "还没记下（{cmd} @{name} 开一次会话、发一句话以后就有）"),
 ];
 
 // --- 原来靠 Python 的数字、文字的几样行为 --------------------------------------------------------------------
@@ -298,86 +296,6 @@ pub(super) fn capitalize(s: &str) -> String {
 pub fn cmd_usage_query(args: &[String]) -> R<()> {
     arity("cmd_usage_query", args, 1, 2)?;
     t().usage_query(&args[0], arg(args, 1, "25"))
-}
-
-/// 在账号的环境里（bash 的 child_env 已经设好 CLAUDE_CONFIG_DIR 和出口）无界面启动 claude，发 get_usage 控制
-/// 请求取用量。--safe-mode 不加载 hooks、MCP、插件；不发消息、不耗额度；token 由 Claude Code 自己读取和刷新。
-/// 拿到回应之前 stdin 一直开着（太早关掉请求可能被取消）。stdout 打印一行 JSON：
-/// {ok: true, usage: 回应} 或 {ok: false, why: unsupported|timeout|error, msg: 说明}
-pub fn claude_usage_query(claude: &str, timeout: &str) -> R<()> {
-    let cd = env_or_empty("CLAUDE_CONFIG_DIR");
-    let err = temp_file()?;
-    let cwd = if path::isdir(&cd) { path::dirname(&cd) } else { CCA_HOME.clone() };
-    let argv = [
-        claude,
-        "-p",
-        "--safe-mode",
-        "--no-session-persistence",
-        "--strict-mcp-config",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-    ];
-    let mut p = match Piped::spawn(&argv, &cwd, err) {
-        Ok(p) => p,
-        Err(e) if e.is_os() || e.is("OSError") => {
-            out!("{}", json::dumps(&V::Dict(dict! { "ok" => false, "why" => "error", "msg" => e.to_string() }), json::LINE));
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
-    let req = dict! { "type" => "control_request", "request_id" => USAGE_REQ, "request" => dict! { "subtype" => "get_usage", "skip_behaviors" => true } };
-    p.write(format!("{}\n", json::dumps(&V::Dict(req), json::Fmt::new())).as_bytes()); // 写不进去（它已经退出了）不管，下面读到头再说
-    let mut out = dict! { "ok" => false, "why" => "timeout", "msg" => "" };
-    let end = time::time() + float_arg(timeout)?;
-    loop {
-        let line = match p.get(end, false)? {
-            Got::Empty => break,
-            // 没回应就退出了：多半是太老的版本（不认 --safe-mode 等参数）
-            Got::Eof => {
-                p.wait(3.0);
-                let said = p.err_tail();
-                let tail = text::splitlines(text::strip(&said));
-                let old = re!(r"unknown option|nsupported").found(&tail.join(" "));
-                let msg = match tail.last() {
-                    Some(last) => text::head(last, 200).to_string(),
-                    None => format!(
-                        "没有回应就退出了（退出码 {}）",
-                        p.returncode().map_or_else(|| "None".to_string(), |rc| rc.to_string())
-                    ),
-                };
-                out = dict! { "ok" => false, "why" => if old { "unsupported" } else { "error" }, "msg" => msg };
-                break;
-            }
-            Got::Line(line) => line,
-        };
-        let Some(V::Dict(m)) = json_loads_bytes(&line) else { continue };
-        if !m.get("type").is_some_and(|x| x.as_str() == Some("control_response")) {
-            continue;
-        }
-        let Some(r) = m.dict("response") else { continue };
-        if !r.get("request_id").is_some_and(|x| x.as_str() == Some(USAGE_REQ)) {
-            continue;
-        }
-        if r.get("subtype").is_some_and(|x| x.as_str() == Some("success")) {
-            out = dict! { "ok" => true, "usage" => r.dict("response").unwrap_or_default() };
-        } else {
-            let e = str_or_empty(&r.get("error"));
-            out = dict! { "ok" => false, "why" => if e.contains("nsupported") { "unsupported" } else { "error" }, "msg" => text::head(&e, 200) };
-        }
-        break;
-    }
-    if out.get("why").is_some_and(|w| w.as_str() == Some("timeout")) {
-        p.kill();
-    }
-    p.close_stdin();
-    if !p.wait(5.0) {
-        p.kill();
-    }
-    out!("{}", json::dumps(&V::Dict(out), json::LINE));
-    Ok(())
 }
 
 /// ISO 时间（小数秒、Z、时区都行）或秒/毫秒数 → 秒；看不懂返回 None。月份不在 1–12、年份是 0 时 Python 的 calendar.timegm
@@ -767,16 +685,100 @@ pub fn usage_scoped_fill(rl: &Dict, prev: &Dict) -> Dict {
 }
 
 /// 查到的用量存进 usage.json，本周的用量顺带记进每周用量（weeks_record；先记它：App 看到 usage.json 变了就重读 state）。
-/// Claude 账号顺带记下查询回的 subscription_type（Claude Code 登录时记的套餐，login_plan）：
-/// 放在顶层、不进用量窗口，用量可能取 Claude Code 自己那份更新的缓存，这一项只有 cca 查的时候才拿得到
+/// Claude 账号顺带记下 Claude Code 登录时记的套餐（login_plan：以前 cca 查用量时 get_usage 回的 subscription_type）：
+/// 放在顶层、不进用量窗口，用量可能取 Claude Code 自己那份更新的缓存
 pub fn usage_save(key: &str, rl: &Dict, sub: &V) -> R<()> {
+    usage_write(key, rl, sub, None)
+}
+
+/// usage_save 的做法；seen 是被动记下时（usage_note）各个会话上次记下时的请求计数，存在 usage.json 的 seen 里
+fn usage_write(key: &str, rl: &Dict, sub: &V, seen: Option<Dict>) -> R<()> {
     let ms = (time::time() * 1000.0) as i64;
     weeks_record(key, rl, ms as f64 / 1000.0)?;
     let j = dict! { "fetchedAtMs" => ms, "accountUuid" => t().who(key)?, "utilization" => rl };
     if t().kind == Kind::Claude && sub.as_str().is_some_and(|s| !s.is_empty()) {
         j.set("login_plan", sub);
     }
+    if let Some(seen) = seen {
+        j.set("seen", seen);
+    }
     quiet_os(save_json(&usage_file(key), &V::Dict(j), Some(0o600), true))
+}
+
+// --- 被动记下的用量（Claude、agy）：cca 不查它们的用量（不用打印模式），cca 启动的交互会话里状态栏的命令记 ------------
+
+/// 额度和记着的一样时最多这么久记一次（只是刷新取到的时间；agy 的不刷新，见 usage_note）
+pub const USAGE_NOTE_EVERY: f64 = 60.0;
+/// usage.json 的 seen 里记着最近这么多个会话
+const USAGE_NOTE_SESSIONS: usize = 8;
+
+/// 状态栏的命令（statusline.rs 的 `cca _claude-statusline`、agy.rs 的 `cca _agy-statusline`）在会话里看到的额度记进账号的 usage.json
+/// （usage_write：连同每周用量），记了就让配对的手机那边更新（status_kick）。Claude 账号以前查用量时记下的 Claude Code 的套餐
+/// （login_plan）不再留着：状态栏的 JSON 里没有它，留着旧的就会一直说“套餐过时”（换过套餐、在 Claude Code 里重新登录过以后）。id、dir 是账号目录名
+/// 和账号目录（statusline_input 核对过），rl 是换成 usage.json 的样子的额度。
+/// 状态栏的命令一会儿就起一次，额度却只在请求回来时才变：seen 是这个会话和它的请求计数（Claude Code 的 cost.total_api_duration_ms，
+/// agy 的 token 数和花费），这个会话从上次记下以后没有新的请求就不记——重画状态栏（改了窗口大小、refreshInterval）时额度还是旧的，
+/// 记下就把旧的数当成刚取到的了（同一个账号别的会话可能已经记了更新的）。额度和记着的一样时，refresh（Claude Code：额度是每个
+/// 回应带回来的，有了新的回应就是刚取到的）最多 USAGE_NOTE_EVERY 秒刷新一次取到的时间，不然（agy：不知道它多久取一次额度）不写。
+/// 账号目录对应账号表里的一个官方账号、登录的就是这个账号才记（email 是状态栏 JSON 里的邮箱，要和登录的一样；Claude Code 的
+/// JSON 里没有：None）。什么都不输出，出什么错都不说（状态栏的命令不出声）
+pub fn usage_note(id: &str, dir: &str, rl: &Dict, seen: Option<(&str, &str)>, email: Option<&str>, refresh: bool) {
+    let _ = usage_note_checked(id, dir, rl, seen, email, refresh);
+}
+
+fn usage_note_checked(id: &str, dir: &str, rl: &Dict, seen: Option<(&str, &str)>, email: Option<&str>, refresh: bool) -> R<()> {
+    let old = load_quiet(&path::join(dir, "usage.json")).and_then(|v| v.as_dict());
+    let marks = old.as_ref().and_then(|o| o.dict("seen")).unwrap_or_default();
+    if let Some((session, mark)) = seen {
+        if marks.get(session).is_some_and(|m| m.as_str() == Some(mark)) {
+            return Ok(());
+        }
+    }
+    if let Some(o) = &old {
+        if o.get("utilization").is_some_and(|u| u.py_eq(&V::Dict(rl.copy()))) {
+            let at = o.get("fetchedAtMs").filter(is_num).map(|x| num(&x) / 1000.0);
+            if !refresh || at.is_some_and(|at| (0.0..USAGE_NOTE_EVERY).contains(&(time::time() - at))) {
+                return Ok(());
+            }
+        }
+    }
+    let (_, table, _) = ctx()?;
+    let Some(key) = table.keys().into_iter().find(|k| acct_id(k, t()) == id && !is_api(&table.at(k))) else { return Ok(()) };
+    let key = key.to_string();
+    let got = t().email(&key)?.to_lowercase();
+    let want = parse_key(&key).1.to_lowercase();
+    if got.is_empty() || (!want.is_empty() && got != want) || email.is_some_and(|e| e.to_lowercase() != got) {
+        return Ok(());
+    }
+    let keep = Dict::new();
+    if let Some((session, mark)) = seen {
+        keep.set(session, mark);
+    }
+    for (s, m) in marks.items() {
+        if keep.len() >= USAGE_NOTE_SESSIONS {
+            break;
+        }
+        if !keep.has(&s) {
+            keep.set(s, m);
+        }
+    }
+    usage_write(&key, rl, &V::None, Some(keep))?;
+    crate::cmd::remote::status_kick();
+    Ok(())
+}
+
+/// 不查用量的工具（Claude、agy：Tool::usage_passive）在 cca usage 里每个账号的结果（和 usage_result 的格式一样）：没登录、登录的
+/// 不是这个账号（和 bash 的 usage_one 一样只看账号目录里的状态），别的是 passive（用记下的）
+fn passive_result(key: &str) -> R<Dict> {
+    let e = t().email(key)?;
+    let want = parse_key(key).1;
+    Ok(if e.is_empty() {
+        dict! { "ok" => false, "why" => "login", "msg" => "" }
+    } else if !want.is_empty() && e.to_lowercase() != want.to_lowercase() {
+        dict! { "ok" => false, "why" => "mismatch", "msg" => e }
+    } else {
+        dict! { "ok" => false, "why" => "passive", "msg" => "" }
+    })
 }
 
 // 每周用量（App 账号页的「每周用量」、「用量统计」页；macos/PROTOCOL.md 2.2 的 usage_weeks）：Claude、OpenAI 都不给过去几周的额度，
@@ -1348,7 +1350,7 @@ pub fn usage_entry(r: &Row, now: f64) -> R<Dict> {
     };
     let rl = &r.rl;
     let at = r.at.filter(|at| *at != 0.0); // `if at`：0 和没有一样
-    let failed = r.why.truthy();
+    let failed = r.why.truthy() && r.why.as_str() != Some("passive"); // 不查的工具还没记下过：不是出错，error 这几项是 null
     let a = Dict::new();
     a.set("account", &r.name);
     a.set("key", &r.key);
@@ -1471,6 +1473,41 @@ pub fn usage_json(rows: &[Row], now: f64, api: &[String]) -> R<Dict> {
     Ok(j)
 }
 
+/// 表格里这一行的数算不算新的（不用变暗）：查到的；不查的工具（usage_passive）记下的还不旧（stale_after 以内）
+pub(super) fn fresh(r: &Row, now: f64) -> bool {
+    r.source == "live" || (r.source == "cache" && t().usage_passive() && r.at.is_some_and(|at| now - at < stale_after()))
+}
+
+/// 表格的备注里说这一行的数是多久以前的：查不到、用了缓存的（why 是查不到的原因）是“缓存（N 前）”；不查的工具（usage_passive）
+/// 记下的（why 是空的）还不旧（fresh）时不说（每一行都是记下的，表格下面说了），旧了说“N 前记下”。不是缓存的行：None
+pub(super) fn age_note(r: &Row, now: f64) -> R<Option<String>> {
+    if r.source != "cache" {
+        return Ok(None);
+    }
+    let ago_s = ago(now - r.at.unwrap_or(now))?;
+    Ok(if r.why.truthy() {
+        Some(format!("缓存（{ago_s}前）"))
+    } else if fresh(r, now) {
+        None
+    } else {
+        Some(format!("{ago_s}前记下"))
+    })
+}
+
+/// 不查的工具（Claude、agy）的表格下面那一行：这些数是从哪来的。终端窄了换短的说法（80 列放不下长的），再窄才截断
+fn passive_note(cols: &str, color: bool) -> R<String> {
+    let wide = (cols_of(cols)?.max(40) - 2) as usize;
+    let product = t().product;
+    let long = format!("  cca 不主动查 {product} 的用量：这些是 cca 启动的会话里记下的，最近没用的账号是上次记下的");
+    let text = if uni::width(&long) <= wide {
+        long
+    } else {
+        format!("  cca 不主动查 {product} 的用量：这些是会话里记下的")
+    };
+    let said = fit(&text, wide, false);
+    Ok(if color { format!("\x1b[2m{said}\x1b[0m") } else { said })
+}
+
 /// cca usage 的表格里备注至少留这么宽（放得下一项原因或额度）；不够时先收起别的列
 const USAGE_NOTE_FLOOR: i64 = 20;
 
@@ -1578,8 +1615,10 @@ fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Str
         if r.source == "cache" {
             // 原因在前（窄的终端里先保住它），再说是多久以前的数
             let mut first = if r.why.truthy() { vec![usage_why(r, WhyTable::Usage)?] } else { Vec::new() };
-            let at = r.at.unwrap_or_else(|| panic!("TypeError: 缓存的用量行没有取到数据的时间"));
-            first.push(format!("缓存（{}前）", ago(now - at)?));
+            if r.at.is_none() {
+                panic!("TypeError: 缓存的用量行没有取到数据的时间");
+            }
+            first.extend(age_note(r, now)?);
             first.append(&mut notes);
             notes = first;
         }
@@ -1668,7 +1707,7 @@ fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Str
     let painted = |cells: &[(String, &str)]| cells.iter().map(|(s, code)| paint(s, code)).collect::<Vec<_>>().join("  ");
     let mut lost = false;
     for d in &data {
-        let dim = if d.r.source == "live" { "" } else { "2" };
+        let dim = if fresh(d.r, now) { "" } else { "2" };
         let mut cells: Vec<(String, &str)> = vec![(fit(&acct(d.r, show), a, true), dim)];
         if p != 0 {
             cells.push((fit(&d.r.plan, p, true), dim));
@@ -1723,15 +1762,18 @@ fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Str
     Ok(lines)
 }
 
-/// 把后台查询的结果整理成表格或 JSON（stdout）；查到的存进 usage.json，查不到的用缓存顶上（注明多久前）
+/// 把后台查询的结果整理成表格或 JSON（stdout）；查到的存进 usage.json，查不到的用缓存顶上（注明多久前）。
+/// 不查的工具（Claude、agy：usage_passive）bash 不起后台查询、tmp 给的是空的：登录着的账号都用记下的（cca 启动的会话里记的，
+/// usage_note）。tmp 不空时照查询的结果整理（tests/usage_view.rs 拿 Claude 的条目测表格、JSON 的写法）
 pub fn cmd_usage_render(args: &[String]) -> R<()> {
     arity("cmd_usage_render", args, 4, usize::MAX)?;
     let (tmp, mode, cols, color, keys) = (args[0].as_str(), args[1].as_str(), args[2].as_str(), args[3].as_str(), &args[4..]);
     let (_, table, _) = ctx()?;
     let now = time::time();
+    let passive = t().usage_passive() && tmp.is_empty();
     let mut rows = Vec::new();
     for (i, k) in keys.iter().enumerate() {
-        let mut r = usage_result(tmp, i)?;
+        let mut r = if passive { passive_result(k)? } else { usage_result(tmp, i)? };
         let u = usage_take(&r)?;
         if r.truthy("ok") && u.is_none() {
             r = dict! { "ok" => false, "why" => "nolimits", "msg" => "" };
@@ -1755,6 +1797,9 @@ pub fn cmd_usage_render(args: &[String]) -> R<()> {
                     row.plan = t().plan(k, &x.rl.at("plan"))?;
                 }
                 row.rl = x.rl;
+                if passive {
+                    row.why = V::None; // 记下的就是有的：不是查不了
+                }
             }
         }
         // 没登录、登录的不是这个账号时不说
@@ -1773,6 +1818,9 @@ pub fn cmd_usage_render(args: &[String]) -> R<()> {
         out!("{}", json::dumps(&V::Dict(usage_json(&rows, now, &api)?), json::FILE));
     } else {
         usage_table(&rows, now, cols, color == "1", &api)?;
+        if passive {
+            out!("{}", passive_note(cols, color == "1")?);
+        }
     }
     io::flush_out();
     keyshare_kick(false); // 开着设备统计时：记下备查的 API key 和登录了同一个账号的其他设备同步（后台，最多 KEYSHARE_EVERY 一次）
@@ -1780,7 +1828,9 @@ pub fn cmd_usage_render(args: &[String]) -> R<()> {
         cost_kick(); // 折合金额：在后台统计、和别的设备同步（最多 COST_EVERY 一次）
     }
     crate::cmd::remote::status_kick(); // 有手机配对时：在后台给它放账号的状态、推额度用完的通知（remote/status.rs）
-    exit(if rows.iter().any(|r| r.source != "none") { 0 } else { 1 })
+
+    // 有数（查到的、记下的），或者不查的工具登录着、只是还没记下：0；都没登录、查不了：1
+    exit(if rows.iter().any(|r| r.source != "none" || r.why.as_str() == Some("passive")) { 0 } else { 1 })
 }
 
 // --- 重置额度（cca codex reset）：查不了、重置不了的原因 → 说明，和图形界面的失败原因（fail 事件的 code，macos/PROTOCOL.md 4.5）---
@@ -2027,13 +2077,19 @@ impl Tool {
         })
     }
 
-    /// `T.usage_query(bin_, timeout)`
+    /// `T.usage_query(bin_, timeout)`：只有 Codex 的用量是查的（codex 的 app-server）
     pub fn usage_query(&self, bin_: &str, timeout: &str) -> R<()> {
         match self.kind {
-            Kind::Claude => claude_usage_query(bin_, timeout),
             Kind::Codex => codex_usage_query(bin_, timeout),
-            Kind::Agy => agy_usage_query(bin_, timeout),
+            Kind::Claude | Kind::Agy => {
+                die(format!("cca 不主动查 {} 的用量（不用打印模式）：用量是 cca 启动的会话里记下的", self.product))
+            }
         }
+    }
+
+    /// 用量不查、只用记下的：Claude、agy（cca 不用打印模式；cca 启动的交互会话里状态栏的命令记下会话里看到的额度，usage_note）
+    pub fn usage_passive(&self) -> bool {
+        self.kind != Kind::Codex
     }
 
     /// `T.usage_caches(key)`：最近一次的用量从哪找——cca 存的 usage.json，Claude 还有 Claude Code 自己缓存的那份

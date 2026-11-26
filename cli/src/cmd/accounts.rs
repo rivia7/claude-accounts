@@ -51,8 +51,9 @@ pub const CMDS: &[Cmd] = &[
 ];
 
 /// `py launch-args 账号 -- 用户参数…`：只这一次启动加在用户参数前面的（bash 的 run_account 记进 LAUNCH_ARGS，放在 ACC_ARGS 后面）。
-/// 和 `py env` 的 ACC_ARGS 分开：它要看用户参数，而切节点时 pick_route 会重新 eval `py env`。agy 交互的会话带上 cca 的状态栏
-/// 命令（记下套餐，做完了、在等你时推通知：`agy_launch_args`），Codex 交互的会话带上推通知的 notify（`codex_launch_args`）。
+/// 和 `py env` 的 ACC_ARGS 分开：它要看用户参数，而切节点时 pick_route 会重新 eval `py env`。Claude 的 --settings（hooks、第三方 API
+/// 账号的地址和 key，官方账号交互的会话还有记下用量的状态栏命令：`claude_launch_args`）；agy 交互的会话带上 cca 的状态栏
+/// 命令（记下套餐和额度，做完了、在等你时推通知：`agy_launch_args`），Codex 交互的会话带上推通知的 notify（`codex_launch_args`）。
 /// `--hosted`（`py launch-args 账号 --hosted -- …`）：这次放进会话宿主（bash 的 HOSTCMD 不空），Codex 另让它把在等你写成终端的通知序列
 pub fn cmd_launch_args(args: &[String]) -> R<()> {
     let hosted = args.get(1).is_some_and(|a| a == "--hosted");
@@ -64,7 +65,7 @@ pub fn cmd_launch_args(args: &[String]) -> R<()> {
     let out = match t().kind {
         Kind::Agy => super::agy::agy_launch_args(&args[0], user),
         Kind::Codex => super::codex::codex_launch_args(&args[0], user, hosted),
-        Kind::Claude => Vec::new(),
+        Kind::Claude => claude_launch_args(&args[0], user)?,
     };
     sh_array("LAUNCH_ARGS", &out);
     Ok(())
@@ -163,6 +164,31 @@ pub fn api_env(v: &Dict) -> Dict {
         }
     }
     env
+}
+
+/// 启动 Claude Code 时只这一次加在用户参数前面的 --settings（`cmd_launch_args`）：hooks（`claude_hooks`：记下会话是哪个账号的，
+/// 远程会话开着时还有「做完了 / 在等你」）；第三方 API 账号的是 `api_settings`（再加地址、模型和 apiKeyHelper）；官方账号交互的
+/// 会话再带上 cca 的状态栏命令（statusline.rs 的 `claude_statusline`：把会话里看到的额度记下来，cca 不主动查用量）。都没有时不加。
+/// 用户自己再写 --settings 时 Claude Code 只认后写的那个，这一份就没了
+pub fn claude_launch_args(key: &str, user: &[String]) -> R<Vec<String>> {
+    let (_, table, _) = ctx()?;
+    let settings = match table.get(key).and_then(|v| v.as_dict()) {
+        Some(d) => api_settings(key, &d),
+        None => {
+            let s = Dict::new();
+            if let Some(h) = claude_hooks(key) {
+                s.set("hooks", h);
+            }
+            if let Some(line) = super::statusline::claude_statusline(key, user) {
+                s.set("statusLine", line);
+            }
+            if s.is_empty() {
+                return Ok(Vec::new());
+            }
+            json::dumps(&V::Dict(s), json::LINE)
+        }
+    };
+    Ok(vec!["--settings".to_string(), settings])
 }
 
 /// 第三方 API 账号的 claude --settings：key 由 apiKeyHelper 现取（回调 cca _api-key，不进环境变量），
@@ -1364,20 +1390,9 @@ impl Tool {
     /// `T.run_args(key, v)`：启动账号时加在用户参数前面的
     pub fn run_args(&self, key: &str, v: &V) -> Vec<String> {
         match self.kind {
-            // 这个账号自己的目录加成工作目录（cca_dir_args）；再加 --settings：hooks（claude_hooks：记下会话是哪个账号的，
-            // 远程会话开着时还有「做完了 / 在等你」），第三方 API 账号的还有地址、模型和 apiKeyHelper
-            Kind::Claude => {
-                let mut out = cca_dir_args(key);
-                let settings = match v.as_dict() {
-                    Some(d) => Some(api_settings(key, &d)),
-                    None => claude_hooks(key).map(|h| json::dumps(&V::Dict(dict! { "hooks" => h }), json::LINE)),
-                };
-                if let Some(s) = settings {
-                    out.push("--settings".to_string());
-                    out.push(s);
-                }
-                out
-            }
+            // 这个账号自己的目录加成工作目录（cca_dir_args）。--settings 不在这里：它要看用户参数（交互的会话才带状态栏命令），
+            // 在 launch-args 里（claude_launch_args）
+            Kind::Claude => cca_dir_args(key),
             // --no-daemon：不挂到常驻的后台进程上（它的代理定死在它启动那一刻）；第三方 API 账号再加模型服务的 -c
             Kind::Codex => {
                 let x = codex_probe(&env_or_empty("CCA_BIN"));

@@ -13,7 +13,7 @@ Got more than one Claude account (say, a personal one and a work one)? cca keeps
 - **Separate sign-ins**: every account has its own login, and they don't affect each other. Works with Claude Code, Codex and Antigravity (`agy`) in the terminal, the Claude and ChatGPT desktop apps, and the web (each account gets its own Chrome window).
 - **Separate network exits**: each account always goes online through the proxy node you choose, so exit IPs never mix. At home it goes through your router; away from home cca switches to its built-in proxy.
 - **Shared work**: chat history, memory, settings, skills, plugins and MCP servers are shared by all accounts. Switch accounts in the middle of a task and carry on.
-- **Usage at a glance**: how much of each account's 5-hour and weekly quota is used, and when it resets. The app also nudges you to use accounts whose weekly quota resets soon with plenty left.
+- **Usage at a glance**: how much of each account's 5-hour and weekly quota is used, and when it resets (for Claude and Antigravity it's recorded in sessions started through cca, so an account you haven't used in a while shows what was last recorded). The app also nudges you to use accounts whose weekly quota resets soon with plenty left.
 - **Checks before launch**: where the exit is, how clean the IP is, whether the right account is signed in. If something is wrong, cca stops or asks you first.
 - **Third-party APIs as accounts**: any service compatible with the Anthropic API, with its URL and key, can sit next to your official accounts.
 
@@ -152,7 +152,7 @@ A Team is a group of devices plus one shared setup: which accounts to use, and w
 
 ## Is it safe?
 
-- **Your credentials stay with the official tools**: Claude Code, Codex and Antigravity sign in and store their credentials themselves. cca never stores or forwards your credentials and never touches the access tokens; it only reads which email and plan are signed in, to make sure it's the right account. Usage is checked by those tools too, without sending a message or using any quota.
+- **Your credentials stay with the official tools**: Claude Code, Codex and Antigravity sign in and store their credentials themselves. cca never stores or forwards your credentials and never touches the access tokens; it only reads which email and plan are signed in, to make sure it's the right account. Usage isn't fetched with extra requests either: Claude Code and Antigravity hand their quota to the status line of sessions started through cca, and cca records it (it never uses non-interactive modes such as `claude -p` or `codex exec`, and won't run them for you); for ChatGPT accounts Codex checks usage itself. No message is sent and no quota is used.
 - **Passwords and keys**: the router password is used once and never saved. Third-party API keys are stored in the Keychain (on Linux, in files only you can read) and never appear in command-line arguments or environment variables.
 - **Checks before launch**:
   - stops if the exit is in a region the provider doesn't serve (for example mainland China or Hong Kong);

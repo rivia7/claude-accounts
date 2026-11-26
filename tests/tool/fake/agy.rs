@@ -6,18 +6,16 @@
 //! 读一行：读到头说 login cancelled、退出码 1；授权码（或整个网址里的 code）以 good 开头算成功（不是就报错再问），token 写进
 //! antigravity-cli/antigravity-oauth-token（id_token_email 取 CCA_ACCOUNT 里的邮箱，一次性的 $CCA_T/agy_login_as 模拟登错号，
 //! $CCA_T/agy_noemail 时不写邮箱，档位取 $CCA_T/agy_tier），说 Logged in as 邮箱.；换 token 时的代理记进 agy.log。
-//! -p /usage --output-format json 照 1.5.16 回额度（一行 JSON，额度在 command.data；按 token 里的邮箱取 $CCA_T/agy_usage/<邮箱>.json，
-//! 没有就用一份默认的，重置时间按现在算），agy.log 里记 AGY-USAGE（有没有控制终端、自动更新关没关、工作目录）；没有 token 或者
-//! $CCA_T/agy_usage_auth 时像没登录一样在 stderr 上打出登录网址、等 60 秒；$CCA_T/agy_usage_error（内容是原因）回 ERROR；
-//! $CCA_T/agy_usage_old 像不认 /usage 的旧版本，当成一句话回答（没有 command）；$CCA_T/agy_usage_hang 一直不回。
+//! 打印模式（-p、--p、-print、--print、-prompt、--prompt，带 =值 的也算）cca 一律不用：$CCA_T/print-mode.log 里记一行 PRINT-MODE、
+//! stderr 上说一句、退出码 1（回归最后查这个文件不在）。
 //! 其余（包括 cca 带着 --gemini_dir 传进来的 --version）当作一次会话：装机标识不是正好 36 个字符就重新生成（像真的），写共享的会话、历史、技能，
-//! 设置用临时文件 + 改名保存；交互的会话（不是 --version、打印模式、子命令）像 agy 画状态栏（`statusline`：--settings 或者 settings.json
-//! 里的 statusLine.command 用 sh -c 跑，stdin 是状态栏的 JSON，plan_tier 取 $CCA_T/agy_plan_tier；状态取 $CCA_T/agy_states，一行画一次），退出码 3
+//! 设置用临时文件 + 改名保存；交互的会话（不是 --version、子命令）像 agy 画状态栏（`statusline`：--settings 或者 settings.json
+//! 里的 statusLine.command 用 sh -c 跑，stdin 是状态栏的 JSON，plan_tier 取 $CCA_T/agy_plan_tier，额度（quota）按 token 里的邮箱取
+//! $CCA_T/agy_quota/<邮箱>.json，没有就用一份默认的；状态取 $CCA_T/agy_states，一行画一次），退出码 3
 
 use super::codex::{regex, tag_of, PY_WS};
 use super::*;
-use kit::json::{Obj, Style};
-use kit::list;
+use kit::json::Obj;
 use std::io::BufRead;
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -53,8 +51,15 @@ pub fn run(a: &[String]) -> R<i32> {
     if args.len() >= 2 && args[0] == "acp" && args[1] == "--login" {
         return login(&t, &g, &cli, &log);
     }
-    if args.len() >= 2 && args[0] == "-p" && args[1] == "/usage" {
-        return usage(&t, &g, &cli, &log);
+    // 打印模式：cca 不用（Go 的 flag，-x 和 --x 一样），回归最后查 print-mode.log 不在
+    let print_mode = |a: &String| {
+        let name = a.split('=').next().unwrap_or_default();
+        name.starts_with('-') && matches!(name.trim_start_matches('-'), "p" | "print" | "prompt")
+    };
+    if args.iter().take_while(|a| *a != "--").any(print_mode) {
+        append_text(&join(&[&t, "print-mode.log"]), &format!("PRINT-MODE agy {}\n", args.join(" ")))?;
+        err_out("fake agy: cca 不该用打印模式\n");
+        return Ok(1);
     }
     // 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
     while exists(&join(&[&t, "hold"])) {
@@ -105,9 +110,10 @@ pub fn run(a: &[String]) -> R<i32> {
 /// 像 agy 画状态栏：交互的会话（不是 --version、打印模式、帮助、子命令）里，--settings（两种写法，最后一个算）里的 statusLine，
 /// 没有就用数据目录 settings.json 里的；它的 command（enabled 不是 false）用 sh -c 跑（开头的 ~ 换成 HOME，像 agy），stdin 是
 /// 1.5.18 给的那种 JSON（email 取 token 里的 id_token_email；plan_tier 取 $CCA_T/agy_plan_tier，conversation_title 取 $CCA_T/agy_title，
-/// 没有这个文件就不给）。状态变了 agy 就画一次：$CCA_T/agy_states 一行画一次（「状态」或者「状态 ask」：tool_confirmation_pending
-/// 是 true），没有这个文件画一次 idle。agy.log 里记 AGY-STATUSLINE-CMD 命令（一次），每画一次记 AGY-STATUSLINE rc=退出码 out=输出
-/// （换行写成 \n）
+/// 没有这个文件就不给；额度是 `quota`：以桶的 id 为键，按邮箱取 $CCA_T/agy_quota/<邮箱>.json，没有就用一份默认的，重置时间按现在算；
+/// 每画一次 context_window 的 token 数和 cost 都多一些，像每次都有新的回应）。状态变了 agy 就画一次：$CCA_T/agy_states 一行画一次
+/// （「状态」或者「状态 ask」：tool_confirmation_pending 是 true），没有这个文件画一次 idle。agy.log 里记 AGY-STATUSLINE-CMD 命令（一次），
+/// 每画一次记 AGY-STATUSLINE rc=退出码 out=输出（换行写成 \n）
 fn statusline(t: &str, cli: &str, args: &[String], log: &dyn Fn(&str) -> R<()>) -> R<()> {
     const ONE_SHOT: &[&str] = &["--version", "-p", "--print", "--prompt", "--help", "-h"];
     const SUBCOMMANDS: &[&str] =
@@ -144,13 +150,22 @@ fn statusline(t: &str, cli: &str, args: &[String], log: &dyn Fn(&str) -> R<()>) 
     let token = load_json_or_empty(&join(&[cli, "antigravity-oauth-token"]))?;
     let (tier, title) = (mark(t, "agy_plan_tier")?, mark(t, "agy_title")?);
     let states = mark(t, "agy_states")?.unwrap_or_else(|| "idle".to_string());
+    let email = token.as_obj().and_then(|o| o.get("id_token_email")).cloned();
+    let sid = format!("conv-{}", uuid4());
     log(&format!("AGY-STATUSLINE-CMD {cmd}"))?;
-    for line in states.lines().filter(|l| !l.trim().is_empty()) {
+    for (i, line) in states.lines().filter(|l| !l.trim().is_empty()).enumerate() {
         let mut words = line.split_whitespace();
         let (state, ask) = (words.next().unwrap_or("idle"), words.next() == Some("ask"));
-        let mut p = obj! { "cwd" => getcwd()?, "session_id" => "", "version" => "1.5.18", "product" => "antigravity", "agent_state" => state, "tool_confirmation_pending" => ask, "terminal_width" => 100 };
-        if let Some(e) = token.as_obj().and_then(|o| o.get("id_token_email")) {
+        let n = (i + 1) as i64;
+        let mut p = obj! {
+            "cwd" => getcwd()?, "session_id" => sid.as_str(), "conversation_id" => sid.as_str(), "version" => "1.5.18", "product" => "antigravity",
+            "agent_state" => state, "tool_confirmation_pending" => ask, "terminal_width" => 100,
+            "context_window" => obj! { "total_input_tokens" => 1200 * n, "total_output_tokens" => 300 * n, "context_window_size" => 1_000_000 },
+            "cost" => obj! { "total_usd" => 0.01 * n as f64, "subagent_usd" => 0.0, "estimated" => true },
+        };
+        if let Some(e) = &email {
             set_item(&mut p, "email", e.clone())?;
+            set_item(&mut p, "quota", quota(t, &py_str(e))?)?;
         }
         if let Some(tier) = &tier {
             set_item(&mut p, "plan_tier", Value::from(tier.as_str()))?;
@@ -333,26 +348,6 @@ fn login(t: &str, g: &str, cli: &str, log: &dyn Fn(&str) -> R<()>) -> R<i32> {
     Ok(0)
 }
 
-/// 打印模式的一行回答（`json.dumps(j, separators=(',', ':'))`）
-fn answer(status: &str, error: &str, command: Option<Value>, response: &str, cid: &str) {
-    let mut j = Obj::new();
-    j.insert("conversation_id", cid);
-    j.insert("status", status);
-    j.insert("response", response);
-    j.insert("error", error);
-    j.insert("duration_seconds", 0.4);
-    j.insert("num_turns", 0);
-    j.insert(
-        "usage",
-        obj! { "input_tokens" => 0, "output_tokens" => 0, "thinking_tokens" => 0, "cache_read_tokens" => 0, "total_tokens" => 0 },
-    );
-    if let Some(command) = command {
-        j.insert("command", command);
-    }
-    j.insert("finished_reason", if status == "ERROR" { "error" } else { "stop" });
-    print_flush(&json::dumps(&Value::Obj(j), &Style { compact: true, ..Style::default() }));
-}
-
 /// `time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + hours * 3600))`
 fn utc_after(hours: f64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
@@ -366,57 +361,20 @@ fn err_out(text: &str) {
     let _ = err.flush();
 }
 
-/// `-p /usage --output-format json`：让 agy 自己查额度（打印模式）
-fn usage(t: &str, g: &str, cli: &str, log: &dyn Fn(&str) -> R<()>) -> R<i32> {
-    // 有没有控制终端：/dev/tty 打不打得开
-    let tty = if std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").is_ok() { "yes" } else { "no" };
-    log(&format!("AGY-USAGE tty={tty} auto_update={} cwd={} @ {g}", env_or("AGY_CLI_DISABLE_AUTO_UPDATE", "unset"), getcwd()?))?;
-    let tokp = join(&[cli, "antigravity-oauth-token"]);
-    while mark(t, "agy_usage_hang")?.is_some() {
-        sleep(0.1);
+/// 状态栏 JSON 里的额度（文档 cli/statusline：以桶的 id 为键，remaining_fraction 或 remaining_amount、reset_time、reset_in_seconds、
+/// disabled）：$CCA_T/agy_quota/<邮箱>.json 原样，没有就用一份默认的（真实账号上见过的四个桶，重置时间按现在算）
+fn quota(t: &str, email: &str) -> R<Value> {
+    let p = join(&[t, "agy_quota", &format!("{email}.json")]);
+    if exists(&p) {
+        return load_json(&p);
     }
-    if !exists(&tokp) || mark(t, "agy_usage_auth")?.is_some() {
-        err_out(
-            "Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?access_type=offline&state=st-usage\n\n\
-             Waiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n",
-        );
-        sleep(60.0);
-        err_out("Error: authentication timed out.\nerror: authentication failed or timed out\n");
-        answer("ERROR", "authentication failed or timed out", None, "", "");
-        return Ok(1);
-    }
-    if mark(t, "agy_usage_old")?.is_some() {
-        answer("SUCCESS", "", None, "I cannot look up your quota from here.", &uuid4());
-        return Ok(0);
-    }
-    if let Some(bad) = mark(t, "agy_usage_error")? {
-        answer("ERROR", if bad.is_empty() { "quota service unavailable" } else { &bad }, None, "", "");
-        return Ok(1);
-    }
-    let token = load_json(&tokp)?;
-    let email = get(&token, "id_token_email")?.map(py_str).unwrap_or_default();
-    log(&format!("AGY-USAGE-AS {email} https_proxy={}", env_or("https_proxy", "unset")))?;
-    let p = join(&[t, "agy_usage", &format!("{email}.json")]);
-    let data = if exists(&p) {
-        load_json(&p)?
-    } else {
-        let bucket = |id: &str, name: &str, window: &str, left: f64, hours: f64| {
-            obj! { "id" => id, "name" => name, "window" => window, "remaining_fraction" => left, "reset_time" => utc_after(hours) }
-        };
-        obj! {
-            "description" => "Quota for Antigravity models",
-            "groups" => list![
-                obj! { "name" => "Gemini Pro", "buckets" => list![
-                    bucket("gemini-pro-5h", "Five Hour Limit Remaining", "5h", 0.87, 2.5),
-                    bucket("gemini-pro-week", "Weekly Limit Remaining", "weekly", 0.25, 80.0),
-                ] },
-                obj! { "name" => "Claude", "description" => "Claude and GPT-OSS models", "buckets" => list![
-                    bucket("claude-5h", "Five Hour Limit Remaining", "5h", 0.05, 1.2),
-                ] },
-                obj! { "name" => "Gemini Flash", "buckets" => list![obj! { "id" => "flash", "name" => "Gemini Flash", "disabled" => true }] },
-            ],
-        }
+    let bucket = |left: f64, hours: f64| {
+        obj! { "remaining_fraction" => left, "reset_time" => utc_after(hours), "reset_in_seconds" => (hours * 3600.0) as i64 }
     };
-    answer("SUCCESS", "", Some(obj! { "name" => "usage", "data" => data }), "", &uuid4());
-    Ok(0)
+    Ok(obj! {
+        "gemini-weekly" => bucket(0.25, 80.0),
+        "gemini-5h" => bucket(0.87, 2.5),
+        "3p-weekly" => obj! { "remaining_fraction" => 1.0, "reset_in_seconds" => 432000, "disabled" => true },
+        "3p-5h" => bucket(0.05, 1.2),
+    })
 }

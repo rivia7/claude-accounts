@@ -1,5 +1,5 @@
 //! 沙箱里的假命令要的那些角色（tests/setup.sh 写出来的 shell 脚本调它们，"$CCA_T/cca-test" 角色 参数…）：假的 claude、codex、
-//! agy 的会话和登录，假的用量接口、OAuth 回调、浏览器、STUN、GitHub 的发布列表、程序坞的配置……一个假命令一个文件。
+//! agy 的会话、登录和状态栏，codex 的 app-server、OAuth 回调、浏览器、STUN、GitHub 的发布列表、程序坞的配置……一个假命令一个文件。
 //!
 //! 原来都是 Python（setup.sh 写出来的 .py 和假命令里内嵌的 python3 -c / python3 - <<PY），这里照原样重写：打印的、追加进日志的、
 //! 写出来的文件（JSON 的缩进、键的先后、转不转义非 ASCII）、退出码、等待前后各做了什么都和原来一样，回归照样 grep 这些日志。
@@ -9,7 +9,7 @@
 //! - 起子进程像 subprocess（close_fds=True）：子进程只拿到 0、1、2（起之前 kit::proc::cloexec_all），环境照传（钩子、apiKeyHelper 要 cca 的环境）
 //! - 空白、拆行、真假、repr 这些 Python 的语义用 kit::py 的那一份（py::strip、splitlines、truthy、py_str、repr_str……）
 //!
-//! regress.sh 用 pgrep -f / pkill -f 找其中几个（fake_oauth、fake_usage、fake_codex_server、fake_agy）：假命令用
+//! regress.sh 用 pgrep -f / pkill -f 找其中几个（fake_oauth、fake_codex_server、fake_agy）：假命令用
 //! exec -a "$CCA_T/fake_oauth" "$CCA_T/cca-test" fake-oauth … 起它们，命令行里就有这个名字。
 
 mod agy;
@@ -26,7 +26,6 @@ mod linux_codex;
 mod linux_netstat;
 mod oauth;
 mod stun;
-mod usage;
 
 pub use kit::crypto::uuid4;
 pub use kit::json::{self, Value};
@@ -47,13 +46,12 @@ macro_rules! role {
 
 pub const CMDS: &[(&str, crate::Run)] = &[
     // 假 claude（setup.sh 的 $T/bin/claude）
-    ("claude-settings", role!(claude::settings)), // 设置 JSON  CCA_T  是否会话(1/0)：记下 env、跑 apiKeyHelper 和 SessionStart 钩子
+    ("claude-settings", role!(claude::settings)), // 设置 JSON  CCA_T  是否会话(1/0)：记下 env、跑 apiKeyHelper、SessionStart 钩子和状态栏
     ("claude-login-device", role!(claude::login_device)), // .claude.json：LOGIN-DEVICE 那一行
     ("claude-login", role!(claude::login)),       // .claude.json 邮箱：写 oauthAccount
     ("claude-logout", role!(claude::logout)),     // .claude.json：去掉 oauthAccount
     ("claude-status", role!(claude::status)),     // .claude.json：auth status 的 JSON
     ("claude-session", role!(claude::session)),   // 配置目录 账号：一次会话写进配置目录的东西
-    ("fake-usage", role!(usage::run)),            // stream-json 的 get_usage
     ("fake-oauth", role!(oauth::run)),            // .claude.json 邮箱：本机回调的登录
     ("browser", role!(browser::run)),             // state code：扮演账号的 Chrome 跳回回调
     // 假 codex（$T/bin/codex）

@@ -5,6 +5,8 @@
 //! 第一个参数是沙箱目录（原来写死在脚本开头的 D），第二个是那个 sh 脚本的路径（不看：留在命令行里，读 /proc 找得到是谁起的）。
 //! 后面是 codex 的参数。cca 加在前面的全局参数先跳过（--no-daemon；--disable、--enable、-c 各带一个值），再看子命令：
 //!
+//!   exec、e、review（-- 前面哪里有都算）  非交互模式：cca 不用，也不让经 cca 用。记一行 PRINT-MODE codex 参数… 进 $D/print-mode.log
+//!                    （linux.sh 最后查它是空的），stderr 上说一句，退出码 1
 //!   --version、--help（前面没有全局参数时）   codex-cli 0.167.0 / “      --no-daemon”：cca 照它们探测这个版本认哪些参数
 //!   features         两行开关（respect_system_proxy、system_proxy_fallback）：cca 照它定启动时关哪些
 //!   logout           删掉 $CODEX_HOME/auth.json（没有也不算错）
@@ -138,6 +140,12 @@ pub fn run(a: &[String]) -> R<i32> {
         return Ok(2);
     };
     let args = &a[2..];
+    if args.iter().take_while(|a| *a != "--").any(|a| matches!(a.as_str(), "exec" | "e" | "review")) {
+        append_text(&join(&[d, "print-mode.log"]), &format!("PRINT-MODE codex {}\n", args.join(" ")))?;
+        flush();
+        eprintln!("fake codex: cca 不该用非交互模式");
+        return Ok(1);
+    }
     let home = env_or("CODEX_HOME", "");
     let i = globals(args);
     let sub = args.get(i).map(String::as_str).unwrap_or("");

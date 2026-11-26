@@ -90,6 +90,9 @@ func agyFixtureTests() {
           && oldCodex?.features == ToolFeatures(app: true, api: true, usage: true) && oldCodex?.cliPrefix == ["codex"])
     let partial = try? JSONDecoder().decode(ToolFeatures.self, from: Data(#"{"usage":false}"#.utf8))
     check("features 少了几项：没写的当作有", partial == ToolFeatures(app: true, api: true, usage: false))
+    let passive = try? JSONDecoder().decode(ToolFeatures.self, from: Data(#"{"usage":true,"usage_passive":true}"#.utf8))
+    check("features.usage_passive：给了取它，没给（旧版 cca）当作会查", passive?.usagePassive == true && partial?.usagePassive == false
+          && old?.features.usagePassive == false && oldCodex?.features.usagePassive == false)
 
     // 总览：Antigravity 一组排在 Claude（和 ChatGPT）后面、第三方 API 前面；没启用就没有这一组
     let o = Office.make(tools: s.tools, enabled: [.claude, .agy], usage: { $0.usage }, live: { _ in nil }, now: 1794042000)
@@ -158,6 +161,33 @@ func agyGateTests() async {
     check("Claude 的照常查", t.requests.contains { $0.arguments == ["usage", "--json"] })
     m.shutdown()
 
+    // 不查用量的 cca（features.usage_passive：Claude、Antigravity 的用量是 cca 启动的会话里记下的，进 state）：定时的、点了刷新的都不跑
+    // cca [agy] usage，菜单栏面板没有「刷新用量」（没有能查的工具）；账号的用量照样是 state 里的
+    let passiveState = withUsagePassive(state, ["claude", "agy"])
+    check("改出 usage_passive 的 state", passiveState != state)
+    let t4 = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: passiveState) }
+        if request.arguments.contains("usage") { return response(0, stdout: tinyUsage) }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let m4 = makeModel(t4, prefs: MemoryPrefs())
+    await m4.start()
+    check("usage_passive 取 cca 给的；没有能查用量的工具", m4.features(.agy).usagePassive && m4.features(.claude).usagePassive && !m4.hasQueryableUsage)
+    check("有能查的工具（旧版 cca 的 state）时有", m.hasQueryableUsage)
+    for _ in 0..<2 {
+        m4.refreshUsageIfNeeded()
+        try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+    m4.refreshUsage(manual: true)
+    m4.refreshUsage(tool: .agy, key: "工作(gina@example.com)", manual: true)
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    let passivePolls = t4.requests.filter { $0.arguments.contains("usage") }
+    check("usage_passive：定时的、点了刷新的都不跑 cca [agy] usage", passivePolls.isEmpty, "\(passivePolls.map(\.arguments))")
+    let g4 = m4.account(AccountRef(tool: .agy, key: "工作(gina@example.com)"))
+    check("用量照样是 state 里记下的", g4 != nil && m4.usage(for: g4!) == g4?.usage)
+    m4.shutdown()
+
     // 3.6.10 及以前的 cca（state_agy_old.json：agy 的 features.usage 是 false，can_why.usage 是 unsupported）：
     // 点了“登录”、等着登录好的那段时间（UsagePolling.reloginWatch），后台不跑 cca agy usage（旧版 cca 只会失败，留下一条“后台刷新 Antigravity 的用量没有成功”；新版的额度 App 也不显示），按同样的间隔只重读 state，登录好了界面照样会变
     let unsupported = EventLog.parseLine(Data(#"{"v":1,"ev":"fail","code":"unsupported","message":"Antigravity 没有能在 agy 外面查的用量接口：在 agy 里用 /usage 看"}"#.utf8))!
@@ -208,6 +238,19 @@ func agyGateTests() async {
     check("没启用：只有 Claude", m2.visibleTools == [.claude] && m2.office(now: 1794042000).rooms.map(\.department) == [.claude, .contractors])
     check("没启用：一条 cca agy … 都不跑", !t2.requests.contains { $0.arguments.first == "agy" })
     m2.shutdown()
+}
+
+/// 把 state 里这几个工具的 features 加上 usage_passive: true（新的 cca 给 Claude、Antigravity 的）
+private func withUsagePassive(_ state: String, _ tools: Set<String>) -> String {
+    guard var doc = jsonObject(Data(state.utf8)) as? [String: Any], var ts = doc["tools"] as? [[String: Any]] else { return state }
+    for i in ts.indices where tools.contains(ts[i]["id"] as? String ?? "") {
+        var f = ts[i]["features"] as? [String: Any] ?? [:]
+        f["usage_passive"] = true
+        ts[i]["features"] = f
+    }
+    doc["tools"] = ts
+    guard let data = try? JSONSerialization.data(withJSONObject: doc) else { return state }
+    return String(decoding: data, as: UTF8.self)
 }
 
 /// Antigravity 的额度什么时候算用完：每一组的这个窗口都用完了才算（一组用完了，别的组的模型照样能用），到最早重置的那一组时就能接着用；

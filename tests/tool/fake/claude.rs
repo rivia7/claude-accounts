@@ -1,5 +1,5 @@
-//! 假 claude 里原来内嵌的几段 Python：--settings 带进来的设置（记下 env，像 Claude Code 一样跑 apiKeyHelper 和 SessionStart 钩子）、
-//! auth login 前记下设备标识、login / logout / status 读写 .claude.json、一次会话往配置目录里写的东西。
+//! 假 claude 里原来内嵌的几段 Python：--settings 带进来的设置（记下 env，像 Claude Code 一样跑 apiKeyHelper、SessionStart 钩子
+//! 和状态栏的命令）、auth login 前记下设备标识、login / logout / status 读写 .claude.json、一次会话往配置目录里写的东西。
 
 use super::*;
 use kit::json::{Obj, Style};
@@ -9,7 +9,8 @@ pub fn arg(a: &[String], i: usize) -> R<&str> {
     a.get(i).map(String::as_str).ok_or_else(|| Fail("IndexError: list index out of range".into()))
 }
 
-/// claude-settings 设置的JSON CCA_T 会话(1/0)：stdout 接在 claude.log 后面（攒到最后一起写）
+/// claude-settings 设置的JSON CCA_T 会话(1/0)：stdout 接在 claude.log 后面（攒到最后一起写）。会话（假 claude 认的交互会话：不是
+/// --version、--help、子命令）像 Claude Code 一样先跑 SessionStart 的钩子，再画状态栏（`statusline`）；钩子和状态栏拿到的是同一个会话 id
 pub fn settings(a: &[String]) -> R<i32> {
     let (s, t, session) = (arg(a, 0)?, arg(a, 1)?, arg(a, 2)? == "1");
     let s = json::parse(s).map_err(|e| Fail(format!("json.decoder.JSONDecodeError: {e}")))?;
@@ -28,6 +29,7 @@ pub fn settings(a: &[String]) -> R<i32> {
     let none = Value::Obj(Obj::new());
     let hooks = get(&s, "hooks")?.filter(|v| truthy(v)).unwrap_or(&none);
     let starts = get(hooks, "SessionStart")?.filter(|v| truthy(v)).cloned().unwrap_or(Value::List(Vec::new()));
+    let sid = uuid4();
     for m in iter_list(&starts)? {
         let hs = get(&m, "hooks")?.filter(|v| truthy(v)).cloned().unwrap_or(Value::List(Vec::new()));
         for h in iter_list(&hs)? {
@@ -46,7 +48,6 @@ pub fn settings(a: &[String]) -> R<i32> {
             };
             let shown = given.as_ref().map_or_else(|| "60".to_string(), py_str);
             let timeout = secs.map(|t| (t, shown.as_str()));
-            let sid = uuid4();
             let ev = obj! {
                 "session_id" => sid.as_str(),
                 "transcript_path" => format!("/w/{sid}.jsonl"),
@@ -63,7 +64,57 @@ pub fn settings(a: &[String]) -> R<i32> {
             ));
         }
     }
+    statusline(t, &s, &sid)?;
     Ok(0)
+}
+
+/// 像 Claude Code 2.1 画状态栏：--settings 里的 statusLine（没有就用配置目录 settings.json 里的），type 是 command、command 不空的
+/// 用 bash -c 跑，stdin 是 2.1.332 给的那种 JSON（session_id、cwd、model、workspace、version、cost……）。画两次：会话开始时（还没有
+/// 回应：没有 rate_limits，cost.total_api_duration_ms 是 0），和收到第一个回应以后（total_api_duration_ms 是 1200；rate_limits 按配置
+/// 目录里登录的邮箱取 $CCA_T/rate/<邮箱>.json，原样放进去，没有这个文件就不给：像按量计费的账号）。claude.log 里记 STATUSLINE-CMD
+/// 命令（一次），每画一次记 STATUSLINE rc=退出码 out=输出（换行写成 \n）
+fn statusline(t: &str, s: &Value, sid: &str) -> R<()> {
+    let cd = env_or("CLAUDE_CONFIG_DIR", "");
+    let line = match get(s, "statusLine")?.filter(|v| !v.is_null()) {
+        Some(l) => l.clone(),
+        None => match get(&load_json_or_empty(&join(&[&cd, "settings.json"]))?, "statusLine")? {
+            Some(l) => l.clone(),
+            None => return Ok(()),
+        },
+    };
+    let Some(o) = line.as_obj() else { return Ok(()) };
+    if o.get("type").and_then(Value::as_str) != Some("command") {
+        return Ok(());
+    }
+    let Some(cmd) = o.get("command").and_then(Value::as_str).filter(|c| !c.trim().is_empty()) else { return Ok(()) };
+    let profile = load_json_or_empty(&join(&[&cd, ".claude.json"]))?;
+    let email = get(&profile, "oauthAccount")?.and_then(|o| o.as_obj()).and_then(|o| o.get("emailAddress")).map(py_str);
+    let fixture = email.filter(|e| !e.is_empty()).map(|e| join(&[t, "rate", &format!("{e}.json")])).filter(|p| exists(p));
+    let rate = match fixture {
+        Some(p) => Some(load_json(&p)?),
+        None => None,
+    };
+    print(&format!("STATUSLINE-CMD {cmd}"));
+    let cwd = getcwd()?;
+    for (api_ms, rl) in [(0, None), (1200, rate)] {
+        let mut p = obj! {
+            "session_id" => sid, "transcript_path" => format!("{cd}/projects/-p/{sid}.jsonl"), "cwd" => cwd.as_str(),
+            "model" => obj! { "id" => "claude-opus-5-5", "display_name" => "Opus 5.5" },
+            "workspace" => obj! { "current_dir" => cwd.as_str(), "project_dir" => cwd.as_str() },
+            "version" => "2.1.332", "output_style" => obj! { "name" => "default" },
+            "cost" => obj! {
+                "total_cost_usd" => if api_ms > 0 { 0.0125 } else { 0.0 }, "total_duration_ms" => 3000 + api_ms,
+                "total_api_duration_ms" => api_ms, "total_lines_added" => 0, "total_lines_removed" => 0,
+            },
+            "exceeds_200k_tokens" => false,
+        };
+        if let Some(rl) = rl {
+            set_item(&mut p, "rate_limits", rl)?;
+        }
+        let r = run_capture(&["bash".into(), "-c".into(), cmd.to_string()], Some(dumps(&p).as_bytes()), Some((5.0, "5")))?;
+        print(&format!("STATUSLINE rc={} out={}", r.code, r.stdout.replace('\n', "\\n")));
+    }
+    Ok(())
 }
 
 /// 给子进程的参数：得是字符串（subprocess 不收别的）

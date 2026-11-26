@@ -3,7 +3,8 @@ import SwiftUI
 /// 用量：大块的额度（5 小时、本周，还有分模型的每周额度，例如 Claude 的 Fable），下面是旧的分模型额度、Codex 的 credits；
 /// 再下面是一行一行的信息（InfoRow，右边是这一行的操作）：ChatGPT 账号还能重置几次（「重置额度…」）、查用量出的错、
 /// Claude Code 记的套餐过时了（「重新登录…」）、只能在网页上看的重置次数和每月 API 额度、API key。
-/// 标题右边是数据从哪来（刚查询 / 缓存、多久以前）和「刷新用量」。和时间有关的文字放在 TimelineView 里，每 30 秒重算一次。
+/// 标题右边是数据从哪来（刚查询 / 缓存、多久以前）和「刷新用量」；不查用量的工具（`features.usage_passive`：Claude、Antigravity 的
+/// 用量是 cca 启动的会话里记下的）写多久以前记下的，没有「刷新用量」。和时间有关的文字放在 TimelineView 里，每 30 秒重算一次。
 struct UsageSection: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -14,7 +15,7 @@ struct UsageSection: View {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     freshness(now: context.date.timeIntervalSince1970)
                 }
-                refreshButton
+                if !passive { refreshButton }
             }
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 let now = context.date.timeIntervalSince1970
@@ -36,19 +37,23 @@ struct UsageSection: View {
         .help(reason ?? "经这个账号的出口查一次用量")
     }
 
+    /// 这个工具的用量是会话里记下的（cca 不主动查）
+    private var passive: Bool { model.features(account.tool).usagePassive }
+
     private var reason: String? {
         guard !account.can.usage, let w = account.canWhy["usage"] else { return nil }
         return Texts.canWhy(w, appLabel: model.appLabel(account.tool), tool: account.tool)
     }
 
-    /// 数据从哪来：10 分钟内查到的写“刚查询”，否则是“缓存”；再写多久以前更新的、是否过时。
+    /// 数据从哪来：10 分钟内查到的写“刚查询”，否则是“缓存”；再写多久以前更新的、是否过时。不查的工具写多久以前记下的，
+    /// 10 分钟内记下的、没过时的也算新的（绿点）。
     @ViewBuilder
     private func freshness(now: Double) -> some View {
         if model.isUsageRefreshing(account.ref) {
             ProgressView().controlSize(.small)
         } else if let u = model.usage(for: account), u.source != .none {
             let age = u.fetchedEpoch.map { now - $0 }
-            let fresh = u.source == .live && (age ?? .infinity) < 600
+            let fresh = (u.source == .live || (passive && u.source == .cache && !u.stale)) && (age ?? .infinity) < 600
             HStack(spacing: 5) {
                 if u.stale {
                     Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
@@ -64,6 +69,10 @@ struct UsageSection: View {
     }
 
     private func freshText(fresh: Bool, age: Double?, stale: Bool) -> String {
+        if passive {
+            let when = (age.map { Texts.agoPhrase($0) } ?? "刚刚") + "记下"
+            return stale ? "数据已经过时，" + when : when
+        }
         if fresh { return (age.map { Texts.agoPhrase($0) } ?? "刚刚") + "查询" }
         let when = age.map { "，" + Texts.agoPhrase($0) + "更新" } ?? ""
         return (stale ? "数据已经过时" : "缓存") + when
@@ -162,7 +171,8 @@ struct UsageSection: View {
         switch account.login {
         case .loggedOut: return "还没登录，查不了用量。"
         case .emailMismatch: return "登录的不是这个账号，查不了用量。"
-        default: return "还没有用量数据：点「刷新用量」查一次。"
+        default:
+            return passive ? "还没有用量数据：用 cca 开一次这个账号的会话（「终端」或者命令行）、发一句话以后就有。" : "还没有用量数据：点「刷新用量」查一次。"
         }
     }
 

@@ -103,12 +103,15 @@ struct MenuBarContent: View {
             }
             Divider()
             HStack(spacing: 14) {
-                Button {
-                    model.refreshUsage(manual: true)
-                } label: {
-                    Label(model.usageRefreshing.isEmpty ? "刷新用量" : "刷新中…", systemImage: "arrow.clockwise")
+                // 只有会话里记下用量的工具（Claude、Antigravity）时没有可查的：不放这个按钮
+                if model.hasQueryableUsage {
+                    Button {
+                        model.refreshUsage(manual: true)
+                    } label: {
+                        Label(model.usageRefreshing.isEmpty ? "刷新用量" : "刷新中…", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(!model.usageRefreshing.isEmpty || model.phase != .ready)
                 }
-                .disabled(!model.usageRefreshing.isEmpty || model.phase != .ready)
                 Spacer()
                 Button {
                     WindowOpener.shared.showMain()   // 平时在后台：这时才有 Dock 图标

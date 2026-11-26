@@ -16,13 +16,10 @@
 //!                                每一项都是 {"type": "command", "command": "… _remote-hook", "timeout": 10}；cca 的路径不看）。是：打出
 //!                                拿掉它们的那一行——hooks 里前面别的（记下会话的 SessionStart）照辅助程序的写法（json.dumps 加
 //!                                ensure_ascii=False）写回去，什么都不剩了连 “ --settings {…}” 一起去掉；不是：打出 BAD。退出码都是 0。（3e）
-//! claude-usage 文件 5小时% 本周% 订阅 额外的窗口
-//!                                写假 claude 给一个账号的 get_usage 回应（10d 的 canned）：
-//!                                {"subscription_type": 订阅, "rate_limits_available": true, "rate_limits": {"five_hour": {"utilization":
-//!                                5小时%, "resets_at": 2 小时 13 分 30 秒以后}, "seven_day": {"utilization": 本周%, "resets_at": 3 天 5 小时
-//!                                以后}, "seven_day_opus": null, "seven_day_sonnet": null}}，两个百分数写成小数（13 → 13.0），时刻是
-//!                                UTC 的 “2026-11-24T05:56:51.123456+00:00” 这个样子；“额外的窗口”是一个 JSON 对象（可以是空串），
-//!                                并进 rate_limits（同名的换掉、位置不动，新的接在后面）。五个参数都要给
+//! statusless ARGS行 账号目录名    同一行里 --settings 有没有 cca 自己的状态栏命令（交互的会话才有："statusLine": {"type": "command",
+//!                                "command": "… _claude-statusline 账号目录名"}，正好这两个键；command 照 shlex 拆开，第一段（cca 的路径）
+//!                                不看）。有：打出拿掉它的那一行——剩下的照辅助程序的写法（json.dumps 加 ensure_ascii=False）写回去，什么都
+//!                                不剩了连 “ --settings {…}” 一起去掉，接着可以交给 hookless；没有、不是这个样子：打出 BAD。退出码都是 0（10c）
 //! text-prepend 文件 一行         像客户端“原子保存”那样在文件开头加一行：读出原文，“一行\n” + 原文 写进 文件.test-new，再改名换上
 //!                                （文件是符号链接的话，链接换成普通文件；新文件的权限是新建文件默认的）。（10f 的 config.toml）
 //! costlog 家目录 写法…           往共享的会话记录里写折合金额要读的那几份（10g 的 costlog）。先建 家目录/.claude/projects/-cost，
@@ -58,7 +55,7 @@
 use crate::fake::{self, type_name};
 use kit::json::{self, Obj, Style, Value};
 use kit::obj;
-use kit::py::{self, repr_str};
+use kit::py::repr_str;
 use std::io::Write;
 
 pub const CMDS: &[(&str, crate::Run)] = &[("fx", run)];
@@ -70,7 +67,7 @@ const SUBS: &[(&str, Sub)] = &[
     ("sha1", sha1),
     ("hookless", hookless),
     ("notifyless", notifyless),
-    ("claude-usage", claude_usage),
+    ("statusless", statusless),
     ("text-prepend", text_prepend),
     ("costlog", costlog),
     ("linux-costlog", linux_costlog),
@@ -222,85 +219,6 @@ fn item_mut<'a>(d: &'a mut Value, k: &str) -> R<&'a mut Value> {
         },
         other => raise(format!("TypeError: '{}' object is not subscriptable", type_name(other))),
     }
-}
-
-/// float(s)：两头的空白不算，数字之间可以夹一个下划线；认不出是 ValueError。全角数字这些 Python 认、这里不认的：不敢担保
-fn py_float(s: &str) -> R<f64> {
-    if !s.is_ascii() {
-        return unsupported(format!("float() 的参数里有非 ASCII 字符：{s}"));
-    }
-    let bad = || raise(format!("ValueError: could not convert string to float: {}", repr_str(s)));
-    let t = py::strip(s);
-    let b = t.as_bytes();
-    let mut plain = String::with_capacity(t.len());
-    for (i, c) in t.char_indices() {
-        if c != '_' {
-            plain.push(c);
-        } else if !(i > 0 && b[i - 1].is_ascii_digit() && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
-            return bad();
-        }
-    }
-    match plain.parse::<f64>() {
-        Ok(f) => Ok(f),
-        Err(_) => bad(),
-    }
-}
-
-/// d.update(other)，other 是 json.loads 出来的随便什么：字典并进去；别的照 Python 的“一对一对”来
-/// （列表里一项是两个元素的列表、两个字符的字符串、两个键的字典），不成对的是 Python 也会出的异常
-fn py_update(d: &mut Obj, other: &Value) -> R<()> {
-    let not_iterable = |v: &Value| raise(format!("TypeError: '{}' object is not iterable", type_name(v)));
-    let pairs: Vec<&Value> = match other {
-        Value::Obj(o) => {
-            for (k, v) in o.iter() {
-                d.insert(k, v.clone());
-            }
-            return Ok(());
-        }
-        Value::List(l) => l.iter().collect(),
-        Value::Str(s) if s.is_empty() => Vec::new(),
-        Value::Str(_) => return raise("ValueError: dictionary update sequence element #0 has length 1; 2 is required"),
-        v => return not_iterable(v),
-    };
-    for (i, pair) in pairs.into_iter().enumerate() {
-        let wrong = |n: usize| raise(format!("ValueError: dictionary update sequence element #{i} has length {n}; 2 is required"));
-        let (k, v) = match pair {
-            Value::List(p) => match p.as_slice() {
-                [k, v] => (k.clone(), v.clone()),
-                _ => return wrong(p.len()),
-            },
-            Value::Str(s) => {
-                let cs: Vec<char> = s.chars().collect();
-                match cs.as_slice() {
-                    [k, v] => (Value::Str(k.to_string()), Value::Str(v.to_string())),
-                    _ => return wrong(cs.len()),
-                }
-            }
-            Value::Obj(o) => {
-                let ks: Vec<&str> = o.keys().collect();
-                match ks.as_slice() {
-                    [k, v] => (Value::from(*k), Value::from(*v)),
-                    _ => return wrong(ks.len()),
-                }
-            }
-            _ => return raise(format!("TypeError: cannot convert dictionary update sequence element #{i} to a sequence")),
-        };
-        match k {
-            Value::Str(k) => {
-                d.insert(k, v);
-            }
-            Value::List(_) | Value::Obj(_) => {
-                return raise(format!(
-                    "TypeError: cannot use '{}' as a dict key (unhashable type: '{}')",
-                    type_name(&k),
-                    type_name(&k)
-                ))
-            }
-            // Python 里数字、True、None 也能当键（写成 JSON 时再变成字符串，1 和 True 还是同一个键）：这里的对象只有字符串的键
-            _ => return unsupported("dict.update 的一对里，键不是字符串"),
-        }
-    }
-    Ok(())
 }
 
 // ---- sha1 ----
@@ -573,24 +491,44 @@ fn notifyless(a: &[String], out: &mut String) -> R<i32> {
     Ok(0)
 }
 
-// ---- claude-usage ----
+// ---- statusless ----
 
-fn claude_usage(a: &[String], _out: &mut String) -> R<i32> {
-    let path = arg(a, 0)?;
-    let five = py_float(arg(a, 1)?)?;
-    let week = py_float(arg(a, 2)?)?;
-    let sub = arg(a, 3)?;
-    let extra = arg(a, 4)?;
-    let extra = loads(if extra.is_empty() { "{}" } else { extra }, "额外的窗口")?;
-    // 原来的 at(秒数)：每算一个时刻各看一次钟
-    let at = |secs: f64| -> R<String> { Ok(format!("{}.123456+00:00", utc(now()? + secs))) };
-    let mut rl = Obj::new();
-    rl.insert("five_hour", obj! { "utilization" => five, "resets_at" => at(8010.0)? }); // 2 小时 13 分 30 秒
-    rl.insert("seven_day", obj! { "utilization" => week, "resets_at" => at(277_200.0)? }); // 3 天 5 小时
-    rl.insert("seven_day_opus", Value::Null);
-    rl.insert("seven_day_sonnet", Value::Null);
-    py_update(&mut rl, &extra)?;
-    dump(path, &obj! { "subscription_type" => sub, "rate_limits_available" => true, "rate_limits" => Value::Obj(rl) })?;
+/// cca 自己带的状态栏命令（cli/src/cmd/statusline.rs 的 `claude_statusline`，用户没配自己的状态栏时）：正好 type、command 两个键，
+/// command 照 shlex 拆开、第一段（cca 的路径）以后是 _claude-statusline 账号目录名
+fn own_statusline(line: &Value, name: &str) -> bool {
+    let Some(o) = line.as_obj() else { return false };
+    o.keys().collect::<Vec<&str>>() == ["type", "command"]
+        && line["type"] == Value::from("command")
+        && line["command"]
+            .as_str()
+            .and_then(|c| shlex_split(c).ok())
+            .is_some_and(|w| w.get(1..).unwrap_or(&[]) == ["_claude-statusline", name])
+}
+
+fn statusless(a: &[String], out: &mut String) -> R<i32> {
+    let (line, name) = (arg(a, 0)?.trim_end_matches('\n'), arg(a, 1)?);
+    let shown = line
+        .find(" --settings {")
+        .and_then(|at| {
+            let start = at + " --settings ".len();
+            let n = object_len(&line[start..])?;
+            let settings = json::parse(&line[start..start + n]).ok()?;
+            let top = settings.as_obj()?;
+            if !own_statusline(top.get("statusLine")?, name) {
+                return None;
+            }
+            let mut rest = top.clone();
+            rest.remove("statusLine");
+            let (head, tail) = (&line[..at], &line[start + n..]);
+            Some(if rest.is_empty() {
+                format!("{head}{tail}")
+            } else {
+                format!("{head} --settings {}{tail}", json::dumps(&Value::Obj(rest), &Style::default().unicode()))
+            })
+        })
+        .unwrap_or_else(|| "BAD".to_string());
+    out.push_str(&shown);
+    out.push('\n');
     Ok(0)
 }
 
@@ -1043,45 +981,22 @@ mod tests {
     }
 
     #[test]
-    fn claude_usage_writes_what_python_wrote() {
-        let dir = TempDir::new("fx-usage-");
-        let file = at(&dir, "u.json");
-        PINNED.with(|p| p.set(Some(NOW)));
-        done(
-            claude_usage,
-            &[
-                &file,
-                r#"13"#,
-                r#"41.5"#,
-                r#"max"#,
-                r#"{"seven_day_opus": {"utilization": 5.0, "resets_at": null}, "five_hour": null}"#,
-            ],
-        );
+    fn statusless_takes_out_only_cca_s_statusline() {
+        let name = "alice-example-com-fc2398";
+        let start = r#""hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "/p/cca _session-start alice-example-com-fc2398", "timeout": 10}]}]}"#;
+        let own = r#""statusLine": {"type": "command", "command": "'/p a/cca' _claude-statusline alice-example-com-fc2398"}"#;
+        let run = |line: &str| done(statusless, &[line, name]);
         assert_eq!(
-            fsx::read_text(&file),
-            r#"{"subscription_type": "max", "rate_limits_available": true, "rate_limits": {"five_hour": null, "seven_day": {"utilization": 41.5, "resets_at": "2026-11-27T11:00:00.123456+00:00"}, "seven_day_opus": {"utilization": 5.0, "resets_at": null}, "seven_day_sonnet": null}}"#
+            run(&format!("ARGS: --add-dir=/a --settings {{{start}, {own}}} 看看")),
+            format!("ARGS: --add-dir=/a --settings {{{start}}} 看看\n")
         );
-        done(claude_usage, &[&file, r#"0"#, r#"100"#, r#"pro"#, r#""#]);
-        assert_eq!(
-            fsx::read_text(&file),
-            r#"{"subscription_type": "pro", "rate_limits_available": true, "rate_limits": {"five_hour": {"utilization": 0.0, "resets_at": "2026-11-24T08:13:30.123456+00:00"}, "seven_day": {"utilization": 100.0, "resets_at": "2026-11-27T11:00:00.123456+00:00"}, "seven_day_opus": null, "seven_day_sonnet": null}}"#
-        );
-        assert_eq!(
-            raised(claude_usage, &[&file, r#"abc"#, r#"1"#, r#"max"#, r#""#]),
-            r#"ValueError: could not convert string to float: 'abc'"#
-        );
-        done(claude_usage, &[&file, r#"1"#, r#"2"#, r#"max"#, r#"[["k", 1]]"#]);
-        assert_eq!(
-            fsx::read_text(&file),
-            r#"{"subscription_type": "max", "rate_limits_available": true, "rate_limits": {"five_hour": {"utilization": 1.0, "resets_at": "2026-11-24T08:13:30.123456+00:00"}, "seven_day": {"utilization": 2.0, "resets_at": "2026-11-27T11:00:00.123456+00:00"}, "seven_day_opus": null, "seven_day_sonnet": null, "k": 1}}"#
-        );
-        assert_eq!(raised(claude_usage, &[&file, r#"1"#, r#"2"#, r#"max"#, r#"5"#]), r#"TypeError: 'int' object is not iterable"#);
-        assert_eq!(raised(claude_usage, &[&file, r#"1"#]), r#"IndexError: list index out of range"#);
-        // 出了异常的那几次没动文件（还是上一次写的）
-        assert!(fsx::read_text(&file).ends_with(r#""seven_day_sonnet": null, "k": 1}}"#));
-        // 键不是字符串的一对、全角数字：Python 认，这里不担保
-        refused(claude_usage, &[&file, "1", "2", "max", "[[1, 2]]"]);
-        refused(claude_usage, &[&file, "１", "2", "max", ""]);
+        assert_eq!(run(&format!("ARGS: --settings {{{own}}}")), "ARGS:\n");
+        // 没有状态栏命令、别的账号的、用户的命令接在后面的（--then）、多了别的键：不是
+        assert_eq!(run(&format!("ARGS: --settings {{{start}}} --version")), "BAD\n");
+        assert_eq!(run("ARGS: --version"), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {{{}}}", own.replace(name, "bob-example-com-000000"))), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {{{}}}", own.replace(name, &format!("{name} --then 'echo x'")))), "BAD\n");
+        assert_eq!(run(&format!("ARGS: --settings {{{}}}", own.replace(r#""}"#, r#"", "padding": 1}"#))), "BAD\n");
     }
 
     #[test]

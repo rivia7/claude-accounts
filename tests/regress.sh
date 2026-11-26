@@ -900,6 +900,9 @@ lastenv() { grep "^ENV: " claude.log | tail -n 1; }   # 最后一次启动 claud
 hookless() {   # hookless "ARGS 那一行" 账号目录：--settings 是记下会话的 hook（只有 SessionStart 回调 cca _session-start 这个账号目录名）时打印去掉它的那一行，别的打印 BAD
 	"$TESTBIN" fx hookless "$1" "$(basename "$2")"   # 三层都没有别的键、别的项；command 照 shlex 拆开，第一段（cca 的路径）不看：目录名没有要引的字符时不带引号（和 shlex.quote 一样）
 }
+statusless() {   # statusless "ARGS 那一行" 账号目录：--settings 里有 cca 自己的状态栏命令（statusLine 回调 cca _claude-statusline 这个账号目录名；交互的会话才有）时打印拿掉它的那一行（接着可以交给 hookless），别的打印 BAD
+	"$TESTBIN" fx statusless "$1" "$(basename "$2")"
+}
 S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
 : > ssh.log; : > "$T/env.log"; rm -f "$T/security.stdin"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/anthropic/ "$S1" kimi-k2 '')" cca add api 2>&1); rc=$?
@@ -933,7 +936,7 @@ AAD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); KAD=$(ls -d "$H"/.cca/accou
 # （Claude Code 判断权限时先解析链接）；照 CLAUDE_SHARED 的顺序，ide 不加
 SD="--add-dir=$H/.claude/projects --add-dir=$H/.claude/skills --add-dir=$H/.claude/commands --add-dir=$H/.claude/agents --add-dir=$H/.claude/plugins --add-dir=$H/.claude/todos --add-dir=$H/.claude/tasks --add-dir=$H/.claude/plans --add-dir=$H/.claude/file-history --add-dir=$H/.claude/output-styles"
 out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
-ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）和它链到的共享目录（ide 除外）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录；再带着记下会话的 hook（--settings，都在用户的参数前面）" '[ $rc -eq 3 ] && [ "$(hookless "$(lastline ARGS)" "$AAD")" = "ARGS: --add-dir=${AAD} $SD $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
+ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）和它链到的共享目录（ide 除外）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录；再带着记下会话的 hook 和记下用量的状态栏命令（交互的会话才有；--settings，都在用户的参数前面）" '[ $rc -eq 3 ] && [ "$(hookless "$(statusless "$(lastline ARGS)" "$AAD")" "$AAD")" = "ARGS: --add-dir=${AAD} $SD $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
 ok "记忆目录交给 Claude Code 的是 ~/.claude 的真实路径（CLAUDE_CODE_REMOTE_MEMORY_DIR：账号的 projects 链到它；不然解析链接以后它认不出自己的记忆，读写都要确认）" '[ "$(lastenv | sed -n "s/.* CLAUDE_CODE_REMOTE_MEMORY_DIR=//p")" = "$H/.claude" ] && [ "$(readlink "$AAD/claude/projects")" = "$H/.claude/projects" ]'
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; a1=$(lastline ARGS)
 "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c['claude_add_dir'] = False"
@@ -952,9 +955,17 @@ run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a3=$(lastline ARGS)
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; s3=$(lastline SETTINGS); a4=$(lastline ARGS)
 "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c.pop('cost')"
 ok "折合金额关掉了（config.json 的 cost 是 false）：不带记下会话的 hook（官方账号没有 --settings，第三方 API 账号的 --settings 里没有 hooks）" '[ "$a3" = "ARGS: --add-dir=${AAD} $SD $P1 --version" ] && printf "%s" "$s3" | grep -q "ANTHROPIC_BASE_URL" && ! printf "%s" "$a4" | grep -q "SessionStart"'
-out=$(run CCA_TTY="$(ans)" cca @alice -p hi 2>&1); rc=$?; h1=$(lastline HOOK)
-out2=$(run CCA_TTY="$(ans)" cca @kimi -p hi 2>&1); rc2=$?; h2=$(lastline HOOK)
+out=$(run CCA_TTY="$(ans)" cca @alice hi 2>&1); rc=$?; h1=$(lastline HOOK)
+out2=$(run CCA_TTY="$(ans)" cca @kimi hi 2>&1); rc2=$?; h2=$(lastline HOOK)
 ok "Claude Code 开始会话时跑 --settings 里的 SessionStart hook：回调 cca _session-start，会话 id 记进这个账号目录的 sessions.jsonl（600）；hook 什么都不打印（stdout 会进 Claude 的上下文）、退出码 0；第三方 API 账号也记（统计时它的会话不算）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && printf "%s" "$h1" | grep -q " rc=0 stdout=0 stderr=0 " && printf "%s" "$h2" | grep -q " rc=0 stdout=0 stderr=0 " && grep -qF "\"sid\":\"${h1##*sid=}\"" "$AAD/sessions.jsonl" && grep -qF "\"sid\":\"${h2##*sid=}\"" "$KAD/sessions.jsonl" && [ "$(stat -f %Lp "$AAD/sessions.jsonl")" = 600 ] && ! grep -qF "${h1##*sid=}" "$KAD/sessions.jsonl"'
+# 打印模式（claude -p）：cca 自己不用（用量是会话里记下的），也不让经 cca 用；假 claude 遇到它记进 $T/print-mode.log，回归最后查这个文件不在
+n_args=$(grep -c "^ARGS: " claude.log)
+out=$(run CCA_TTY="$(ans)" cca @alice -p hi 2>&1); rc=$?
+out2=$(run CCA_TTY="$(ans)" cca @alice --model opus --print=hi 2>&1); rc2=$?
+out3=$(run CCA_TTY="$(ans)" cca @kimi -cp hi 2>&1); rc3=$?
+n_args2=$(grep -c "^ARGS: " claude.log)
+run CCA_TTY="$(ans)" cca @alice -- -- -p >/dev/null 2>&1; rc4=$?   # 账号后面的第一个 -- 是 cca 的（cca @账号 -- 参数…），第二个才交给 claude
+ok "打印模式（-p、--print，-cp 这样几个短选项写在一起的也算）不能经 cca 用：说是打印模式、不启动（官方账号、第三方 API 账号都一样）；交给 claude 的 -- 后面的是提示词，照常启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "启动参数 -p 是打印模式" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "启动参数 --print 是打印模式" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "启动参数 -cp 是打印模式" && [ "$n_args2" = "$n_args" ] && [ $rc4 -eq 3 ] && [ "$(lastline ARGS | sed "s/.* -- //")" = "-p" ] && [ ! -e "$T/print-mode.log" ]'
 cp "$H/.claude/settings.json" "$T/settings.bak"; n_args=$(grep -c "^ARGS: " claude.log)
 "$TESTBIN" edit "j=$H/.claude/settings.json" "j.setdefault(\"env\", {})[\"ANTHROPIC_BASE_URL\"]=\"http://evil.invalid\""
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
@@ -1153,143 +1164,154 @@ ok "密钥文件：删掉第三方 API 账号，它的 key 文件一起删" '[ $
 
 fi
 if sect 10d; then
-# 10d. 订阅用量：经每个官方账号自己的出口，让 Claude Code 自己查（get_usage），查不到时显示缓存；菜单里附上最近一次的
-setoa() {   # setoa .claude.json 字段=值…：改 oauthAccount（套餐、accountUuid）
+# 10d. 订阅用量：cca 不查（不用打印模式 claude -p）。cca 启动的交互会话带着状态栏的命令（cca _claude-statusline 账号目录名），Claude Code
+#      有了回应以后状态栏的 JSON 里有 rate_limits（5 小时、本周），记进账号的 usage.json；cca usage、菜单、App 显示记下的。Claude Code
+#      自己的 /usage 存的缓存（.claude.json 的 cachedUsageUtilization）也认，取新的那份
+setoa() {   # setoa .claude.json 字段=值…：改 oauthAccount（套餐、accountUuid、邮箱）
 	"$TESTBIN" edit --indent 2 j="$1" 'oa = j.setdefault("oauthAccount", {}); [oa.update([kv.split("=", 1)]) for kv in argv]' "${@:2}"
 }
-canned() {   # canned 邮箱 5小时% 本周% [订阅] [额外的窗口 JSON]：假 claude 给这个账号的 get_usage 回应
-	mkdir -p "$T/usage"
-	# 5 小时的窗口 2 小时 13 分 30 秒以后重置，本周的 3 天 5 小时以后；seven_day_opus、seven_day_sonnet 是 null；额外的窗口并进 rate_limits
-	"$TESTBIN" fx claude-usage "$T/usage/$1.json" "$2" "$3" "${4:-max}" "${5:-}"
+rate() {   # rate 邮箱 5小时% 本周% [本周的几秒以后重置]：假 claude 在这个账号的会话里给状态栏的 rate_limits（$T/rate/<邮箱>.json，像 2.1.332：
+	# used_percentage 是百分数，resets_at 是 Unix 秒；5 小时的 2 小时 13 分 30 秒以后重置，本周的默认 3 天 5 小时以后）；5小时% 写 - 时
+	# 没有 five_hour（没有 5 小时限制的套餐）
+	local now five=""; now=$(date +%s); mkdir -p "$T/rate"
+	[ "$2" = - ] || five="\"five_hour\": {\"used_percentage\": $2, \"resets_at\": $((now + 8010))}, "
+	printf '{%s"seven_day": {"used_percentage": %s, "resets_at": %s}}\n' "$five" "$3" "$((now + ${4:-277200}))" > "$T/rate/$1.json"
+}
+SLN=0
+note() {   # note 邮箱 [会话 id] [请求计数]：像 Claude Code 在这个账号的会话里画一次状态栏（JSON 里是 rate 写的 rate_limits），直接交给
+	# cca _claude-statusline（不经一次启动）；不写会话 id 时每次一个新的会话，请求计数（cost.total_api_duration_ms）默认 1200
+	SLN=$((SLN + 1))
+	printf '{"session_id": "%s", "cost": {"total_api_duration_ms": %s}, "rate_limits": %s}' "${2:-note-$SLN}" "${3:-1200}" "$(cat "$T/rate/$1.json")" |
+		run cca _claude-statusline "$(basename "$(ls -d "$H/.cca/accounts/$(printf %s "$1" | tr @. --)"-*)")"
+}
+u5() { "$TESTBIN" val -f "j=$AD/usage.json" 'j["utilization"]["five_hour"]["utilization"]'; }   # alice 记下的 5 小时用量
+uat() { "$TESTBIN" val -f "j=$AD/usage.json" 'j["fetchedAtMs"]'; }   # alice 的用量记下的时间（毫秒）
+useed() {   # useed 额外的键：alice 的 usage.json 换成以前 cca 查用量时存的那种（会话里记下的只有 5 小时和本周），刚取到；“额外的键”接在 5 小时、本周后面
+	local r5 r7 u; r5=$("$TESTBIN" time --utc --add 8010 --fmt '%Y-%m-%dT%H:%M:%SZ'); r7=$("$TESTBIN" time --utc --add 277200 --fmt '%Y-%m-%dT%H:%M:%SZ')
+	u=$("$TESTBIN" val -f "j=$AJ" 'j["oauthAccount"]["accountUuid"]')
+	printf '{"fetchedAtMs": %s, "accountUuid": "%s", "utilization": {"five_hour": {"utilization": 13.0, "resets_at": "%s"}, "seven_day": {"utilization": 41.0, "resets_at": "%s"}, %s}}\n' "$(($(date +%s) * 1000))" "$u" "$r5" "$r7" "$1" > "$AD/usage.json"
 }
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); AJ="$AD/claude/.claude.json"
 setoa "$AJ" organizationType=claude_max organizationRateLimitTier=default_claude_max_5x accountUuid=u-alice
 run CCA_TTY="$(ans bob@example.com '' 2)" cca add >/dev/null 2>&1
 run CCA_TTY="$(ans)" cca @bob --version >/dev/null 2>&1
-BJ=$(ls -d "$H"/.cca/accounts/bob-example-com-*)/claude/.claude.json
+BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*); BJ="$BD/claude/.claude.json"
 setoa "$BJ" organizationType=claude_pro organizationRateLimitTier=default_claude_ai accountUuid=u-bob
-canned alice@example.com 13 41
-canned bob@example.com 98 72 pro '{"seven_day_sonnet": {"utilization": 60, "resets_at": "2099-01-01T00:00:00Z"}}'
+rm -f "$AD/usage.json" "$BD/usage.json"
+n_args=$(grep -c "^ARGS: " claude.log); n_trace=$(grep -c "cdn-cgi/trace" curl.log)
+out=$(run COLUMNS=160 cca usage 2>&1); rc=$?; outj=$(run cca usage --json 2>/dev/null)
+ok "cca usage：不主动查（不起 claude、不测出口）；还没记下的账号说怎么记下（经 cca 开一次会话、发一句话），--json 里没有数、也不算出错；表格下面说这些数是 cca 启动的会话里记下的" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Max .*还没记下（cca @alice@example.com 开一次会话、发一句话以后就有）" && printf "%s" "$out" | grep -q "cca 不主动查 Claude Code 的用量：这些是 cca 启动的会话里记下的" && printf "%s" "$outj" | jok "(lambda a: a[\"source\"] == \"none\" and a[\"error_code\"] is None)(uacct(\"alice@example.com\"))" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ] && [ "$(grep -c "cdn-cgi/trace" curl.log)" = "$n_trace" ]'
+rate alice@example.com 13 41
+out=$(run CCA_TTY="$(ans)" cca @alice hi 2>&1); rc=$?
+out2=$(run cca usage 2>&1); outj=$(run cca usage --json 2>/dev/null)
+ok "会话里记下：cca 启动的交互会话带着状态栏的命令（cca _claude-statusline 账号目录名），Claude Code 有了回应、状态栏的 JSON 里有 rate_limits 时记进账号的 usage.json（600）；状态栏上什么都不画（用户没配自己的）；cca usage 显示记下的：套餐、5 小时和本周用量、重置时间（刚记下的不说多久前；--json 里 source 是 cache、不算旧）" '[ $rc -eq 3 ] && grep "^STATUSLINE-CMD " claude.log | tail -n 1 | grep -q " _claude-statusline $(basename "$AD")$" && [ "$(grep "^STATUSLINE " claude.log | tail -n 2 | sort -u)" = "STATUSLINE rc=0 out=" ] && [ "$(stat -f %Lp "$AD/usage.json")" = 600 ] && printf "%s" "$out2" | grep -qE "alice@example.com +Max +13% 2小时1[0-9]分后 +41% (今天|明天|周.) [0-9:]+" && ! printf "%s" "$out2" | grep -q "前记下" && printf "%s" "$outj" | jok "(lambda a: a[\"source\"] == \"cache\" and a[\"error_code\"] is None and a[\"stale\"] is False and a[\"five_hour\"][\"utilization\"] == 13 and a[\"plan\"] == \"Max\")(uacct(\"alice@example.com\"))"'
+# 用户自己的状态栏（项目、本机、账号的设置里的 statusLine）：cca 的命令先记下，再把同一份 JSON 交给它（--then）
+mkdir -p "$T/slproj/.claude"; printf '#!/bin/sh\ncat > "$CCA_T/sl.json"; printf "mine %%s" "$1"; exit 4\n' > "$T/slproj/sl.sh"; chmod +x "$T/slproj/sl.sh"
+printf '{"statusLine": {"type": "command", "command": "%s x", "padding": 0}}' "$T/slproj/sl.sh" > "$T/slproj/.claude/settings.local.json"
+rate alice@example.com 14 41
+out=$(cd "$T/slproj" && run CCA_TTY="$(ans)" cca @alice hi 2>&1); rc=$?; v1=$(u5)
+ok "用户自己配了状态栏（这里是项目的 settings.local.json）：cca 的命令先记下，再经 --then 把同一份 JSON 交给用户的命令，输出、退出码照它的；用户写的别的键（padding）留着" '[ $rc -eq 3 ] && grep "^STATUSLINE " claude.log | tail -n 1 | grep -qx "STATUSLINE rc=4 out=mine x" && grep "^STATUSLINE-CMD " claude.log | tail -n 1 | grep -qF -- " --then " && grep "^ARGS: " claude.log | tail -n 1 | grep -qF "\"padding\": 0}" && "$TESTBIN" check -f "j=$T/sl.json" "j[\"rate_limits\"][\"five_hour\"][\"used_percentage\"] == 14" && [ "$v1" = 14 ]'
+rm -rf "$T/slproj" "$T/sl.json"
+# 什么时候不记：状态栏一会儿就画一次，额度只在有了回应时才变
+rate alice@example.com 20 50; note alice@example.com s1 1200; v1=$(u5)
+rate alice@example.com 21 51; note alice@example.com s1 1200; v2=$(u5)
+note alice@example.com s1 2400; v3=$(u5)
+ok "同一个会话没有新的请求（请求计数没变：改了窗口大小这类重画）不记（额度还是旧的），有了新的请求再记" '[ "$v1" = 20 ] && [ "$v2" = 20 ] && [ "$v3" = 21 ]'
+a1=$(uat); note alice@example.com s2; a2=$(uat)
+"$TESTBIN" edit j="$AD/usage.json" 'j["fetchedAtMs"] = j["fetchedAtMs"] - 120000'; a3=$(uat); note alice@example.com s3; a4=$(uat)
+ok "额度和记着的一样：一分钟以内不重写，过了一分钟只刷新取到的时间（Claude Code 的额度是每个回应带回来的：有新的回应就是刚取到的）" '[ "$a2" = "$a1" ] && [ $((a4 - a3)) -ge 100000 ]'
+aem=$("$TESTBIN" val -f "j=$AJ" 'j["oauthAccount"]["emailAddress"]')
+setoa "$AJ" emailAddress=mallory@example.com; rate alice@example.com 30 60; note alice@example.com; v4=$(u5); setoa "$AJ" "emailAddress=$aem"
+printf '{"session_id": "x", "cost": {"total_api_duration_ms": 1}, "rate_limits": {"five_hour": {"used_percentage": 99, "resets_at": 1}}}' > "$T/sl99.json"
+o1=$(run cca _claude-statusline ../alice < "$T/sl99.json" 2>&1); r1=$?
+o2=$(run cca _claude-statusline nobody-example-com-000000 < "$T/sl99.json" 2>&1); r2=$?
+note alice@example.com; v5=$(u5); rm -f "$T/sl99.json"
+ok "不记：账号目录里登录的不是这个账号；账号目录名不对、没有这个账号目录（什么都不输出、退出码 0：状态栏的命令不出声）；登录对上了照常记" '[ "$v4" = 21 ] && [ -z "$o1" ] && [ $r1 -eq 0 ] && [ -z "$o2" ] && [ $r2 -eq 0 ] && [ ! -e "$H/.cca/accounts/nobody-example-com-000000" ] && [ "$v5" = 30 ]'
+rate alice@example.com 13 41; note alice@example.com
+# bob：Claude Code 自己的 /usage 存的缓存（接口原样，有分模型的窗口）
+r5=$("$TESTBIN" time --utc --add 8010 --fmt '%Y-%m-%dT%H:%M:%SZ'); r7=$("$TESTBIN" time --utc --add 277200 --fmt '%Y-%m-%dT%H:%M:%SZ')   # 和 rate 一样的重置时间（2099 年的写出来太宽：80 列的表格会收起套餐那一列）
+"$TESTBIN" edit j="$BJ" 'w = {"utilization": 98.0, "resets_at": "'"$r5"'"}
+w7 = {"utilization": 72.0, "resets_at": "'"$r7"'"}
+j["cachedUsageUtilization"] = {"fetchedAtMs": int(time.time() * 1000), "accountUuid": "u-bob", "utilization": {"five_hour": w, "seven_day": w7, "seven_day_sonnet": dict(w7, utilization=60)}}'
 out=$(run cca usage 2>&1); rc=$?
-ok "cca usage：两个官方账号一起查，表里有套餐（原来的 Max 5x 现在就叫 Max）、5 小时和本周用量、分模型额度；注明第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Max +13% 2小时1[0-9]分后 +41% (今天|明天|周.) [0-9:]+" && printf "%s" "$out" | grep -qE "bob@example.com +Pro +98%" && printf "%s" "$out" | grep -q "Sonnet 本周 60%" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && [ "$(printf "%s\n" "$out" | grep -c "@example.com")" = 2 ]'
+ok "cca usage：两个官方账号一起列，表里有套餐（原来的 Max 5x 现在就叫 Max）、5 小时和本周用量；Claude Code 自己的 /usage 存的缓存也认（bob：有分模型的额度）；注明第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Max +13% 2小时1[0-9]分后 +41% (今天|明天|周.) [0-9:]+" && printf "%s" "$out" | grep -qE "bob@example.com +Pro +98%" && printf "%s" "$out" | grep -q "Sonnet 本周 60%" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && [ "$(printf "%s\n" "$out" | grep -c "@example.com")" = 2 ]'
 maxw() { "$TESTBIN" maxw; }   # 每行显示宽度的最大值（中文算 2 格）
 o50=$(run COLUMNS=50 cca usage 2>/dev/null)
 ok "cca usage 一个账号一行：整行不超过终端的宽度（80 列最宽 78，50 列最宽 48），窄了先收起套餐、重置时间，不折行" '[ "$(printf "%s\n" "$out" | grep -v "^•" | maxw)" -le 78 ] && [ "$(printf "%s\n" "$o50" | maxw)" -le 48 ] && [ "$(printf "%s\n" "$o50" | grep -c "@example.com")" = 2 ] && printf "%s" "$o50" | grep -qE "alice@example.com +13% +41%"'
-ok "cca usage：每个账号经自己的端口、用自己的配置目录无界面查询（--safe-mode），查之前先看出口地区" 'grep -q "^ARGS: -p --safe-mode --no-session-persistence --strict-mcp-config --input-format stream-json --output-format stream-json --verbose$" claude.log && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=alice@example.com https_proxy=http://192.0.2.10:7901" && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=bob@example.com https_proxy=http://192.0.2.10:7902" && grep -q "CURL via :7902 https://claude.ai/cdn-cgi/trace" curl.log'
 out=$(run cca usage --json 2>/dev/null)
-ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | "$TESTBIN" check -f d=- "a={x[\"account\"]: x for x in d[\"accounts\"]}; a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max\" and a[\"bob@example.com\"][\"source\"]==\"live\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] and \"reset_credits\" not in a[\"alice@example.com\"]"'
-ok "cca usage：查到的存进账号目录的 usage.json（菜单和查不到时用）" '[ -f "$AD/usage.json" ]'
+ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | "$TESTBIN" check -f d=- "a={x[\"account\"]: x for x in d[\"accounts\"]}; a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max\" and a[\"bob@example.com\"][\"source\"]==\"cache\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] and \"reset_credits\" not in a[\"alice@example.com\"]"'
 cp "$AD/usage.json" "$T/alice.usage.keep"
 fable='"model_scoped": [{"display_name": "Fable", "utilization": 6, "resets_at": "2099-01-01T00:00:00Z"}], "weekly_scoped_shares": [{"limit_index": 1, "used_percent_of_weekly": 3, "allowance_percent_of_weekly": 50}]'
-canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}, {\"kind\": \"weekly_scoped\", \"scope\": {\"model\": {\"id\": null, \"display_name\": \"Fable\"}}}]}"
+useed "$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}, {\"kind\": \"weekly_scoped\", \"scope\": {\"model\": {\"id\": null, \"display_name\": \"Fable\"}}}]"
 out=$(run cca usage alice --json 2>/dev/null)
-canned alice@example.com 13 41 max "{$fable, \"limits\": null}"
+useed "$fable, \"limits\": null"
 out2=$(run cca usage alice --json 2>/dev/null)
-canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}]}"
+useed "$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}]"
 out3=$(run cca usage alice --json 2>/dev/null)
-mixed=$(run CCA_USAGE_JOBS=1 cca usage alice bob --json 2>/dev/null)
-ok "cca usage：可以写好几个账号，只查这几个（App 自动刷新只查到期的；CCA_USAGE_JOBS 限制同时查几个）" 'printf "%s" "$mixed" | "$TESTBIN" check -f d=- "len(d[\"accounts\"]) == 2"'
-canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
-ok "cca usage --json：分模型的每周额度（Fable）带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
-# 有没有 5 小时限制只看接口给没给 five_hour（没有 5 小时限制的套餐不给，limits 里也没有 session 那一项；cca 原样给 null，表格里是 —，App 不画这一行）。
-# limits 里的 is_active 不是“生不生效”：每个账号只有一项是 true（用得最多的那一项），5 小时用得比本周少时 session 那一项就是 false；
-# 5 小时的窗口还没开始计时是 0%、没有重置时间（beta.12、beta.13 拿 is_active 判断，把 Max 账号的 5 小时用量藏掉了）
-lim='{"limits": [{"kind": "session", "group": "session", "percent": %s, "scope": null, "is_active": false}, {"kind": "weekly_all", "group": "weekly", "percent": 41, "scope": null, "is_active": true}]%s}'
-canned alice@example.com 5 41 max "$(printf "$lim" 5 '')"
-outj=$(run cca usage alice --json 2>/dev/null); st=$(gj state); out=$(run COLUMNS=160 cca usage alice 2>&1)
-canned alice@example.com 0 41 max "$(printf "$lim" 0 ', "five_hour": {"utilization": 0, "resets_at": null}')"; outz=$(run cca usage alice --json 2>/dev/null)
-canned alice@example.com 0 41 max '{"five_hour": null, "limits": [{"kind": "weekly_all", "group": "weekly", "percent": 41, "scope": null, "is_active": true}]}'
+mixed=$(run cca usage alice bob --json 2>/dev/null)
+ok "cca usage：可以写好几个账号，只列这几个" 'printf "%s" "$mixed" | "$TESTBIN" check -f d=- "len(d[\"accounts\"]) == 2"'
+cp "$T/alice.usage.keep" "$AD/usage.json"
+ok "以前查用量时存下的分模型每周额度（usage.json 里的 model_scoped，Fable）照样显示，带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
+# 有没有 5 小时限制只看状态栏的 rate_limits 里有没有 five_hour（没有 5 小时限制的套餐不给）：cca 原样给 null，表格里是 —，App 不画这一行
+rate alice@example.com - 41; note alice@example.com
 outn=$(run cca usage alice --json 2>/dev/null); stn=$(gj state); outt=$(run COLUMNS=160 cca usage alice 2>&1)
-canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
-ok "5 小时用得比本周少（limits 里 session 那一项 is_active 是 false）：5 小时照常（usage --json、_gui state、表格里都是 5%；还没开始计时的照常是 0%）" 'printf "%s" "$outj" | jok "uacct(\"alice@example.com\")[\"five_hour\"][\"utilization\"] == 5" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"five_hour\"][\"utilization\"] == 5" && printf "%s" "$out" | grep "alice@example.com" | grep -qE " 5% .*41%" && printf "%s" "$outz" | jok "uacct(\"alice@example.com\")[\"five_hour\"][\"utilization\"] == 0"'
-ok "没有 5 小时限制的套餐（接口不给 five_hour）：usage --json、_gui state 里是 null（App 不画这一行），表格里是 —，本周照常" 'printf "%s" "$outn" | jok "uacct(\"alice@example.com\")[\"five_hour\"] is None and uacct(\"alice@example.com\")[\"seven_day\"][\"utilization\"] == 41" && printf "%s" "$stn" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"five_hour\"] is None" && printf "%s" "$outt" | grep "alice@example.com" | grep -qE "— .*41%"'
-# 周结算提醒（use_first，只给 App）：本周额度还剩至少 20% 时给出 [重置前 24 小时, 重置) 的区间，App 拿当前时间比；剩得少、
-# 这次查询说明账号现在用不了（端口不通、没登录……）时是 null；终端的表格里不提示
-soon=$("$TESTBIN" time --utc --add 36000 --fmt '%Y-%m-%dT%H:%M:%SZ')
-canned alice@example.com 13 41 max "{\"seven_day\": {\"utilization\": 41, \"resets_at\": \"$soon\"}}"
+ok "没有 5 小时限制的套餐（状态栏的 rate_limits 里没有 five_hour）：usage --json、_gui state 里是 null（App 不画这一行），表格里是 —，本周照常" 'printf "%s" "$outn" | jok "uacct(\"alice@example.com\")[\"five_hour\"] is None and uacct(\"alice@example.com\")[\"seven_day\"][\"utilization\"] == 41" && printf "%s" "$stn" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"five_hour\"] is None" && printf "%s" "$outt" | grep "alice@example.com" | grep -qE "— .*41%"'
+# 周结算提醒（use_first，只给 App）：本周额度还剩至少 20% 时给出 [重置前 24 小时, 重置) 的区间，App 拿当前时间比；剩得少时是 null；
+# 终端的表格里不提示
+rate alice@example.com 13 41 36000; note alice@example.com
 outj=$(run cca usage alice --json 2>/dev/null); st=$(gj state); out=$(run COLUMNS=160 cca usage alice 2>&1)
 ok "usage --json / _gui state：本周额度还剩不少时带 use_first（还剩百分之几、重置前 24 小时到重置）；终端的表格里不提示" 'printf "%s" "$outj" | jok "(lambda a: a[\"use_first\"] == {\"left_percent\": 59, \"from_epoch\": a[\"seven_day\"][\"resets_epoch\"] - 86400, \"until_epoch\": a[\"seven_day\"][\"resets_epoch\"]})(uacct(\"alice@example.com\"))" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"use_first\"][\"left_percent\"] == 59" && ! printf "%s" "$out" | grep -q "先用"'
-canned alice@example.com 13 80.4; o1=$(run cca usage alice --json 2>/dev/null)
-canned alice@example.com 13 80.5; o2=$(run cca usage alice --json 2>/dev/null)
+rate alice@example.com 13 80.4; note alice@example.com; o1=$(run cca usage alice --json 2>/dev/null)
+rate alice@example.com 13 80.5; note alice@example.com; o2=$(run cca usage alice --json 2>/dev/null)
 ok "按四舍五入后显示的百分比判断：用了 80.4%（显示 80%）还剩 20% 算，80.5%（显示 81%）不算" 'printf "%s" "$o1" | jok "uacct(\"alice@example.com\")[\"use_first\"][\"left_percent\"] == 20" && printf "%s" "$o2" | jok "uacct(\"alice@example.com\")[\"use_first\"] is None"'
-canned alice@example.com 13 41; run cca usage alice >/dev/null 2>&1; cp "$R/listening" "$T/listening.uf"; unlisten 7901
-o1=$(run cca usage alice --json 2>/dev/null); cp "$T/listening.uf" "$R/listening"
-ok "这次查询端口不通（账号现在用不了）：use_first 是 null，缓存里的用量照样给" 'printf "%s" "$o1" | jok "uacct(\"alice@example.com\")[\"error_code\"] == \"port\" and uacct(\"alice@example.com\")[\"use_first\"] is None and uacct(\"alice@example.com\")[\"seven_day\"][\"utilization\"] == 41"'
-# 每周用量（usage_weeks，只给 App）：查到用量时顺带记进账号目录的 usage-weeks.json（600），一周一项，取这一周查到的最高的；
+# 每周用量（usage_weeks，只给 App）：记下用量时顺带记进账号目录的 usage-weeks.json（600），一周一项，取这一周记下的最高的；
 # 比最高的低了超过 5 个百分点算中间重置过（重置前的加上）。_gui state 只读：比记下的新的用量只在内存里并进来
 rm -f "$AD/usage-weeks.json"
-canned alice@example.com 13 30; run cca usage alice >/dev/null 2>&1; w1=$(gj state)
-canned alice@example.com 13 45; run cca usage alice >/dev/null 2>&1
-canned alice@example.com 13 44; run cca usage alice >/dev/null 2>&1; w2=$(gj state)
-ok "每周用量：查到用量时记进 usage-weeks.json（600）；_gui state 里是还没过完的这一周（7 天），用到这一周查到的最高的（略低一点不算重置），还没有过完的周、没有统计；第三方 API 账号是 null" '[ "$(stat -f %Lp "$AD/usage-weeks.json")" = 600 ] && printf "%s" "$w1" | jok "(lambda u: len(u[\"weeks\"]) == 1 and u[\"weeks\"][0][\"used_percent\"] == 30 and u[\"weeks\"][0][\"current\"] is True and u[\"weeks\"][0][\"partial\"] is False and u[\"weeks\"][0][\"resets\"] == 0 and u[\"summary\"] == {\"weeks\": 0, \"average_percent\": None, \"maxed\": 0, \"under_half\": 0} and isinstance(u[\"since_epoch\"], float))(acct(0, \"alice@example.com\")[\"usage_weeks\"]) and all(a[\"usage_weeks\"] is None for a in d[\"tools\"][0][\"accounts\"] if a[\"kind\"] == \"api\")" && printf "%s" "$w2" | jok "(lambda w: w[\"used_percent\"] == 45 and w[\"resets\"] == 0 and abs(w[\"end_epoch\"] - w[\"start_epoch\"] - 7 * 86400) < 1)(acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
+rate alice@example.com 13 30; note alice@example.com; w1=$(gj state)
+rate alice@example.com 13 45; note alice@example.com
+rate alice@example.com 13 44; note alice@example.com; w2=$(gj state)
+ok "每周用量：记下用量时记进 usage-weeks.json（600）；_gui state 里是还没过完的这一周（7 天），用到这一周记下的最高的（略低一点不算重置），还没有过完的周、没有统计；第三方 API 账号是 null" '[ "$(stat -f %Lp "$AD/usage-weeks.json")" = 600 ] && printf "%s" "$w1" | jok "(lambda u: len(u[\"weeks\"]) == 1 and u[\"weeks\"][0][\"used_percent\"] == 30 and u[\"weeks\"][0][\"current\"] is True and u[\"weeks\"][0][\"partial\"] is False and u[\"weeks\"][0][\"resets\"] == 0 and u[\"summary\"] == {\"weeks\": 0, \"average_percent\": None, \"maxed\": 0, \"under_half\": 0} and isinstance(u[\"since_epoch\"], float))(acct(0, \"alice@example.com\")[\"usage_weeks\"]) and all(a[\"usage_weeks\"] is None for a in d[\"tools\"][0][\"accounts\"] if a[\"kind\"] == \"api\")" && printf "%s" "$w2" | jok "(lambda w: w[\"used_percent\"] == 45 and w[\"resets\"] == 0 and abs(w[\"end_epoch\"] - w[\"start_epoch\"] - 7 * 86400) < 1)(acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
 cp "$AD/usage-weeks.json" "$T/weeks.keep"
 "$TESTBIN" edit j="$AD/usage.json" 'j["fetchedAtMs"] += 60000; j["utilization"]["seven_day"]["utilization"] = 50'
 w3=$(gj state)
 ok "_gui state 只读：比记下的新的用量（usage.json、Claude Code 的缓存）只在内存里并进来，不写 usage-weeks.json" 'printf "%s" "$w3" | jok "acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1][\"used_percent\"] == 50" && cmp -s "$AD/usage-weeks.json" "$T/weeks.keep"'
-canned alice@example.com 13 10; run cca usage alice >/dev/null 2>&1; w4=$(gj state)
+rate alice@example.com 13 10; note alice@example.com; w4=$(gj state)
 ok "每周用量：比这一周最高的低了超过 5 个百分点算中间重置过，重置前的加上（45 + 10），记一次" 'printf "%s" "$w4" | jok "(lambda w: w[\"used_percent\"] == 55 and w[\"resets\"] == 1 and w[\"current\"] is True)(acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
-canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
-# Claude Code 记的套餐过时了（登录以后升级了）：查用量时它回报的 subscription_type 是登录时记下的，和账号资料（organizationType）对不上
-canned alice@example.com 13 41 pro
+rate alice@example.com 13 41; note alice@example.com
+# Claude Code 记的套餐过时了（登录以后升级了）：以前 cca 查用量时 get_usage 回报的 subscription_type 是登录时记下的（usage.json 的
+# login_plan），和账号资料（organizationType）对不上。会话里记下的没有它（状态栏的 JSON 里没有），装着以前的版本记下的还会说
+"$TESTBIN" edit j="$AD/usage.json" 'j["login_plan"] = "pro"'
 out=$(run COLUMNS=160 cca usage 2>&1); outj=$(run cca usage --json 2>/dev/null); st=$(gj state); out80=$(run cca usage 2>/dev/null)
-ok "Claude Code 记的套餐和账号资料对不上：表格下面说一句、让重新登录；--json 和 _gui state 的用量里是 outdated_login_plan（对得上的是 null），记进 usage.json" 'printf "%s" "$out" | grep -qF "! alice@example.com：Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）" && [ "$(printf "%s" "$out" | grep -c "里记的套餐还是")" = 1 ] && printf "%s" "$out80" | grep -qF "! 套餐过时（记的是 Pro，现在是 Max）：cca login alice@example.com" && [ "$(printf "%s\n" "$out80" | maxw)" -le 78 ] && printf "%s" "$outj" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] == \"Pro\" and uacct(\"bob@example.com\")[\"outdated_login_plan\"] is None" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"outdated_login_plan\"] == \"Pro\"" && "$TESTBIN" check -f "j=$AD/usage.json" "j[\"login_plan\"] == \"pro\""'
+ok "以前记下的 Claude Code 的套餐（usage.json 的 login_plan）和账号资料对不上：表格下面说一句、让重新登录；--json 和 _gui state 的用量里是 outdated_login_plan（对得上的是 null）" 'printf "%s" "$out" | grep -qF "! alice@example.com：Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）" && [ "$(printf "%s" "$out" | grep -c "里记的套餐还是")" = 1 ] && printf "%s" "$out80" | grep -qF "! 套餐过时（记的是 Pro，现在是 Max）：cca login alice@example.com" && [ "$(printf "%s\n" "$out80" | maxw)" -le 78 ] && printf "%s" "$outj" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] == \"Pro\" and uacct(\"bob@example.com\")[\"outdated_login_plan\"] is None" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"outdated_login_plan\"] == \"Pro\""'
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
-ok "启动横幅里也说一句（读上次查用量时记下的，不另外查）" 'printf "%s" "$out" | grep -qF "套餐  Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）"'
-cp "$R/listening" "$T/listening.plan"; unlisten 7901
-out=$(run COLUMNS=160 cca usage alice 2>&1)
-cp "$T/listening.plan" "$R/listening"
-ok "这次查不到（出口端口不通）：照上次记下的说" 'printf "%s" "$out" | grep -q "出口端口 7901 不通" && printf "%s" "$out" | grep -qF "! alice@example.com：Claude Code 里记的套餐还是 Pro"'
+ok "启动横幅里也说一句（读记下的，不另外查）" 'printf "%s" "$out" | grep -qF "套餐  Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）"'
 setoa "$AJ" organizationType=claude_pro; out=$(run cca usage alice --json 2>/dev/null); setoa "$AJ" organizationType=claude_max
 ok "账号资料也是 Pro（又降回去了）：对上了就不说" 'printf "%s" "$out" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] is None"'
+rate alice@example.com 14 41; note alice@example.com; out=$(run cca usage alice --json 2>/dev/null)
+ok "会话里记下额度时不留着以前记的套餐：状态栏的 JSON 里没有 Claude Code 记的套餐，留着旧的就会一直说过时（换过套餐、在 Claude Code 里重新登录过以后）" '! grep -q login_plan "$AD/usage.json" && printf "%s" "$out" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] is None"'
+"$TESTBIN" edit j="$AD/usage.json" 'j["login_plan"] = "pro"'
 run CCA_TTY="$(ans)" cca login alice >/dev/null 2>&1; rc=$?
 setoa "$AJ" organizationType=claude_max organizationRateLimitTier=default_claude_max_5x accountUuid=u-alice   # 假 claude 登录时只写邮箱
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
-ok "经 cca 重新登录：登录之前把记下的套餐作废（下次查用量按 Claude Code 新记的重新记），横幅里不再说" '[ $rc -eq 0 ] && ! grep -q login_plan "$AD/usage.json" && ! printf "%s" "$out" | grep -q "里记的套餐还是"'
-canned alice@example.com 13 41; run cca usage alice >/dev/null 2>&1
+ok "经 cca 重新登录：登录之前把记下的套餐作废，横幅里不再说" '[ $rc -eq 0 ] && ! grep -q login_plan "$AD/usage.json" && ! printf "%s" "$out" | grep -q "里记的套餐还是"'
+rate alice@example.com 13 41; note alice@example.com
 edit_table 'j["副号(bob@example.com)"] = j.pop("bob@example.com")'
 out=$(run COLUMNS=120 cca usage 2>&1); out80=$(run cca usage 2>/dev/null)
 edit_table 'j["bob@example.com"] = j.pop("副号(bob@example.com)")'
 ok "cca usage：账号一列和菜单一样写别名和邮箱，两小列对齐（没起别名的别名那格留空）；终端窄了先收起有别名的账号的邮箱，给备注留地方" 'printf "%s" "$out" | grep -qE "^  副号  bob@example.com +Pro +98%" && printf "%s" "$out" | grep -qE "^ {8}alice@example.com +Max +13%" && printf "%s" "$out80" | grep -qE "^  副号 +Pro +98%.*Sonnet 本周 60%" && ! printf "%s" "$out80" | grep -q bob@example.com'
 m=$(run CCA_TTY="$(ans q)" cca 2>&1)
-ok "菜单：官方账号附上最近一次的用量（读缓存，不联网）" 'printf "%s" "$m" | grep -q "5h 13% · 周 41%" && printf "%s" "$m" | grep -q "5h 98% · 周 72%"'
-cp "$R/listening" "$T/listening.bak"; grep -vx 7902 "$T/listening.bak" > "$R/listening"; canned bob@example.com 50 50 pro
-out=$(run COLUMNS=120 cca usage 2>&1); out80=$(run cca usage 2>/dev/null)
-ok "出口端口不通：显示上次的缓存和原因（原因在前，窄的终端里先保住它），不拿账号走别的路" 'printf "%s" "$out" | grep -qE "bob@example.com +Pro +98%" && printf "%s" "$out" | grep -qE "出口端口 7902 不通；缓存（[0-9]+ 分钟前）；Sonnet 本周 60%" && printf "%s" "$out80" | grep -q "出口端口 7902 不通"'
-cp "$T/listening.bak" "$R/listening"
-touch "$T/usage/unsupported"
-out=$(run COLUMNS=160 cca usage alice 2>&1)
-ok "Claude Code 不支持 get_usage：提示升级，用缓存顶上" 'printf "%s" "$out" | grep -q "这个版本的 Claude Code 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Max +13%"'
-rm -f "$T/usage/unsupported"; touch "$T/usage/hang"; t0=$(date +%s)
-out=$(run CCA_USAGE_TIMEOUT=2 cca usage alice 2>&1); t1=$(date +%s)
-ok "查询卡住：到时间就结束（不会一直等），显示缓存" 'printf "%s" "$out" | grep -q "查询超时" && [ $((t1 - t0)) -lt 15 ]'
-# 查询途中按 Ctrl-C、关掉终端（TERM）：后台的查询忽略 SIGINT，cca 自己停掉它们和它们起的进程，不等查询超时（没装 procps 的
-# Linux 上读 /proc 的那条路在 tests/linux.sh）。$! 是 run 的子 shell，cca 一般是它的子进程（bash 把 env 直接 exec 了的话就是它自己）
-n_usage=$(grep -c "^USAGE: " claude.log)
-run CCA_USAGE_TIMEOUT=60 cca usage alice >/dev/null 2>&1 & UP=$!
-for i in $(seq 1 100); do [ "$(grep -c "^USAGE: " claude.log)" -gt "$n_usage" ] && break; sleep 0.1; done
-CP=$UP; ps -o command= -p "$UP" | grep -q 'cca usage' || CP=$(pgrep -P "$UP" | head -n 1)
-kids=$(for j in $(pgrep -P "$CP"); do pgrep -P "$j"; done); t0=$(date +%s)
-kill -TERM "${CP:-$UP}"; wait "$UP"; rc=$?
-for i in $(seq 1 30); do left=""; for k in $kids; do kill -0 "$k" 2>/dev/null && left="$left $k"; done; [ -z "$left" ] && break; sleep 0.1; done; t1=$(date +%s)
-pkill -f "$T/fake_usage"
-ok "查询途中按 Ctrl-C、关掉终端：后台的查询连同它起的进程马上停掉（不等 60 秒的超时），退出码 130" '[ "$rc" = 130 ] && [ -n "$kids" ] && [ -z "$left" ] && [ $((t1 - t0)) -lt 5 ]'
-rm -f "$T/usage/hang"; mkdir -p "$T/loc"; printf CN > "$T/loc/7901"; n_usage=$(grep -c "^USAGE: " claude.log)
-out=$(run cca usage alice 2>&1)
-ok "出口在受限地区：不拿账号去查，说明原因" 'printf "%s" "$out" | grep -q "出口在中国大陆" && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
-rm -f "$T/loc/7901"
+ok "菜单：官方账号附上最近一次的用量（读记下的，不联网）" 'printf "%s" "$m" | grep -q "5h 13% · 周 41%" && printf "%s" "$m" | grep -q "5h 98% · 周 72%"'
 out=$(run cca usage kimi 2>&1); rc=$?
 ok "cca usage 第三方 API 账号：说明它没有订阅用量" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有订阅用量可查"'
 setoa "$AJ" organizationRateLimitTier=default_claude_max_20x; setoa "$BJ" organizationType=claude_team organizationRateLimitTier=default_claude_max_5x
-out=$(run cca usage 2>&1)
-setoa "$AJ" 'planDisplayName=Ultra Plus'; out2=$(run cca usage alice 2>&1)
+out=$(run COLUMNS=160 cca usage 2>&1)   # 看的是套餐的叫法：宽一点，Team Premium 和 bob 的备注都放得下（80 列会先收起套餐那一列）
+setoa "$AJ" 'planDisplayName=Ultra Plus'; out2=$(run COLUMNS=160 cca usage alice 2>&1)
 setoa "$AJ" organizationRateLimitTier=default_claude_max_5x planDisplayName=; setoa "$BJ" organizationType=claude_pro organizationRateLimitTier=default_claude_ai
-ok "套餐叫法和官网一样：原来的 Max 20x 现在叫 Ultra，Team 的 5x 档位是 Team Premium；Claude Code 存了官方给的套餐名（planDisplayName）时照它写" 'printf "%s" "$out" | grep -qE "alice@example.com +Ultra +13%" && printf "%s" "$out" | grep -qE "bob@example.com +Team Premium +50%" && printf "%s" "$out2" | grep -qE "alice@example.com +Ultra Plus +13%"'
-run CLAUDECODE=1 cca usage alice >/dev/null 2>&1
-ok "在 Claude Code 里（! 前缀）运行 cca usage：查询的子进程不带 CLAUDECODE" 'lastenv | grep -q "CLAUDECODE=unset"'
+ok "套餐叫法和官网一样：原来的 Max 20x 现在叫 Ultra，Team 的 5x 档位是 Team Premium；Claude Code 存了官方给的套餐名（planDisplayName）时照它写" 'printf "%s" "$out" | grep -qE "alice@example.com +Ultra +13%" && printf "%s" "$out" | grep -qE "bob@example.com +Team Premium +98%" && printf "%s" "$out2" | grep -qE "alice@example.com +Ultra Plus +13%"'
 "$TESTBIN" edit "j=$BJ" "j.pop(\"oauthAccount\")"
-n_usage=$(grep -c "^USAGE: " claude.log)
+n_args=$(grep -c "^ARGS: " claude.log)
 out=$(run cca usage 2>&1)
-ok "没登录的账号：不启动查询，提示先登录" 'printf "%s" "$out" | grep -q "还没登录（cca @bob@example.com 登录）" && [ "$(grep -c "^USAGE: " claude.log)" = $((n_usage + 1)) ]'
+ok "没登录的账号：提示先登录，不显示以前记下的；cca usage 不起 claude" 'printf "%s" "$out" | grep -q "还没登录（cca @bob@example.com 登录）" && ! printf "%s" "$out" | grep -q "98%" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
 "$TESTBIN" edit j="$AD/usage.json" 'j["fetchedAtMs"] = int((time.time() - 3 * 3600 - 60) * 1000); j["utilization"]["five_hour"]["resets_at"] = "2000-01-01T00:00:00Z"'
 m=$(run COLUMNS=160 CCA_TTY="$(ans q)" cca 2>&1)
 ok "菜单：缓存旧了注明多久前；重置时间过了的窗口写已重置" 'printf "%s" "$m" | grep -q "5h 已重置 · 周 41%（3 小时前）"'
@@ -1450,10 +1472,20 @@ cp "$X/config.toml" "$T/codex-config.bak"; grep -v '^notify = ' "$T/codex-config
 : > osascript.log
 run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; cn1=$(clast ARGS)
 cx_acct=$(clast ENV | sed -n 's/.* CCA_ACCOUNT=\([^ ]*\) .*/\1/p'); cx_acct="${cx_acct%%(*}"
-run CCA_TTY="$(ans)" cca codex @alice exec hi >/dev/null 2>&1; cn2=$(clast ARGS)
-run CCA_TTY="$(ans)" cca codex @alice --model gpt-x 修 exec >/dev/null 2>&1; cn3=$(clast ARGS)
+run CCA_TTY="$(ans)" cca codex @alice mcp list >/dev/null 2>&1; cn2=$(clast ARGS)
+run CCA_TTY="$(ans)" cca codex @alice --model gpt-x "修一下 exec 的 bug" >/dev/null 2>&1; cn3=$(clast ARGS)
 run CCA_TTY="$(ans)" cca codex @alice resume --last >/dev/null 2>&1; cn4=$(clast ARGS)
-ok "Codex 的通知：交互的会话（不带参数、带着选项和开场白、resume）在用户参数前面带上 -c notify=[cca, _remote-hook, --codex]，不在会话宿主里时不带 tui.*；exec 这类子命令不带" 'printf "%s" "$cn1" | grep -Eqx "$CXF $cnot" && [ "$cn2" = "$CXF exec hi" ] && printf "%s" "$cn3" | grep -Eqx "$CXF $cnot --model gpt-x 修 exec" && printf "%s" "$cn4" | grep -Eqx "$CXF $cnot resume --last" && [ -n "$cx_acct" ] && [ ! -s osascript.log ]'
+ok "Codex 的通知：交互的会话（不带参数、带着选项和开场白、resume）在用户参数前面带上 -c notify=[cca, _remote-hook, --codex]，不在会话宿主里时不带 tui.*；mcp 这类子命令不带" 'printf "%s" "$cn1" | grep -Eqx "$CXF $cnot" && [ "$cn2" = "$CXF mcp list" ] && printf "%s" "$cn3" | grep -Eqx "$CXF $cnot --model gpt-x 修一下 exec 的 bug" && printf "%s" "$cn4" | grep -Eqx "$CXF $cnot resume --last" && [ -n "$cx_acct" ] && [ ! -s osascript.log ]'
+# Codex 的非交互模式（codex exec、它的别名 e、review、cloud exec）：和 claude -p 一样，cca 不用，也不让经 cca 用；假 codex 遇到它们记进 $T/print-mode.log
+n_cx=$(grep -c "^ARGS: .* hi$" codex.log)
+out=$(run CCA_TTY="$(ans)" cca codex @alice exec hi 2>&1); rc=$?
+out1=$(run CCA_TTY="$(ans)" cca codex @alice --model gpt-x --add-dir "$T" e hi 2>&1); rc1=$?
+out2=$(run CCA_TTY="$(ans)" cca codex @alice review hi 2>&1); rc2=$?
+out3=$(run CCA_TTY="$(ans)" cca codex @alice cloud exec --env x hi 2>&1); rc3=$?
+out4=$(run CCA_TTY="$(ans)" cca codex @alice 修一下 exec hi 2>&1); rc4=$?   # 开场白后面的 exec：codex 照样认成子命令
+n_cx2=$(grep -c "^ARGS: .* hi$" codex.log)
+run CCA_TTY="$(ans)" cca codex @alice -- -- exec >/dev/null 2>&1; rc5=$?; cx5=$(clast ARGS)   # 第二个 -- 才交给 codex：后面的是开场白
+ok "Codex 的非交互模式（exec、e、review、cloud exec；开场白、选项后面的也算）不能经 cca 用：说是非交互模式、不启动；交给 codex 的 -- 后面的是开场白，照常启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "启动参数 exec 是非交互模式" && [ $rc1 -ne 0 ] && printf "%s" "$out1" | grep -q "启动参数 e 是非交互模式" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "启动参数 review 是非交互模式" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "启动参数 exec 是非交互模式" && [ $rc4 -ne 0 ] && printf "%s" "$out4" | grep -q "启动参数 exec 是非交互模式" && [ "$n_cx2" = "$n_cx" ] && [ $rc5 -eq 3 ] && printf "%s" "$cx5" | grep -Eqx "$CXF $cnot -- exec" && [ ! -e "$T/print-mode.log" ]'
 { printf 'notify = ["%s", "a b"]\n' "$H/mine.sh"; grep -v '^notify = ' "$T/codex-config.bak"; } > "$X/config.toml"   # 换掉用户自己的 notify（插在开头：顶层的键；同一个键写两次就不是合法的 TOML 了，cca 不启动）
 printf '#!/bin/sh\nprintf "MINE %%s|%%s\\n" "$1" "$2" >> "$CCA_T/mine.log"\n' > "$H/mine.sh"; chmod +x "$H/mine.sh"; rm -f mine.log
 printf '%s' '{"type": "agent-turn-complete", "thread-id": "t-1", "turn-id": "u-1", "cwd": "/x/work", "input-messages": ["hi"], "last-assistant-message": "**改好了** 两处\n细节"}' > "$T/codex_notify"
@@ -1509,9 +1541,9 @@ j.update({"rateLimitResetCredits": {"availableCount": int(resets), "credits": [
         {"id": "rc-%d" % i, "resetType": "codexRateLimits", "status": "available", "grantedAt": now - 86400,
          "expiresAt": now + 30 * 86400, "title": None, "description": None} for i in range(int(resets))]}} if resets else {})' "$2" "$3" "${4:-plus}" "${5:-}"
 }
-ccanned alice@example.com 13 41 pro 2; n_usage=$(grep -c "^USAGE: " claude.log)
+ccanned alice@example.com 13 41 pro 2; n_usage=$(grep -c "^ARGS: " claude.log)
 out=$(run COLUMNS=160 cca codex usage 2>&1); rc=$?
-ok "cca codex usage：经账号的端口让 codex 的 app-server 查（不发模型请求），表里有套餐（叫法和 codex 的 /status 一样，pro 是 Pro 200）、5 小时、本周，备注里先写剩余的重置次数，再是别的额度和 credits；第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13% 2小时1[0-9]分后 +41% (今天|明天|周.) [0-9:]+" && printf "%s" "$out" | grep -qE "剩余重置 2 次（最早 [0-9]+ 月 [0-9]+ 日过期）；GPT-5-Pro 本周 30%；credits 余额 12.5" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
+ok "cca codex usage：经账号的端口让 codex 的 app-server 查（不发模型请求），表里有套餐（叫法和 codex 的 /status 一样，pro 是 Pro 200）、5 小时、本周，备注里先写剩余的重置次数，再是别的额度和 credits；第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13% 2小时1[0-9]分后 +41% (今天|明天|周.) [0-9:]+" && printf "%s" "$out" | grep -qE "剩余重置 2 次（最早 [0-9]+ 月 [0-9]+ 日过期）；GPT-5-Pro 本周 30%；credits 余额 12.5" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^ARGS: " claude.log)" = "$n_usage" ]'
 ccanned alice@example.com 13 41 pro 1; out=$(run COLUMNS=160 cca codex usage 2>&1)
 ok "cca codex usage：只有一次重置机会时不说“最早”，到期日照样写" 'printf "%s" "$out" | grep -qE "剩余重置 1 次（[0-9]+ 月 [0-9]+ 日过期）"'
 ccanned alice@example.com 13 41 pro 2
@@ -1529,6 +1561,21 @@ touch "$T/codex_usage/hang"; t0=$(date +%s)
 out=$(run CCA_USAGE_TIMEOUT=2 cca codex usage alice 2>&1); t1=$(date +%s)
 rm -f "$T/codex_usage/hang"
 ok "codex 查用量卡住：到时间就结束（不会一直等），显示缓存" 'printf "%s" "$out" | grep -q "查询超时" && [ $((t1 - t0)) -lt 15 ]'
+# 查询途中按 Ctrl-C、关掉终端（TERM）：后台的查询忽略 SIGINT，cca 自己停掉它们和它们起的进程，不等查询超时（没装 procps 的
+# Linux 上读 /proc 的那条路在 tests/linux.sh）。$! 是 run 的子 shell，cca 一般是它的子进程（bash 把 env 直接 exec 了的话就是它自己）
+touch "$T/codex_usage/hang"; n_rpc=$(grep -c "RPC rateLimits" codex.log)
+run CCA_USAGE_TIMEOUT=60 cca codex usage alice >/dev/null 2>&1 & UP=$!
+for i in $(seq 1 100); do [ "$(grep -c "RPC rateLimits" codex.log)" -gt "$n_rpc" ] && break; sleep 0.1; done
+CP=$UP; ps -o command= -p "$UP" | grep -q 'cca codex usage' || CP=$(pgrep -P "$UP" | head -n 1)
+kids=$(for j in $(pgrep -P "$CP"); do pgrep -P "$j"; done); t0=$(date +%s)
+kill -TERM "${CP:-$UP}"; wait "$UP"; rc=$?
+for i in $(seq 1 30); do left=""; for k in $kids; do kill -0 "$k" 2>/dev/null && left="$left $k"; done; [ -z "$left" ] && break; sleep 0.1; done; t1=$(date +%s)
+rm -f "$T/codex_usage/hang"; pkill -f "$T/fake_codex_server"
+ok "查询途中按 Ctrl-C、关掉终端：后台的查询连同它起的进程马上停掉（不等 60 秒的超时），退出码 130" '[ "$rc" = 130 ] && [ -n "$kids" ] && [ -z "$left" ] && [ $((t1 - t0)) -lt 5 ]'
+mkdir -p "$T/loc"; printf CN > "$T/loc/7902"; n_rpc=$(grep -c "RPC rateLimits" codex.log)
+out=$(run cca codex usage alice 2>&1)
+rm -f "$T/loc/7902"
+ok "出口在受限地区：不拿账号去查，说明原因" 'printf "%s" "$out" | grep -q "出口在中国大陆" && [ "$(grep -c "RPC rateLimits" codex.log)" = "$n_rpc" ]'
 # 登录凭证失效（改过密码、在别处退出过）：本地的 auth.json 还在，cca 算的还是已登录，查用量时 codex 才说
 printf 'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.' > "$T/codex_usage/rpc_error"
 out=$(run COLUMNS=200 cca codex usage alice 2>&1); js=$(run cca codex usage alice --json 2>/dev/null); printf '%s' "$js" > "$T/usage_auth.json"
@@ -1670,33 +1717,36 @@ run CCA_TTY="$(ans)" aga @alice --version >/dev/null 2>&1; rc=$?
 ok "aga @alice：启动的是 alice 的 agy（等于 cca agy @alice）" '[ $rc -eq 3 ] && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = $((n_args + 1)) ] && alast ARGS | grep -qx "ARGS: --gemini_dir=$AG --version"'
 out2=$(run CCA_TTY="$(ans)" cca agy add api 2>&1); rc2=$?; out3=$(run cca agy app alice 2>&1 </dev/null); rc3=$?; out4=$(run cca agy billing alice 2>&1 </dev/null); rc4=$?
 ok "agy 没有第三方 API 账号、桌面 App 和控制台账单页：说清楚，什么都不动" '[ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有第三方 API 账号" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "没有桌面 App" && [ $rc4 -ne 0 ] && printf "%s" "$out4" | grep -q "没有控制台的账单页"'
-n_p=$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)
-out=$(run COLUMNS=120 cca agy usage 2>&1); rc=$?
-agy_ucwd=$(sed -n 's/^AGY-USAGE tty=.* cwd=\(.*\) @ .*$/\1/p' agy.log | tail -n 1)
-ok "cca agy usage：经账号的端口让 agy 自己查（打印模式的 /usage）：账号自己的数据目录，登录存成文件的开关，不顺带自动更新，没有控制终端（要授权码时读不到用户的键盘），工作目录是用完就删的空目录；探测结果照用缓存" '[ $rc -eq 0 ] && grep -qx "ARGS: --gemini_dir=$AG -p /usage --output-format json" agy.log && alast ENV | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=http://192.0.2.10:7902 " && alast ENV | grep -q "AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 AGY_CLI_DISABLE_AUTO_UPDATE=true " && grep -q "AGY-USAGE tty=no auto_update=true cwd=.*/cca-agy-usage\.[a-z0-9_]* @ $AG$" agy.log && [ -n "$agy_ucwd" ] && [ ! -e "$agy_ucwd" ] && grep -q "AGY-USAGE-AS alice@example.com https_proxy=http://192.0.2.10:7902" agy.log && [ "$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)" = "$n_p" ]'
-ok "cca agy usage 的表格：一个额度一行（组名 · 窗口，和 Claude 的叫法一样：5 小时、本周；agy 的桶名 …Limit Remaining 写在「已用」旁边会被看反，不显示），用了多少、什么时候重置；账号和套餐只写在第一行，停用的写不可用；查到的存进 usage.json" 'printf "%s" "$out" | grep -qE "alice@example.com +Google AI Pro +Gemini Pro · 5 小时 +13% +2小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Pro · 本周 +75% +周" && printf "%s" "$out" | grep -qE "^ +Claude · 5 小时 +95% +1小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Flash +不可用" && ! printf "%s" "$out" | grep -q "Remaining" && [ "$(printf "%s" "$out" | grep -c "alice@example.com")" = 1 ] && [ -f "$AGD/usage.json" ] && [ ! -e "$AGD/usage-weeks.json" ]'
-out=$(run cca agy usage --json 2>/dev/null); rc=$?; mkdir -p "$T/guifx"; printf '%s' "$out" > "$T/guifx/usage_agy.json"
-ok "cca agy usage --json：tool 是 agy；条目的 quota_groups 是 agy 给的几组额度（原样的几项，每个桶另加 utilization、resets_at、resets_epoch、reset 和认出的窗口 slot：five_hour、seven_day，认不出是 null），没有 5 小时、本周这些窗口（输出交给 10g 的契约测试解码）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and d[\"tool\"] == \"agy\" and (lambda a: a[\"source\"] == \"live\" and a[\"plan\"] == \"Google AI Pro\" and a[\"error_code\"] is None and \"five_hour\" not in a and \"credits\" not in a and a[\"quota_description\"] == \"Quota for Antigravity models\" and [g[\"name\"] for g in a[\"quota_groups\"]] == [\"Gemini Pro\", \"Claude\", \"Gemini Flash\"] and a[\"quota_groups\"][1][\"description\"] == \"Claude and GPT-OSS models\" and (lambda b: b[\"id\"] == \"gemini-pro-5h\" and b[\"utilization\"] == 13.0 and b[\"remaining_fraction\"] == 0.87 and b[\"window\"] == \"5h\" and b[\"slot\"] == \"five_hour\" and a[\"quota_groups\"][0][\"buckets\"][1][\"slot\"] == \"seven_day\" and b[\"reset\"] is False and b[\"resets_epoch\"] > d[\"generated_epoch\"] and b[\"resets_at\"].endswith(\"Z\"))(a[\"quota_groups\"][0][\"buckets\"][0]) and (lambda b: b[\"disabled\"] is True and b[\"slot\"] is None and b[\"utilization\"] is None and b[\"resets_epoch\"] is None)(a[\"quota_groups\"][2][\"buckets\"][0]))(d[\"accounts\"][0])"'
-out=$(run cca agy ls 2>&1)
-ok "cca agy ls：登录着的账号后面和 Claude、Codex 一样写 5h … · 周 …（各组里同一个窗口用得最多的那个；读缓存，不联网）" 'printf "%s" "$out" | grep -qE "1\. alice@example.com +已登录 +US-A +5h 95% · 周 75%"'
-echo "quota service unavailable" > "$T/agy_usage_error"
+n_args=$(grep -c "^ARGS: " agy.log); rm -f "$AGD/usage.json"
 out=$(run COLUMNS=160 cca agy usage 2>&1); rc=$?
-rm -f "$T/agy_usage_error"
-ok "agy 回 ERROR：用上次存下的额度，第一行后面注明原因（agy 的原话）和多久以前" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "Gemini Pro · 5 小时 +13% .*查询失败：quota service unavailable；缓存（1 分钟前）"'
-mv "$AG/antigravity-cli/antigravity-oauth-token" "$T/agy-token.bak"; n_u=$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)
+ok "cca agy usage：不主动查（不起 agy、不用打印模式）；还没记下时说怎么记下（cca agy @账号 开一次会话、发一句话），退出码 0" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还没记下（cca agy @alice@example.com 开一次会话、发一句话以后就有）" && printf "%s" "$out" | grep -q "cca 不主动查 Antigravity 的用量" && [ "$(grep -c "^ARGS: " agy.log)" = "$n_args" ]'
+n_p=$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)
+out=$(run CCA_TTY="$(ans)" cca agy @alice hi 2>&1); rc=$?
+out2=$(run COLUMNS=120 cca agy usage 2>&1)
+ok "agy 会话里记下额度：交互的会话里 cca 的状态栏命令把状态栏 JSON 里的 quota（各个额度剩多少、什么时候重置、停用）按组记进 usage.json（600；没有每周用量的统计）；cca agy usage 的表格：一个额度一行（组名 · 窗口，一组里 5 小时排在本周前面），用了多少、什么时候重置；账号和套餐只写在第一行，停用的写不可用；探测结果照用缓存" '[ $rc -eq 3 ] && [ "$(stat -f %Lp "$AGD/usage.json")" = 600 ] && [ ! -e "$AGD/usage-weeks.json" ] && printf "%s" "$out2" | grep -qE "alice@example.com +Google AI Pro +Gemini Models · 5 小时 +13% +2小时[0-9]+分后" && printf "%s" "$out2" | grep -qE "^ +Gemini Models · 本周 +75% " && printf "%s" "$out2" | grep -qE "^ +Claude and GPT models · 5 小时 +95% +1小时[0-9]+分后" && printf "%s" "$out2" | grep -qE "^ +Claude and GPT models · 本周 +不可用" && [ "$(printf "%s" "$out2" | grep -c "alice@example.com")" = 1 ] && [ "$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)" = "$n_p" ]'
+out=$(run cca agy usage --json 2>/dev/null); rc=$?; mkdir -p "$T/guifx"; printf '%s' "$out" > "$T/guifx/usage_agy.json"
+ok "cca agy usage --json：tool 是 agy；条目的 quota_groups 是会话里记下的几组额度（每个桶有 id、认出的窗口、剩多少，另加 utilization、resets_at、resets_epoch、reset 和对应的 slot：five_hour、seven_day，认不出是 null），没有 5 小时、本周这些窗口；数据来源是 cache（输出交给 10g 的契约测试解码）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and d[\"tool\"] == \"agy\" and (lambda a: a[\"source\"] == \"cache\" and a[\"stale\"] is False and a[\"plan\"] == \"Google AI Pro\" and a[\"error_code\"] is None and \"five_hour\" not in a and \"credits\" not in a and [g[\"name\"] for g in a[\"quota_groups\"]] == [\"Gemini Models\", \"Claude and GPT models\"] and (lambda b: b[\"id\"] == \"gemini-5h\" and b[\"utilization\"] == 13.0 and b[\"remaining_fraction\"] == 0.87 and b[\"window\"] == \"5h\" and b[\"slot\"] == \"five_hour\" and a[\"quota_groups\"][0][\"buckets\"][1][\"slot\"] == \"seven_day\" and b[\"reset\"] is False and b[\"resets_epoch\"] > d[\"generated_epoch\"] and b[\"resets_at\"].endswith(\"Z\"))(a[\"quota_groups\"][0][\"buckets\"][0]) and a[\"quota_groups\"][1][\"buckets\"][1][\"disabled\"] is True)(d[\"accounts\"][0])"'
+out=$(run cca agy ls 2>&1)
+ok "cca agy ls：登录着的账号后面和 Claude、Codex 一样写 5h … · 周 …（各组里同一个窗口用得最多的那个；读记下的，不联网）" 'printf "%s" "$out" | grep -qE "1\. alice@example.com +已登录 +US-A +5h 95% · 周 75%"'
+mv "$AG/antigravity-cli/antigravity-oauth-token" "$T/agy-token.bak"; n_args=$(grep -c "^ARGS: " agy.log)
 out=$(run cca agy usage --json 2>/dev/null); rc=$?
 mv "$T/agy-token.bak" "$AG/antigravity-cli/antigravity-oauth-token"
-ok "agy 账号没登录：不起 agy（它会等 60 秒的登录），说还没登录、退出码 1" '[ $rc -ne 0 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"login\" and d[\"accounts\"][0][\"source\"] == \"none\" and d[\"accounts\"][0][\"quota_groups\"] is None" && [ "$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)" = "$n_u" ]'
-touch "$T/agy_usage_auth"; t0=$(date +%s)
-out=$(run COLUMNS=160 cca agy usage 2>&1); rc=$?; t1=$(date +%s)   # 160 列：备注那一行放得下整句（窄的终端里照别的表格一样截短）
-rm -f "$T/agy_usage_auth"
-ok "agy 要重新登录（打出登录网址、等着授权）：马上停掉它，说登录已失效，网址不给出来；用上次的额度" '[ $((t1 - t0)) -lt 20 ] && [ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录已失效（比如改过密码）：cca agy login alice@example.com 重新登录" && ! printf "%s" "$out" | grep -q "accounts.google.com" && gone "fake_agy fake-agy --gemini_dir=.* -p /usage"'
-touch "$T/agy_usage_old"; out=$(run cca agy usage --json 2>/dev/null); rm -f "$T/agy_usage_old"
-ok "打印模式还不认 /usage 的旧版 agy（当成一句话回答）：说这个版本查不了、升级后再试" 'printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"unsupported\" and d[\"accounts\"][0][\"error\"] == \"这个版本的 Antigravity 查不了用量（agy update 升级后再试）\" and d[\"accounts\"][0][\"source\"] == \"cache\""'
-touch "$T/agy_usage_hang"; t0=$(date +%s)
-out=$(run CCA_USAGE_TIMEOUT=2 cca agy usage --json 2>/dev/null); t1=$(date +%s)
-rm -f "$T/agy_usage_hang"
-ok "agy 一直不回：到点（CCA_USAGE_TIMEOUT）连同它起的进程一起停掉，说查询超时" '[ $((t1 - t0)) -lt 15 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"timeout\"" && gone "fake_agy fake-agy --gemini_dir=.* -p /usage"'
+ok "agy 账号没登录：说还没登录、不显示记下的，退出码 1；不起 agy" '[ $rc -ne 0 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"error_code\"] == \"login\" and d[\"accounts\"][0][\"source\"] == \"none\" and d[\"accounts\"][0][\"quota_groups\"] is None" && [ "$(grep -c "^ARGS: " agy.log)" = "$n_args" ]'
+cp "$AGD/usage.json" "$T/agy-usage.keep"
+aq() {   # aq 会话标记 输入的 token 数 5小时剩下的比例 [邮箱]：像 agy 在 alice 的会话里画一次状态栏（只有 gemini-5h 一个桶，没有重置时间），直接交给 cca _agy-statusline
+	printf '{"email": "%s", "session_id": "", "context_window": {"total_input_tokens": %s, "total_output_tokens": 1}, "cost": {"total_usd": 0}, "quota": {"gemini-5h": {"remaining_fraction": %s}}}' "${4:-alice@example.com}" "$2" "$3" | run cca _agy-statusline "$(basename "$AGD")" "$1"
+}
+aqv() { "$TESTBIN" val -f "j=$AGD/usage.json" 'j["utilization"]["groups"][0]["buckets"][0]["remaining_fraction"]'; }
+aqt() { "$TESTBIN" val -f "j=$AGD/usage.json" 'j["fetchedAtMs"]'; }
+aq 0123456789abcdef 100 0.5; q1=$(aqv)
+aq 0123456789abcdef 100 0.4; q2=$(aqv)
+aq 0123456789abcdef 200 0.4; q3=$(aqv)
+ok "agy：会话按 cca 的会话标记认，同一个会话没有新的请求（token 数、花费没变）不记，有了再记" '[ "$q1" = 0.5 ] && [ "$q2" = 0.5 ] && [ "$q3" = 0.4 ]'
+"$TESTBIN" edit j="$AGD/usage.json" 'j["fetchedAtMs"] = j["fetchedAtMs"] - 120000'; t1=$(aqt)
+aq fedcba9876543210 300 0.4; t2=$(aqt)
+aq 00000000000000aa 400 0.3 mallory@example.com; q4=$(aqv)
+ok "agy：额度没变不重写（不知道 agy 多久取一次额度：不刷新取到的时间）；状态栏 JSON 里的邮箱不是登录的这个：不记" '[ "$t2" = "$t1" ] && [ "$q4" = 0.4 ]'
+cp "$T/agy-usage.keep" "$AGD/usage.json"
 edit_table 'j["kimi"] = {"base_url": "https://api.example.com/v1"}' "$AGJ"
 n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
 out=$(run cca agy @alice --version 2>&1 </dev/null); rc=$?
@@ -1716,10 +1766,10 @@ rm -f "$H/.cca/agy/probe2.json"; agy_old=$(cat "$H/.cca/agy/probe.json")
 touch "$T/agy_keychain"; n_p=$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)
 out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
 ok "像 1.5.16（钥匙串没锁时 SSH 会话不算数，认开关）、以前的 cca 记下的探测结果（probe.json）说不存文件：设着开关重新探测，照常启动；probe.json 原样留着（降级回去的 cca 启动 agy 时不设开关，照旧停下）" '[ $rc -eq 3 ] && [ "$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)" = $((n_p + 1)) ] && cfgok "(lambda p: p[\"files\"] is True)(json.load(open(\"$H/.cca/agy/probe2.json\")))" && [ "$(cat "$H/.cca/agy/probe.json")" = "$agy_old" ]'
-rm -f "$H/.cca/agy/probe.json" "$H/.cca/agy/probe2.json"; touch "$T/agy_noswitch"; n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log); n_u=$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)
-out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?; out2=$(run cca agy usage 2>&1); rc2=$?
+rm -f "$H/.cca/agy/probe.json" "$H/.cca/agy/probe2.json"; touch "$T/agy_noswitch"; n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
+out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
 rm -f "$T/agy_keychain" "$T/agy_noswitch" "$H/.cca/agy/probe.json" "$H/.cca/agy/probe2.json"
-ok "换了新版的 agy、开关和 SSH_CONNECTION 都不让它把登录存进文件（各账号会共用钥匙串里的同一份）：停止，不启动，也不查用量" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再把登录存进账号自己的目录" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "不再把登录存进账号自己的目录" && [ "$(grep -c "^ARGS: --gemini_dir=$AG -p /usage" agy.log)" = "$n_u" ]'
+ok "换了新版的 agy、开关和 SSH_CONNECTION 都不让它把登录存进文件（各账号会共用钥匙串里的同一份）：停止，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再把登录存进账号自己的目录" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
 echo mallory@example.com > "$T/agy_login_as"
 out=$(run CCA_TTY="$(ans good-ag2 n)" cca agy login alice 2>&1); rc=$?
 ok "cca agy login：先退出原来的登录（删掉 token）；登成了别的邮箱就不用，问过之后不继续" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录的是 mallory@example.com，不是 alice@example.com"'
@@ -1755,7 +1805,7 @@ out=$(run CCA_COST= cca cost sync --json 2>/dev/null </dev/null); rc=$?; out2=$(
 ok "agy 的折合金额：会话库里的回复按记下的运行认出是 alice 的 agy 账号，按 Gemini API 的标价折合 4.503 美元（按模型列出 gemini-4-neon）；cost_total 的 by_tool 有 agy" '[ $rc -eq 0 ] && printf "%s" "$out2" | jok "(lambda a: a[\"can\"][\"cost\"] is True and abs(a[\"cost\"][\"summary\"][\"days_usd\"] - 4.503) < 0.001 and a[\"cost\"][\"summary\"][\"requests\"] == 1 and [m[\"model\"] for m in a[\"cost\"][\"models\"]] == [\"gemini-4-neon\"])(d[\"tools\"][2][\"accounts\"][0]) and d[\"tools\"][2][\"features\"][\"cost\"] is True and abs(d[\"cost_total\"][\"by_tool\"][\"agy\"][\"days_usd\"] - 4.503) < 0.001"'
 rm -rf "$H/.cca/cost" "$G/antigravity-cli/conversations/$AGC.db"   # 10g 从还没统计过开始
 GF0="$T/guifx"; mkdir -p "$GF0"; out=$(gj state); printf '%s' "$out" > "$GF0/state_agy.json"; out2=$(gj hello); printf '%s' "$out2" > "$GF0/hello_agy.json"
-ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API，有 App 里显示的用量（usage 是缓存里的几组额度 quota_groups，没有 5 小时、本周这些窗口，也没有每周用量的统计）；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": True, \"cost\": True} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is True and \"usage\" not in a[\"can_why\"] and a[\"usage\"][\"source\"] == \"cache\" and \"five_hour\" not in a[\"usage\"] and a[\"usage\"][\"quota_groups\"][0][\"buckets\"][0][\"slot\"] == \"five_hour\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
+ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API，有 App 里显示的用量（usage 是缓存里的几组额度 quota_groups，没有 5 小时、本周这些窗口，也没有每周用量的统计）；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": True, \"cost\": True, \"usage_passive\": True} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is True and \"usage\" not in a[\"can_why\"] and a[\"usage\"][\"source\"] == \"cache\" and \"five_hour\" not in a[\"usage\"] and a[\"usage\"][\"quota_groups\"][0][\"buckets\"][0][\"slot\"] == \"five_hour\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True, \"usage_passive\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
 ok "_gui hello：agy 已启用，找到了 agy 命令" 'printf "%s" "$out2" | jok "d[\"tools\"][\"agy\"][\"enabled\"] is True and d[\"tools\"][\"agy\"][\"bin\"]"'
 # 套餐：agy 1.5 的登录文件里没有档位（user_tier），cca 启动交互的会话时经 --settings 带上自己的状态栏命令，从状态栏的 JSON 里
 # 记下 plan_tier（账号目录的 agy-plan.json，邮箱对得上才算）；用户自己的状态栏命令接在后面照样运行。token、共享的设置先存一份，最后放回去
@@ -1775,10 +1825,10 @@ agy_sl1="ARGS: --gemini_dir=$AG --settings {\"statusLine\": {\"type\": \"command
 agy_sl2="$(basename "$AGD") [0-9a-f]{16} --then '~/sl.sh x'"
 ok "agy 的套餐：共享的 settings.json 里有用户自己的状态栏命令时照用户的那一份（padding 留着），命令换成 cca 的、经 --then 接着运行用户的（同一份 JSON，它的输出就是状态栏）；套餐跟着换（Ultra 认成 Google AI Ultra、premium）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && printf "%s" "${agy_slc##* _agy-statusline }" | grep -Eqx "$agy_sl2" && grep -qx "AGY-STATUSLINE rc=0 out=mine x" agy.log && "$TESTBIN" check -f "j=$T/agy_sl.json" "j[\"plan_tier\"] == \"Ultra\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Ultra\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"premium\""'
 cp "$T/agy_set.bak" "$G/antigravity-cli/settings.json"; : > agy.log
-run CCA_TTY="$(ans)" cca agy @alice -p hi >/dev/null 2>&1; agy_a1=$(alast ARGS)
+out=$(run CCA_TTY="$(ans)" cca agy @alice -p hi 2>&1); rc=$?; out1=$(run CCA_TTY="$(ans)" cca agy @alice --prompt=hi 2>&1); rc1=$?
 run CCA_TTY="$(ans)" cca agy @alice mcp list >/dev/null 2>&1; agy_a2=$(alast ARGS)
 run CCA_TTY="$(ans)" cca agy @alice --settings '{"x": 1}' >/dev/null 2>&1; agy_a3=$(alast ARGS)
-ok "agy 的套餐：打印模式、子命令、自己带了 --settings 的启动不加 cca 的状态栏命令（用户的 --settings 原样生效）" '[ "$agy_a1" = "ARGS: --gemini_dir=$AG -p hi" ] && [ "$agy_a2" = "ARGS: --gemini_dir=$AG mcp list" ] && [ "$agy_a3" = "ARGS: --gemini_dir=$AG --settings {\"x\": 1}" ]'
+ok "agy 的打印模式（-p、--prompt……）不能经 cca 用：说是打印模式、不启动；子命令、自己带了 --settings 的启动不加 cca 的状态栏命令（用户的 --settings 原样生效）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "启动参数 -p 是打印模式" && [ $rc1 -ne 0 ] && printf "%s" "$out1" | grep -q "启动参数 --prompt 是打印模式" && ! grep -qE -- "^ARGS: .*(-p hi|--prompt)" agy.log && [ "$agy_a2" = "ARGS: --gemini_dir=$AG mcp list" ] && [ "$agy_a3" = "ARGS: --gemini_dir=$AG --settings {\"x\": 1}" ]'
 printf '{"email": "bob@example.com", "plan_tier": "Pro", "at": 1}' > "$AGD/agy-plan.json"; out2=$(gj state)
 ok "agy 的套餐：状态栏记下时的邮箱和现在登录的不一样（换了账号登录）时不算" 'printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"\""'
 mkdir -p "$H/.cca/agy/x"
@@ -1819,6 +1869,7 @@ GF="$T/guifx"; mkdir -p "$GF"
 VER=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$CCA")
 snap() { ( cd "$H/.cca" && find . -type f ! -path '*/chrome/*' ! -path '*/desktop/*' ! -name 'cm-*' ! -name '*.lock' | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; shasum < "$f"; done ) | shasum; }   # ~/.cca 里文件的摘要
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*)
+rate alice@example.com 13 41; note alice@example.com   # alice 的用量是会话里记下的（10d 最后删掉了，之后没有会话再记）
 s0=$(snap)
 out=$(gj hello); printf '%s' "$out" > "$GF/hello.json"
 ok "_gui hello：接口版本 1、cca 的版本、开发模式、装好了、Codex 已启用、找到了 claude 和 codex、还没装 App" 'printf "%s" "$out" | jok "d[\"kind\"] == \"hello\" and d[\"api\"] == 1 and d[\"cca_version\"] == \"$VER\" and d[\"dev_mode\"] is True and d[\"installed\"] is True and d[\"tools\"][\"codex\"][\"enabled\"] is True and d[\"tools\"][\"claude\"][\"bin\"] and d[\"tools\"][\"codex\"][\"bin\"] and d[\"gui\"][\"app_version\"] is None"'
@@ -2009,23 +2060,18 @@ run cca @alice --version >/dev/null 2>&1 </dev/null   # 先跑一次：上一条
 out=$(run cca @alice --version 2>&1 </dev/null); rc=$?
 out2=$(run CCA_EVENTS=/nonexistent/dir/ev.jsonl cca @alice --version 2>&1 </dev/null); rc2=$?
 ok "事件文件指向写不了的地方：命令照常，输出和不设事件文件时一样（bash 打不开文件的报错也不漏出来）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && [ "$out" = "$out2" ]'
-# Claude Code 记的套餐过时了（outdated_login_plan）：契约测试要解码不是 null 的（下面查用量时 alice 又回到 max）
-canned alice@example.com 13 41 pro
+# Claude Code 记的套餐过时了（outdated_login_plan：以前 cca 查用量时记下的 login_plan）：契约测试要解码不是 null 的
+rate alice@example.com 13 41; note alice@example.com; "$TESTBIN" edit j="$AD/usage.json" 'j["login_plan"] = "pro"'
 out=$(run cca usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_claude_outdated.json"
 out2=$(gj state); printf '%s' "$out2" > "$GF/state_outdated_plan.json"
 ok "usage --json / _gui state：Claude Code 记的套餐和账号资料对不上时 outdated_login_plan 是记下的那个（Pro）；Codex 的条目没有这个字段" 'printf "%s" "$out" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] == \"Pro\"" && printf "%s" "$out2" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"outdated_login_plan\"] == \"Pro\" and all(\"outdated_login_plan\" not in (a[\"usage\"] or {}) for a in d[\"tools\"][1][\"accounts\"])"'
-# usage --json 的新字段（alice 带着 Fable 的每周额度：契约测试要解码它占本周总额度的份额）
-canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}, {\"kind\": \"weekly_scoped\", \"scope\": {\"model\": {\"id\": null, \"display_name\": \"Fable\"}}}]}"
+# usage --json 的新字段（alice 带着以前查用量时存下的 Fable 的每周额度：契约测试要解码它占本周总额度的份额）
+useed "$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}, {\"kind\": \"weekly_scoped\", \"scope\": {\"model\": {\"id\": null, \"display_name\": \"Fable\"}}}]"
 out=$(run cca usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_claude.json"
-ok "usage --json：新字段 kind / generated_epoch / error_code / fetched_epoch / stale，窗口有 resets_epoch（Unix 秒）" 'printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and isinstance(d[\"generated_epoch\"], float) and (lambda a: a[\"source\"] == \"live\" and a[\"error_code\"] is None and a[\"stale\"] is False and isinstance(a[\"fetched_epoch\"], float) and isinstance(a[\"five_hour\"][\"resets_epoch\"], float) and a[\"five_hour\"][\"resets_epoch\"] > a[\"fetched_epoch\"])(uacct(\"alice@example.com\"))"'
+ok "usage --json：新字段 kind / generated_epoch / error_code / fetched_epoch / stale，窗口有 resets_epoch（Unix 秒）" 'printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and isinstance(d[\"generated_epoch\"], float) and (lambda a: a[\"source\"] == \"cache\" and a[\"error_code\"] is None and a[\"stale\"] is False and isinstance(a[\"fetched_epoch\"], float) and isinstance(a[\"five_hour\"][\"resets_epoch\"], float) and a[\"five_hour\"][\"resets_epoch\"] > a[\"fetched_epoch\"])(uacct(\"alice@example.com\"))"'
 cp "$AD/usage.json" "$T/usage.keep"
-printf '{"subscription_type": "max", "rate_limits_available": true, "rate_limits": {"five_hour": null, "seven_day": null}}' > "$T/usage/alice@example.com.json"
-out=$(run cca usage --json 2>/dev/null)
-ok "usage：查到的数据里一个窗口都认不出时不算查到（nolimits），不把好好的缓存换掉" 'printf "%s" "$out" | jok "(lambda a: a[\"source\"] == \"cache\" and a[\"error_code\"] == \"nolimits\" and a[\"five_hour\"][\"utilization\"] == 13)(uacct(\"alice@example.com\"))" && cmp -s "$AD/usage.json" "$T/usage.keep"'
-unlisten 7901
-out=$(run cca usage --json 2>/dev/null)
-echo 7901 >> "$R/listening"
-ok "usage --json：端口不通时 error_code 是 port，error_detail 是端口" 'printf "%s" "$out" | jok "(lambda a: a[\"error_code\"] == \"port\" and a[\"error_detail\"] == \"7901\" and a[\"source\"] == \"cache\")(uacct(\"alice@example.com\"))"'
+printf '{"session_id": "nl", "cost": {"total_api_duration_ms": 5}, "rate_limits": {"five_hour": {"used_percentage": null}, "seven_day": "x"}}' | run cca _claude-statusline "$(basename "$AD")"
+ok "状态栏的 rate_limits 里一个窗口都认不出：不记，不把记下的换掉" 'cmp -s "$AD/usage.json" "$T/usage.keep"'
 out=$(run cca codex usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_codex.json"
 ok "codex usage --json：同样的新字段（Codex 的重置时间本来就是 Unix 秒）" 'printf "%s" "$out" | jok "d[\"tool\"] == \"codex\" and all(\"error_code\" in a and \"stale\" in a for a in d[\"accounts\"])"'
 # 重置额度（App 的「重置额度…」）：要同意（reset_credit:账号目录名，默认不同意），同意后带着授权重跑，stdout 是 kind=reset 的文档
@@ -3798,8 +3844,6 @@ ok "在外面、还没配置内置代理、非交互（Dock 上的启动器、�
 out=$(runev CCA_GRANT=builtin_core cca @alice --version 2>&1); rc=$?
 ok "界面 App 里同意之后（带着授权重跑）：改用内置代理：下载内核（按 SHA256 校验），在后台打开界面 App（--core），App 起内核，账号照常启动" '[ $rc -eq 3 ] && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo mihomo-darwin-.*-v1.19.33.gz$" gh.log && grep -qF "OPEN [-g] [$GA] [--args] [--core]" open.log && grep -qx START "$CD/core.log" && [ "$(cat "$CD/home")" = "$CN" ] && [ "$(cat "$CN/mihomo.pid")" = "$(cat "$CD/pid")" ] && [ -z "$(ls "$CN" | grep "^dl\.")" ]'
 ok "在外面：经内置代理的 7901 出去（CCA-1 选中 US-A），Claude Code 拿到的代理也是它；不连路由器" '[ "$(csel CCA-1)" = US-A ] && grep -q "CURL via local:7901 https://claude.ai/cdn-cgi/trace" curl.log && lastenv | grep -q "https_proxy=http://127.0.0.1:7901" && [ ! -s ssh.log ]'
-run cca usage alice >/dev/null 2>&1
-ok "在外面 cca usage：经内置代理的端口查" 'grep "^USAGE: " claude.log | tail -n 1 | grep -q "email=alice@example.com https_proxy=http://127.0.0.1:7901"'
 ok "内置代理的配置（600）：只有 127.0.0.1 上的入站（各自直通 CCA-n）、可选节点、一条 MATCH,REJECT；不开通用的代理端口、TUN、DNS；控制接口只开 Unix socket，不记选中的节点" '[ "$(stat -f %Lp "$CN/config.yaml")" = 600 ] && ccfg "all(l[\"listen\"] == \"127.0.0.1\" and l[\"proxy\"] == \"CCA-%d\" % (l[\"port\"] - 7900) for l in c[\"listeners\"]) and c[\"rules\"] == [\"MATCH,REJECT\"] and not any(k in c for k in (\"port\", \"mixed-port\", \"socks-port\", \"tun\", \"dns\", \"external-controller\")) and c[\"external-controller-unix\"].endswith(\".sock\") and c[\"profile\"][\"store-selected\"] is False and [p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"US-D\", \"HK-A2\"] and c[\"proxy-groups\"][0][\"proxies\"][0] == \"US-A\""'
 # 别的程序开着 TUN（Clash 客户端的虚拟网卡模式、VPN）：去节点的流量走虚拟网卡时，内核的出站绑定到物理网卡（macOS 的 interface-name）
 cp "$CN/config.yaml" "$T/core.notun"; n0=$(creloads); touch "$T/tun"
@@ -4554,4 +4598,6 @@ ok "断言里没有求值器不认识的写法（cca-test 的退出码 2；不�
 [ ! -s "$CCA_TEST_TRAP" ] || sed 's/^/      | /' "$CCA_TEST_TRAP"
 ok "整个回归没人调过 Python（沙箱的 PATH 最前面是一个记账的假 python3；只有「换代的更新」里内嵌 Python 的旧版本用真的）" '[ -x "$T/bin/python3" ] && [ ! -s "$T/python3.log" ]'
 [ ! -s "$T/python3.log" ] || sed 's/^/      | /' "$T/python3.log"
+ok "整个回归没有一次打印模式、非交互模式（claude -p、agy -p、codex exec 这些：cca 不用，也不让经 cca 用；假的 claude、agy、codex 遇到它记进 print-mode.log、不运行）" '[ ! -e "$T/print-mode.log" ]'
+[ ! -s "$T/print-mode.log" ] || sed 's/^/      | /' "$T/print-mode.log"
 echo "---- $pass passed, $fail failed"

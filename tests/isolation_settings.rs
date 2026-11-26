@@ -46,6 +46,7 @@ pub const MODULE: Module = Module {
         case!(cli_endpoint_proxy_and_remote_overrides_blocked),
         case!(project_configs_in_selected_directory_and_ancestors_only),
         case!(scoped_cd_override_is_relative_to_original_directory),
+        case!(codex_noninteractive_subcommands_are_print_mode),
         case!(fallback_off_is_semantic_and_invalid_is_not_off),
         case!(command_failure_does_not_echo_values),
         case!(rollout_repair_uses_real_toml_and_reports_invalid_config).needs(&[Need::Bin("sqlite3")]),
@@ -167,15 +168,18 @@ impl Fx {
         self.write(".cca/accounts.json", &dumps(&obj! { "api" => obj! { "base_url" => "https://example.invalid", "env" => env } }));
     }
 
-    /// bash 启动这个第三方 API 账号时拿到的（env 子命令的输出）：(交给 Claude Code 的环境, 整份输出)。
-    /// 环境在启动参数 ACC_ARGS 里 --settings 的 env
+    /// bash 启动这个第三方 API 账号时拿到的（env、launch-args 两个子命令的输出）：(交给 Claude Code 的环境, 整份输出)。
+    /// 环境在启动参数 LAUNCH_ARGS（launch-args：看得到用户的参数，交互的会话还带着记用量的状态栏）里 --settings 的 env
     fn api_launch(&self) -> (Value, String) {
-        let r = self.helper(&["env", "api"], "claude", None);
-        assert_eq!((r.status.py(), r.err()), (0, String::new()));
-        let out = r.out();
-        let line = out.lines().find(|line| line.starts_with("ACC_ARGS=(")).expect("有 ACC_ARGS=( 那一行");
-        let args = shlex_split(&line["ACC_ARGS=(".len()..line.len() - 1]);
-        let at = args.iter().position(|a| a == "--settings").expect("ACC_ARGS 里有 --settings");
+        let mut out = String::new();
+        for argv in [&["env", "api"][..], &["launch-args", "api", "--"][..]] {
+            let r = self.helper(argv, "claude", None);
+            assert_eq!((r.status.py(), r.err()), (0, String::new()));
+            out.push_str(&r.out());
+        }
+        let line = out.lines().find(|line| line.starts_with("LAUNCH_ARGS=(")).expect("有 LAUNCH_ARGS=( 那一行");
+        let args = shlex_split(&line["LAUNCH_ARGS=(".len()..line.len() - 1]);
+        let at = args.iter().position(|a| a == "--settings").expect("LAUNCH_ARGS 里有 --settings");
         let settings = json::parse(&args[at + 1]).unwrap_or_else(|e| panic!("--settings 后面不是 JSON：{e}"));
         (settings["env"].clone(), out)
     }
@@ -497,7 +501,7 @@ fn desktop_handoffs_use_the_managed_entrypoint(t: &mut Ctx) {
     assert!(has(&fx.launch(&["--desktop"], "claude", None), "--desktop:use_cca_app"));
     assert!(has(&fx.launch(&["app"], "codex", None), "app:use_cca_codex_app"));
     assert!(has(&fx.launch(&["-m", "sample-model", "app"], "codex", None), "app:use_cca_codex_app"));
-    assert_eq!(fx.launch(&["exec", "app"], "codex", None), Vec::<String>::new());
+    assert_eq!(fx.launch(&["resume", "app"], "codex", None), Vec::<String>::new());
     assert_eq!(fx.launch(&["-m", "app", "write a test"], "codex", None), Vec::<String>::new());
     assert_eq!(fx.launch(&["--", "app"], "codex", None), Vec::<String>::new());
     assert_eq!(fx.launch(&["--system-prompt", "--desktop"], "claude", None), Vec::<String>::new());
@@ -559,12 +563,47 @@ fn scoped_cd_override_is_relative_to_original_directory(t: &mut Ctx) {
     let fx = fixture(t);
     fx.write("project/a/b/.codex/config.toml", "model=\"safe-model\"\n");
     fx.write("project/b/.codex/config.toml", "chatgpt_base_url=\"https://example.invalid\"\n");
-    let errors = fx.launch(&["-C", "a", "exec", "-C", "b"], "codex", None);
+    let errors = fx.launch(&["-C", "a", "resume", "-C", "b"], "codex", None);
     assert!(!errors.is_empty());
     assert!(errors.join(" ").contains(&fx.project.join("b/.codex/config.toml").display().to_string()), "{errors:?}");
     fx.write("project/a/b/.codex/config.toml", "chatgpt_base_url=\"https://example.invalid\"\n");
     fx.write("project/b/.codex/config.toml", "model=\"safe-model\"\n");
-    assert_eq!(fx.launch(&["-C", "a", "exec", "--cd=b"], "codex", None), Vec::<String>::new());
+    assert_eq!(fx.launch(&["-C", "a", "resume", "--cd=b"], "codex", None), Vec::<String>::new());
+}
+
+/// Codex 的非交互模式（exec、它的别名 e、review、cloud exec）不能经 cca 用（print_mode）：codex 在开场白、选项后面也认子命令
+/// （真的 codex 0.172.0 上用 --help 核对过）；选项的值、`--` 后面的开场白、别的子命令的参数（resume 的会话名）不算
+fn codex_noninteractive_subcommands_are_print_mode(t: &mut Ctx) {
+    let fx = fixture(t);
+    let blocked: [(&[&str], &str); 8] = [
+        (&["exec", "hi"], "exec"),
+        (&["e"], "e"),
+        (&["review", "--uncommitted"], "review"),
+        (&["cloud", "exec", "--env", "x", "hi"], "exec"),
+        (&["-m", "gpt-x", "--strict-config", "e", "hi"], "e"),
+        (&["修一下", "exec", "hi"], "exec"),
+        (&["修一下", "-m", "gpt-x", "review"], "review"),
+        (&["--add-dir", "resume", "exec", "hi"], "exec"),
+    ];
+    for (args, src) in blocked {
+        t.sub(format!("args={args:?}"), |_| {
+            let found = fx.launch(args, "codex", None);
+            assert!(has(&found, &format!("{src}:print_mode")), "{found:?}");
+        });
+    }
+    let allowed: [&[&str]; 8] = [
+        &[],
+        &["--", "exec"],
+        &["修一下 exec 的 bug"],
+        &["resume", "review"],
+        &["-c", "model=exec", "-m", "e"],
+        &["--add-dir", "exec"],
+        &["help", "exec"],
+        &["cloud", "list"],
+    ];
+    for args in allowed {
+        t.sub(format!("args={args:?}"), |_| assert_eq!(fx.launch(args, "codex", None), Vec::<String>::new()));
+    }
 }
 
 fn fallback_off_is_semantic_and_invalid_is_not_off(t: &mut Ctx) {

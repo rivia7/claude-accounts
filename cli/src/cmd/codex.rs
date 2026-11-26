@@ -238,7 +238,7 @@ const CODEX_NOTIFY_TUI: [&str; 3] = [
 const CODEX_NOTIFY_PROBE: &str = r#"notify=["true"]"#;
 
 /// codex 的子命令（0.172.0 的 `codex --help`）里不进交互界面的：带着它们启动时不加通知。resume、fork、agents 进交互界面，加
-const CODEX_BATCH: &[&str] = &[
+pub(super) const CODEX_BATCH: &[&str] = &[
     "exec",
     "e",
     "review",
@@ -533,11 +533,6 @@ impl Piped {
             delay = f64::min(delay * 2.0, 0.05).min(left);
             sleep(delay);
         }
-    }
-
-    /// `p.returncode`：还没等到它退出是 None；被信号杀掉的是负的信号号
-    pub(super) fn returncode(&self) -> Option<i32> {
-        self.rc
     }
 
     /// `err.seek(0); err.read()[-800:].decode('utf-8', 'replace')`：子进程在 stderr 上说的最后 800 个字节
@@ -1250,7 +1245,7 @@ mod tests {
         assert!(s(&[]));
         assert!(s(&["--model", "gpt-6", "修一下 exec 的 bug"]), "开场白");
         assert!(s(&["resume", "--last"]) && s(&["fork"]) && s(&["agents"]), "进交互界面的子命令");
-        assert!(s(&["-c", "exec=1"]) && s(&["--config=x=1", "-p", "exec"]), "带值的选项跳过它的值");
+        assert!(s(&["-c", "exec=1"]) && s(&["--config=x=1", "-p", "exec"]) && s(&["--add-dir", "exec"]), "带值的选项跳过它的值");
         assert!(s(&["--", "exec"]), "-- 后面是开场白");
         for no in
             [&["exec", "hi"][..], &["e"], &["-m", "x", "review"], &["mcp", "list"], &["features", "list"], &["--version"], &["-h"]]
