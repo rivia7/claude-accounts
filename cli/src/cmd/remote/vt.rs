@@ -394,6 +394,26 @@ fn osc_class(body: &[u8]) -> Class {
     }
 }
 
+/// 一条完整的通知序列里给人看的那段字：OSC 9 的整段字、OSC 777 notify 的正文（标题不要：程序自己写的，标题由宿主定）。
+/// 宿主把 Codex 会话里的这些换成推出去的通知（host.rs 的 `osc_note`）。seq 是 Scanner 交出来的一整段（`ESC ]` 开头，BEL 结尾，
+/// 或者被 ST 结束的、没带结束符）。9 后面跟着数的（`9;4;…` 进度条、`9;9;…` 当前目录这些）不是通知；没有字的不算
+pub fn osc_note_text(seq: &[u8]) -> Option<String> {
+    let body = seq.strip_prefix(b"\x1b]")?;
+    let body = body.strip_suffix(b"\x07").unwrap_or(body);
+    let text = if let Some(t) = body.strip_prefix(b"9;") {
+        let digits = t.iter().take_while(|b| b.is_ascii_digit()).count();
+        if digits > 0 && matches!(t.get(digits), None | Some(b';')) {
+            return None;
+        }
+        t
+    } else {
+        let rest = body.strip_prefix(b"777;notify;")?;
+        &rest[rest.iter().position(|b| *b == b';')? + 1..]
+    };
+    let s = std::str::from_utf8(text).ok()?.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
 /// 一条 DCS / APC / PM / SOS（从 ESC 起；可能还没到结尾）
 fn str_class(seq: &[u8]) -> Class {
     let body = seq.get(2..).unwrap_or(b"");
@@ -1084,6 +1104,34 @@ mod tests {
         r.push(&"你".as_bytes()[1..]);
         r.push(b"ok");
         assert_eq!(r.replay(), b"ok");
+    }
+
+    #[test]
+    fn notification_text() {
+        // 整段交出来的（BEL 结尾、被 ST 结束的）才认；进度条、当前目录这些 9 后面跟着数的不是
+        let segs = scan(&[b"a\x1b]9;Approval requested: rm -rf b\x07b\x1b]9;Plan mode prompt: x\x1b\\"]);
+        let texts: Vec<Option<String>> =
+            segs.iter().filter(|(s, _)| s.class == Class::Effect).map(|(_, b)| osc_note_text(b)).collect();
+        assert_eq!(texts, [Some("Approval requested: rm -rf b".into()), Some("Plan mode prompt: x".into())]);
+        assert_eq!(
+            osc_note_text(b"\x1b]777;notify;Codex;Question: \xe7\x94\xa8\xe5\x93\xaa\xe4\xb8\xaa\xef\xbc\x9f;\xe5\x8f\xa6\x07")
+                .as_deref(),
+            Some("Question: 用哪个？;另")
+        );
+        for no in [
+            &b"\x1b]9;4;1;50\x07"[..],
+            b"\x1b]9;9;/tmp\x07",
+            b"\x1b]9;42\x07",
+            b"\x1b]9;  \x07",
+            b"\x1b]9;\xff\x07",
+            b"\x1b]0;title\x07",
+            b"\x1b]777;notify;only-title\x07",
+            b"\x1b]777;precmd\x07",
+            b"\x1b[1m",
+        ] {
+            assert_eq!(osc_note_text(no), None, "{no:?}");
+        }
+        assert_eq!(osc_note_text(b"\x1b]9;3 files changed\x07").as_deref(), Some("3 files changed"), "数后面不是分号：是字");
     }
 
     #[test]

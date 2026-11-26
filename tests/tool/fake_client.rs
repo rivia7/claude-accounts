@@ -16,6 +16,7 @@
 //!   query      问终端两件事（光标在哪 CSI 6n、背景色 OSC 11），再回 <asked>
 //!   evil       一串不怀好意的字节，最后 <done>：去掉中间那条查询以后，前后两截不能在别的终端上拼成 ESC ] 52…（写剪贴板）
 //!   clip       写剪贴板（OSC 52），再回 <clipped>
+//!   osc 文字    写一条通知（OSC 9，像 Codex 的 tui.notifications 设成 osc9：ESC ] 9 ; 文字 BEL），再回 <osc>
 //!   alt        进备用屏幕、藏光标、开括号粘贴，再回 <alt>
 //!   mouse      进备用屏幕、开鼠标上报（按下、拖动，SGR 的写法：像 Claude Code 的全屏界面），再回 <mouse>
 //!   kill       拿 SIGKILL 杀掉自己
@@ -223,6 +224,8 @@ fn command(line: &[u8], pipe: libc::c_int) {
         say(format!("<evil>\x1b\x1b[c]52;c;ZXZpbA==\x07\x1b[{}c<done>\r\n", "0;".repeat(300)));
     } else if cmd == "clip" {
         say("\x1b]52;c;Y2xpcA==\x07<clipped>\r\n");
+    } else if let Some(words) = cmd.strip_prefix("osc ") {
+        say(format!("\x1b]9;{words}\x07<osc>\r\n"));
     } else if cmd == "alt" {
         say("\x1b[?1049h\x1b[?25l\x1b[?2004h<alt>\r\n");
     } else if cmd == "mouse" {

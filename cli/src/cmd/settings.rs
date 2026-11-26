@@ -607,7 +607,7 @@ pub(super) const AGY_VALUES: &[&str] = &[
     "--gemini_dir",
     "--gemini-dir",
 ];
-const CODEX_VALUES: &[&str] = &[
+pub(super) const CODEX_VALUES: &[&str] = &[
     "-c",
     "--config",
     "-p",

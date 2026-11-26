@@ -862,7 +862,10 @@ exit 3
 S
 # 假的 codex：记下参数和环境；features list / --help / --version 给 cca 探测参数；app-server 交给 cca-test fake-codex-server
 # （登录、查用量）；logout 删掉 auth.json；login 是 cca 退回 codex login 时的登录（直接写 auth.json）；其余当作一次会话：
-# 像真的 codex 那样写 CODEX_HOME 里的文件和会话库，退出码 3。codex_noflags：这个版本不认识 cca 要关的两个开关
+# 像真的 codex 那样写 CODEX_HOME 里的文件和会话库，退出码 3。codex_noflags：这个版本不认识 cca 要关的两个开关；codex_nocfg：
+# 不认识 -c tui.notification_method 的值（像以前的版本：配置读不了，报错退出）；codex_notify：会话结束时像一轮做完了，起
+# -c notify=[…]（最后一个算，像 codex）的命令，最后一个参数是这个文件里的 JSON（cca-test codex-notify 起、等它结束，codex.log 里记 NOTIFY rc=…）；
+# codex_osc：会话里像 tui.notifications 设成 osc9 时在等你，往终端里写一条通知（OSC 9，字是这个文件的内容）
 cat > "$T/bin/codex" <<'S'
 #!/bin/bash
 LOG="$CCA_T/codex.log"
@@ -874,6 +877,7 @@ while [ $i -lt ${#args[@]} ]; do   # 跳过 cca 加在前面的全局参数
 		--no-daemon) i=$((i + 1)) ;;
 		--disable|--enable|-c)
 			if [ "${args[$i]}" = --disable ] && [ -f "$CCA_T/codex_noflags" ]; then echo "Error: Unknown feature flag: ${args[$((i + 1))]}" >&2; exit 1; fi
+			if [ "${args[$i]}" = -c ] && [ -f "$CCA_T/codex_nocfg" ]; then case "${args[$((i + 1))]}" in tui.notification_method=*) echo "Error: failed to load bootstrap configuration" >&2; exit 1 ;; esac; fi
 			i=$((i + 2)) ;;
 		*) break ;;
 	esac
@@ -906,7 +910,13 @@ if [ -n "$prov" ]; then
 fi
 # 当作一次会话
 while [ -e "$CCA_T/hold" ]; do sleep 0.1; done   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
+[ ! -f "$CCA_T/codex_osc" ] || printf '\033]9;%s\007' "$(cat "$CCA_T/codex_osc")"
 "$CCA_T/cca-test" codex-session "$CODEX_HOME" "${CODEX_SQLITE_HOME:-$CODEX_HOME}" "${CCA_ACCOUNT:-x}"
+if [ -f "$CCA_T/codex_notify" ]; then   # 一轮做完了：起 notify 的命令
+	nv=""; prev=""
+	for a in "$@"; do [ "$prev" = -c ] && case "$a" in notify=*) nv="${a#notify=}" ;; esac; prev="$a"; done
+	[ -z "$nv" ] || "$CCA_T/cca-test" codex-notify "$nv" "$(cat "$CCA_T/codex_notify")" >> "$LOG"
+fi
 exit 3
 S
 # 假的 agy（照 1.5.16 的行为）：--gemini_dir=目录 换数据目录（写在子命令前面）。acp --login 在 antigravity-cli/log/acp-login-*.log 里

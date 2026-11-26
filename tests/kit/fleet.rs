@@ -5,8 +5,8 @@
 //!   要自己拼参数起服务器的测试直接用它）。服务器没起来就退出了时马上说出是哪条命令、退出码、它说了什么，不干等到超时
 //! - [`signed_call`]、[`SignedCalls`]、[`unknown`]：照文档自己签一个请求发给服务器
 //! - [`Team`]：测试里的一个 Team，测试拿着根密钥扮演管理员（登记、移除设备）
-//! - [`Device`]：一台设备——自己的 HOME（~/.cca），辅助程序在里面跑；curl、ps、cca、security 是它 ~/bin 里的假命令
-//!   （[`CURL`]、[`PS`]、[`SELF`]、[`NO_KEYCHAIN`]、[`KEYCHAIN`]）
+//! - [`Device`]：一台设备——自己的 HOME（~/.cca），辅助程序在里面跑；curl、ps、cca、security、osascript 是它 ~/bin 里的假命令
+//!   （[`CURL`]、[`PS`]、[`SELF`]、[`NO_KEYCHAIN`]、[`KEYCHAIN`]、[`OSASCRIPT`]）
 //! - 命令行会话和上报进程：[`session`]、[`agent`]、[`rounds`]、[`more_rounds`]、[`status`]（原来的 Sessions）
 //!
 //! 名字、参数的先后、默认值都照原来的 Python；Python 里带默认值的参数这里分成两个写法（[`Device::login`] / [`Device::login_as`]），
@@ -104,6 +104,12 @@ exit 0
 "#;
 /// 后台起的 cca（记下 key 以后的 _key-sync 这些）：只记一笔（自己的进程号、参数），不真的起
 pub const SELF: &str = r#"echo "$$ $*" >> "$HOME/kicks.log"
+"#;
+/// 假的 osascript：测试里不弹真的通知（cca 启动的 Codex、Antigravity 会话做完了、在等你时这台 Mac 上弹的，cli 的
+/// remote/popup.rs）。参数记进 ~/osascript.log（一行 `OSA [参数]…`），stdin 上的脚本读掉不要
+pub const OSASCRIPT: &str = r#"{ printf 'OSA'; printf ' [%s]' "$@"; echo; } >> "$HOME/osascript.log"
+[ "${1:-}" = - ] && cat > /dev/null
+exit 0
 "#;
 /// 默认：钥匙串碰不到（key 存成文件，CCA_KEYSTORE=file）
 pub const NO_KEYCHAIN: &str = r#"echo "测试不碰钥匙串：security $*" >> "$HOME/security.log"
@@ -744,7 +750,7 @@ impl Device {
             env.insert("TZ".to_string(), tz);
         }
         let dev = Device { name: name.to_string(), home: home.to_path_buf(), cca, env, first: None, lane: None };
-        for (cmd, script) in [("curl", CURL), ("ps", PS), ("cca", SELF), ("security", NO_KEYCHAIN)] {
+        for (cmd, script) in [("curl", CURL), ("ps", PS), ("cca", SELF), ("security", NO_KEYCHAIN), ("osascript", OSASCRIPT)] {
             dev.fake(cmd, script);
         }
         fsx::write(dev.cca.join("config.json"), "{}");

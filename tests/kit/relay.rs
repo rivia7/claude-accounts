@@ -962,8 +962,13 @@ pub fn term_sized(dev: &Device, argv: &[&str], rows: u16, cols: u16) -> Term {
 
 /// dev 上起一个在宿主里运行的会话（`remote-host claude 账号的键 名字 -- 假客户端 参数…`），等假客户端报到（`<ready 24 80`）
 pub fn session(dev: &Device, key: &str, name: &str, client_args: &[&str]) -> Term {
+    session_as(dev, "claude", key, name, client_args)
+}
+
+/// 同 [`session`]，宿主当它是 tool 的会话（`codex`：认得 Codex 往终端里写的通知序列）
+pub fn session_as(dev: &Device, tool: &str, key: &str, name: &str, client_args: &[&str]) -> Term {
     let client = text(&client(dev));
-    let mut argv = vec!["remote-host", "claude", key, name, "--", client.as_str()];
+    let mut argv = vec!["remote-host", tool, key, name, "--", client.as_str()];
     argv.extend(client_args);
     let mut h = term(dev, &argv);
     h.expect("<ready 24 80");

@@ -3,7 +3,8 @@
 //! - `remote/host.rs`：会话宿主（remote-host）：客户端跑在它开的 pty 里，启动它的终端没了会话照样运行，别的终端能接进来
 //! - `remote/attach.rs`：接入端（remote-attach）：把一个终端接到宿主上；`remote/keys.rs`：从按键里认出“断开”
 //! - `remote/manage.rs`：开关、列表、结束一个会话（remote-set、remote-list、remote-end）、推通知（remote-notify）
-//! - `remote/hook.rs`：cca 自己带给 Claude Code 的钩子（remote-hook：做完了、在等你）
+//! - `remote/hook.rs`：cca 自己带给 Claude Code 的钩子（remote-hook：做完了、在等你），Codex、Antigravity 的这两种也从这里推
+//! - `remote/popup.rs`：这台 Mac 上弹的通知（Codex、Antigravity 的会话）
 //! - `remote/status.rs`：给配对的手机放账号的状态、推额度用完 / 恢复的通知（remote-status）
 //! - `remote/local.rs`：这台机器上的会话目录、socket、帧的格式
 //! - `remote/vt.rs`：终端输出的识别（查询、模式、回放）
@@ -22,15 +23,17 @@ mod local;
 mod manage;
 mod pair;
 mod peers;
+mod popup;
 mod pty;
 mod relay;
 mod sig;
 mod status;
 mod vt;
 
-pub use hook::hooks as notify_hooks;
+pub use hook::{agy_note, deliver as notify_deliver, hooks as notify_hooks, AgyEvent};
 pub use local::activity as hosted_activity;
 pub use manage::{hooks_on as notify_hooks_on, remote_on};
+pub use popup::on as popup_on;
 pub use pty::restore_on_panic;
 pub use status::status_kick;
 

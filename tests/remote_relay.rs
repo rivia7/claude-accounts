@@ -42,6 +42,7 @@ pub const MODULE: Module = Module {
         case!(relay_is_off_unless_asked),
         case!(pair_list_attach),
         case!(cca_hooks_reach_the_other_machine),
+        case!(codex_notes_reach_the_other_machine),
         case!(what_the_other_side_may_do),
         case!(the_other_implementation_and_what_the_host_enforces),
         case!(a_phone_sets_the_size_only_when_it_types),
@@ -781,6 +782,61 @@ fn cca_hooks_reach_the_other_machine(t: &mut Ctx) {
     assert_eq!((h.wait(), v.wait()), (0, 0));
     let seen = fx.sniff.snapshot();
     for word in ["改好了", "清掉编译的", "github", "后台的会话", "Claude Code"] {
+        assert!(!has(&seen, word), "服务器看得到通知里的字：{word}");
+    }
+}
+
+/// Codex 的会话（宿主当它是 codex：cca 放进宿主时给它的 tui.notifications 让它把在等你的那几种写成 OSC 9）：宿主认出来推出去，
+/// 接着它的另一台机器上弹出来；原来的序列不给接入方（不然弹两次），这台 Mac 上弹了（假的 osascript 记下）就不给启动它的终端。
+/// 一轮做完了的是 Codex 起的 notify（`remote-hook --codex JSON`）：一样推给接着的各处、这台 Mac 上弹。config.json 的 popup 是
+/// false 时这台 Mac 上不弹，序列照给启动它的终端
+fn codex_notes_reach_the_other_machine(t: &mut Ctx) {
+    let (fx, mut a, b, asked) = client_fx(t);
+    a.env.insert("CCA_ACCOUNT".into(), "工作(alice@example.com)".into());
+    let mut h = relay::session_as(&a, "codex", Device::KEY, "alice", &[]);
+    pair(&a, &b);
+    let row = asked.listed(&b, "laptop 列出 box 上的会话").remove(0);
+    let mut v = relay::term(&b, &["remote-attach", &row[..8]]);
+    v.expect("<ready 24 80");
+    let osc = |title: &str, body: &str| format!(r"\x1b\]777;notify;{title} · 工作 · work;{body}\x1b\\");
+    let popped = || fsx::try_read_text(&a.home.join("osascript.log")).unwrap_or_default();
+    let said = |h: &mut Term, line: &str, back: &str| {
+        let at = h.mark();
+        h.send(format!("{line}\n"));
+        h.expect_since(back, at);
+        at
+    };
+    let m = v.mark();
+    let at = said(&mut h, "osc Approval requested: cargo test", "<osc>");
+    v.expect_since(&osc("Codex 要你确认", "运行：cargo test"), m);
+    let pop = "OSA [-] [Codex 要你确认] [工作 · work] [运行：cargo test] [Ping]";
+    wait_for("这台 Mac 上弹了「Codex 要你确认」", WAIT, || popped().lines().any(|l| l == pop));
+    assert!(!has(&h.out()[at..], "\x1b]9;"), "弹了：启动它的终端不再给");
+    // 一轮做完了：Codex 起 cca 给它的 notify，JSON 加在最后（会话里的钩子那样：客户端的子进程）
+    let helper = relay::helper(&a);
+    let done = r#"{"type":"agent-turn-complete","cwd":"/x/work","last-assistant-message":"**改好了**两处"}"#;
+    said(&mut h, &format!("run {} remote-hook --codex {done}", helper.display()), "<ran 0>");
+    v.expect_since(&osc("Codex 做完了", "改好了两处"), m);
+    let pop = "OSA [-] [Codex 做完了] [工作 · work] [改好了两处] [Glass]";
+    wait_for("这台 Mac 上弹了「Codex 做完了」", WAIT, || popped().lines().any(|l| l == pop));
+    // 用户自己又打开了一轮做完了的那一句：不推（notify 推过了），也不给接入方；这台 Mac 上弹着，启动它的终端也不给
+    let at = said(&mut h, "osc Agent turn complete", "<osc>");
+    assert!(!has(&h.out()[at..], "\x1b]9;"), "弹着的时候不推的那一句也不给启动它的终端");
+    // 这台 Mac 上不弹的时候：照样推，序列照给启动它的终端（它认得的话自己会弹）
+    fsx::write(a.cca.join("config.json"), r#"{"popup": false}"#);
+    let at = said(&mut h, "osc Question: 用哪个库？", "<osc>");
+    v.expect_since(&osc("Codex 在问你", "用哪个库？"), m);
+    said(&mut h, "osc Agent turn complete", "<osc>");
+    assert!(has(&h.out()[at..], "\x1b]9;Question: 用哪个库？\x07"), "没弹：启动它的终端照给");
+    assert!(has(&h.out()[at..], "\x1b]9;Agent turn complete\x07"), "不推的那一句启动它的终端照给");
+    let shown = String::from_utf8_lossy(&v.out()[m..]).to_string();
+    assert!(!shown.contains("\x1b]9;"), "接入方只收推出去的那一条：{shown:?}");
+    assert!(!shown.contains("notify;Codex 在等你"), "一轮做完了的那一句没换成在等你：{shown:?}");
+    assert_eq!(popped().lines().filter(|l| l.starts_with("OSA ")).count(), 2, "{}", popped());
+    h.send("exit 0\n");
+    assert_eq!((h.wait(), v.wait()), (0, 0));
+    let seen = fx.sniff.snapshot();
+    for word in ["cargo test", "改好了", "用哪个库", "Codex"] {
         assert!(!has(&seen, word), "服务器看得到通知里的字：{word}");
     }
 }

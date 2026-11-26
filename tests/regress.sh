@@ -101,6 +101,7 @@ fi
 run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_TEST_TRAP="$T.trap" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_HELPER="$HELPERWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
+waitfor() { local i; for i in $(seq 1 50); do grep -qF -- "$1" "$2" 2>/dev/null && return 0; sleep 0.1; done; return 1; }   # waitfor 字 文件：等文件里出现这些字（最多 5 秒）
 pass=0; fail=0
 ok() {   # ok 说明 '断言'：断言写丢了（比如说明和断言之间少了空格，连成了一个参数）也算失败，不会空过。DEBUG_OUT=1 时失败的附上 $out 的最后几行
 	if [ $# -eq 2 ] && [ -n "$2" ] && eval "$2"; then echo "PASS  $1"; pass=$((pass + 1)); else
@@ -1433,6 +1434,54 @@ rm -f "$T/codex_noflags" "$H/.cca/codex/probe.json"
 ok "codex 不认识要关的开关时（删掉了）就不加 --disable（否则它直接报错退出）；按 codex 程序缓存，不每次都问" '[ $rc -eq 3 ] && clast ARGS | grep -qx "ARGS: --no-daemon --version" && [ "$(grep -c "FEATURES list" codex.log)" -ge 1 ]'
 n_f=$(grep -c "FEATURES list" codex.log); run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1
 ok "（探测结果按 codex 程序缓存）" '[ "$(grep -c "FEATURES list" codex.log)" = $((n_f + 1)) ]'
+# 通知（docs/dev/remote.md「Codex、Antigravity 的通知」）：交互的会话带上 -c notify（Codex 一轮做完了起 cca _remote-hook --codex：
+# 这台 Mac 上弹一个，在会话宿主里时推给接着它的各处）；放进宿主时再让它把在等你的那几种写成终端的通知序列（tui.*，宿主认出来推）。
+# 打印、子命令、--version 不带；config.json 的 popup 是 false、又不在宿主里时不带
+cx_pty() {   # cx_pty：在真的终端里（script）、远程会话的开关开着运行 cca codex @alice（客户端跑在会话宿主里），退出码写进 $T/cx.rc，完了建 $T/cx.done
+	rm -f "$T/cx.done" "$T/cx.rc"
+	{ for i in $(seq 1 300); do [ -f "$T/cx.done" ] && break; sleep 0.1; done; } |
+		script -q "$T/cx.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_STUN=127.0.0.1:9 CCA_HELPER="$HELPERWRAP" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_RETRY_WAIT=0 CCA_REMOTE=1 CCA_TTY="$(ans)" \
+		PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca codex @alice; echo $? > "$CCA_T/cx.rc"; touch "$CCA_T/cx.done"' >/dev/null 2>&1
+}
+CXF="ARGS: --no-daemon --disable system_proxy_fallback --disable respect_system_proxy"
+cnot='-c notify=\["[^"]*", "_remote-hook", "--codex"\]'
+cn_tui='-c tui.notifications=["approval-requested", "plan-mode-prompt", "async-question"] -c tui.notification_method="osc9" -c tui.notification_condition="always"'
+cp "$X/config.toml" "$T/codex-config.bak"; grep -v '^notify = ' "$T/codex-config.bak" > "$X/config.toml"   # setup.sh 写的共享 config.toml 里有用户自己的 notify：先去掉（没有的时候），下面再换成会记一笔的那一个，最后放回去
+: > osascript.log
+run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; cn1=$(clast ARGS)
+cx_acct=$(clast ENV | sed -n 's/.* CCA_ACCOUNT=\([^ ]*\) .*/\1/p'); cx_acct="${cx_acct%%(*}"
+run CCA_TTY="$(ans)" cca codex @alice exec hi >/dev/null 2>&1; cn2=$(clast ARGS)
+run CCA_TTY="$(ans)" cca codex @alice --model gpt-x 修 exec >/dev/null 2>&1; cn3=$(clast ARGS)
+run CCA_TTY="$(ans)" cca codex @alice resume --last >/dev/null 2>&1; cn4=$(clast ARGS)
+ok "Codex 的通知：交互的会话（不带参数、带着选项和开场白、resume）在用户参数前面带上 -c notify=[cca, _remote-hook, --codex]，不在会话宿主里时不带 tui.*；exec 这类子命令不带" 'printf "%s" "$cn1" | grep -Eqx "$CXF $cnot" && [ "$cn2" = "$CXF exec hi" ] && printf "%s" "$cn3" | grep -Eqx "$CXF $cnot --model gpt-x 修 exec" && printf "%s" "$cn4" | grep -Eqx "$CXF $cnot resume --last" && [ -n "$cx_acct" ] && [ ! -s osascript.log ]'
+{ printf 'notify = ["%s", "a b"]\n' "$H/mine.sh"; grep -v '^notify = ' "$T/codex-config.bak"; } > "$X/config.toml"   # 换掉用户自己的 notify（插在开头：顶层的键；同一个键写两次就不是合法的 TOML 了，cca 不启动）
+printf '#!/bin/sh\nprintf "MINE %%s|%%s\\n" "$1" "$2" >> "$CCA_T/mine.log"\n' > "$H/mine.sh"; chmod +x "$H/mine.sh"; rm -f mine.log
+printf '%s' '{"type": "agent-turn-complete", "thread-id": "t-1", "turn-id": "u-1", "cwd": "/x/work", "input-messages": ["hi"], "last-assistant-message": "**改好了** 两处\n细节"}' > "$T/codex_notify"
+run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; rc=$?; cn5=$(clast ARGS)
+waitfor "[Codex 做完了]" osascript.log; waitfor "MINE a b|" mine.log
+cn_then="\"--codex\", \"--then\", \"[\\\"$H/mine.sh\\\", \\\"a b\\\"]\"]"; cn_mine="MINE a b|$(cat "$T/codex_notify")"; cn_osa="OSA [-] [Codex 做完了] [$cx_acct · work] [改好了 两处] [Glass]"
+ok "Codex 的通知：一轮做完了 Codex 起 cca _remote-hook --codex（它给的 JSON 在最后），这台 Mac 上弹「Codex 做完了」（副标题是账号 · 文件夹，正文是最后一条回复的第一行）；共享的 config.toml 里用户自己的 notify 经 --then 接着起（同一份 JSON 加在最后）" '[ $rc -eq 3 ] && [[ "$cn5" == *"$cn_then" ]] && grep -q "^NOTIFY rc=0 " codex.log && grep -qxF -- "$cn_osa" osascript.log && grep -qxF -- "$cn_mine" mine.log'
+{ printf 'notify = "not-a-list"\n'; grep -v '^notify = ' "$T/codex-config.bak"; } > "$X/config.toml"
+run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; cn6=$(clast ARGS)
+grep -v '^notify = ' "$T/codex-config.bak" > "$X/config.toml"; rm -f "$T/codex_notify" "$H/mine.sh" mine.log
+ok "Codex 的通知：用户自己的 notify 不是字符串数组（config.toml 读不了也是）时什么都不加（不顶掉它）" '[ "$cn6" = "$CXF" ]'
+edit_table 'j["popup"] = False' "$H/.cca/config.json"; : > osascript.log
+run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; cn7=$(clast ARGS)
+edit_table 'j.pop("popup")' "$H/.cca/config.json"
+ok "Codex 的通知：config.json 的 popup 是 false、又不在会话宿主里：不加" '[ "$cn7" = "$CXF" ] && [ ! -s osascript.log ]'
+printf 'Approval requested: cargo test' > "$T/codex_osc"; : > osascript.log
+cx_pty; cn8=$(clast ARGS); waitfor "[Codex 要你确认]" osascript.log
+cn_osa="OSA [-] [Codex 要你确认] [$cx_acct · $(basename "$PWD")] [运行：cargo test] [Ping]"
+ok "Codex 的通知：放进会话宿主时（远程会话开着、在终端里）再带上 tui.*：在等你的那几种 Codex 往终端里写 OSC 9，宿主认出来推出去、这台 Mac 上弹「Codex 要你确认」，弹了就不给启动它的终端" '[ "$(cat "$T/cx.rc")" = 3 ] && printf "%s" "$cn8" | grep -Eq "^$CXF $cnot " && [[ "$cn8" == *" $cn_tui" ]] && grep -qxF -- "$cn_osa" osascript.log && ! grep -q "Approval requested" "$T/cx.log"'
+edit_table 'j["popup"] = False' "$H/.cca/config.json"; : > osascript.log
+cx_pty; cn9=$(clast ARGS)
+edit_table 'j.pop("popup")' "$H/.cca/config.json"; rm -f "$T/codex_osc"
+ok "Codex 的通知：popup 是 false、放进会话宿主：照样带 notify 和 tui.*（推给接着它的各处）；这台 Mac 上不弹，通知序列照给启动它的终端" '[ "$(cat "$T/cx.rc")" = 3 ] && [ "$cn9" = "$cn8" ] && [ ! -s osascript.log ] && grep -q "Approval requested: cargo test" "$T/cx.log"'
+rm -f "$H/.cca/codex/probe.json"; touch "$T/codex_nocfg"; n_f=$(grep -c "FEATURES list" codex.log)
+run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; rc=$?; cn10=$(clast ARGS)
+rm -f "$T/codex_nocfg"
+ok "Codex 的通知：这个版本的 codex 不认通知的那几个 -c（探测时报错退出）：再不带它们问一次，启动时不加（加不加通知不能让会话起不来）；探测结果里 notify 是 false" '[ $rc -eq 3 ] && [ "$cn10" = "$CXF" ] && [ "$(grep -c "FEATURES list" codex.log)" = $((n_f + 1)) ] && "$TESTBIN" check -f "j=$H/.cca/codex/probe.json" "j[\"notify\"] is False"'
+rm -f "$H/.cca/codex/probe.json"; cp "$T/codex-config.bak" "$X/config.toml"   # 用户自己的 notify 放回去
 # 第三方 API 账号（Codex）：兼容 Responses 接口；key 存钥匙串，经 auth.command 回调 cca 取（不进命令行、环境变量）
 : > "$T/env.log"; rm -f "$T/security.stdin" "$T/codex.key"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/v1/ "$S1" kimi-k2 '')" cca codex add api 2>&1); rc=$?
@@ -1716,15 +1765,15 @@ printf 'Pro' > "$T/agy_plan_tier"; : > agy.log
 out=$(run CCA_TTY="$(ans)" cca agy @alice --model gemini-x 2>&1); rc=$?
 agy_slc=$(sed -n 's/^AGY-STATUSLINE-CMD //p' agy.log | tail -n 1); out2=$(gj state)
 agy_sl1="ARGS: --gemini_dir=$AG --settings {\"statusLine\": {\"type\": \"command\", \"command\": \"$agy_slc\", \"enabled\": true, \"padding\": 0, \"stack_with_default\": true}} --model gemini-x"
-ok "agy 的套餐：交互的会话在用户参数前面带上 --settings（cca 的状态栏命令 cca _agy-statusline 账号目录名，叠在 agy 自己的状态栏上、什么都不输出）；状态栏 JSON 里的 plan_tier 连同邮箱记进账号目录的 agy-plan.json（600）；token 里没有档位时 _gui state 照它显示套餐（Pro 认成 Google AI Pro、standard）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && [ "${agy_slc##* _agy-statusline }" = "$(basename "$AGD")" ] && grep -qx "AGY-STATUSLINE rc=0 out=" agy.log && [ "$(stat -f %Lp "$AGD/agy-plan.json")" = 600 ] && "$TESTBIN" check -f "j=$AGD/agy-plan.json" "j[\"plan_tier\"] == \"Pro\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Pro\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"standard\""'
+ok "agy 的套餐：交互的会话在用户参数前面带上 --settings（cca 的状态栏命令 cca _agy-statusline 账号目录名 会话标记，叠在 agy 自己的状态栏上、什么都不输出）；状态栏 JSON 里的 plan_tier 连同邮箱记进账号目录的 agy-plan.json（600）；token 里没有档位时 _gui state 照它显示套餐（Pro 认成 Google AI Pro、standard）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && printf "%s" "${agy_slc##* _agy-statusline }" | grep -Eqx "$(basename "$AGD") [0-9a-f]{16}" && grep -qx "AGY-STATUSLINE rc=0 out=" agy.log && [ "$(stat -f %Lp "$AGD/agy-plan.json")" = 600 ] && "$TESTBIN" check -f "j=$AGD/agy-plan.json" "j[\"plan_tier\"] == \"Pro\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Pro\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"standard\""'
 printf '#!/bin/sh\ncat > "$CCA_T/agy_sl.json"; printf "mine %%s" "$1"\n' > "$H/sl.sh"; chmod +x "$H/sl.sh"
 printf '{"theme": "dark", "statusLine": {"type": "command", "command": "~/sl.sh x", "padding": 1}}' > "$G/antigravity-cli/settings.json"
 printf 'Ultra' > "$T/agy_plan_tier"; : > agy.log
 out=$(run CCA_TTY="$(ans)" cca agy @alice 2>&1); rc=$?
 agy_slc=$(sed -n 's/^AGY-STATUSLINE-CMD //p' agy.log | tail -n 1); out2=$(gj state)
 agy_sl1="ARGS: --gemini_dir=$AG --settings {\"statusLine\": {\"type\": \"command\", \"command\": \"$agy_slc\", \"padding\": 1, \"enabled\": true}}"
-agy_sl2="$(basename "$AGD") --then '~/sl.sh x'"
-ok "agy 的套餐：共享的 settings.json 里有用户自己的状态栏命令时照用户的那一份（padding 留着），命令换成 cca 的、经 --then 接着运行用户的（同一份 JSON，它的输出就是状态栏）；套餐跟着换（Ultra 认成 Google AI Ultra、premium）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && [ "${agy_slc##* _agy-statusline }" = "$agy_sl2" ] && grep -qx "AGY-STATUSLINE rc=0 out=mine x" agy.log && "$TESTBIN" check -f "j=$T/agy_sl.json" "j[\"plan_tier\"] == \"Ultra\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Ultra\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"premium\""'
+agy_sl2="$(basename "$AGD") [0-9a-f]{16} --then '~/sl.sh x'"
+ok "agy 的套餐：共享的 settings.json 里有用户自己的状态栏命令时照用户的那一份（padding 留着），命令换成 cca 的、经 --then 接着运行用户的（同一份 JSON，它的输出就是状态栏）；套餐跟着换（Ultra 认成 Google AI Ultra、premium）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && printf "%s" "${agy_slc##* _agy-statusline }" | grep -Eqx "$agy_sl2" && grep -qx "AGY-STATUSLINE rc=0 out=mine x" agy.log && "$TESTBIN" check -f "j=$T/agy_sl.json" "j[\"plan_tier\"] == \"Ultra\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Ultra\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"premium\""'
 cp "$T/agy_set.bak" "$G/antigravity-cli/settings.json"; : > agy.log
 run CCA_TTY="$(ans)" cca agy @alice -p hi >/dev/null 2>&1; agy_a1=$(alast ARGS)
 run CCA_TTY="$(ans)" cca agy @alice mcp list >/dev/null 2>&1; agy_a2=$(alast ARGS)
@@ -1735,8 +1784,23 @@ ok "agy 的套餐：状态栏记下时的邮箱和现在登录的不一样（换
 mkdir -p "$H/.cca/agy/x"
 agy_o1=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-statusline ../x --then 'printf ok; exit 4' 2>&1); agy_r1=$?
 agy_o2=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-statusline nobody 2>&1); agy_r2=$?
-ok "cca _agy-statusline：账号目录名不像、目录不在时不记（只往 cca 自己的账号目录里写）；--then 的命令照样运行，它的输出和退出码就是这一次的；没有 --then 时什么都不输出、总是成功" '[ "$agy_o1" = ok ] && [ $agy_r1 -eq 4 ] && [ ! -e "$H/.cca/agy/x/agy-plan.json" ] && [ -z "$agy_o2" ] && [ $agy_r2 -eq 0 ] && [ ! -e "$H/.cca/agy/accounts/nobody" ]'
+ok "cca _agy-statusline：账号目录名不像、目录不在时不记（只往 cca 自己的账号目录里写）；--then 的命令照样运行，它的输出和退出码就是这一次的；没有 --then 时什么都不输出、总是成功（没有会话标记的旧写法也认：换版本以前启动、还开着的会话）" '[ "$agy_o1" = ok ] && [ $agy_r1 -eq 4 ] && [ ! -e "$H/.cca/agy/x/agy-plan.json" ] && [ -z "$agy_o2" ] && [ $agy_r2 -eq 0 ] && [ ! -e "$H/.cca/agy/accounts/nobody" ]'
 rm -rf "$H/.cca/agy/x"; cp "$T/agy_tok.bak" "$AG/antigravity-cli/antigravity-oauth-token"; rm -f "$AGD/agy-plan.json" "$T/agy_plan_tier" "$T/agy_sl.json" "$H/sl.sh"
+# 通知：状态栏的命令带着会话标记（一次启动一个），和这个会话上一次的状态比：干过活回到 idle 推「做完了」（正文是会话的标题）、
+# tool_confirmation_pending 变成 true 推「在等你」（这台 Mac 上弹一个；在会话宿主里时也推给接着它的各处）。状态记在账号目录的
+# agy-turns/<会话标记>（目录 700、文件 600），新的会话头一次记的时候删掉一天以前的
+rm -rf "$AGD/agy-turns"; mkdir -m 700 "$AGD/agy-turns"; : > "$AGD/agy-turns/0000000000000000"; touch -t 202001010000 "$AGD/agy-turns/0000000000000000"   # 上面套餐的用例起的会话也各记了一个：从空的开始数
+printf 'working\ntool_use ask\ntool_use ask\nidle\nidle\n' > "$T/agy_states"; printf '**解释** 这段代码' > "$T/agy_title"; : > osascript.log; : > agy.log
+out=$(run CCA_TTY="$(ans)" cca agy @alice 2>&1); rc=$?
+agy_run=$(sed -n 's/^AGY-STATUSLINE-CMD .* _agy-statusline [^ ]* \([0-9a-f]\{16\}\)$/\1/p' agy.log | tail -n 1)
+agy_acct=$(alast ENV | sed -n 's/.* CCA_ACCOUNT=\([^ ]*\) .*/\1/p'); agy_sub="${agy_acct%%(*} · $(basename "$PWD")"; waitfor "[Antigravity 在等你]" osascript.log; waitfor "[Antigravity 做完了]" osascript.log
+agy_ask="OSA [-] [Antigravity 在等你] [$agy_sub] [要你确认一个操作] [Ping]"; agy_done="OSA [-] [Antigravity 做完了] [$agy_sub] [解释 这段代码] [Glass]"
+ok "agy 的通知：状态栏的命令带着会话标记，和这个会话上一次的状态比：tool_confirmation_pending 变成 true 弹「Antigravity 在等你」，干过活回到 idle 弹「Antigravity 做完了」（正文是会话的标题），没变的不再弹；状态记在账号目录的 agy-turns/<会话标记>（700 / 600），一天以前的删掉" '[ $rc -eq 3 ] && [ -n "$agy_run" ] && [ "$(grep -c "^AGY-STATUSLINE rc=0 out=$" agy.log)" = 5 ] && grep -qxF -- "$agy_ask" osascript.log && grep -qxF -- "$agy_done" osascript.log && [ "$(grep -c "^OSA " osascript.log)" = 2 ] && [ "$(stat -f %Lp "$AGD/agy-turns/$agy_run")" = 600 ] && [ "$(cat "$AGD/agy-turns/$agy_run")" = "idle 0 0" ] && [ ! -e "$AGD/agy-turns/0000000000000000" ]'
+edit_table 'j["popup"] = False' "$H/.cca/config.json"; : > osascript.log
+run CCA_TTY="$(ans)" cca agy @alice >/dev/null 2>&1; rc=$?
+edit_table 'j.pop("popup")' "$H/.cca/config.json"
+ok "agy 的通知：config.json 的 popup 是 false 时这台 Mac 上不弹（状态照样记）" '[ $rc -eq 3 ] && [ ! -s osascript.log ] && [ "$(ls "$AGD/agy-turns" | wc -l | tr -d " ")" = 2 ]'
+rm -rf "$AGD/agy-turns"; rm -f "$T/agy_states" "$T/agy_title"
 ok "agy 的登录 token 从没出现在 cca 写的文件、日志和命令行里（cca 只读里面的邮箱和档位）" '! grep -rqF -e ya29.test -e 1//test --exclude antigravity-oauth-token "$H/.cca" && ! grep -qF -e ya29.test -e 1//test agy.log open.log curl.log "$T/env.log"'
 out=$(run cca help 2>&1)
 ok "cca help 有 Antigravity 一节" 'printf "%s" "$out" | grep -q "cca agy add" && printf "%s" "$out" | grep -q "Antigravity（Google 的 agy 命令行"'

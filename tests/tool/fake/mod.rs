@@ -59,6 +59,7 @@ pub const CMDS: &[(&str, crate::Run)] = &[
     // 假 codex（$T/bin/codex）
     ("codex-features", role!(codex::features)),      // config.toml 开关：features disable
     ("codex-provider", role!(codex::provider)),      // -c 里的 model_providers.cca  CCA_T：执行 auth 的命令取 key
+    ("codex-notify", role!(codex::notify)),          // -c 里的 notify  JSON：一轮做完了起 notify 的命令
     ("codex-session", role!(codex::session)),        // CODEX_HOME  会话库目录  账号：一次会话写进 CODEX_HOME 的东西
     ("fake-codex-server", role!(codex_server::run)), // [--write-auth]：app-server
     // 假 agy（$T/bin/agy）

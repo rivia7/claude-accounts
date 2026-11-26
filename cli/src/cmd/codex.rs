@@ -4,8 +4,9 @@
 //! JSON-RPC（`Rpc`：查用量、重置额度、登录）、`codex_fix_rollouts`。Claude 查用量也是“起一个子进程、一行一行读它的回答”，
 //! 用的是这里的 `Piped`。
 
+use super::accounts::toml_str;
 use super::keyshare::is_num;
-use super::settings::{read_toml_config, ConfigReadError};
+use super::settings::{read_toml_config, ConfigReadError, CODEX_VALUES};
 use super::usage::{capitalize, div_small, float_arg, hashable, py_max, type_error};
 use super::{arg, arity, Cmd};
 use crate::core::base::{str_or_empty, CCA_HOME, EMAIL_RE, SELF_PATH};
@@ -137,7 +138,9 @@ pub fn codex_plan_tier(plan: &V) -> &'static str {
 
 /// 这个版本的 codex 认得哪些 cca 要用的参数：不认识的 --disable 开关、参数 codex 会直接报错退出，开关不存在了也就不会
 /// 改走系统代理。按 codex 程序文件缓存（换了版本才重新问，问一次要一秒多）。问不出来时照样全加上（宁可启动失败）。
-/// 返回 `{'sig', 'flags', 'no_daemon', 'version'}`（问不出来时没有 sig）
+/// notify：认不认 cca 给交互的会话加的通知的那几个 -c（`codex_launch_args`；不认的值 codex 也是直接报错退出）——这一项和上面
+/// 反过来，问不出来时是 false、不加：加不加通知不能让会话起不来。
+/// 返回 `{'sig', 'flags', 'no_daemon', 'version', 'notify'}`（问不出来时没有 sig、notify）
 pub fn codex_probe(bin_: &str) -> Dict {
     let full = dict! { "flags" => str_list(CODEX_FLAGS), "no_daemon" => true, "version" => "" };
     if bin_.is_empty() {
@@ -163,7 +166,8 @@ pub fn codex_probe(bin_: &str) -> Dict {
     let master = &codex().master;
     let cache = path::join(&codex().sroot, "probe.json");
     if let Some(V::Dict(j)) = load_quiet(&cache) {
-        if j.get("sig").is_some_and(|s| s.as_str() == Some(sig.as_str())) && j.list("flags").is_some() {
+        let same = j.get("sig").is_some_and(|s| s.as_str() == Some(sig.as_str()));
+        if same && j.list("flags").is_some() && j.get("notify").is_some() {
             return j;
         }
     }
@@ -186,7 +190,15 @@ pub fn codex_probe(bin_: &str) -> Dict {
             Err(_) => (1, String::new()),
         }
     };
-    let (rc, out) = run(&["features", "list"]);
+    // 通知的那几个 -c 和 features list 一起问：认的话问一次就够，不认（报错退出）再不带它们问一次
+    let mut with: Vec<&str> = Vec::new();
+    for c in std::iter::once(CODEX_NOTIFY_PROBE).chain(CODEX_NOTIFY_TUI) {
+        with.extend(["-c", c]);
+    }
+    with.extend(["features", "list"]);
+    let (rc, out) = run(&with);
+    let notify = rc == 0 && !text::strip(&out).is_empty();
+    let (rc, out) = if notify { (rc, out) } else { run(&["features", "list"]) };
     if rc != 0 || text::strip(&out).is_empty() {
         return full;
     }
@@ -207,9 +219,115 @@ pub fn codex_probe(bin_: &str) -> Dict {
         "flags" => str_list(flags),
         "no_daemon" => rc != 0 || help.contains("--no-daemon"),
         "version" => ver.last().copied().unwrap_or(""),
+        "notify" => notify,
     };
     let _ = save_json(&cache, &V::Dict(j.clone()), Some(0o600), true); // 存不了（OSError）就算了
     j
+}
+
+// --- 交互的会话做完了、在等你时推通知（codex_launch_args）-----------------------------------------------------------
+
+/// 放进会话宿主时加的：Codex 在等你的那几种（要你确认、计划等你批准、问你）往终端里写 OSC 9，不管终端在不在前台；宿主
+/// 认出来推出去（remote/host.rs 的 `osc_note`）。一轮做完了的不要：notify 已经推了
+const CODEX_NOTIFY_TUI: [&str; 3] = [
+    r#"tui.notifications=["approval-requested", "plan-mode-prompt", "async-question"]"#,
+    r#"tui.notification_method="osc9""#,
+    r#"tui.notification_condition="always""#,
+];
+/// 探测时的 notify（`codex_probe`：只看认不认，不会起它）
+const CODEX_NOTIFY_PROBE: &str = r#"notify=["true"]"#;
+
+/// codex 的子命令（0.172.0 的 `codex --help`）里不进交互界面的：带着它们启动时不加通知。resume、fork、agents 进交互界面，加
+const CODEX_BATCH: &[&str] = &[
+    "exec",
+    "e",
+    "review",
+    "login",
+    "logout",
+    "mcp",
+    "mcp-server",
+    "plugin",
+    "app-server",
+    "remote-control",
+    "app",
+    "completion",
+    "update",
+    "doctor",
+    "sandbox",
+    "debug",
+    "apply",
+    "a",
+    "queue",
+    "archive",
+    "delete",
+    "migrate-rollouts",
+    "migrate-nfs-db",
+    "unarchive",
+    "cloud",
+    "exec-server",
+    "features",
+    "help",
+];
+
+/// 这一次是 codex 交互的会话：用户参数里头一个不是选项的不是 CODEX_BATCH 里的子命令（没有也算：直接进交互界面，带着开场白
+/// 也是；`--` 后面的都是开场白），前面也没有 --version、--help。带值的选项（settings.rs 的 CODEX_VALUES）跳过它的值
+fn codex_interactive(args: &[String]) -> bool {
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        match a.as_str() {
+            "--version" | "-V" | "--help" | "-h" => return false,
+            "--" => return true,
+            f if CODEX_VALUES.contains(&f) => i += 2,
+            f if f.starts_with('-') && f.len() > 1 => i += 1,
+            p => return !CODEX_BATCH.contains(&p),
+        }
+    }
+    true
+}
+
+/// 账号的 config.toml（一般是链到共享的那一份）里用户自己的 notify：没有是 Ok(None)，不空的字符串数组是 Ok(Some)，别的（不是
+/// 字符串数组、空的、文件读不了、TOML 写错了）是 Err
+fn user_notify(key: &str) -> Result<Option<Vec<String>>, ()> {
+    let d = read_toml_config(&path::join(&cdir(key), "config.toml")).map_err(|_| ())?;
+    match d.get("notify") {
+        None => Ok(None),
+        Some(V::List(l)) => {
+            let argv: Option<Vec<String>> = l.items().iter().map(|v| v.as_str().map(str::to_string)).collect();
+            argv.filter(|a| !a.is_empty()).map(Some).ok_or(())
+        }
+        Some(_) => Err(()),
+    }
+}
+
+/// 只这一次加在用户参数前面的（`py launch-args`；用户自己的 -c 排在后面，同名的照用户的）：交互的会话一轮做完了、在等你时
+/// 推一条通知（remote/hook.rs）——
+/// - `-c notify=[cca, _remote-hook, --codex]`：一轮做完了 Codex 起它（JSON 加在最后）。在会话宿主里时推给接着它的各处，这台 Mac 上
+///   弹一个（popup.rs，开着时）；这次不放进宿主（hosted）、这台机器上又不弹时不加。账号的 config.toml 里有用户自己的 notify
+///   （字符串数组）时经 `--then` 接着起它；有但不是字符串数组、config.toml 读不了时什么都不加（不顶掉用户的）
+/// - 放进宿主时再加 CODEX_NOTIFY_TUI：Codex 照它往终端里写 OSC 9，宿主认出来推出去。不放进宿主时不加：用户自己的终端提醒照旧
+///
+/// 这个版本的 codex 不认这几个 -c（`codex_probe` 的 notify）、不是交互的会话时什么都不加
+pub fn codex_launch_args(key: &str, user: &[String], hosted: bool) -> Vec<String> {
+    if !codex_interactive(user) || !(hosted || super::remote::popup_on()) {
+        return Vec::new();
+    }
+    if !codex_probe(&env_or_empty("CCA_BIN")).get("notify").is_some_and(|v| v.truthy()) {
+        return Vec::new();
+    }
+    let Ok(mine) = user_notify(key) else { return Vec::new() };
+    let mut cmd: Vec<String> = vec![SELF_PATH.to_string(), "_remote-hook".into(), "--codex".into()];
+    if let Some(mine) = mine {
+        cmd.push("--then".into());
+        cmd.push(format!("[{}]", mine.iter().map(|a| json::dump_str(a, false)).collect::<Vec<_>>().join(", ")));
+    }
+    let toml: Vec<String> = cmd.iter().map(|a| toml_str(a)).collect();
+    let mut out = vec!["-c".to_string(), format!("notify=[{}]", toml.join(", "))];
+    if hosted {
+        for c in CODEX_NOTIFY_TUI {
+            out.extend(["-c".to_string(), c.to_string()]);
+        }
+    }
+    out
 }
 
 // --- 起一个子进程、一行一行读它的回答（Claude 的 get_usage、codex 的 app-server 都是这样）--------------------------
@@ -1125,6 +1243,21 @@ pub fn codex_fix_rollouts() -> R<()> {
 mod tests {
     use super::super::usage::vectors::{check, rows};
     use super::*;
+
+    #[test]
+    fn interactive_codex() {
+        let s = |a: &[&str]| codex_interactive(&a.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+        assert!(s(&[]));
+        assert!(s(&["--model", "gpt-6", "修一下 exec 的 bug"]), "开场白");
+        assert!(s(&["resume", "--last"]) && s(&["fork"]) && s(&["agents"]), "进交互界面的子命令");
+        assert!(s(&["-c", "exec=1"]) && s(&["--config=x=1", "-p", "exec"]), "带值的选项跳过它的值");
+        assert!(s(&["--", "exec"]), "-- 后面是开场白");
+        for no in
+            [&["exec", "hi"][..], &["e"], &["-m", "x", "review"], &["mcp", "list"], &["features", "list"], &["--version"], &["-h"]]
+        {
+            assert!(!s(no), "{no:?}");
+        }
+    }
 
     #[test]
     fn plans_match_python() {

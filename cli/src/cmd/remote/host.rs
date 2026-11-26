@@ -17,7 +17,8 @@ use super::local::{self, Decoder, Meta, Note, NoteBudget, Status};
 use super::peers;
 use super::pty::{self, Raw, Size};
 use super::sig;
-use super::vt::{replay_bytes, typing, Class, Modes, Part, Ring, Route, Scanner, Seg};
+use super::vt::{osc_note_text, replay_bytes, typing, Class, Modes, Part, Ring, Route, Scanner, Seg};
+use super::{hook, popup};
 use crate::py::fs;
 use crate::py::rand::token_hex;
 use crate::py::time::{monotonic, time};
@@ -50,6 +51,8 @@ pub const NOTE_GAP: f64 = 3.0;
 /// 一模一样的一条（标题、副标题、正文都一样）这么久（秒）以内又来了不再推：cca 自己带的钩子（hook.rs）和用户自己照着同样的写法
 /// 写的钩子（调 `cca remote notify`）会为同一件事各推一条
 const NOTE_SAME: f64 = 10.0;
+/// 这台 Mac 上弹通知的 osascript 这么久（秒）还没完就结束掉它
+const POPUP_MAX: f64 = 10.0;
 
 /// 最近一次输入是谁的（终端的回答也算输入：查询只发给它，免得每个接入方的终端都答一遍）
 #[derive(Clone, Copy, PartialEq)]
@@ -158,6 +161,8 @@ struct Host {
     notes: NoteBudget,
     /// 上一条推出去的通知和什么时候（NOTE_SAME）
     last_note: Option<(Note, f64)>,
+    /// 这台 Mac 上弹通知的 osascript（popup.rs）和什么时候起的：主循环里收尸，POPUP_MAX 秒还没完的结束掉
+    popups: Vec<(Child, f64)>,
 }
 
 fn push(q: &mut VecDeque<u8>, data: &[u8]) {
@@ -247,6 +252,7 @@ impl Host {
             link: LinkProc::default(),
             notes: NoteBudget::new(NOTE_BURST, NOTE_GAP),
             last_note: None,
+            popups: Vec::new(),
         })
     }
 
@@ -285,6 +291,8 @@ impl Host {
             segs.push((seg, full.len()));
         });
         let pieces = || pieces(&full, &segs);
+        // 每一段（接入方不给，启动它的终端不给）：Codex 会话里的通知序列换成推出去的通知（`osc_note`）
+        let hide: Vec<(bool, bool)> = pieces().map(|(seg, bytes)| self.osc_note(seg, bytes)).collect();
         let mut out = Vec::new();
         for (seg, bytes) in pieces() {
             if seg.class == Class::Seq && seg.part == Part::Whole {
@@ -297,21 +305,82 @@ impl Host {
         let primary = self.primary();
         if self.local.tty.is_some() && !self.local.resync {
             out.clear();
-            for (seg, bytes) in pieces() {
-                self.local.route.take(primary == Some(Who::Local) || seg.class.for_all(), seg, bytes, &mut out);
+            for ((seg, bytes), (_, popped)) in pieces().zip(&hide) {
+                self.local.route.take((primary == Some(Who::Local) || seg.class.for_all()) && !popped, seg, bytes, &mut out);
             }
             push(&mut self.local.out, &out);
         }
         for v in self.viewers.iter_mut().filter(|v| v.size.is_some() && !v.dead) {
             out.clear();
-            for (seg, bytes) in pieces() {
-                v.route.take(primary == Some(Who::Viewer(v.id)) || seg.class.for_all(), seg, bytes, &mut out);
+            for ((seg, bytes), (noted, _)) in pieces().zip(&hide) {
+                v.route.take((primary == Some(Who::Viewer(v.id)) || seg.class.for_all()) && !noted, seg, bytes, &mut out);
             }
             if !out.is_empty() {
                 push(&mut v.out, &local::frame(local::OUTPUT, &out));
             }
         }
         self.last_output = monotonic();
+    }
+
+    /// Codex 会话的一段输出要是一条通知序列（它的 tui.notifications 写的 OSC 9：codex_launch_args 只开了在等你的那几种）：
+    /// 换成一条推出去的通知（`emit_note`），这台 Mac 上弹一个（popup.rs，开着时）。返回（接入方不给：它们收到推出去的那一条，
+    /// 不然要弹两次；启动它的终端不给）。启动它的终端：这台 Mac 上弹着时不给——弹了的、不推的（一轮做完了的那一句：notify 弹过了）、
+    /// 刚推过一模一样的、一下子太多的都不给，不然它认得这种序列的话自己再弹一次；不弹（popup 关着、osascript 起不来）时照给。
+    /// 别的工具的会话、别的序列原样
+    fn osc_note(&mut self, seg: Seg, bytes: &[u8]) -> (bool, bool) {
+        if self.meta.tool != "codex" || seg.class != Class::Effect || seg.part != Part::Whole {
+            return (false, false);
+        }
+        let Some(text) = osc_note_text(bytes) else { return (false, false) };
+        let pop = popup::on();
+        let Some(n) = hook::codex_osc_note(&text, &self.meta.cwd).and_then(|n| Note::parse(&n.to_json())) else {
+            return (true, pop);
+        };
+        if !self.emit_note(n.clone()) || !pop {
+            return (true, pop);
+        }
+        match popup::show(&n) {
+            Some(child) => {
+                self.popups.push((child, monotonic()));
+                (true, true)
+            }
+            None => (true, false),
+        }
+    }
+
+    /// 推一条通知：交给已经接上的各处（说过 HELLO 的），别的机器上的那边弹出来；转接进程也给一份（封给配对的手机，经服务器
+    /// 推过去：锁着屏、App 没开着也收得到）。宿主给每一条一个编号：手机经推送、经接着的会话各收到一份时认得出是同一条。
+    /// 刚推过一模一样的（NOTE_SAME）、一下子太多的（`notes`）不推。推了是 true
+    fn emit_note(&mut self, mut n: Note) -> bool {
+        let now = monotonic();
+        let again = self.last_note.as_ref().is_some_and(|(last, at)| last.same_text(&n) && now - at < NOTE_SAME);
+        if again || !self.notes.take() {
+            return false;
+        }
+        n.id = token_hex(Note::ID_LEN / 2);
+        let f = local::frame(local::NOTIFY, &n.to_json());
+        self.last_note = Some((n, now));
+        for v in self.viewers.iter_mut().filter(|v| v.size.is_some() && !v.dead) {
+            push(&mut v.out, &f);
+        }
+        let l = &mut self.link;
+        if l.child.is_some() && l.out.len() + f.len() <= LINK_HIGH {
+            push(&mut l.out, &f);
+        }
+        true
+    }
+
+    /// 弹通知的 osascript：完了的收尸，太久还没完的结束掉
+    fn popup_tick(&mut self, now: f64) {
+        self.popups.retain_mut(|(child, at)| match child.try_wait() {
+            Ok(None) if now - *at < POPUP_MAX => true,
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                false
+            }
+            _ => false,
+        });
     }
 
     /// 接入时（或者待写的丢过以后）补上的那一段：终端的模式、最近的输出，最后是键盘协议的标志
@@ -599,26 +668,11 @@ impl Host {
                 }
                 // 这条 socket 上都是这台机器上的同一个用户（别的机器经转接进程来，它不转这一种）
                 local::END => self.end(),
-                // 会话里的钩子推一条通知（`cca remote notify`、cca 自己带的钩子）：交给已经接上的各处（说过 HELLO 的），别的机器上
-                // 的那边弹出来。启动它的终端不给：这台机器上的钩子自己会弹。刚推过一模一样的不再推（NOTE_SAME）
-                // 宿主给每一条一个编号：手机经推送、经接着的会话各收到一份时认得出是同一条。转接进程也给一份：封给配对的
-                // 手机，经服务器推过去（锁着屏、App 没开着也收得到）
+                // 会话里的钩子推一条通知（`cca remote notify`、cca 自己带的钩子、Codex 的 notify、agy 的状态栏命令）：推给接着
+                // 这个会话的各处（`emit_note`）。启动它的终端不给、宿主也不弹：这台机器上的钩子自己会弹（hook.rs 的 `deliver`）
                 local::NOTIFY_REQ => {
-                    if let Some(mut n) = Note::parse(&payload) {
-                        let now = monotonic();
-                        let again = self.last_note.as_ref().is_some_and(|(last, at)| last.same_text(&n) && now - at < NOTE_SAME);
-                        if !again && self.notes.take() {
-                            n.id = token_hex(Note::ID_LEN / 2);
-                            let f = local::frame(local::NOTIFY, &n.to_json());
-                            self.last_note = Some((n, now));
-                            for v in self.viewers.iter_mut().filter(|v| v.size.is_some() && !v.dead) {
-                                push(&mut v.out, &f);
-                            }
-                            let l = &mut self.link;
-                            if l.child.is_some() && l.out.len() + f.len() <= LINK_HIGH {
-                                push(&mut l.out, &f);
-                            }
-                        }
+                    if let Some(n) = Note::parse(&payload) {
+                        self.emit_note(n);
                     }
                 }
                 _ => {} // 不认识的帧（以后加的）：不理
@@ -675,6 +729,7 @@ impl Host {
         loop {
             self.reap();
             let now = monotonic();
+            self.popup_tick(now);
             if self.ended.is_none() && self.kill_at.is_some_and(|t| now >= t) {
                 self.kill_at = Some(now + local::END_GRACE); // 万一这一下没结束掉（换了前台进程组），过一阵再来一次
                 self.signal_session(libc::SIGKILL);

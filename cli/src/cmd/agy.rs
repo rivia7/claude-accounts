@@ -7,9 +7,11 @@
 //!
 //! 套餐也在这里：agy 1.5 的登录 token 里没有档位了，只有交互会话的状态栏 JSON 里有（plan_tier）。cca 启动交互的会话时经
 //! `--settings` 带上自己的状态栏命令（`agy_launch_args`），它（agy-statusline）把套餐记进账号目录（`agy_plan_seen` 读），
-//! 用户自己的状态栏命令接在后面照样运行。
+//! 用户自己的状态栏命令接在后面照样运行。状态栏每次状态变了 agy 都起一次这个命令：它顺带看出这一轮做完了、在等你确认，
+//! 推一条通知（`agy_turn`，和 Claude Code、Codex 的一样：在会话宿主里时推给接着它的各处，这台 Mac 上弹一个）。
 
 use super::login::sys::{interrupted, trap};
+use super::remote::{agy_note, notify_deliver, AgyEvent};
 use super::settings::AGY_VALUES;
 use super::usage::{ago, cols_of, dicts, float_arg, parse_ts, py_round, reset_short, usage_why, Row, WhyTable, AGY_STALE};
 use super::{arity, Cmd};
@@ -21,6 +23,7 @@ use crate::py::json;
 use crate::py::obj::{Dict, V};
 use crate::py::path;
 use crate::py::proc::{self, Cmd as Proc, In, Out, ProcError};
+use crate::py::rand::token_hex;
 use crate::py::shutil::TemporaryDirectory;
 use crate::py::text::{self, fit, sh_quote};
 use crate::py::time::{monotonic, time};
@@ -654,29 +657,38 @@ pub fn agy_launch_args(key: &str, args: &[String]) -> Vec<String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return Vec::new(),
     };
-    let base = format!("{} _agy-statusline {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, agy())));
+    // 会话标记：这一次启动（一个 agy 进程）的状态记在它名下（`agy_turn`：和上一次比才看得出做完了）
+    let base = format!("{} _agy-statusline {} {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, agy())), token_hex(8));
     statusline_for(user.as_ref(), &base).map_or_else(Vec::new, |line| {
         vec!["--settings".to_string(), json::dumps(&V::Dict(dict! { "statusLine" => line }), json::LINE)]
     })
 }
 
-/// `cca _agy-statusline 账号目录名 [--then 命令]`：cca 启动的 agy 交互会话里状态栏的命令（`agy_launch_args` 经 --settings 交给 agy）。
-/// agy 刷新状态栏时用 sh -c 起它，JSON 从 stdin 进（1.5.18：最多 300 毫秒一次，5 秒不完就杀掉，连着 30 次失败就不再起）：里面的
-/// plan_tier（套餐的叫法）连同 email 记进账号目录（`plan_note`），自己什么都不输出。--then 是用户自己的状态栏命令：用同一份 JSON
-/// 接着运行它，它的输出和退出码就是这一次的（agy 照它画状态栏）
+/// `cca _agy-statusline 账号目录名 会话标记 [--then 命令]`：cca 启动的 agy 交互会话里状态栏的命令（`agy_launch_args` 经 --settings
+/// 交给 agy）。状态变了 agy 就用 sh -c 起它，JSON 从 stdin 进（1.5.18：最多 300 毫秒一次，5 秒不完就杀掉，连着 30 次失败就不再起）：
+/// 里面的 plan_tier（套餐的叫法）连同 email 记进账号目录（`plan_note`），和这个会话上一次的状态比、该推的通知推出去（`agy_turn`），
+/// 自己什么都不输出。--then 是用户自己的状态栏命令：用同一份 JSON 接着运行它，它的输出和退出码就是这一次的（agy 照它画状态栏）。
+/// 也认没有会话标记的（换版本以前启动、还开着的会话）：只记套餐
 fn cmd_agy_statusline(args: &[String]) -> R<()> {
-    arity("cmd_agy_statusline", args, 1, 3)?;
-    let then = match &args[1..] {
-        [] => None,
-        [flag, cmd] if flag == "--then" => Some(cmd),
-        _ => return die("用法：cca _agy-statusline 账号目录名 [--then 命令]"),
+    arity("cmd_agy_statusline", args, 1, 4)?;
+    let (id, run, then) = match args {
+        [id] => (id, None, None),
+        [id, flag, cmd] if flag == "--then" => (id, None, Some(cmd)),
+        [id, run] => (id, Some(run), None),
+        [id, run, flag, cmd] if flag == "--then" => (id, Some(run), Some(cmd)),
+        _ => return die("用法：cca _agy-statusline 账号目录名 会话标记 [--then 命令]"),
     };
     // SAFETY: 只是问 fd 0 是不是终端（手动运行时不等输入）
     let tty = unsafe { libc::isatty(0) } == 1;
     let mut raw = Vec::new();
     if !tty {
         let _ = std::io::stdin().lock().read_to_end(&mut raw);
-        plan_note(&args[0], &raw);
+        if let Some((dir, d)) = statusline_input(id, &raw) {
+            plan_note(&dir, &d);
+            if let Some(run) = run {
+                agy_turn(&dir, run, &d);
+            }
+        }
     }
     let Some(cmd) = then else { return Ok(()) };
     let p = Proc::new(["sh", "-c", cmd.as_str()]);
@@ -687,26 +699,127 @@ fn cmd_agy_statusline(args: &[String]) -> R<()> {
     }
 }
 
-/// 记下状态栏 JSON 里的套餐：id 要像账号目录名、目录要在（只往 cca 自己的账号目录里写）；plan_tier 是不空的字符串（最多 64 个字），
-/// email 像个邮箱（读的时候拿它和登录的邮箱比）。和记着的一样就不写（agy 最多 300 毫秒起一次）；写不了也不说（状态栏的命令不出声）
-fn plan_note(id: &str, raw: &[u8]) {
+/// 状态栏的命令收到的：账号目录（id 要像账号目录名、目录要在：只往 cca 自己的账号目录里写）和状态栏的 JSON（最多 256 KB）
+fn statusline_input(id: &str, raw: &[u8]) -> Option<(String, Dict)> {
     if raw.len() > 256 << 10 || re!(r"[a-z0-9][a-z0-9-]{0,63}").fullmatch(id).is_none() {
-        return;
+        return None;
     }
     let dir = path::join_all(&[&agy().sroot, "accounts", id]);
-    let Some(d) = json::loads_file_bytes(raw).ok().and_then(|v| v.as_dict()) else { return };
+    let d = json::loads_file_bytes(raw).ok()?.as_dict()?;
+    path::isdir(&dir).then_some((dir, d))
+}
+
+/// 记下状态栏 JSON 里的套餐：plan_tier 是不空的字符串（最多 64 个字），email 像个邮箱（读的时候拿它和登录的邮箱比）。和记着的
+/// 一样就不写（agy 最多 300 毫秒起一次）；写不了也不说（状态栏的命令不出声）
+fn plan_note(dir: &str, d: &Dict) {
     let plan = d.str("plan_tier").map(|p| text::strip(&p).to_string()).unwrap_or_default();
     let email = d.str("email").map(|e| e.to_string()).unwrap_or_default();
-    if plan.is_empty() || plan.chars().count() > 64 || !EMAIL_RE.matches(&email) || !path::isdir(&dir) {
+    if plan.is_empty() || plan.chars().count() > 64 || !EMAIL_RE.matches(&email) {
         return;
     }
-    let file = path::join(&dir, AGY_PLAN_FILE);
+    let file = path::join(dir, AGY_PLAN_FILE);
     if let Some(old) = load_quiet(&file).and_then(|v| v.as_dict()) {
         if old.str("plan_tier").as_deref() == Some(plan.as_str()) && old.str("email").as_deref() == Some(email.as_str()) {
             return;
         }
     }
     let _ = save_json(&file, &V::Dict(dict! { "email" => email, "plan_tier" => plan, "at" => time() }), Some(0o600), false);
+}
+
+/// 每个会话（会话标记）上一次的状态记在账号目录的这个目录下（`agy_turn`）
+const AGY_TURNS: &str = "agy-turns";
+/// agent_state 是这几种时在干活（1.5.18 的文档：idle、working、tool_use、reviewing、authenticating、initializing、error）
+const AGY_BUSY: &[&str] = &["working", "tool_use", "reviewing"];
+
+/// 一个会话上一次的状态：agent_state、在不在等你确认（tool_confirmation_pending）、上次推了以后干过活没有
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Turn {
+    state: String,
+    ask: bool,
+    worked: bool,
+}
+
+impl Turn {
+    /// 文件里是一行「状态 0|1 0|1」
+    fn parse(s: &str) -> Option<Turn> {
+        let mut w = s.split_whitespace();
+        let (state, ask, worked) = (w.next()?, w.next()?, w.next()?);
+        Some(Turn { state: state.to_string(), ask: ask == "1", worked: worked == "1" })
+    }
+
+    fn line(&self) -> String {
+        format!("{} {} {}\n", self.state, u8::from(self.ask), u8::from(self.worked))
+    }
+}
+
+/// 和上一次比该推的：干过活以后回到 idle 是做完了、到了 error 是出错停下；tool_confirmation_pending 变成 true 是在等你确认。
+/// 这个会话头一次（还没有上一次）只记下
+fn turn_step(prev: Option<&Turn>, d: &Dict) -> (Turn, Vec<AgyEvent>) {
+    let state: String =
+        d.str("agent_state").map(|s| s.chars().filter(|c| c.is_ascii_graphic()).take(32).collect()).unwrap_or_default();
+    let ask = d.get("tool_confirmation_pending").is_some_and(|v| v.as_bool() == Some(true));
+    let busy = AGY_BUSY.contains(&state.as_str());
+    let mut worked = busy || prev.is_some_and(|p| p.worked);
+    let mut events = Vec::new();
+    if let Some(p) = prev {
+        if p.worked && (state == "idle" || state == "error") {
+            events.push(if state == "idle" { AgyEvent::Done } else { AgyEvent::Failed });
+            worked = false;
+        }
+        if ask && !p.ask {
+            events.push(AgyEvent::Ask);
+        }
+    }
+    (Turn { state, ask, worked }, events)
+}
+
+/// 这个会话（会话标记 run：一次启动一个）这一次的状态：和上一次比该推的推出去（remote 的 `notify_deliver`），状态记进账号目录的
+/// agy-turns/<会话标记>（目录 700、文件 600，原子写；新的会话头一次记的时候顺手删掉一天以前的）。JSON 里没有 agent_state 的
+/// （旧版的 agy）看不出来，什么都不记、不推（不然记下的那一行读不回来，每一次都当头一次）。写不了也不说
+fn agy_turn(dir: &str, run: &str, d: &Dict) {
+    if re!(r"[0-9a-f]{16}").fullmatch(run).is_none() {
+        return;
+    }
+    let turns = path::join(dir, AGY_TURNS);
+    let file = path::join(&turns, run);
+    let prev = std::fs::read_to_string(&file).ok().and_then(|s| Turn::parse(&s));
+    let (now, events) = turn_step(prev.as_ref(), d);
+    if now.state.is_empty() {
+        return;
+    }
+    if prev.as_ref() != Some(&now) {
+        turn_save(&turns, &file, &now, prev.is_none());
+    }
+    let cwd = d.str("cwd").map(|c| c.to_string()).unwrap_or_default();
+    let topic = d.str("conversation_title").map(|t| t.to_string()).unwrap_or_default();
+    for e in events {
+        notify_deliver(&agy_note(e, &topic, &cwd));
+    }
+}
+
+fn turn_save(turns: &str, file: &str, t: &Turn, fresh: bool) {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    if std::fs::DirBuilder::new().mode(0o700).recursive(true).create(turns).is_err() {
+        return;
+    }
+    if fresh {
+        let now = std::time::SystemTime::now();
+        for n in crate::py::fs::listdir_sorted(turns).unwrap_or_default() {
+            let p = path::join(turns, &n);
+            let age = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok());
+            if age.is_some_and(|a| a.as_secs() > 86400) {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+    let tmp = format!("{file}.tmp");
+    let wrote = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).and_then(|mut f| {
+        use std::io::Write;
+        f.write_all(t.line().as_bytes())
+    });
+    if wrote.is_err() || std::fs::rename(&tmp, file).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 #[cfg(test)]
@@ -939,6 +1052,54 @@ mod tests {
         for a in no {
             assert!(!agy_takes_statusline(&args_of(a)), "{a:?}");
         }
+    }
+
+    #[test]
+    fn turns() {
+        let step = |prev: Option<&Turn>, j: &str| turn_step(prev, &json::loads(j).unwrap().as_dict().unwrap());
+        let (t, e) = step(None, r#"{"agent_state": "working"}"#);
+        assert_eq!((&t, e), (&Turn { state: "working".into(), ask: false, worked: true }, vec![]), "头一次只记下");
+        let (t, e) = step(Some(&t), r#"{"agent_state": "tool_use", "tool_confirmation_pending": true}"#);
+        assert_eq!(e, [AgyEvent::Ask]);
+        let (t, e) = step(Some(&t), r#"{"agent_state": "tool_use", "tool_confirmation_pending": true}"#);
+        assert_eq!(e, [], "还在等：不再推");
+        let (t, e) = step(Some(&t), r#"{"agent_state": "idle"}"#);
+        assert_eq!((e, t.worked), (vec![AgyEvent::Done], false));
+        let (t, e) = step(Some(&t), r#"{"agent_state": "idle", "context_window": {}}"#);
+        assert_eq!(e, [], "别的变了、状态没变：推过了");
+        let (t, _) = step(Some(&t), r#"{"agent_state": "working"}"#);
+        let (t, e) = step(Some(&t), r#"{"agent_state": "error"}"#);
+        assert_eq!(e, [AgyEvent::Failed]);
+        let (_, e) = step(Some(&t), r#"{"agent_state": "idle"}"#);
+        assert_eq!(e, [], "出错停下已经推过了");
+        let (t, e) = step(None, r#"{"agent_state": "idle"}"#);
+        assert_eq!((e, t.worked), (vec![], false), "刚启动");
+        let (_, e) = step(Some(&t), r#"{"agent_state": "authenticating"}"#);
+        assert_eq!(e, []);
+        let t = Turn { state: "tool_use".into(), ask: true, worked: true };
+        assert_eq!(Turn::parse(&t.line()), Some(t));
+        assert_eq!(Turn::parse("garbage"), None);
+        assert_eq!(step(None, r#"{"agent_state": "a b\nc"}"#).0.state, "abc", "写进文件的只有看得见的 ASCII");
+    }
+
+    #[test]
+    fn turns_need_a_state() {
+        let tmp = TemporaryDirectory::new("cca-agy-turns.", &crate::py::fs::gettempdir()).unwrap();
+        let dir = tmp.name.clone();
+        let turns = path::join(&dir, AGY_TURNS);
+        let d = |j: &str| json::loads(j).unwrap().as_dict().unwrap();
+        agy_turn(&dir, "0123456789abcdef", &d(r#"{"plan_tier": "x", "tool_confirmation_pending": false}"#));
+        assert!(!path::exists(&turns), "没有 agent_state：什么都不记");
+        agy_turn(&dir, "0123456789abcdef", &d(r#"{"agent_state": " "}"#));
+        assert!(!path::exists(&turns), "agent_state 里没有看得见的字也一样");
+        agy_turn(&dir, "not-a-nonce", &d(r#"{"agent_state": "working"}"#));
+        assert!(!path::exists(&turns), "会话标记不对：不记");
+        agy_turn(&dir, "0123456789abcdef", &d(r#"{"agent_state": "working"}"#));
+        let file = path::join(&turns, "0123456789abcdef");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "working 0 1\n");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&turns).unwrap().permissions().mode() & 0o777, 0o700);
     }
 
     #[test]

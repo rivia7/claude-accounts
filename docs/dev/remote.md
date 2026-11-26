@@ -79,6 +79,41 @@
     "Claude needs your permission…" 换成「要你确认一个操作」）。记下的那一句用没用都删掉：马上答了的那次留下的不拿来配别的通知
   - 副标题：`CCA_ACCOUNT`（bash 给会话设的「别名(邮箱)」）括号前那一段 · 项目文件夹的名字（`CLAUDE_PROJECT_DIR`，没有时是钩子输入里的 `cwd`）
   - 个人钩子还在调 `cca remote notify` 的话，同一件事会来两条一模一样的：宿主 10 秒以内只推一次（`NOTE_SAME`）。装了带这些钩子的版本以后，个人钩子里调它的那一行可以去掉
+- Codex、Antigravity 的通知（「做完了 / 在等你」，和上面 Claude Code 的是同一种 `NOTIFY`，字照那几种写；另外在这台 Mac 上弹一个）：
+  - Codex：交互的会话（`codex.rs` 的 `codex_interactive`：用户参数里头一个不是选项的不是 `CODEX_BATCH` 里的子命令，前面没有 --version、--help；
+    resume、fork、agents 算，带值的选项照 `CODEX_VALUES` 跳过它的值）启动时在用户参数前面加 `-c notify=["<cca>", "_remote-hook", "--codex"]`
+    （`codex_launch_args`，经 bash 的 `py launch-args 键 [--hosted] -- 用户参数` 进 `LAUNCH_ARGS`；用户自己的 -c 排在后面，同名的照用户的）：一轮做完了
+    Codex 起它，JSON（`{"type": "agent-turn-complete", "cwd", "last-assistant-message", …}`）加在最后，`hook.rs` 的 `codex_hook` 推
+    「Codex 做完了」+ 最后一条回复的第一行（`line`、`clip`，同 Claude Code；没有时「这一轮做完了」）。账号的 config.toml（一般链到共享的那一份）里
+    有用户自己的 notify（字符串数组）时经 `--then <它的 JSON 数组>` 接着起它（同一份 JSON 加在最后，不等它）；有但不是字符串数组、config.toml
+    读不了时什么都不加（不顶掉它）。放进会话宿主时（`--hosted`：bash 的 `HOSTCMD` 不空）再加 `tui.notifications=["approval-requested",
+    "plan-mode-prompt", "async-question"]`、`tui.notification_method="osc9"`、`tui.notification_condition="always"`（`CODEX_NOTIFY_TUI`）：
+    Codex 在等你的这三种往终端里写 OSC 9（不管终端在不在前台），宿主（`host.rs` 的 `osc_note`，只认 `meta.tool` 是 codex 的会话里整条的
+    通知序列）认出来（`vt.rs` 的 `osc_note_text`：OSC 9 的字、OSC 777 notify 的正文；`9;数字` 开头的是进度条这些，不算）、换成中文
+    （`codex_osc_note`，照 0.172.0 的写法：`Approval requested: 命令` →「Codex 要你确认」+「运行：命令」，`Codex wants to edit 文件` /
+    `N files` →「改文件：名字」/「改 N 个文件」，`Approval requested by 服务器` →「用 服务器」，`Plan mode prompt: …` →「Codex 等你批准计划」，
+    `Question: …` →「Codex 在问你」，认不出的「Codex 在等你」+ 原话；`Agent turn complete` 不推：notify 推过了），推出去（`emit_note`：和
+    `NOTIFY_REQ` 同一套清理、限流、去重）。原来的序列不给接入方（它们收到推出去的那一条，不然弹两次）；这台 Mac 上弹着（`popup` 开着）时也不给启动它的
+    终端（弹了的、不推的、刚推过一模一样的、一下子太多的都不给：不然它认得这种序列的话自己再弹一次），不弹（关着、osascript 起不来）时照给。不放进宿主时不加 tui.*：用户自己的终端提醒照旧——这时 Codex 在等你的 cca 看不到，只有终端自己的提醒。
+    这台 Mac 上不弹（config.json 的 `popup` 是 false，或者不是 macOS）、又不放进宿主时什么都不加；打印（exec）、子命令、--version 不加。
+    这个版本的 codex 不认这几个 -c 时不加（不认的值 codex 直接报错退出）：`codex_probe` 带着它们问 `features list`（`CODEX_NOTIFY_PROBE`、
+    `CODEX_NOTIFY_TUI`），报错退出就不带它们再问一次，`probe.json` 记 `notify`（和开关反过来：问不出来是 false，加不加通知不能让会话起不来；
+    以前的缓存没有这一项，重新探测一次）
+  - Antigravity：状态栏的命令（accounts.md「agy 的套餐」）带着会话标记：`cca _agy-statusline 账号目录名 会话标记 [--then 命令]`（一次启动一个，
+    16 个十六进制字）。agy 状态一变就起它（最多 300 毫秒一次），`agy.rs` 的 `agy_turn` 拿这一次的 JSON 和这个会话上一次的比（`turn_step`）：
+    `agent_state` 是 working、tool_use、reviewing 时算干活；干过活以后回到 idle 推「Antigravity 做完了」、到了 error 推「Antigravity 出错了」
+    （正文是 `conversation_title`：状态栏的 JSON 里没有最后一条回复；没有标题时「这一轮做完了」「这一轮没做完」）；`tool_confirmation_pending`
+    变成 true 推「Antigravity 在等你」+「要你确认一个操作」。会话头一次（还没有上一次）只记下。上一次记在账号目录的 `agy-turns/<会话标记>`
+    （一行「状态 在不在等确认 推了以后干过活没有」，目录 700、文件 600、原子写；新的会话头一次记的时候删掉一天以前的）。没有会话标记的旧写法
+    （换版本以前启动、还开着的会话）照样认，只记套餐
+  - 推到哪：`hook.rs` 的 `deliver`——在会话宿主里时（`host_of_me`）推给接着它的各处（`NOTIFY_REQ`），这台 Mac 上弹一个（`popup.rs`：
+    `osascript -` 从 stdin 读脚本、字经参数（不拼进脚本：会话里的程序写的字也注入不了），`display notification`，做完了是 Glass、别的是 Ping；
+    通知中心里归在「脚本编辑器」名下，第一次可能要在系统设置里允许它）。宿主自己认出来的（Codex 的 OSC 9）宿主弹（`popups`：主循环里收尸，
+    10 秒还没完的结束掉，`POPUP_MAX`）。宿主不为 `NOTIFY_REQ` 弹：Claude Code 的由用户自己的钩子弹，Codex、agy 的 `deliver` 弹过了。
+    config.json 的 `popup` 设成 false 时都不弹（每次现读，`popup::on`）；不是 macOS 时不弹。副标题和 Claude Code 的一样（`subtitle`：
+    `CCA_ACCOUNT` 括号前那一段 · 文件夹的名字；Codex 是 notify 的 `cwd`、宿主的工作目录，agy 是状态栏 JSON 的 `cwd`）
+  - 没核对过的（要登录了的真会话，每次另问）：真的 Codex 写出来的 OSC 9 的字、notify 的 JSON；agy 真的状态先后（干完活是不是总回到 idle、
+    中间会不会闪一下 idle）、`tool_confirmation_pending` 包不包括它问你问题
 
 ### 和直接运行不一样的地方
 
@@ -490,6 +525,15 @@ iPhone 上的 cca App 除了接入会话，还有一页「账号」：配对过�
   `remote-hook`：`cca-test fake-client` 的 `runin`；laptop 上接着的那一端收到做完了、要你确认、在等你，后台任务还在跑的不推，照个人钩子的写法调的
   `remote-notify` 那一条不重复，会话外面调什么都不做，服务器看不到通知里的字）；`cargo test` 的 `remote::hook`：文字的规则；回归 3e：开关开着、
   `CCA_REMOTE=1` 时启动参数里多了这三个钩子（`cca-test fx notifyless` 认出、去掉以后和没开时一样），`CCA_REMOTE=0` 时没有
+- Codex、Antigravity 的通知：`tests/remote_relay.rs` 的 `codex_notes_reach_the_other_machine`（宿主当它是 codex 的会话：`cca-test fake-client`
+  的 `osc` 写 OSC 9，laptop 上收到推出去的那一条、收不到原来的序列；这台 Mac 上的假 osascript（`kit::fleet` 的 `OSASCRIPT`：suite 里的设备都有，
+  不弹真的）记下弹了，弹着时不给启动它的终端；`remote-hook --codex` 推「Codex 做完了」；`Agent turn complete` 不推；popup 是 false 时序列照给
+  启动它的终端；服务器看不到通知里的字）；`cargo test` 的 `remote::hook`（`codex_turns`、`codex_waits`、`agy_notes`）、`remote::vt` 的
+  `notification_text`、`agy` 的 `turns`、`codex` 的 `interactive_codex`；回归 10f（假 codex：`$T/codex_notify` 一轮做完了起 notify、
+  `$T/codex_osc` 往终端里写 OSC 9、`$T/codex_nocfg` 不认那几个 -c；交互的才加、用户自己的 notify 经 --then 接着起、popup 是 false、放进宿主时的
+  tui.* 和宿主弹了就不给启动它的终端（`cx_pty`：真终端里、`CCA_REMOTE=1`）、探测不认时不加）和 10f2（假 agy：`$T/agy_states` 一行画一次
+  状态栏、`$T/agy_title` 是会话的标题；在等你、做完了各弹一次，`agy-turns` 的权限和清理，popup 是 false 时不弹）。沙箱里的 `osascript` 是假的
+  （`tests/setup.sh`：记进 `$T/osascript.log`）
 - `tests/remote_relay.rs`（回归的 unit 一节；单独跑之前先 `cargo build --release`）：真的 Team 的服务器进程（开着中转）、每台设备一个临时 HOME 和
   登记在这个 Team 里的密钥（`team_enroll`）、会话在真的伪终端上。前五条（`pairing` 到 `pairings_survive_a_restart`）两头都照文档自己说话（配对的各种先后和拒绝、票据只能用一次、认证码不对的不算用掉、
   对接后大块的一个字节不丢、宿主说完就关时最后几个字节也到、宿主不来接时接入方等到 `nohost`、取消配对 / 撤销设备后正接着的被断开、

@@ -12,9 +12,15 @@
 //!
 //! 不在会话宿主里（这次没放进宿主：图形界面里启动的、不是在终端里）什么都不做。总是成功、什么都不打印：Stop 的钩子退出码 2
 //! 会拦着 Claude Code 不让它停，stdout 在有的钩子里会进 Claude 的上下文
+//!
+//! Codex、Antigravity 的「做完了 / 在等你」也在这里（docs/dev/remote.md「Codex、Antigravity 的通知」）：Codex 一轮做完了起
+//! `cca _remote-hook --codex …`（它的 notify，`codex_hook`），在等你的那几种它往终端里写 OSC 9、宿主认出来（`codex_osc_note`）；
+//! Antigravity 的从状态栏的命令里来（agy.rs 的 `agy_turn`）。这几种在会话宿主里时推给接着它的各处，这台 Mac 上再弹一个
+//! （popup.rs，`deliver`）：Claude Code 的由用户自己的钩子弹
 
 use super::local::{self, Note};
 use super::manage::{host_of_me, notify_host};
+use super::popup;
 use crate::core::base::SELF_PATH;
 use crate::dict;
 use crate::py::fs;
@@ -214,16 +220,130 @@ fn note_for(d: &Dict) -> Option<Note> {
         }
         _ => return None,
     };
-    // 副标题：账号的别名（CCA_ACCOUNT 是「别名(邮箱)」）· 项目的文件夹
-    let account = getenv("CCA_ACCOUNT").map(|a| a.split('(').next().unwrap_or_default().to_string()).unwrap_or_default();
     let dir =
         getenv("CLAUDE_PROJECT_DIR").filter(|d| !d.is_empty()).or_else(|| d.str("cwd").map(|c| c.to_string())).unwrap_or_default();
-    let subtitle = if dir.is_empty() { account } else { format!("{account} · {}", base(&dir)) };
-    Note::parse(&Note::new(title, subtitle, body).to_json())
+    Note::parse(&Note::new(title, subtitle(&dir), body).to_json())
 }
 
-/// `remote-hook`：stdin 是 Claude Code 给钩子的输入（JSON）
-pub fn cmd_remote_hook(_args: &[String]) -> R<()> {
+/// 副标题：账号的别名（CCA_ACCOUNT 是 bash 给会话设的「别名(邮箱)」，括号前那一段）· 项目的文件夹
+pub fn subtitle(dir: &str) -> String {
+    let account = getenv("CCA_ACCOUNT").map(|a| a.split('(').next().unwrap_or_default().to_string()).unwrap_or_default();
+    if dir.is_empty() {
+        account
+    } else {
+        format!("{account} · {}", base(dir))
+    }
+}
+
+/// Codex、Antigravity 会话里的一条通知：在会话宿主里时推给接着它的各处（`NOTIFY_REQ`，和 Claude Code 的钩子一样），这台 Mac 上
+/// 再弹一个（popup.rs，开着时）。先照宿主的规矩清理、限长；什么字都没有的不推。不说话
+pub fn deliver(n: &Note) {
+    let Some(n) = Note::parse(&n.to_json()) else { return };
+    if let Some(sid) = host_of_me() {
+        let _ = notify_host(&sid, &n);
+    }
+    if popup::on() {
+        let _ = popup::show(&n);
+    }
+}
+
+/// Codex 一轮做完了（notify 的 JSON：`{"type": "agent-turn-complete", "cwd", "last-assistant-message", …}`）：正文照 Claude Code 的
+/// 做完了（最后一条回复的第一行）。别的种类不推
+fn codex_done(d: &Dict) -> Option<Note> {
+    if d.str("type").as_deref() != Some("agent-turn-complete") {
+        return None;
+    }
+    let body = clip(&line(&d.get("last-assistant-message").unwrap_or(V::None)));
+    let body = if body.is_empty() { "这一轮做完了".to_string() } else { body };
+    Some(Note::new("Codex 做完了", subtitle(&d.str("cwd").unwrap_or_default()), body))
+}
+
+/// `remote-hook --codex [--then 用户的 notify] JSON`：Codex 的 notify（codex.rs 的 `codex_launch_args` 经 -c 加的），JSON 是 Codex
+/// 加在最后的那一个参数。--then 是用户自己在 config.toml 里写的 notify（JSON 的字符串数组）：照 Codex 的做法接着起它（同一份 JSON
+/// 加在最后），不等它
+fn codex_hook(args: &[String]) {
+    let (user, payload) = match args {
+        [flag, user, payload] if flag == "--then" => (Some(user), payload),
+        [payload] => (None, payload),
+        _ => return,
+    };
+    let argv: Option<Vec<String>> = user
+        .and_then(|u| json::loads(u).ok())
+        .and_then(|v| v.as_list())
+        .and_then(|l| l.items().iter().map(|a| a.as_str().map(str::to_string)).collect());
+    if let Some([prog, rest @ ..]) = argv.as_deref() {
+        let _ = std::process::Command::new(prog)
+            .args(rest)
+            .arg(payload)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    if let Some(n) = json::loads(payload).ok().and_then(|v| v.as_dict()).and_then(|d| codex_done(&d)) {
+        deliver(&n);
+    }
+}
+
+/// 宿主在 Codex 会话的输出里认出的一条通知（vt.rs 的 `osc_note_text`：OSC 9 的字、OSC 777 notify 的正文）：Codex 的
+/// tui.notifications，codex_launch_args 只开了在等你的那几种。认得的英文（0.172.0 的写法）换成中文、标题照 Claude Code 的那几种，
+/// 认不出的「Codex 在等你」+ 原话。一轮做完了的那一句（Agent turn complete：用户自己的 -c 又打开了它）不推：notify 推过了。
+/// cwd 是会话的文件夹（副标题）
+pub fn codex_osc_note(text: &str, cwd: &str) -> Option<Note> {
+    let t = text.trim();
+    if t.is_empty() || t == "Agent turn complete" {
+        return None;
+    }
+    let after = |p: &str| t.strip_prefix(p).map(str::trim);
+    let (title, body) = if let Some(cmd) = after("Approval requested: ") {
+        ("Codex 要你确认", format!("运行：{}", clip(cmd)))
+    } else if let Some(what) = after("Codex wants to edit ") {
+        match what.strip_suffix(" files").and_then(|n| n.parse::<u32>().ok()) {
+            Some(n) => ("Codex 要你确认", format!("改 {n} 个文件")),
+            None => ("Codex 要你确认", format!("改文件：{}", base(what))),
+        }
+    } else if let Some(server) = after("Approval requested by ") {
+        ("Codex 要你确认", format!("用 {}", clip(server)))
+    } else if let Some(plan) = after("Plan mode prompt: ") {
+        ("Codex 等你批准计划", clip(plan))
+    } else if let Some(q) = after("Question: ") {
+        ("Codex 在问你", clip(q))
+    } else {
+        ("Codex 在等你", clip(&line(&V::str(t))))
+    };
+    Some(Note::new(title, subtitle(cwd), body))
+}
+
+/// Antigravity 的几件事（agy.rs 的状态栏命令从状态的变化里看出来的）
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AgyEvent {
+    /// 干完活回到 idle
+    Done,
+    /// 干着活到了 error
+    Failed,
+    /// 要你确认一个操作（tool_confirmation_pending）
+    Ask,
+}
+
+/// Antigravity 的一条通知：标题照 Claude Code 的那几种；正文是会话的标题（状态栏 JSON 的 conversation_title：它不给最后一条
+/// 回复），没有时是一句默认的话。cwd 是 agy 启动的文件夹（副标题）
+pub fn agy_note(what: AgyEvent, topic: &str, cwd: &str) -> Note {
+    let topic = clip(&line(&V::str(topic)));
+    let or = |dflt: &str| if topic.is_empty() { dflt.to_string() } else { topic.clone() };
+    let (title, body) = match what {
+        AgyEvent::Done => ("Antigravity 做完了", or("这一轮做完了")),
+        AgyEvent::Failed => ("Antigravity 出错了", or("这一轮没做完")),
+        AgyEvent::Ask => ("Antigravity 在等你", "要你确认一个操作".to_string()),
+    };
+    Note::new(title, subtitle(cwd), body)
+}
+
+/// `remote-hook`：stdin 是 Claude Code 给钩子的输入（JSON）；`remote-hook --codex …` 是 Codex 的 notify（`codex_hook`）
+pub fn cmd_remote_hook(args: &[String]) -> R<()> {
+    if args.first().is_some_and(|a| a == "--codex") {
+        codex_hook(&args[1..]);
+        return Ok(());
+    }
     // SAFETY: 只是问 fd 0 是不是终端（手动运行时不等输入）
     if unsafe { libc::isatty(0) } == 1 {
         return Ok(());
@@ -247,6 +367,20 @@ mod tests {
 
     fn doc(text: &str) -> Dict {
         json::loads(text).unwrap().as_dict().unwrap()
+    }
+
+    #[test]
+    fn agy_notes() {
+        let n = agy_note(AgyEvent::Done, "**Explain** the code\nmore", "/a/work");
+        assert_eq!((n.title.as_str(), n.body.as_str()), ("Antigravity 做完了", "Explain the code"));
+        assert!(n.subtitle.ends_with(" · work"), "{:?}", n.subtitle);
+        assert_eq!(agy_note(AgyEvent::Done, "", "").body, "这一轮做完了");
+        assert_eq!(
+            (agy_note(AgyEvent::Failed, " ", "").title.as_str(), agy_note(AgyEvent::Failed, " ", "").body.as_str()),
+            ("Antigravity 出错了", "这一轮没做完")
+        );
+        let ask = agy_note(AgyEvent::Ask, "标题不用", "");
+        assert_eq!((ask.title.as_str(), ask.body.as_str()), ("Antigravity 在等你", "要你确认一个操作"));
     }
 
     #[test]
@@ -275,6 +409,34 @@ mod tests {
             Some("好了")
         );
         assert_eq!(done_text(&doc(r#"{"session_crons": [{"id": "x"}]}"#)), None, "到点会醒来");
+    }
+
+    #[test]
+    fn codex_turns() {
+        let done = |j: &str| codex_done(&doc(j)).map(|n| (n.title, n.body));
+        assert_eq!(
+            done(r#"{"type": "agent-turn-complete", "cwd": "/a/work", "last-assistant-message": "**改好了**\n细节"}"#),
+            Some(("Codex 做完了".into(), "改好了".into()))
+        );
+        assert_eq!(done(r#"{"type": "agent-turn-complete", "last-assistant-message": null}"#).unwrap().1, "这一轮做完了");
+        assert_eq!(done(r#"{"type": "approval-requested"}"#), None, "别的种类不推");
+        assert!(codex_done(&doc(r#"{"type": "agent-turn-complete", "cwd": "/a/work"}"#)).unwrap().subtitle.ends_with(" · work"));
+    }
+
+    #[test]
+    fn codex_waits() {
+        let note = |t: &str| codex_osc_note(t, "/a/work").map(|n| (n.title, n.body));
+        let pair = |a: &str, b: &str| Some((a.to_string(), b.to_string()));
+        assert_eq!(note("Approval requested: rm -rf build"), pair("Codex 要你确认", "运行：rm -rf build"));
+        assert_eq!(note("Codex wants to edit src/main.rs"), pair("Codex 要你确认", "改文件：main.rs"));
+        assert_eq!(note("Codex wants to edit 3 files"), pair("Codex 要你确认", "改 3 个文件"));
+        assert_eq!(note("Approval requested by github"), pair("Codex 要你确认", "用 github"));
+        assert_eq!(note("Plan mode prompt: Implement this plan?"), pair("Codex 等你批准计划", "Implement this plan?"));
+        assert_eq!(note("Question: 用哪个库？"), pair("Codex 在问你", "用哪个库？"));
+        assert_eq!(note("**Something** new"), pair("Codex 在等你", "Something new"), "认不出的照原话");
+        assert_eq!(note("   "), None);
+        assert_eq!(note("Agent turn complete"), None, "一轮做完了的 notify 推过了");
+        assert_eq!(note(&format!("Question: {}", "字".repeat(200))).unwrap().1.chars().count(), CLIP + 1);
     }
 
     #[test]

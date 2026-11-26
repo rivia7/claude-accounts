@@ -68,6 +68,22 @@ pub fn provider(a: &[String]) -> R<i32> {
     Ok(0)
 }
 
+/// codex-notify notify的值 JSON：像 Codex 一轮做完了起 notify 的命令。notify 的值是 -c 给的 TOML 字符串数组（cca 的
+/// codex_launch_args 写的那种：每一项是 TOML 的基本字符串，转义和 JSON 的一样），拆开以后 JSON 加在最后起它、等它结束；
+/// stdout 是一行 NOTIFY rc=退出码 程序（接在 codex.log 后面）
+pub fn notify(a: &[String]) -> R<i32> {
+    let (v, payload) = (arg(a, 0)?, arg(a, 1)?);
+    let mut argv = Vec::new();
+    for m in regex(r#""(?:[^"\\]|\\.)*""#)?.find_iter(v) {
+        argv.push(str_arg(&loads(m.as_str())?)?.to_string());
+    }
+    let Some((prog, rest)) = argv.split_first() else { return Err(Fail(format!("notify 的值里没有命令：{v}"))) };
+    let st = std::process::Command::new(prog).args(rest).arg(payload).status();
+    let code = st.ok().and_then(|s| s.code()).unwrap_or(-1);
+    print(&format!("NOTIFY rc={code} {prog}"));
+    Ok(0)
+}
+
 /// 账号的短名：acct.split('(')[-1].split('@')[0].strip(')')
 pub fn tag_of(acct: &str) -> &str {
     let last = acct.rsplit('(').next().unwrap_or_default();

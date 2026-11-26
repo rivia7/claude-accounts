@@ -5542,9 +5542,14 @@ run_account() {
 		if [ "$ACC_KIND" = api ]; then warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（这个账号的接口、key 和模型由 cca 设定）"
 		else warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（官方账号用它自己的登录；要换模型写进 ${TOOL_SETTINGS} 或用 /model）"; fi
 	fi
-	LAUNCH_ARGS=()   # 只这一次加在用户参数前面的（看用户参数）：agy 交互的会话带上 cca 的状态栏命令，记下套餐（辅助程序的 agy_launch_args）
-	[ "$TOOL" != agy ] || eval "$(py launch-args "$key" -- "$@")"
 	remote_prepare
+	# 只这一次加在用户参数前面的（看用户参数、放不放进会话宿主）：agy 交互的会话带上 cca 的状态栏命令（记下套餐，做完了、在等你时推通知），
+	# Codex 交互的会话带上推通知的 notify，放进宿主时再让它把在等你写成终端的通知序列（辅助程序的 agy_launch_args、codex_launch_args）
+	LAUNCH_ARGS=()
+	if [ "$TOOL" != claude ]; then
+		if [ ${#HOSTCMD[@]} -gt 0 ]; then eval "$(py launch-args "$key" --hosted -- "$@")"
+		else eval "$(py launch-args "$key" -- "$@")"; fi
+	fi
 	trap ':' INT TERM HUP
 	session_open
 	if [ ${#HOSTCMD[@]} -gt 0 ]; then   # 远程会话的开关开着：客户端跑在会话宿主里（它的退出码就是客户端的），别的都一样
@@ -8379,6 +8384,7 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
 EOF
 	[ -z "$mac" ] || cat >&2 <<EOF
                              dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）、
+                             popup（设成 false：cca 启动的 Codex、Antigravity 会话做完了、在等你时不在这台 Mac 上弹通知）、
                              mail（cca mail setup 写的；auto 设成 false：登录时不再自动打开登录邮件里的链接）
 EOF
 }
@@ -8405,8 +8411,10 @@ main() {
 		_session-start)   # Claude Code 的 SessionStart hook（启动时经 --settings 带上的；--desktop：cca cost hook 加在共享设置里的，Claude App 里的会话）：会话 id 记进账号目录（--desktop 带着 App 登录的账号记进 cost/），折合金额按它认账号。stdout 会进 Claude 的上下文：什么都不说，总是成功
 			shift
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
-		_remote-hook)   # cca 自己带的 Claude Code 钩子（远程会话开着时经 --settings 带上的 Stop、PermissionRequest、Notification）：做完了、在等你时推一条通知给接着这个会话的各处（辅助程序的 remote-hook，stdin 是钩子的输入）。Stop 的退出码 2 会拦着 Claude Code 不让停：什么都不说，总是成功
-			py remote-hook >/dev/null 2>&1 || : ;;
+		_remote-hook)   # cca 自己带的 Claude Code 钩子（远程会话开着时经 --settings 带上的 Stop、PermissionRequest、Notification）：做完了、在等你时推一条通知给接着这个会话的各处（辅助程序的 remote-hook，stdin 是钩子的输入）。Stop 的退出码 2 会拦着 Claude Code 不让停：什么都不说，总是成功。
+			                # --codex [--then 用户的 notify] JSON：cca 经 -c notify 交给 Codex 的（一轮做完了，JSON 是 Codex 给的；codex_launch_args）
+			shift
+			py remote-hook "$@" >/dev/null 2>&1 || : ;;
 		# _agy-statusline（agy 状态栏的命令）到不了这里：脚本开头找到辅助程序就交给它了（helper_find 后面）
 		_update-fetch) cmd_update_fetch ;;
 		_policy-fetch) ;;   # 3.6.0 去掉了维护者的映射：以前的版本在后台起的（起的时候还是旧版、跑到这里已经换成新版）什么都不做
