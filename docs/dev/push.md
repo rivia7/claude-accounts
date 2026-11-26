@@ -58,9 +58,10 @@ docs/dev/ios.md「推送」。
 /opt/cca-push/
   app/cca-core     Linux x86_64 的辅助程序（同一台服务器上 Team 的目录里 app/cca-core 那一份，要 3.7.3 以上：有 team-push）
   app/ca.pem       这台服务器的 CA 证书拷一份（Team 的安装脚本 ca_bundle 找的那几个地方）
-  certs/           openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 36500 -subj /CN=cca-push \
-                     -keyout certs/key.pem -out certs/cert.pem（私钥 600）
-  keys/AuthKey.p8  维护者放的
+  certs/           openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 -subj /CN=cca-push \
+                     -keyout certs/key.pem -out certs/cert.pem（私钥 600、属主 10001；只认公钥，过期了照样用）
+  keys/AuthKey.p8  维护者放的（600，目录 700，属主都是跑网关的 10001）
+  .env             CCA_APNS_KEY_ID=…、CCA_APNS_TEAM_ID=…（600，compose 照它填）
   compose.yaml
 ```
 
@@ -72,9 +73,9 @@ services:
     restart: unless-stopped
     user: "10001:10001"
     command: ["/app/cca-core", "team-push", "--listen", "0.0.0.0:18460", "--cert", "/certs/cert.pem", "--key", "/certs/key.pem",
-              "--apns-key", "/keys/AuthKey.p8", "--key-id", "<Key ID>", "--team-id", "<Team ID>", "--ca", "/app/ca.pem"]
+              "--apns-key", "/keys/AuthKey.p8", "--key-id", "${CCA_APNS_KEY_ID:?}", "--team-id", "${CCA_APNS_TEAM_ID:?}", "--ca", "/app/ca.pem"]
     ports:
-      - "18460:18460"
+      - "<内网地址>:18460:18460"
     volumes:
       - ./app:/app:ro,z
       - ./certs:/certs:ro,z
@@ -88,7 +89,12 @@ services:
 ```
 
 起来以后 `docker run --rm -v /opt/cca-push/certs:/certs:ro … /app/cca-core team-push --cert /certs/cert.pem --print-pin`（或者在服务器上直接运行
-那个程序）打出公钥。还没有安装脚本：只有一份，手动装；要升级时换 `app/cca-core`、`docker compose up -d --force-recreate`。
+那个程序）打出公钥，日志的第一行也说。还没有安装脚本：只有一份，手动装；要升级时换 `app/cca-core`、`docker compose up -d --force-recreate`。
+只听内网地址：同一台服务器上的 Team 够用，端口不经公网；别的服务器上的 Team 要用时再改成听公网、在云服务器的防火墙放行。装好以后核对：
+`curl -k --pinnedpubkey 公钥 https://内网地址:18460/v1/health` 回 `{"v":1,"ok":true}`（公钥不对时 curl 连不上）；Team 的容器里连得到
+（`docker run --rm --network container:<Team 的容器> …` 起一个带 HTTP 客户端的镜像去要 health）；随便一个令牌（64 个十六进制字符）POST 一条
+`/v1/push`，两种环境都回 410 就是苹果认了密钥、Key ID、Team ID（推送服务回 400 BadDeviceToken；不认时是 403 InvalidProviderToken：网关回 502，
+日志里说「没收下」）。
 
 ### Team 的服务器
 
@@ -113,9 +119,12 @@ services:
 
 ## 没验证的
 
-- 真的推送服务：要维护者建了密钥、部署了网关才测得到（假的推送服务是照苹果的文档写的）
+- 真的推送服务：2026-11-26 维护者的服务器上装好了网关（只听内网地址），两个 Team 的服务器（3.7.3）带上了 `--push`。验证过的：网关对着
+  真的推送服务，正式、开发两种环境拿随便一个令牌 POST 都回 410（苹果回 400 BadDeviceToken：自己写的 HTTP/2、ES256 的令牌、Key ID、Team ID
+  苹果都认了）；Team 的容器里连得到网关、钉住的公钥对得上；两台服务器的 `/v1/health` 里 `relay.push` 是 true。还没验证：Team 的服务器
+  真的转过去、推到真机上（要手机装了第三个 TestFlight 构建、登记了令牌）
 - 通知扩展这个进程：模拟器里的 `xcrun simctl push` 不经它（2026-11-26 试过：系统日志里是 CoreSimulatorBridge 直接把通知加进通知中心，
   `mutableContent: YES` 也不调扩展，到 App 的还是固定的那一句）。扩展里解开的那一段和 `in_the_simulator` 里 App 照扩展的读法解开的是同一份代码
   （CcaRemoteKit 的 `openPushed`、`NoteCard`、`NoteKeychain.read`），可扩展的进程读不读得到共用分组的钥匙串、时限内做没做完，要真的推送
-  到真机（TestFlight 的构建）上才看得到
-- 环境：TestFlight / App Store 装的照描述文件的 `aps-environment` 认成 production，Xcode 装的是 sandbox；真机上还没看过
+  到真机（TestFlight 的构建）上才看得到：第三个构建（1.0，20261126.54245，2026-11-26 传的）带着它，真机上还没试
+- 环境：TestFlight / App Store 装的照描述文件的 `aps-environment` 认成 production，Xcode 装的是 sandbox；传给 TestFlight 的那一份里是 production（testflight.sh 查过）。真机上登记成什么还没看过
