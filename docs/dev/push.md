@@ -161,5 +161,5 @@ services:
   `mutableContent: YES` 也不调扩展，到 App 的还是固定的那一句）。扩展里解开的那一段和 `in_the_simulator` 里 App 照扩展的读法解开的是同一份代码
   （CcaRemoteKit 的 `openPushed`、`NoteCard`、`NoteKeychain.read`），可扩展的进程读不读得到共用分组的钥匙串、时限内做没做完，要真的推送
   到真机（TestFlight 的构建）上才看得到：第三个构建（1.0，20261126.54245）真机上解开了（上一条）
-- 额度的通知：真机、真的推送服务还没试过（要 3.7.5 的 cca、重新部署的 Team 的服务器和新的 TestFlight 构建）
+- 额度的通知：真机、真的推送服务还没试过（3.7.5 发布了、两个 Team 的服务器部署成了 3.7.5、第五个 TestFlight 构建（1.0，20261126.101645）传了：等真机上看）
 - 环境：TestFlight / App Store 装的照描述文件的 `aps-environment` 认成 production，Xcode 装的是 sandbox；传给 TestFlight 的那一份里是 production（testflight.sh 查过），真机上登记的也是 production（上面那一条）
