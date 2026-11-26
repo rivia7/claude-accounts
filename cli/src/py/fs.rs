@@ -112,6 +112,37 @@ pub fn put(p: &str, data: &[u8], mode: u32) -> io::Result<bool> {
     Ok(true)
 }
 
+/// 记一笔就走的小文件（Claude Code 会话里刚问的那一句、agy 每个会话上一次的状态）：目录只给自己（700，缺的各层一起建），
+/// sweep 时先把这个目录里一天以前的删掉（早就结束了的会话留下的），再写成只有自己能读写的文件（先写旁边的临时文件再改名换上）。
+/// 尽力而为：哪一步不成就算了，什么都不说
+pub fn note_file(dir: &str, file: &str, text: &str, sweep: bool) {
+    use std::os::unix::fs::DirBuilderExt;
+    if fs::DirBuilder::new().mode(0o700).recursive(true).create(dir).is_err() {
+        return;
+    }
+    if sweep {
+        let now = std::time::SystemTime::now();
+        for n in listdir_sorted(dir).unwrap_or_default() {
+            let p = path::join(dir, &n);
+            let age = fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok());
+            if age.is_some_and(|a| a.as_secs() > 86400) {
+                let _ = fs::remove_file(&p);
+            }
+        }
+    }
+    let tmp = format!("{file}.tmp");
+    let wrote = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(text.as_bytes()));
+    if wrote.is_err() || fs::rename(&tmp, file).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
 /// `shutil.rmtree(p)`：p 本身是链接时不删（Python 报 OSError），里面的链接只删链接
 pub fn rmtree(p: &str) -> io::Result<()> {
     if fs::symlink_metadata(p)?.file_type().is_symlink() {

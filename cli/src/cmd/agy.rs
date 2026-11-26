@@ -658,37 +658,13 @@ fn agy_turn(dir: &str, run: &str, d: &Dict) {
         return;
     }
     if prev.as_ref() != Some(&now) {
-        turn_save(&turns, &file, &now, prev.is_none());
+        // 新会话头一次记时删掉一天以前的（早就结束了的会话留下的）
+        crate::py::fs::note_file(&turns, &file, &now.line(), prev.is_none());
     }
     let cwd = d.str("cwd").map(|c| c.to_string()).unwrap_or_default();
     let topic = d.str("conversation_title").map(|t| t.to_string()).unwrap_or_default();
     for e in events {
         notify_deliver(&agy_note(e, &topic, &cwd));
-    }
-}
-
-fn turn_save(turns: &str, file: &str, t: &Turn, fresh: bool) {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    if std::fs::DirBuilder::new().mode(0o700).recursive(true).create(turns).is_err() {
-        return;
-    }
-    if fresh {
-        let now = std::time::SystemTime::now();
-        for n in crate::py::fs::listdir_sorted(turns).unwrap_or_default() {
-            let p = path::join(turns, &n);
-            let age = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok());
-            if age.is_some_and(|a| a.as_secs() > 86400) {
-                let _ = std::fs::remove_file(&p);
-            }
-        }
-    }
-    let tmp = format!("{file}.tmp");
-    let wrote = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).and_then(|mut f| {
-        use std::io::Write;
-        f.write_all(t.line().as_bytes())
-    });
-    if wrote.is_err() || std::fs::rename(&tmp, file).is_err() {
-        let _ = std::fs::remove_file(&tmp);
     }
 }
 

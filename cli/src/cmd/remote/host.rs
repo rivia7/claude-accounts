@@ -126,6 +126,13 @@ fn spawn_link(sid: &str) -> Option<Child> {
 /// 给转接进程的通知还没写出去的到了这么多，新的不再给它（它卡住了：退出以后宿主再起一个）
 const LINK_HIGH: usize = 64 * 1024;
 
+/// 一段输出不给谁（`Host::osc_note`）：viewers：接入方（它们收到推出去的那一条通知）；tty：启动它的终端（这台 Mac 上弹过了）
+#[derive(Clone, Copy, Default)]
+struct Hide {
+    viewers: bool,
+    tty: bool,
+}
+
 /// 无头的会话（`--headless`：远程启动的，launch.rs）：没有启动它的终端，等着手机接进来
 struct Headless {
     /// 客户端退出时还没人接入过：留这么久（秒）等人接上来看它最后说了什么（CCA_HEADLESS_LINGER）
@@ -324,7 +331,7 @@ impl Host {
         });
         let pieces = || pieces(&full, &segs);
         // 每一段（接入方不给，启动它的终端不给）：Codex 会话里的通知序列换成推出去的通知（`osc_note`）
-        let hide: Vec<(bool, bool)> = pieces().map(|(seg, bytes)| self.osc_note(seg, bytes)).collect();
+        let hide: Vec<Hide> = pieces().map(|(seg, bytes)| self.osc_note(seg, bytes)).collect();
         let mut out = Vec::new();
         for (seg, bytes) in pieces() {
             if seg.class == Class::Seq && seg.part == Part::Whole {
@@ -337,15 +344,15 @@ impl Host {
         let primary = self.primary();
         if self.local.tty.is_some() && !self.local.resync {
             out.clear();
-            for ((seg, bytes), (_, popped)) in pieces().zip(&hide) {
-                self.local.route.take((primary == Some(Who::Local) || seg.class.for_all()) && !popped, seg, bytes, &mut out);
+            for ((seg, bytes), h) in pieces().zip(&hide) {
+                self.local.route.take((primary == Some(Who::Local) || seg.class.for_all()) && !h.tty, seg, bytes, &mut out);
             }
             push(&mut self.local.out, &out);
         }
         for v in self.viewers.iter_mut().filter(|v| v.size.is_some() && !v.dead) {
             out.clear();
-            for ((seg, bytes), (noted, _)) in pieces().zip(&hide) {
-                v.route.take((primary == Some(Who::Viewer(v.id)) || seg.class.for_all()) && !noted, seg, bytes, &mut out);
+            for ((seg, bytes), h) in pieces().zip(&hide) {
+                v.route.take((primary == Some(Who::Viewer(v.id)) || seg.class.for_all()) && !h.viewers, seg, bytes, &mut out);
             }
             if !out.is_empty() {
                 push(&mut v.out, &local::frame(local::OUTPUT, &out));
@@ -355,28 +362,28 @@ impl Host {
     }
 
     /// Codex 会话的一段输出要是一条通知序列（它的 tui.notifications 写的 OSC 9：codex_launch_args 只开了在等你的那几种）：
-    /// 换成一条推出去的通知（`emit_note`），这台 Mac 上弹一个（popup.rs，开着时）。返回（接入方不给：它们收到推出去的那一条，
-    /// 不然要弹两次；启动它的终端不给）。启动它的终端：这台 Mac 上弹着时不给——弹了的、不推的（一轮做完了的那一句：notify 弹过了）、
+    /// 换成一条推出去的通知（`emit_note`），这台 Mac 上弹一个（popup.rs，开着时）。返回这一段不给谁（`Hide`：接入方不给，它们收到
+    /// 推出去的那一条，不然要弹两次；启动它的终端不给）。启动它的终端：这台 Mac 上弹着时不给——弹了的、不推的（一轮做完了的那一句：notify 弹过了）、
     /// 刚推过一模一样的、一下子太多的都不给，不然它认得这种序列的话自己再弹一次；不弹（popup 关着、osascript 起不来）时照给。
     /// 别的工具的会话、别的序列原样
-    fn osc_note(&mut self, seg: Seg, bytes: &[u8]) -> (bool, bool) {
+    fn osc_note(&mut self, seg: Seg, bytes: &[u8]) -> Hide {
         if self.meta.tool != "codex" || seg.class != Class::Effect || seg.part != Part::Whole {
-            return (false, false);
+            return Hide::default();
         }
-        let Some(text) = osc_note_text(bytes) else { return (false, false) };
+        let Some(text) = osc_note_text(bytes) else { return Hide::default() };
         let pop = popup::on();
         let Some(n) = hook::codex_osc_note(&text, &self.meta.cwd).and_then(|n| Note::parse(&n.to_json())) else {
-            return (true, pop);
+            return Hide { viewers: true, tty: pop };
         };
         if !self.emit_note(n.clone()) || !pop {
-            return (true, pop);
+            return Hide { viewers: true, tty: pop };
         }
         match popup::show(&n) {
             Some(child) => {
                 self.popups.push((child, monotonic()));
-                (true, true)
+                Hide { viewers: true, tty: true }
             }
-            None => (true, false),
+            None => Hide { viewers: true, tty: false },
         }
     }
 

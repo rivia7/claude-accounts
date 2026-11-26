@@ -30,7 +30,6 @@ use crate::py::proc::getenv;
 use crate::py::text::sh_quote;
 use crate::py::{path, R};
 use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 /// Notification 里认的几种（idle_prompt 不认：做完了在等下一句，Stop 那一条已经说了）
 pub const MATCHER: &str = "permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt";
@@ -150,31 +149,9 @@ fn ask_file(session: &str) -> Option<String> {
 }
 
 fn ask_save(file: &str, title: &str, body: &str) {
-    let dir = path::join(&local::dir(), "ask");
-    if std::fs::DirBuilder::new().mode(0o700).recursive(true).create(&dir).is_err() {
-        return;
-    }
-    // 马上答了的（没等到 Notification）留下的：一天以前的清掉
-    if let Ok(names) = fs::listdir_sorted(&dir) {
-        let now = std::time::SystemTime::now();
-        for n in names {
-            let p = path::join(&dir, &n);
-            let old = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok());
-            if old.is_some_and(|age| age.as_secs() > 86400) {
-                let _ = std::fs::remove_file(&p);
-            }
-        }
-    }
-    let tmp = format!("{file}.tmp");
     let one = |s: &str| s.replace(['\n', '\r'], " ");
-    let text = format!("{}\n{}\n", one(title), one(body));
-    let wrote = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).and_then(|mut f| {
-        use std::io::Write;
-        f.write_all(text.as_bytes())
-    });
-    if wrote.is_err() || std::fs::rename(&tmp, file).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
+    // 马上答了的（没等到 Notification）留下的：一天以前的清掉
+    fs::note_file(&path::join(&local::dir(), "ask"), file, &format!("{}\n{}\n", one(title), one(body)), true);
 }
 
 /// 刚记下的那一句（ASK_FRESH 秒以内的；马上答了的那次留下的旧话不拿来配别的通知），读了就删
