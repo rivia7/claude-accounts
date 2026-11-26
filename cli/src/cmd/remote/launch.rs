@@ -13,11 +13,11 @@
 //! 线上的格式见 server/README.md「启动器」：服务器不用改，它看启动器就是一个会话（占这台设备 8 个名额里的一个）。
 
 use super::far::clean;
-use super::link::{self, bye, connect_as, ctl_step, fork_kid, shape, stop, Allowed, Ctl, Kid, FORKS_PER_10S, MAX_KIDS};
+use super::link::{self, Allowed, Join, Link, Respawn};
 use super::local::{self, Asked, Decoder};
 use super::peers::{self, Incoming, Peer};
 use super::pty::{self, Size};
-use super::relay::{self, ctl_frame, Server, Tunnel};
+use super::relay::{self, ctl_frame, Tunnel};
 use super::template::{self, Template};
 use super::{crypto, sig};
 use crate::cmd::arity;
@@ -37,7 +37,6 @@ use crate::py::time::{monotonic, sleep, strftime_local, time};
 use crate::py::{die, exit, R};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
@@ -63,7 +62,7 @@ const JOIN_GAP: f64 = 3.0;
 const SESSIONS_MAX: usize = 7;
 /// 子进程起成了一个会话时的退出码（转接进程照它数一分钟起了几个）
 const EXIT_LAUNCHED: i32 = 10;
-/// 隔多久看一眼配对表、模板变了没有
+/// 后台进程隔多久看一眼配对表变了没有（转接进程照 link.rs 的 PEERS_EVERY 看配对表，跟着看模板）
 const CHECK_EVERY: f64 = 3.0;
 /// 隔多久重新算一遍给手机的说明（账号的别名、文件夹变了也要跟着变）
 const DOC_EVERY: f64 = 60.0;
@@ -147,20 +146,17 @@ pub fn cmd_remote_launcher(args: &[String]) -> R<()> {
 // ---------------------------------------------------------------------------
 
 /// 后台进程给一台服务器起的转接进程
-struct LinkProc {
+struct HubLink {
     hub: HubKind,
     sid: String,
     child: Option<Child>,
-    started: f64,
-    /// 什么时候再起
-    next: f64,
-    fails: u32,
+    retry: Respawn,
 }
 
-impl LinkProc {
+impl HubLink {
     /// 起转接进程（它的标准输入是一根管道：后台进程不在了它读到头，告诉服务器、自己退出）；起不来当它马上退出了
     fn spawn(&mut self, now: f64) {
-        self.started = now;
+        self.retry.started(now);
         let child = std::env::current_exe().ok().and_then(|exe| {
             let mut c = Command::new(exe);
             c.args(["remote-link", "--launcher", &self.hub.team(), &self.sid]);
@@ -168,13 +164,8 @@ impl LinkProc {
         });
         match child {
             Some(c) => self.child = Some(c),
-            None => self.backoff(now),
+            None => self.retry.failed(now),
         }
-    }
-
-    fn backoff(&mut self, now: f64) {
-        self.fails = if now - self.started > 60.0 { 0 } else { self.fails + 1 };
-        self.next = now + (5.0 * f64::from(1u32 << self.fails.min(4))).min(60.0);
     }
 
     /// 退出了没有：这台服务器用不了（退出码 3）过一阵再试，别的按退避再起
@@ -184,11 +175,11 @@ impl LinkProc {
             Ok(None) => {}
             Ok(Some(st)) if st.code() == Some(link::EXIT_OFF) => {
                 self.child = None;
-                self.next = now + OFF_RETRY;
+                self.retry.next = now + OFF_RETRY;
             }
             _ => {
                 self.child = None;
-                self.backoff(now);
+                self.retry.failed(now);
             }
         }
     }
@@ -241,7 +232,7 @@ fn serve(if_down: bool) -> R<()> {
     save_state(me, started, &sids);
     let wake = sig::install()?;
     let self_was = peers::stamp_of(&SELF_PATH);
-    let mut links: Vec<LinkProc> = Vec::new();
+    let mut links: Vec<HubLink> = Vec::new();
     let mut retired: Vec<Child> = Vec::new();
     let (mut checked, mut stamp, mut self_checked) = (f64::NEG_INFINITY, None, monotonic());
     // cca 换了版本、辅助程序的文件没了：收场以后经 cca 重新执行自己（进程号不变，launchd 照旧管着）
@@ -272,12 +263,12 @@ fn serve(if_down: bool) -> R<()> {
                 links.retain(|l| want.contains(&l.hub));
                 for h in want {
                     match links.iter_mut().find(|l| l.hub == h) {
-                        Some(l) => l.next = l.next.min(now), // 配对表变了：用不了的那台也马上再试
+                        Some(l) => l.retry.next = l.retry.next.min(now), // 配对表变了：用不了的那台也马上再试
                         None => {
                             let sid =
                                 sids.str(&h.team()).filter(|s| peers::hex32(s)).map_or_else(|| token_hex(16), |s| s.to_string());
                             sids.set(h.team(), sid.as_str());
-                            links.push(LinkProc { hub: h, sid, child: None, started: now, next: now, fails: 0 });
+                            links.push(HubLink { hub: h, sid, child: None, retry: Respawn::default() });
                         }
                     }
                 }
@@ -287,7 +278,7 @@ fn serve(if_down: bool) -> R<()> {
                 again = true;
                 break;
             }
-            for l in links.iter_mut().filter(|l| l.child.is_none() && now >= l.next) {
+            for l in links.iter_mut().filter(|l| l.child.is_none() && now >= l.retry.next) {
                 l.spawn(now);
             }
         }
@@ -435,38 +426,26 @@ fn announce(sid: &str, allowed: &[Allowed], doc: &Dict) -> Vec<u8> {
     ctl_frame(relay::F_ANNOUNCE, json::dumps(&V::Dict(blobs), json::Fmt::new().utf8().compact()).as_bytes())
 }
 
-/// 转接进程这一头的：哪台服务器、登记成哪个会话
-struct Gate {
-    srv: Server,
-    hub: HubKind,
-    sid: String,
-}
-
-/// 子进程和限流
+/// 限流：最近一分钟里起成了会话的时候、每台手机上一次接进来的时候（分出子进程的上限在 link.rs 的 `Link::join`）
 #[derive(Default)]
-struct Kids {
-    kids: Vec<Kid>,
-    /// 最近 10 秒里分出子进程的时候
-    forks: VecDeque<f64>,
-    /// 最近一分钟里起成了会话的时候
+struct Gate {
     launched: VecDeque<f64>,
-    /// 每台手机上一次接进来的时候
     joined: HashMap<String, f64>,
 }
 
-impl Kids {
-    /// 收走退出了的子进程；起成了会话的记下来
-    fn reap(&mut self) {
-        let launched = &mut self.launched;
-        self.kids.retain(|k| {
-            let mut status = 0;
-            // SAFETY: status 是有效的；child 是自己分出来的子进程
-            let r = unsafe { libc::waitpid(k.child, &mut status, libc::WNOHANG) };
-            if r == k.child && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == EXIT_LAUNCHED {
-                launched.push_back(monotonic());
-            }
-            r == 0
-        });
+impl Gate {
+    /// 一台手机接进来：同一台两次隔得不够 JOIN_GAP 秒的不接（None）。接的记下时候，交出这一次是不是起得太勤了（一分钟里起成的
+    /// 会话够 LAUNCHES_PER_MIN 个：照样接，接上以后回它 `rate`）
+    fn admit(&mut self, pid: &str) -> Option<bool> {
+        let now = monotonic();
+        while self.launched.front().is_some_and(|t| now - t > 60.0) {
+            self.launched.pop_front();
+        }
+        if self.joined.get(pid).is_some_and(|t| now - t < JOIN_GAP) {
+            return None;
+        }
+        self.joined.insert(pid.to_string(), now);
+        Some(self.launched.len() >= LAUNCHES_PER_MIN)
     }
 }
 
@@ -478,38 +457,21 @@ pub fn cmd_launcher_link(args: &[String]) -> R<()> {
     };
     let hub = HubKind::Team(tag);
     let Ok(srv) = relay::server_of(hub)? else { return exit(link::EXIT_OFF) };
-    let gate = Gate { srv, hub, sid: args[1].clone() };
-    let wake = sig::install()?;
-    let mut allowed: Vec<Allowed> = Vec::new();
-    let (mut pstamp, mut tstamp) = (None, None);
-    let (mut checked, mut built) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let sid = args[1].as_str();
+    let mut link = Link::new(srv, sid)?;
+    let mut gate = Gate::default();
+    let (mut tstamp, mut built) = (None, f64::NEG_INFINITY);
     let (mut doc, mut doc_text) = (Dict::new(), String::new());
-    let mut ctl: Option<Ctl> = None;
-    let mut kids = Kids::default();
-    let (mut next_try, mut fails) = (0.0f64, 0u32);
     let mut buf = [0u8; 256];
     loop {
         let now = monotonic();
-        kids.reap();
-        if now - checked >= CHECK_EVERY {
-            checked = now;
-            // 配对表变了：不该再接着的子进程结束掉；手机变了要换一条控制连接（新的票据上是新的那几台）
-            let p = peers::stamp();
-            if pstamp != Some(p) {
-                pstamp = Some(p);
-                let fresh = allowed_now(hub);
-                if shape(&fresh) != shape(&allowed) {
-                    let keep = shape(&fresh);
-                    stop(kids.kids.iter().filter(|k| !keep.contains(&(k.pid.clone(), k.access))));
-                    allowed = fresh;
-                    if let Some(old) = ctl.take() {
-                        if allowed.is_empty() {
-                            bye(old);
-                        }
-                    }
-                    (next_try, fails) = (now, 0);
-                }
+        for code in link.reap() {
+            if code == EXIT_LAUNCHED {
+                gate.launched.push_back(now);
             }
+        }
+        // 配对表变了：不该再接着的子进程结束掉；手机变了要换一条控制连接（新的票据上是新的那几台）
+        if link.refresh(now, || allowed_now(hub)) {
             // 模板变了（隔一阵也重新算一遍）：说明不一样了就在原来的控制连接上再说一遍（服务器整份换掉）
             let t = template::stamp();
             if tstamp != Some(t) || now - built >= DOC_EVERY {
@@ -518,173 +480,91 @@ pub fn cmd_launcher_link(args: &[String]) -> R<()> {
                 let text = json::dumps(&V::Dict(fresh.clone()), json::Fmt::new().utf8().compact());
                 if text != doc_text {
                     (doc, doc_text) = (fresh, text);
-                    if let Some(c) = ctl.as_mut() {
-                        c.out.extend(announce(&gate.sid, &allowed, &doc));
+                    if let Some(c) = link.ctl.as_mut() {
+                        c.out.extend(announce(sid, &link.allowed, &doc));
                     }
                 }
             }
         }
-        if ctl.is_none() && !allowed.is_empty() && now >= next_try {
-            match connect_as(&gate.srv, &gate.sid, &allowed, announce(&gate.sid, &allowed, &doc), fails)? {
-                Ok(c) => {
-                    ctl = Some(c);
-                    fails = 0;
-                }
-                Err(Some(wait)) => {
-                    fails += 1;
-                    next_try = now + wait;
-                }
-                Err(None) => {
-                    stop(&kids.kids);
-                    return exit(link::EXIT_OFF);
-                }
-            }
+        if !link.connect_if_due(now, |allowed| announce(sid, allowed, &doc))? {
+            return exit(link::EXIT_OFF);
         }
-        let ctl_fd = ctl.as_ref().map_or(-1, |c| c.stream.as_raw_fd());
-        let ctl_out = ctl.as_ref().is_some_and(|c| !c.out.is_empty());
-        let mut fds = [
-            libc::pollfd { fd: wake, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: ctl_fd, events: libc::POLLIN | if ctl_out { libc::POLLOUT } else { 0 }, revents: 0 },
-        ];
-        // SAFETY: fds 是有效的数组；被信号打断就是要它马上回来
-        unsafe { libc::poll(fds.as_mut_ptr(), 3, 1000) };
-        if fds[0].revents != 0 || sig::pending() {
-            let got = sig::take(wake);
-            if [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGQUIT].into_iter().any(|s| got.has(s)) {
-                break;
-            }
-        }
+        let Some(woke) = link.wait() else { break };
         // 标准输入读到头：后台进程不在了（或者不要这台服务器了）
-        if fds[1].revents != 0 {
+        if woke.stdin {
             match pty::read_some(0, &mut buf) {
                 Some(Ok(n)) if n > 0 => {}
                 None => {}
                 _ => break,
             }
         }
-        let mut lost = false;
-        if let Some(c) = ctl.as_mut() {
-            let ready = fds[2].revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0;
-            match ctl_step(c, ready) {
-                Ok(list) => {
-                    for (kind, payload) in list {
-                        if kind == relay::F_JOIN {
-                            gate.join(c, &payload, &allowed, &mut kids);
-                        }
-                    }
-                }
-                Err(()) => lost = true,
-            }
-        }
-        if lost {
-            ctl = None;
-            fails += 1;
-            next_try = monotonic() + (2.0 * f64::from(1u32 << fails.min(5))).min(60.0);
+        for p in &woke.joins {
+            link.join(p, |a| gate.admit(&a.peer.pid), |j, limited| kid_serve(j, hub, limited));
         }
     }
-    if let Some(c) = ctl.take() {
-        bye(c);
-    }
-    let end = monotonic() + 3.0;
-    while !kids.kids.is_empty() && monotonic() < end {
-        sleep(0.05);
-        kids.reap();
-    }
-    stop(&kids.kids);
+    link.finish();
     Ok(())
 }
 
-impl Gate {
-    /// 服务器说有手机来了：分出一个子进程去接它。不是允许远程启动的手机、子进程够多了、来得太勤：不理（手机那头等一会儿，服务器
-    /// 告诉它这边没来）。一分钟里起成的会话够多了照样接，接上以后回它 `rate`
-    fn join(&self, ctl: &Ctl, payload: &[u8], allowed: &[Allowed], kids: &mut Kids) {
-        let Some(j) = std::str::from_utf8(payload).ok().and_then(|s| json::loads(s).ok()).and_then(|j| j.as_dict()) else { return };
-        let (Some(token), Some(pid)) = (j.str("token").filter(|t| peers::hex32(t)), j.str("pid")) else { return };
-        let Some(a) = allowed.iter().find(|a| *a.peer.pid == *pid) else { return };
-        let now = monotonic();
-        while kids.forks.front().is_some_and(|t| now - t > 10.0) {
-            kids.forks.pop_front();
+/// 子进程里：一台手机接进来要起会话。握手、等它说起哪个、查、起、回话、记一笔。退出码：起成了是 EXIT_LAUNCHED
+fn kid_serve(j: &Join, hub: HubKind, limited: bool) -> i32 {
+    let Ok(mut tun) = j.tunnel() else { return 1 };
+    let Some(raw) = wait_ask(&mut tun, j.parent) else { return 1 };
+    let mut what = String::new();
+    let result = match Ask::parse(&raw) {
+        Some(ask) => {
+            what = ask.id.clone();
+            launch(hub, &j.a.peer.pid, &ask, limited, &mut what)
         }
-        while kids.launched.front().is_some_and(|t| now - t > 60.0) {
-            kids.launched.pop_front();
-        }
-        let again = kids.joined.get(&a.peer.pid).is_some_and(|t| now - t < JOIN_GAP);
-        if again || kids.kids.len() >= MAX_KIDS || kids.forks.len() >= FORKS_PER_10S {
-            return;
-        }
-        kids.forks.push_back(now);
-        kids.joined.insert(a.peer.pid.clone(), now);
-        let limited = kids.launched.len() >= LAUNCHES_PER_MIN;
-        if let Some(child) = fork_kid(ctl, |me| self.serve(ctl, &token, a, me, limited)) {
-            kids.kids.push(Kid { child, pid: a.peer.pid.clone(), access: a.peer.incoming });
-        }
+        None => Err("bad"),
+    };
+    let reply = match &result {
+        Ok(sid) => dict! { "v" => 1, "ok" => true, "sid" => sid.as_str() },
+        Err(code) => dict! { "v" => 1, "ok" => false, "code" => *code, "text" => fail_text(code) },
+    };
+    log(&j.a.peer.name, &what, &result);
+    tun.send(&local::frame(local::LAUNCHED, json::dumps(&V::Dict(reply), json::Fmt::new().utf8().compact()).as_bytes()));
+    tun.drain(2.0);
+    tun.close();
+    if result.is_ok() {
+        EXIT_LAUNCHED
+    } else {
+        0
     }
+}
 
-    /// 子进程里：一台手机接进来要起会话。握手、等它说起哪个、查、起、回话、记一笔。退出码：起成了是 EXIT_LAUNCHED
-    fn serve(&self, ctl: &Ctl, token: &str, a: &Allowed, parent: libc::pid_t, limited: bool) -> i32 {
-        let Ok(mut stream) = self.srv.dial(ctl.port, "join", token, &ctl.key, 10.0) else { return 1 };
-        let allowed = |pid: &str| (pid == a.peer.pid).then(|| (&a.peer, a.secret.clone()));
-        let Ok((chan, _)) = relay::handshake_host(&mut stream, &self.sid, &self.srv.fp, allowed) else { return 1 };
-        let Ok(mut tun) = Tunnel::new(stream, chan) else { return 1 };
-        let Some(raw) = wait_ask(&mut tun, parent) else { return 1 };
-        let mut what = String::new();
-        let result = match Ask::parse(&raw) {
-            Some(ask) => {
-                what = ask.id.clone();
-                self.launch(&a.peer.pid, &ask, limited, &mut what)
-            }
-            None => Err("bad"),
-        };
-        let reply = match &result {
-            Ok(sid) => dict! { "v" => 1, "ok" => true, "sid" => sid.as_str() },
-            Err(code) => dict! { "v" => 1, "ok" => false, "code" => *code, "text" => fail_text(code) },
-        };
-        log(&a.peer.name, &what, &result);
-        tun.send(&local::frame(local::LAUNCHED, json::dumps(&V::Dict(reply), json::Fmt::new().utf8().compact()).as_bytes()));
-        tun.drain(2.0);
-        tun.close();
-        if result.is_ok() {
-            EXIT_LAUNCHED
-        } else {
-            0
-        }
+/// 照手机说的起会话：每一样都现读、现查（配对表、模板、账号表、文件夹、参数、这台服务器上的会话数）。返回新会话的编号，
+/// 不行是 LAUNCHED 的 code。what：记进日志的模板名字
+fn launch(hub: HubKind, pid: &str, ask: &Ask, limited: bool, what: &mut String) -> Result<String, &'static str> {
+    if !launch_peers(Some(hub)).iter().any(|p| p.pid == pid) {
+        return Err("denied");
     }
-
-    /// 照手机说的起会话：每一样都现读、现查（配对表、模板、账号表、文件夹、参数、这台服务器上的会话数）。返回新会话的编号，
-    /// 不行是 LAUNCHED 的 code。what：记进日志的模板名字
-    fn launch(&self, pid: &str, ask: &Ask, limited: bool, what: &mut String) -> Result<String, &'static str> {
-        if !launch_peers(Some(self.hub)).iter().any(|p| p.pid == pid) {
-            return Err("denied");
-        }
-        if limited {
-            return Err("rate");
-        }
-        let Some(t) = template::load().into_iter().find(|t| t.id == ask.id) else { return Err("no_template") };
-        what.clone_from(&t.name);
-        if t.digest() != ask.digest {
-            return Err("changed");
-        }
-        let Some((key, name)) = t.account_now() else { return Err("no_account") };
-        if relay::session_hub(&t.tool, &key) != Some(self.hub) {
-            return Err("other_hub");
-        }
-        if !path::isdir(&t.dir) {
-            return Err("no_dir");
-        }
-        if !template::args_problems(t.tool(), &t.args, &t.dir).is_ok_and(|p| p.is_empty()) {
-            return Err("bad_args");
-        }
-        if ask.line.is_some() && !t.line_ok() {
-            return Err("bad");
-        }
-        let here =
-            local::sessions(false).iter().filter(|s| relay::session_hub(&s.meta.tool, &s.meta.key) == Some(self.hub)).count();
-        if here >= SESSIONS_MAX {
-            return Err("busy");
-        }
-        spawn_session(&t, &key, &name, ask).ok_or("spawn")
+    if limited {
+        return Err("rate");
     }
+    let Some(t) = template::load().into_iter().find(|t| t.id == ask.id) else { return Err("no_template") };
+    what.clone_from(&t.name);
+    if t.digest() != ask.digest {
+        return Err("changed");
+    }
+    let Some((key, name)) = t.account_now() else { return Err("no_account") };
+    if relay::session_hub(&t.tool, &key) != Some(hub) {
+        return Err("other_hub");
+    }
+    if !path::isdir(&t.dir) {
+        return Err("no_dir");
+    }
+    if !template::args_problems(t.tool(), &t.args, &t.dir).is_ok_and(|p| p.is_empty()) {
+        return Err("bad_args");
+    }
+    if ask.line.is_some() && !t.line_ok() {
+        return Err("bad");
+    }
+    let here = local::sessions(false).iter().filter(|s| relay::session_hub(&s.meta.tool, &s.meta.key) == Some(hub)).count();
+    if here >= SESSIONS_MAX {
+        return Err("busy");
+    }
+    spawn_session(&t, &key, &name, ask).ok_or("spawn")
 }
 
 /// 等手机说要起哪个（LAUNCH 帧；别的帧不理：启动器不是会话），最多 ASK_WAIT 秒；断了、分出它的进程不在了是 None

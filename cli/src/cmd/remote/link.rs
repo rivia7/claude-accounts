@@ -16,6 +16,8 @@
 //!   这个进程自己被强行结束时，子进程看到父进程换了也跟着走（不然它们没人管着，配对表变了也照转）。
 //!
 //! 退出码 3：这台机器用不了中转（不在哪个 Team 里、用不了会话走的那台服务器、服务器没开中转），宿主不用再起它。
+//!
+//! 远程启动的转接进程（launch.rs 的 `cmd_launcher_link`）也是这样连服务器、接手机的：公共的部分是这里的 `Link`。
 
 use super::far;
 use super::local::{self, Asked, Conn, Decoder, Meta, Note};
@@ -37,9 +39,9 @@ use std::time::Duration;
 
 pub const EXIT_OFF: i32 = 3;
 /// 一个会话同时最多转接几处（服务器那边也是这个数）
-pub(super) const MAX_KIDS: usize = 4;
+const MAX_KIDS: usize = 4;
 /// 10 秒里最多为接入方分出这么多个子进程（服务器一个劲地说“有人来了”也不跟着它转）
-pub(super) const FORKS_PER_10S: usize = 8;
+const FORKS_PER_10S: usize = 8;
 /// 一头还没写出去的超过这么多就先不读另一头
 const HIGH: usize = 1024 * 1024;
 /// 隔多久看一眼配对表变了没有
@@ -67,10 +69,10 @@ pub(super) struct Ctl {
 }
 
 /// 转接着一个接入方的子进程
-pub(super) struct Kid {
-    pub(super) child: libc::pid_t,
-    pub(super) pid: String,
-    pub(super) access: Incoming,
+struct Kid {
+    child: libc::pid_t,
+    pid: String,
+    access: Incoming,
 }
 
 /// 这个会话在哪：宿主的 socket
@@ -91,7 +93,7 @@ fn allowed_now(hub: HubKind) -> Vec<Allowed> {
 }
 
 /// 配对表里和转接有关的那些（变了才要动）
-pub(super) fn shape(a: &[Allowed]) -> Vec<(String, Incoming)> {
+fn shape(a: &[Allowed]) -> Vec<(String, Incoming)> {
     a.iter().map(|x| (x.peer.pid.clone(), x.peer.incoming)).collect()
 }
 
@@ -107,13 +109,9 @@ fn announce(meta: &Meta, allowed: &[Allowed]) -> Vec<u8> {
     ctl_frame(relay::F_ANNOUNCE, json::dumps(&V::Dict(blobs), json::Fmt::new().utf8().compact()).as_bytes())
 }
 
-/// 连上服务器的控制连接。Err(Some(秒))：这么久以后再试；Err(None)：用不了，退出
-fn connect(srv: &Server, meta: &Meta, allowed: &[Allowed], fails: u32) -> R<Result<Ctl, Option<f64>>> {
-    connect_as(srv, &meta.sid, allowed, announce(meta, allowed), fails)
-}
-
-/// 同上：登记成 sid 这个会话，连上以后先说 first（ANNOUNCE；启动器的说明是 launch.rs 封的）
-pub(super) fn connect_as(srv: &Server, sid: &str, allowed: &[Allowed], first: Vec<u8>, fails: u32) -> R<Result<Ctl, Option<f64>>> {
+/// 连上服务器的控制连接：登记成 sid 这个会话，连上以后先说 first（ANNOUNCE：会话的说明是这里封的，启动器的是 launch.rs 封的）。
+/// Err(Some(秒))：这么久以后再试；Err(None)：用不了，退出
+fn connect_as(srv: &Server, sid: &str, allowed: &[Allowed], first: Vec<u8>, fails: u32) -> R<Result<Ctl, Option<f64>>> {
     let pids: Vec<V> = allowed.iter().map(|a| V::from(a.peer.pid.as_str())).collect();
     let backoff = (5.0 * f64::from(1u32 << fails.min(5))).min(120.0);
     let t = match srv.ticket("relay_host", &crate::dict! { "sid" => sid, "pids" => pids })? {
@@ -134,7 +132,7 @@ pub(super) fn connect_as(srv: &Server, sid: &str, allowed: &[Allowed], first: Ve
 }
 
 /// 控制连接的这一轮：ready（poll 说有动静）时读进来、交出完整的帧；该说一声了说一声；把要说的写出去。断了（读写出错、太久没动静）是 Err
-pub(super) fn ctl_step(c: &mut Ctl, ready: bool) -> Result<Vec<(u8, Vec<u8>)>, ()> {
+fn ctl_step(c: &mut Ctl, ready: bool) -> Result<Vec<(u8, Vec<u8>)>, ()> {
     let got = if ready { frames(c).map_err(|_| ())? } else { Vec::new() };
     let now = monotonic();
     if now - c.pinged >= PING_EVERY {
@@ -186,7 +184,7 @@ fn push_note(ctl: &mut Ctl, meta: &Meta, allowed: &[Allowed], n: &Note) {
 }
 
 /// 告诉服务器会话结束了（写不出去就算了：它过一分钟自己也会清掉）
-pub(super) fn bye(mut ctl: Ctl) {
+fn bye(mut ctl: Ctl) {
     ctl.out.extend(ctl_frame(relay::F_BYE, b""));
     let _ = ctl.stream.set_nonblocking(false);
     let _ = ctl.stream.set_write_timeout(Some(Duration::from_secs(2)));
@@ -194,14 +192,11 @@ pub(super) fn bye(mut ctl: Ctl) {
     let _ = ctl.stream.write_all(a).and_then(|()| ctl.stream.write_all(b));
 }
 
-/// 子进程里：转接一个接入方，到一头断了为止。parent 是分出它的那个进程：它不在了就走
-fn bridge(srv: &Server, ctl: &Ctl, token: &str, a: &Allowed, at: &Session, parent: libc::pid_t) -> io::Result<()> {
-    let mut stream = srv.dial(ctl.port, "join", token, &ctl.key, 10.0)?;
-    let allowed = |pid: &str| (pid == a.peer.pid).then(|| (&a.peer, a.secret.clone()));
-    let (chan, _) = relay::handshake_host(&mut stream, &at.meta.sid, &srv.fp, allowed)?;
+/// 子进程里：转接一个接入方，到一头断了为止。分出它的那个进程（j.parent）不在了就走
+fn bridge(j: &Join, at: &Session) -> io::Result<()> {
+    let mut tun = j.tunnel()?;
     let mut conn = Conn::new(local::connect(&at.dir, &at.sock)?)?;
-    let mut tun = Tunnel::new(stream, chan)?;
-    let control = a.peer.incoming == Incoming::Control;
+    let control = j.a.peer.incoming == Incoming::Control;
     let (mut from_far, mut from_host) = (Decoder::default(), Decoder::default());
     let mut greeted = false;
     const BAD: libc::c_short = libc::POLLERR | libc::POLLHUP | libc::POLLNVAL;
@@ -224,7 +219,7 @@ fn bridge(srv: &Server, ctl: &Ctl, token: &str, a: &Allowed, at: &Session, paren
         // SAFETY: fds 是有效的数组
         unsafe { libc::poll(fds.as_mut_ptr(), 2, 1000) };
         // SAFETY: getppid 没有参数、不会失败
-        if unsafe { libc::getppid() } != parent {
+        if unsafe { libc::getppid() } != j.parent {
             return far_gone(&mut conn);
         }
         // 接入方发来的：只让看的，按键、改窗口大小的不转（它的窗口多小都不该影响会话）；问宿主状态的谁都不转；起会话的（LAUNCH：
@@ -279,16 +274,7 @@ fn bridge(srv: &Server, ctl: &Ctl, token: &str, a: &Allowed, at: &Session, paren
     }
 }
 
-/// 收走退出了的子进程
-fn reap(kids: &mut Vec<Kid>) {
-    kids.retain(|k| {
-        let mut status = 0;
-        // SAFETY: status 是有效的；child 是自己分出来的子进程
-        unsafe { libc::waitpid(k.child, &mut status, libc::WNOHANG) == 0 }
-    });
-}
-
-pub(super) fn stop<'a>(kids: impl IntoIterator<Item = &'a Kid>) {
+fn stop<'a>(kids: impl IntoIterator<Item = &'a Kid>) {
     for k in kids {
         // SAFETY: 给自己分出来的子进程发信号；它已经没了时出错，不管
         unsafe { libc::kill(k.child, libc::SIGTERM) };
@@ -319,77 +305,21 @@ pub fn cmd_remote_link(args: &[String]) -> R<()> {
     // 不在哪个 Team 里时没有，这个会话不经中转）
     let Some(hub) = relay::session_hub(&at.meta.tool, &at.meta.key) else { return exit(EXIT_OFF) };
     let Ok(srv) = relay::server_of(hub)? else { return exit(EXIT_OFF) };
-    let wake = sig::install()?;
-
-    let mut allowed: Vec<Allowed> = Vec::new();
-    let mut stamp: Option<peers::Stamp> = None; // 还没看过是 None
-    let mut checked = f64::NEG_INFINITY;
-    let mut ctl: Option<Ctl> = None;
-    let mut kids: Vec<Kid> = Vec::new();
-    let mut forks: VecDeque<f64> = VecDeque::new();
-    let (mut next_try, mut fails) = (0.0f64, 0u32);
+    let mut link = Link::new(srv, &at.meta.sid)?;
     let (mut from_host, mut notes) = (Decoder::default(), VecDeque::<(f64, Note)>::new());
     let mut buf = [0u8; 4096];
-    'run: loop {
+    loop {
         let now = monotonic();
-        reap(&mut kids);
-        // 配对表变了：照新的来
-        if now - checked >= PEERS_EVERY {
-            checked = now;
-            let s = peers::stamp();
-            if stamp != Some(s) {
-                stamp = Some(s);
-                let fresh = allowed_now(hub);
-                if shape(&fresh) != shape(&allowed) {
-                    // 不该再接着的（不让了、改成只看了、取消配对了）结束掉；它们留在 kids 里等着收走
-                    let keep = shape(&fresh);
-                    stop(kids.iter().filter(|k| !keep.contains(&(k.pid.clone(), k.access))));
-                    allowed = fresh;
-                    // 换一条控制连接（新的票据上是新的那几个配对）：旧的直接断开；一个都不让了就告诉服务器会话没了
-                    if let Some(old) = ctl.take() {
-                        if allowed.is_empty() {
-                            bye(old);
-                        }
-                    }
-                    (next_try, fails) = (now, 0);
-                }
-            }
+        link.reap();
+        link.refresh(now, || allowed_now(hub));
+        // 连上以后先说 ANNOUNCE，攒着的通知下面接着推
+        if !link.connect_if_due(now, |allowed| announce(&at.meta, allowed))? {
+            return exit(EXIT_OFF);
         }
-        if ctl.is_none() && !allowed.is_empty() && now >= next_try {
-            // 连上以后先说 ANNOUNCE（connect 里），攒着的通知下面接着推
-            match connect(&srv, &at.meta, &allowed, fails)? {
-                Ok(c) => {
-                    ctl = Some(c);
-                    fails = 0;
-                }
-                Err(Some(wait)) => {
-                    fails += 1;
-                    next_try = now + wait;
-                }
-                Err(None) => {
-                    stop(&kids);
-                    return exit(EXIT_OFF);
-                }
-            }
-        }
-        let ctl_fd = ctl.as_ref().map_or(-1, |c| c.stream.as_raw_fd());
-        let ctl_out = ctl.as_ref().is_some_and(|c| !c.out.is_empty());
-        let mut fds = [
-            libc::pollfd { fd: wake, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: ctl_fd, events: libc::POLLIN | if ctl_out { libc::POLLOUT } else { 0 }, revents: 0 },
-        ];
-        // SAFETY: fds 是有效的数组；被信号打断就是要它马上回来
-        unsafe { libc::poll(fds.as_mut_ptr(), 3, 1000) };
-        if fds[0].revents != 0 || sig::pending() {
-            let got = sig::take(wake);
-            if got.has(libc::SIGTERM) || got.has(libc::SIGINT) || got.has(libc::SIGHUP) || got.has(libc::SIGQUIT) {
-                break 'run;
-            }
-        }
+        let Some(woke) = link.wait() else { break };
         // 宿主交来的通知；读到头（出错、帧不对）是宿主不在了：这一轮的推完再走
         let mut host_gone = false;
-        if fds[1].revents != 0 {
+        if woke.stdin {
             match pty::read_some(0, &mut buf) {
                 Some(Ok(n)) if n > 0 => from_host.push(&buf[..n]),
                 None => {}
@@ -414,81 +344,255 @@ pub fn cmd_remote_link(args: &[String]) -> R<()> {
                 notes.pop_front();
             }
         }
-        match ctl.as_mut() {
+        match link.ctl.as_mut() {
             Some(c) => {
                 for (_, n) in notes.drain(..) {
-                    push_note(c, &at.meta, &allowed, &n);
+                    push_note(c, &at.meta, &link.allowed, &n);
                 }
             }
             None => notes.retain(|(t, _)| now - t < NOTE_KEEP),
         }
         if host_gone {
-            break 'run;
+            break;
         }
-        let mut lost = false;
-        if let Some(c) = ctl.as_mut() {
-            let ready = fds[2].revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0;
-            match ctl_step(c, ready) {
-                Ok(list) => {
-                    for (kind, payload) in list {
-                        if kind == relay::F_JOIN {
-                            join(&srv, c, &payload, &allowed, &at, &mut kids, &mut forks);
-                        }
-                    }
-                }
-                Err(()) => lost = true,
-            }
-        }
-        if lost {
-            ctl = None;
-            fails += 1;
-            next_try = monotonic() + (2.0 * f64::from(1u32 << fails.min(5))).min(60.0);
+        for p in &woke.joins {
+            link.join(p, |_| Some(()), |j, ()| if bridge(j, &at).is_ok() { 0 } else { 1 });
         }
     }
-    // 收场：告诉服务器会话结束了；子进程把宿主最后说的（“会话结束了”）转完自己会走，等它们一会儿
-    if let Some(c) = ctl.take() {
-        bye(c);
-    }
-    let end = monotonic() + 3.0;
-    while !kids.is_empty() && monotonic() < end {
-        sleep(0.05);
-        reap(&mut kids);
-    }
-    stop(&kids);
+    // 收场：告诉服务器会话结束了；子进程把宿主最后说的（“会话结束了”）转完自己会走
+    link.finish();
     Ok(())
 }
 
-/// 服务器说有接入方来了：分出一个子进程去转接它。不是允许接入的配对、已经转接着够多了、它说得太勤：不理
-/// （接入方那头等一会儿，服务器告诉它宿主没来）
-fn join(
-    srv: &Server,
-    ctl: &Ctl,
-    payload: &[u8],
-    allowed: &[Allowed],
-    at: &Session,
-    kids: &mut Vec<Kid>,
-    forks: &mut VecDeque<f64>,
-) {
-    let Some(j) = std::str::from_utf8(payload).ok().and_then(|s| json::loads(s).ok()).and_then(|j| j.as_dict()) else { return };
-    let (Some(token), Some(pid)) = (j.str("token").filter(|t| peers::hex32(t)), j.str("pid")) else { return };
-    let Some(a) = allowed.iter().find(|a| *a.peer.pid == *pid) else { return };
-    let now = monotonic();
-    while forks.front().is_some_and(|t| now - t > 10.0) {
-        forks.pop_front();
+/// 转接进程退出了、没起来时过多久再起（会话宿主、远程启动的后台进程都这样管它）：一次比一次久（5、10、20、40 秒，最多一分钟），
+/// 上一次跑了一分钟以上的从头算
+#[derive(Default)]
+pub(super) struct Respawn {
+    started: f64,
+    /// 什么时候再起（宿主也拿它记什么时候再看一眼）
+    pub(super) next: f64,
+    fails: u32,
+}
+
+impl Respawn {
+    pub(super) fn started(&mut self, now: f64) {
+        self.started = now;
     }
-    if kids.len() >= MAX_KIDS || forks.len() >= FORKS_PER_10S {
-        return;
+
+    /// 它退出了（或者没起来）
+    pub(super) fn failed(&mut self, now: f64) {
+        self.fails = if now - self.started > 60.0 { 0 } else { self.fails + 1 };
+        self.next = now + (5.0 * f64::from(1u32 << self.fails.min(4))).min(60.0);
     }
-    forks.push_back(now);
-    let run = |me| if bridge(srv, ctl, &token, a, at, me).is_ok() { 0 } else { 1 };
-    if let Some(child) = fork_kid(ctl, run) {
-        kids.push(Kid { child, pid: a.peer.pid.clone(), access: a.peer.incoming });
+}
+
+/// 转接进程的公共部分（会话的 `cmd_remote_link`、远程启动的 launch.rs 的 `cmd_launcher_link`）：在一台服务器上登记成一个会话，
+/// 照配对表允许的配对开一条控制连接（断了按退避再连），配对表变了几秒钟内照新的来；接入方来了（JOIN）分出子进程去接
+pub(super) struct Link {
+    srv: Server,
+    sid: String,
+    wake: libc::c_int,
+    /// 允许接入的配对（各带配对的密钥）
+    pub(super) allowed: Vec<Allowed>,
+    /// 配对表上一次的样子（还没看过是 None）、什么时候看的
+    stamp: Option<peers::Stamp>,
+    checked: f64,
+    pub(super) ctl: Option<Ctl>,
+    kids: Vec<Kid>,
+    /// 最近 10 秒里分出子进程的时候
+    forks: VecDeque<f64>,
+    /// 控制连接什么时候再连、接连失败了几次
+    next_try: f64,
+    fails: u32,
+}
+
+/// 这一轮等到的（`Link::wait`）
+pub(super) struct Woke {
+    /// 标准输入上有动静（读它的是调用方）
+    pub(super) stdin: bool,
+    /// 服务器说有接入方来了（JOIN 的内容；交给 `Link::join`）
+    pub(super) joins: Vec<Vec<u8>>,
+}
+
+/// 子进程要接的那一个接入方（`Link::join` 交给子进程的）
+pub(super) struct Join<'a> {
+    srv: &'a Server,
+    ctl: &'a Ctl,
+    pub(super) sid: &'a str,
+    token: &'a str,
+    pub(super) a: &'a Allowed,
+    /// 分出它的进程：不在了，子进程也该走
+    pub(super) parent: libc::pid_t,
+}
+
+impl Join<'_> {
+    /// 拿令牌另连一条上去，和接入方握手（核对它有配对的密钥）
+    pub(super) fn tunnel(&self) -> io::Result<Tunnel> {
+        let mut stream = self.srv.dial(self.ctl.port, "join", self.token, &self.ctl.key, 10.0)?;
+        let allowed = |pid: &str| (pid == self.a.peer.pid).then(|| (&self.a.peer, self.a.secret.clone()));
+        let (chan, _) = relay::handshake_host(&mut stream, self.sid, &self.srv.fp, allowed)?;
+        Tunnel::new(stream, chan)
+    }
+}
+
+impl Link {
+    /// 登记成 sid 这个会话（还没连：`connect_if_due`）；收结束的信号
+    pub(super) fn new(srv: Server, sid: &str) -> R<Link> {
+        let wake = sig::install()?;
+        Ok(Link {
+            srv,
+            sid: sid.to_string(),
+            wake,
+            allowed: Vec::new(),
+            stamp: None,
+            checked: f64::NEG_INFINITY,
+            ctl: None,
+            kids: Vec::new(),
+            forks: VecDeque::new(),
+            next_try: 0.0,
+            fails: 0,
+        })
+    }
+
+    /// 收走退出了的子进程，交出正常退出的那些的退出码
+    pub(super) fn reap(&mut self) -> Vec<i32> {
+        let mut codes = Vec::new();
+        self.kids.retain(|k| {
+            let mut status = 0;
+            // SAFETY: status 是有效的；child 是自己分出来的子进程
+            let r = unsafe { libc::waitpid(k.child, &mut status, libc::WNOHANG) };
+            if r == k.child && libc::WIFEXITED(status) {
+                codes.push(libc::WEXITSTATUS(status));
+            }
+            r == 0
+        });
+        codes
+    }
+
+    /// 隔 PEERS_EVERY 秒看一眼配对表。变了就照新的（allowed_now 算的）来：不该再接着的子进程（不让了、改成只看了、取消配对了）
+    /// 结束掉，它们留着等收走；换一条控制连接（新的票据上是新的那几个配对），旧的直接断开，一个都不让了就告诉服务器会话没了。
+    /// 这一轮看了是 true（调用方隔一阵要看的别的也跟着看）
+    pub(super) fn refresh(&mut self, now: f64, allowed_now: impl FnOnce() -> Vec<Allowed>) -> bool {
+        if now - self.checked < PEERS_EVERY {
+            return false;
+        }
+        self.checked = now;
+        let s = peers::stamp();
+        if self.stamp != Some(s) {
+            self.stamp = Some(s);
+            let fresh = allowed_now();
+            if shape(&fresh) != shape(&self.allowed) {
+                let keep = shape(&fresh);
+                stop(self.kids.iter().filter(|k| !keep.contains(&(k.pid.clone(), k.access))));
+                self.allowed = fresh;
+                if let Some(old) = self.ctl.take() {
+                    if self.allowed.is_empty() {
+                        bye(old);
+                    }
+                }
+                (self.next_try, self.fails) = (now, 0);
+            }
+        }
+        true
+    }
+
+    /// 没连着、有允许的配对、到时候了：连上服务器，先说 first 封的（ANNOUNCE）。false：这台机器用不了中转（子进程都结束掉了；
+    /// 调用方退出，退出码 EXIT_OFF）
+    pub(super) fn connect_if_due(&mut self, now: f64, first: impl FnOnce(&[Allowed]) -> Vec<u8>) -> R<bool> {
+        if self.ctl.is_some() || self.allowed.is_empty() || now < self.next_try {
+            return Ok(true);
+        }
+        match connect_as(&self.srv, &self.sid, &self.allowed, first(&self.allowed), self.fails)? {
+            Ok(c) => {
+                self.ctl = Some(c);
+                self.fails = 0;
+            }
+            Err(Some(wait)) => {
+                self.fails += 1;
+                self.next_try = now + wait;
+            }
+            Err(None) => {
+                stop(&self.kids);
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// 等一会儿（最多 1 秒）：信号、标准输入、控制连接。收到要结束的信号是 None。控制连接这一轮照常读写（`ctl_step`），
+    /// 断了按退避再连
+    pub(super) fn wait(&mut self) -> Option<Woke> {
+        let ctl_fd = self.ctl.as_ref().map_or(-1, |c| c.stream.as_raw_fd());
+        let ctl_out = self.ctl.as_ref().is_some_and(|c| !c.out.is_empty());
+        let mut fds = [
+            libc::pollfd { fd: self.wake, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: ctl_fd, events: libc::POLLIN | if ctl_out { libc::POLLOUT } else { 0 }, revents: 0 },
+        ];
+        // SAFETY: fds 是有效的数组；被信号打断就是要它马上回来
+        unsafe { libc::poll(fds.as_mut_ptr(), 3, 1000) };
+        if fds[0].revents != 0 || sig::pending() {
+            let got = sig::take(self.wake);
+            if [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGQUIT].into_iter().any(|s| got.has(s)) {
+                return None;
+            }
+        }
+        let mut woke = Woke { stdin: fds[1].revents != 0, joins: Vec::new() };
+        if let Some(c) = self.ctl.as_mut() {
+            let ready = fds[2].revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0;
+            match ctl_step(c, ready) {
+                Ok(list) => woke.joins = list.into_iter().filter(|(kind, _)| *kind == relay::F_JOIN).map(|(_, p)| p).collect(),
+                Err(()) => {
+                    self.ctl = None;
+                    self.fails += 1;
+                    self.next_try = monotonic() + (2.0 * f64::from(1u32 << self.fails.min(5))).min(60.0);
+                }
+            }
+        }
+        Some(woke)
+    }
+
+    /// 服务器说有接入方来了（JOIN：令牌、配对编号）：是允许的配对、转接着的没到 MAX_KIDS 个、10 秒里分出的没到 FORKS_PER_10S 个、
+    /// admit 也说行（交出给子进程的）时，分出一个子进程做 run（退出码是它返回的）。不然不理：接入方那头等一会儿，服务器告诉它
+    /// 这边没来
+    pub(super) fn join<T>(&mut self, payload: &[u8], admit: impl FnOnce(&Allowed) -> Option<T>, run: impl FnOnce(&Join, T) -> i32) {
+        let Some(ctl) = self.ctl.as_ref() else { return };
+        let Some(j) = std::str::from_utf8(payload).ok().and_then(|s| json::loads(s).ok()).and_then(|j| j.as_dict()) else { return };
+        let (Some(token), Some(pid)) = (j.str("token").filter(|t| peers::hex32(t)), j.str("pid")) else { return };
+        let Some(a) = self.allowed.iter().find(|a| *a.peer.pid == *pid) else { return };
+        let now = monotonic();
+        while self.forks.front().is_some_and(|t| now - t > 10.0) {
+            self.forks.pop_front();
+        }
+        if self.kids.len() >= MAX_KIDS || self.forks.len() >= FORKS_PER_10S {
+            return;
+        }
+        let Some(given) = admit(a) else { return };
+        self.forks.push_back(now);
+        let (srv, sid) = (&self.srv, self.sid.as_str());
+        let kid = |parent| run(&Join { srv, ctl, sid, token: &token, a, parent }, given);
+        if let Some(child) = fork_kid(ctl, kid) {
+            self.kids.push(Kid { child, pid: a.peer.pid.clone(), access: a.peer.incoming });
+        }
+    }
+
+    /// 收场：告诉服务器会话结束了；子进程把手上的做完自己会走，等它们一会儿（3 秒），还没走的结束掉
+    pub(super) fn finish(mut self) {
+        if let Some(c) = self.ctl.take() {
+            bye(c);
+        }
+        let end = monotonic() + 3.0;
+        while !self.kids.is_empty() && monotonic() < end {
+            sleep(0.05);
+            self.reap();
+        }
+        stop(&self.kids);
     }
 }
 
 /// 为一个接入方分出一个子进程做 run（交给它的是分出它的那个进程的编号：那个进程不在了，子进程也该走），子进程做完直接 _exit，
 /// 退出码是 run 返回的。分不出来是 None
-pub(super) fn fork_kid(ctl: &Ctl, run: impl FnOnce(libc::pid_t) -> i32) -> Option<libc::pid_t> {
+fn fork_kid(ctl: &Ctl, run: impl FnOnce(libc::pid_t) -> i32) -> Option<libc::pid_t> {
     // SAFETY: getpid 没有参数、不会失败
     let me = unsafe { libc::getpid() };
     // SAFETY: 这个进程只有一条线程；子进程里只用自己这一份内存、新开的连接，做完直接 _exit（不跑父进程的收尾）

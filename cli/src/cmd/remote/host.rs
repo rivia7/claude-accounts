@@ -12,7 +12,7 @@
 //! 把远处的接入方像这台机器上的接入方一样接到 socket 上，会话里推的通知也经它推给配对的手机；它退出了过一会儿再起，会话本身
 //! 不受影响。
 
-use super::link;
+use super::link::{self, Respawn};
 use super::local::{self, Decoder, Meta, Note, NoteBudget, Status};
 use super::peers;
 use super::pty::{self, Raw, Size};
@@ -98,10 +98,8 @@ struct LinkProc {
     child: Option<Child>,
     /// 还没写进那根管道的（写不动时攒着，到 `LINK_HIGH` 为止）
     out: VecDeque<u8>,
-    started: f64,
-    /// 什么时候再看一眼
-    next: f64,
-    fails: u32,
+    /// 什么时候再看一眼（隔 2 秒）、它退出了过多久再起
+    retry: Respawn,
     /// 这台机器用不了中转（它自己说的）：不再试
     off: bool,
 }
@@ -723,18 +721,15 @@ impl Host {
     /// 配对过别的机器（有配对表）就让转接进程跑着；它退出了过一会儿再起（一次比一次久，最多一分钟）
     fn link_tick(&mut self, now: f64) {
         let l = &mut self.link;
-        if l.off || now < l.next {
+        if l.off || now < l.retry.next {
             return;
         }
-        l.next = now + 2.0;
+        l.retry.next = now + 2.0;
         if let Some(child) = l.child.as_mut() {
             match child.try_wait() {
                 Ok(None) => return,
                 Ok(Some(st)) if st.code() == Some(link::EXIT_OFF) => l.off = true,
-                _ => {
-                    l.fails = if now - l.started > 60.0 { 0 } else { l.fails + 1 };
-                    l.next = now + (5.0 * f64::from(1u32 << l.fails.min(4))).min(60.0);
-                }
+                _ => l.retry.failed(now),
             }
             l.child = None;
             l.out.clear(); // 是给那根管道的（可能写了半帧）：下一个转接进程从头来
@@ -742,11 +737,10 @@ impl Host {
         }
         if peers::stamp().is_some() {
             l.child = spawn_link(&self.meta.sid);
-            l.started = now;
+            l.retry.started(now);
             if l.child.is_none() {
                 // 没起来（辅助程序的文件刚被新版本换掉之类）：和它自己退出一样，过一会儿再试
-                l.fails += 1;
-                l.next = now + (5.0 * f64::from(1u32 << l.fails.min(4))).min(60.0);
+                l.retry.failed(now);
             }
         }
     }
