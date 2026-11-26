@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.3", title: "远程会话做完了、在等你时会通知你", points: [
+            .init(symbol: "bell.badge",
+                  text: "开着远程会话时，Claude Code 做完一轮、要你确认或者在等你，cca 自己会发通知给接着这个会话的设备，不用再自己写钩子。"),
+            .init(symbol: "iphone",
+                  text: "iPhone 上的 cca App 更新后也弹这些通知；Team 的服务器开了推送时，App 没开着、锁着屏也收得到，内容只在手机上解开。"),
+            .init(symbol: "server.rack",
+                  text: "Team 的服务器可以接上推送网关（cca team deploy 的 --push、--push-pin），服务器和网关只经手密文。"),
+        ]),
         ReleaseNote(version: "3.7.2", title: "折合金额算上 Antigravity", points: [
             .init(symbol: "dollarsign.circle",
                   text: "用 cca 启动的 Antigravity 会话也折合成金额：Gemini 模型按 Gemini API 的标价，Claude 模型按 Anthropic 的价格。"),
