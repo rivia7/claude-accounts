@@ -211,9 +211,14 @@ enum CostChart {
         return out
     }
 
-    /// 折合金额页一行下面要不要列各台设备（看所有设备时）：有记录的设备至少两台（只有一台时和整个账号一样）
+    /// 折合金额页一行下面列哪几台设备（看所有设备时）：用过这个账号的（cca 给的 `used`；3.7.4 及以前的 cca 只为诊断列出来的那种是 false，不列）
+    static func listedDevices(_ c: AccountCost) -> [CostDevice] {
+        c.devices.filter(\.used)
+    }
+
+    /// 折合金额页一行下面要不要列各台设备（看所有设备时）：列的设备至少两台（只有一台时和整个账号一样）
     static func listsDevices(_ c: AccountCost?) -> Bool {
-        (c?.devices.count ?? 0) >= 2
+        (c.map(listedDevices)?.count ?? 0) >= 2
     }
 
     // MARK: 按模型

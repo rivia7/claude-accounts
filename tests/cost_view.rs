@@ -2062,8 +2062,8 @@ fn strptime_secs(text: &str, format: &CStr) -> i64 {
     unsafe { libc::mktime(&mut tm) as i64 }
 }
 
-/// 诊断：这台设备的（local.json 的 diag、cca 的版本）、别的设备传来的（dg）。最近 30 天有回复认不出账号的设备即使这个账号
-/// 没有数据也列出来（金额是 0）；这台设备没有数据时不列（它认不出的用量不一定是这个账号的）
+/// 诊断：这台设备的（local.json 的 diag、cca 的版本）、别的设备传来的（dg）。只列有这个账号的数据的设备：最近有回复认不出账号、
+/// 这个账号却没有数据的设备不列（3.7.5 起；以前金额是 0 也列出来）
 fn diag(t: &mut Ctx) {
     let mut fx = View::new(t);
     let recent = obj! { "code" => "old_claude_code", "last_epoch" => NOW - DAY, "claude_code" => "2.1.316" };
@@ -2095,7 +2095,7 @@ fn diag(t: &mut Ctx) {
     let mut cv = fx.view();
     let a = cv.account("claude", "alice(alice@example.com)", Value::Null, Given::Team);
     let devs = &a["devices"];
-    assert_eq!(names(devs), list!["alice-mbp", "bob-mini", "carol-air", "erin-mini"], "没有数据的只列最近有回复认不出账号的");
+    assert_eq!(names(devs), list!["alice-mbp", "bob-mini", "carol-air"], "没有这个账号的数据的不列，最近有回复认不出账号的也不列");
     assert_eq!(
         named(devs, "alice-mbp")["diag"],
         obj! { "cca" => "3.6.0", "claude_code" => "2.1.330", "claude_code_old" => false, "why" => list![&recent] },
@@ -2104,21 +2104,13 @@ fn diag(t: &mut Ctx) {
     assert_eq!(
         named(devs, "bob-mini")["diag"],
         obj! { "cca" => "3.6.0", "claude_code" => "2.1.316", "claude_code_old" => true, "why" => list![why(2.0 * DAY, old)] },
-        "命令行里还在用旧版的 Claude Code：cca 标出来（App 据此提醒更新）"
+        "命令行里还在用旧版的 Claude Code：cca 照旧标出来（App 不显示）"
     );
     assert_eq!(named(devs, "carol-air")["diag"], Value::Null);
-    let e = named(devs, "erin-mini");
-    assert_eq!(
-        list![&e["summary"]["days_usd"], fsum(&e["days_usd"]), &e["diag"]["why"][0]["code"], &e["used"]],
-        list![0.0, 0.0, "claude_app", false]
-    );
+    assert_eq!(col(devs, "used"), list![true, true, true], "列出来的都用过这个账号");
     assert_eq!(list![&a["summary"]["days_usd"], &a["since_epoch"]], list![19.0, at_f(2026, 10, 1, 10)], "合计、从哪天有数据照旧");
     let t = cv.total(&["claude"]);
-    assert_eq!(
-        col(&t["devices"], "name"),
-        list!["alice-mbp", "bob-mini", "carol-air"],
-        "只为诊断列出来的设备没用过这个账号：设备菜单里没有它"
-    );
+    assert_eq!(col(&t["devices"], "name"), list!["alice-mbp", "bob-mini", "carol-air"], "设备菜单里只有用过这个账号的");
     let u = &t["unattributed"];
     assert_eq!(
         pick(u, &["days_usd", "requests", "why", "claude_code", "claude_code_old"]),

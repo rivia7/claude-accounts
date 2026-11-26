@@ -174,13 +174,13 @@ extension Texts {
 
     /// 同步的状态、还没算进来的设备（看所有设备时，只在要说的时候有）：
     /// not_logged_in、pending、local_only、off 说一句（灰字）；error（和不认识的状态）、30 天内用过却没同步过金额的设备（missing）、
-    /// 很久没同步上来的设备、有用量没算进来的设备（cca 给的 diag.why）说一句（橙色）。ok 不说。撤销了的设备不提醒（数字本来就是撤销前同步来的）。
-    /// 只看一台设备时只说那一台的：本机只说有用量没算进来（这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它），
-    /// 另一台设备再说它很久没同步上来
+    /// 很久没同步上来的设备说一句（橙色）。ok 不说。撤销了的设备不提醒（数字本来就是撤销前同步来的）。cca 给的诊断（diag）不说。
+    /// 只看一台设备时只说那一台的：本机什么都不说（这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它），
+    /// 另一台设备说它很久没同步上来
     static func costNotes(_ c: AccountCost, scope: CostScope = .all, now: Double, calendar: Calendar = .current) -> [CostNote] {
         guard scope == .all else {
             guard let d = CostChart.device(c, scope: scope) else { return [] }
-            return [costStale(d, now: now, calendar: calendar), costDeviceNote(d)].compactMap { $0 }.map { CostNote(text: $0, warning: true) }
+            return [costStale(d, now: now, calendar: calendar)].compactMap { $0 }.map { CostNote(text: $0, warning: true) }
         }
         var out: [CostNote] = []
         // cca 没给 sync 时（syncState 当作 local_only）不知道为什么只有这台设备，不说
@@ -199,34 +199,7 @@ extension Texts {
         for d in c.devices {
             if let text = costStale(d, now: now, calendar: calendar) { out.append(CostNote(text: text, warning: true)) }
         }
-        for d in c.devices {
-            if let text = costDeviceNote(d) { out.append(CostNote(text: text, warning: true)) }
-        }
         return out
-    }
-
-    /// 一个认不出账号的原因（几个用「、」连起来）：「Claude Code 2.1.316 太旧」「Claude App 里的 Code 会话」「会话没带账号信息」
-    static func costWhy(_ w: CostWhy) -> String {
-        switch w.code.shown {
-        case .oldClaudeCode: return "Claude Code " + (w.claudeCode.map { $0 + " " } ?? "") + "太旧"
-        case .claudeApp: return "Claude App 里的 Code 会话"
-        default: return "会话没带账号信息"
-        }
-    }
-
-    /// 一台设备有用量没算进来（cca 给的 diag.why；撤销了的不说）：「有用量没算进来：Claude Code 2.1.316 太旧」（设备那一行的提示）。
-    /// 都认得出、旧版 cca 的设备（没有诊断）是 nil
-    static func costDeviceWhy(_ d: CostDevice) -> String? {
-        guard !d.revoked, let why = d.diag?.why, !why.isEmpty else { return nil }
-        return "有用量没算进来：" + why.map(costWhy).joined(separator: "、")
-    }
-
-    /// 同上，带着是哪台设备，命令行里用的 Claude Code 还是旧版本（cca 标的 claude_code_old）时提醒更新：
-    /// 「office-imac 有用量没算进来：Claude Code 2.1.316 太旧，那台设备要更新 Claude Code」「这台设备有用量没算进来：…」
-    static func costDeviceNote(_ d: CostDevice) -> String? {
-        guard let why = costDeviceWhy(d) else { return nil }
-        let update = d.diag?.claudeCodeOld == true ? (d.isMe ? "，要更新 Claude Code" : "，那台设备要更新 Claude Code") : ""
-        return (d.isMe ? "这台设备" : d.name + " ") + why + update
     }
 
     /// 一台很久没同步上来的设备（cca 标的 `stale`；这台设备自己、撤销了的不说）：「office-imac 周四 15:00 以后的还没同步上来」
@@ -257,7 +230,7 @@ extension Texts {
         switch tool {
         case .codex: return since + "Codex 0.157 起的会话才带着账号信息，更早的算不进来。"
         case .agy: return since + "只有用 cca 启动的 Antigravity 会话认得出是哪个账号的，直接运行 agy 的算进「认不出账号」。"
-        default: return since + "Claude Code 2.1.317 起的会话才带着账号信息，更早的、Claude 桌面 App 里的会话算不进来。"
+        default: return since
         }
     }
 
@@ -320,8 +293,8 @@ extension Texts {
     }
 
     /// 认不出是哪个账号的用量（折合金额页的合计下面）。cca 给了所有设备的（`unattributed.cost`，3.6.8 起）：说没算进合计、单独列在
-    /// 最下面，为什么（看所有设备时是各台设备的原因，本机、另一台设备时是那一台的；它没有这种用量时不说）。旧版 cca 只有这台设备
-    /// 近 30 天的：照旧说这台设备的金额、为什么（cca 给的原因；没给时笼统地说），看另一台设备时不说。没有时是 nil
+    /// 最下面（本机、另一台设备时说那一台的；它没有这种用量时不说）。旧版 cca 只有这台设备近 30 天的：照旧说这台设备的金额，
+    /// 看另一台设备时不说。不说为什么认不出（cca 给的原因不显示）。没有时是 nil
     static func costUnattributed(_ u: CostUnattributed?, scope: CostScope = .me, total: CostTotal? = nil, currency: String) -> String? {
         guard let u else { return nil }
         if let c = u.cost {
@@ -332,8 +305,7 @@ extension Texts {
             case .me: who = "这台设备"
             case .device: who = costOrphanRowName(scope, total: total) + " "
             }
-            let why = costOrphanWhy(c, scope: scope)
-            return who + "认不出是哪个账号的用量没算进合计，单独列在最下面" + (why.isEmpty ? "" : "（" + why.joined(separator: "、") + "）") + "。"
+            return who + "认不出是哪个账号的用量没算进合计，单独列在最下面。"
         }
         guard !scope.isOtherDevice else { return nil }
         let what: String
@@ -344,8 +316,7 @@ extension Texts {
         } else {
             return nil
         }
-        let why = u.why.isEmpty ? "旧版 Claude Code、桌面 App 里的会话" : u.why.map(costWhy).joined(separator: "、")
-        return "近 30 天另有 \(what)认不出是哪个账号的（\(why)），没算进来。"
+        return "近 30 天另有 \(what)认不出是哪个账号的，没算进来。"
     }
 
     /// 还没传认不出的用量的设备（cca 给的 `unattributed.unsynced`，3.6.8 起）：看所有设备时
@@ -367,23 +338,6 @@ extension Texts {
         case .me: return "这台设备"
         case .device(let id): return total?.device(id)?.name ?? total?.unattributed?.cost?.device(id)?.name ?? "那台设备"
         }
-    }
-
-    /// 认不出的原因（cca 给的各台设备的诊断，去掉重复的）：看所有设备时是各台的，本机、另一台设备时是那一台的
-    static func costOrphanWhy(_ c: AccountCost, scope: CostScope) -> [String] {
-        let devices = scope == .all ? c.devices : (CostChart.device(c, scope: scope).map { [$0] } ?? [])
-        var out: [String] = []
-        for w in devices.compactMap(\.diag).flatMap(\.why) {
-            let s = costWhy(w)
-            if !out.contains(s) { out.append(s) }
-        }
-        return out
-    }
-
-    /// 「认不出账号」那一组里一台设备的原因（悬停提示、读屏；不是要处理的问题，不画橙色的三角）：「认不出的原因：Claude App 里的 Code 会话」
-    static func costOrphanDeviceWhy(_ d: CostDevice) -> String? {
-        guard let why = d.diag?.why, !why.isEmpty else { return nil }
-        return "认不出的原因：" + why.map(costWhy).joined(separator: "、")
     }
 
     // MARK: 按模型
@@ -434,17 +388,4 @@ extension Texts {
         return "检测到新模型 " + est.compactMap(\.model).joined(separator: "、") + "：cca 的价格表里还没有，按同系列的价格估算（≈）"
     }
 
-    /// 这台设备的 Claude App 里有 Code 会话认不出账号（`why` 里有 claude_app），又没开 `cca cost hook`（`app_hook` 是 off；旧版 cca
-    /// 没有这一项：不说）：说一句，旁边是「记下账号…」
-    static func costAppHook(_ u: CostUnattributed?) -> String? {
-        guard let u, u.appHook == .off, u.why.contains(where: { $0.code == .claudeApp }) else { return nil }
-        return "这台设备 Claude App 里的 Code 会话认不出是哪个账号的：可以让 cca 在会话开始时记下 App 登录的账号，以后的就算得进来。"
-    }
-
-    /// 这台设备命令行里用的 Claude Code 太旧（cca 标的 claude_code_old，和有没有认不出的用量无关）：提醒更新，旁边是去「客户端更新」的按钮
-    static func costUpdateClaudeCode(_ u: CostUnattributed?) -> String? {
-        guard let u, u.claudeCodeOld else { return nil }
-        return "这台设备命令行里用的 Claude Code " + (u.claudeCode.map { $0 + " " } ?? "")
-            + "太旧，会话不带账号信息：不经 cca 启动的用量算不进来。更新 Claude Code 就好了。"
-    }
 }

@@ -335,13 +335,13 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   - `usd`：这一项折成多少美元（小数，App 自己按位数显示）；`requests` 请求数；`unpriced_requests`：其中没有公开价格的模型的请求数
     （只计数、不算钱，模型名在 `unpriced_models`）；`tokens`：输入（不含缓存）、输出、缓存读、缓存写的 token 数，只给账号合计、不给每台设备。
   - `partial`：这一项开始时还没有记录（`since_epoch` 落在它里面或者后面），数字可能偏小。`since_epoch`：这个账号最早的一条记录
-    （所有设备里最早的）。会话记录里带账号信息才算得进来：Claude Code 2.1.317、Codex 0.157 起才有，更早的、Claude 桌面 App 里的会话算不进来。
+    （所有设备里最早的）。
   - `summary`：`weeks_usd` 列出的周期加起来，`current_usd` 当前这一项，`average_usd` 过完的、不是 `partial`、至少 6 天的周期平均
     （`average_weeks` 是算了几项：一项都没有时 `average_usd` 是 null、`average_weeks` 是 0），`days_usd` 30 天加起来，`today_usd` 今天，
     `average_day_usd` 过完的、不是 `partial` 的那几天的平均（今天不算；`average_days` 是算了几天，一天都没有时 null 和 0；
     旧版 cca 没有这两项，App 当作没有平均每天、不写），`requests` / `unpriced_requests` 列出的周期加起来。
-  - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列（例外：别的设备最近有回复
-    认不出账号时，没有这个账号的记录也列出来，数字都是 0，`diag.why` 不空）；只有这台设备时只有一项。
+  - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列（3.7.4 及以前的 cca 例外：
+    别的设备最近有回复认不出账号时，没有这个账号的记录也列出来，数字都是 0，`used` 是 false）；只有这台设备时只有一项。
     `id`：认同一台机器用的。传了机器标识的设备（config.json 里有 `device_id` 的：同步路由器时生成，16 个小写十六进制字符；
     同一台机器经各台服务器传的都带着它）是这个标识，别的（旧版 cca、没有标识的）是它在那台服务器上的设备指纹
     （`SHA256:…`）；这台设备是自己的 `device_id`，没有时是 `"local"`。App 只拿它在各账号、设备菜单之间认同一台设备，不解释。
@@ -350,19 +350,19 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     合计里也不再有它）；3.6.5 及以前是这台设备的 key 作废了（数字是那以前同步来的，照样算进合计；和现在某台设备是同一台机器、
     或者同名的，当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
     这台设备是最后一次统计的时间），`stale`：超过 36 小时没同步上来（那台设备没开、断网、cca 太旧），之后用的可能还没算进来。
-    `used`：那台设备用过这个账号（列出的周期里有请求）；只为诊断列出来的那种是 false（App 的设备菜单看那台设备时不列这个账号，账号页的设备菜单也不列那台设备）。
-    旧版 cca 没有这一项，当作 true。
+    `used`：那台设备用过这个账号（列出的周期里有请求）；3.7.5 起总是 true，3.7.4 及以前只为诊断列出来的那种是 false（App 不列它：设备菜单看
+    那台设备时不列这个账号，账号页的设备菜单不列那台设备，折合金额页账号下面也不列）。旧版 cca 没有这一项，当作 true。
     `weeks_usd`、`days_usd` 和 `weeks`、`days` 一一对应；`summary` 同上（没有 `requests`、`unpriced_requests`）。平均按整个账号的那几周、那几天算
     （`average_weeks`、`average_days` 和账号的一样），所以各台设备的平均加起来就是整个账号的（旧版 cca 的设备 `summary` 没有
     `average_weeks`、`average_days`、`average_day_usd`）。App 看「本机」时用 `me` 为真的那一台，看另一台设备时按 `id` 找那一台
     （那台设备没有这个账号的记录时没有，App 当作都是 0）。
     `diag`：那台设备的诊断（这台设备的是本机统计的，别的设备的是它同步上来的；旧版 cca 的设备、旧版 cca 输出里没有，为 null）。
     `cca`：那台设备的 cca 版本；`claude_code`：它命令行里最近用的 Claude Code 版本（没有为 null）；`claude_code_old`：这个版本还不在会话里
-    写账号信息（2.1.317 以前），App 据此提醒更新 Claude Code、不自己比版本；`why[]`：最近 30 天里那台设备上有 Claude 的回复认不出是哪个账号的，
+    写账号信息（2.1.317 以前，cca 比的版本；3.7.4 及以前的 App 据此提醒更新 Claude Code）；`why[]`：最近 30 天里那台设备上有 Claude 的回复认不出是哪个账号的，
     为什么（每个原因一项，没有条数）。`code`：`old_claude_code`（Claude Code 太旧，又不是经 cca 启动的）| `claude_app`（Claude App 里的
     Code 会话，从来不带账号信息）| `unknown`（别的：登录的不是 cca 里的账号、不是经 cca 启动的……；不认识的值也当它说）；`last_epoch`：最近一次
     （别的设备传来的只到 UTC 的天）；`claude_code`：那时的 Claude Code 版本（没有为 null）。认不出的用量不知道是哪个账号的，所以那台设备用的
-    每个账号都带着同一份；App 在那台设备那一行、提示里说“有用量没算进来”和原因（撤销了的设备不说）。
+    每个账号都带着同一份。3.7.5 起 App 不显示诊断（这些不是漏统计的原因；3.7.4 及以前在那台设备那一行、提示里说“有用量没算进来”和原因）。
     `models`：那台设备按模型分开的（同下面的 `models[]`，没有 `tokens`）；各台设备的加起来就是账号的。旧版 cca 没有这一项，当作 `[]`。
   - `models[]`：按模型分开的金额（3.6.8 起；旧版 cca 没有这一项，App 不显示按模型的那一块）。每一项：`model` 是模型名（会话记录里的写法：
     小写，去掉了 `[1m]` 这类后缀和末尾的日期；会话记录里没写时是 `""`，App 写「没写模型名」），`null` 是没有按模型记下的那一部分（合计减去
@@ -507,11 +507,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   金额从多到少排：账号的几项都是 0、`models` 是 `[]`，App 看它时只有「认不出账号」那一部分有数字。
 - `scan.state`：`ready`（统计过，`updated_epoch` 是最后一次）| `scanning`（正在统计：第一次要把会话记录全读一遍，可能要一会儿）|
   `never`（还没统计过：App 显示“正在统计”并运行一次 `cost sync`）。
-- `unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息：旧版 Claude Code、桌面 App 里的会话），只给“另有多少没算进来”
-  这一句用。`why`、`claude_code`、`claude_code_old` 和这台设备的 `devices[].diag` 一样（旧版 cca 没有：App 当作 `[]`、null、false，笼统地说原因）；
-  `claude_code_old` 为真时 App 提醒这台设备更新 Claude Code（和有没有认不出的用量无关）。
+- `unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息），只给“另有多少没算进来”
+  这一句用。`why`、`claude_code`、`claude_code_old` 和这台设备的 `devices[].diag` 一样（旧版 cca 没有：App 当作 `[]`、null、false）；
+  3.7.5 起 App 不显示它们（3.7.4 及以前说原因，`claude_code_old` 为真时提醒这台设备更新 Claude Code）。
   `app_hook`（3.6.9 起）：这台设备记不记 Claude App 里 Code 会话的账号（`cca cost hook`，3.5）：`on` | `off`；不是 macOS 时是 null，
-  旧版 cca 没有。是 `off`、`why` 里又有 `claude_app` 时 App 在这一句旁边给「记下账号…」（运行 `cca cost hook on`）；没有这一项时不给。
+  旧版 cca 没有。3.7.5 起 App 不用它（3.7.4 及以前是 `off`、`why` 里又有 `claude_app` 时在这一句旁边给「记下账号…」）。
   - `cost`（3.6.8 起）：认不出是哪个账号的用量，所有设备的：每台设备经它在的各个 Team（有它用的账号的那几个）的服务器传一份
     （和账号的那一份同一种密文、同一把密钥，账号摘要是固定的那一个，见 server/README.md「折合金额」），这里是这台设备的和别的设备传来的。
     和账号的 `cost` 一样的样子（`weeks[]` 都按日历周切：`basis` 都是 `calendar`，没有额度窗口），`summary`、`devices[]`、`models[]`、
@@ -1058,7 +1058,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `remote attach [-r] <会话的 id>` | 「远程会话」页每个会话的「接入」「只看」 | 界面里的终端（App 开的伪终端，9.3） |
 | `remote end <会话的 id>` | 「远程会话」页这台 Mac 上的会话那一行的「结束…」（要 `hello.remote_end`） | 无交互命令，先 `consent.remote_end`（4.2、9.2） |
 | `remote`（`status`、`peers`、不带 `--json` 的 `list`） | 没有入口 | 终端里自己运行 |
-| `cost hook on` | 折合金额页「认不出账号」那一句旁边的「记下账号…」（`unattributed.app_hook` 是 `off`、`why` 里有 `claude_app` 时，2.2） | 无交互命令，先 `consent.cost_hook`（4.2）；`off` 和不带参数的 `cost hook`（看开没开）没有入口，终端里自己运行 |
+| `cost hook on` | 没有入口（3.7.5 起；3.7.4 及以前是折合金额页「认不出账号」那一句旁边的「记下账号…」） | 无交互命令，先 `consent.cost_hook`（4.2）；`on`、`off` 和不带参数的 `cost hook`（看开没开）都在终端里自己运行 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
 | `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |

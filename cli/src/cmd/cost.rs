@@ -3283,8 +3283,8 @@ impl CostView {
     }
 
     /// 给 App 的诊断（PROTOCOL 2.2 的 devices[].diag）：{"cca", "claude_code", "claude_code_old": claude_code 还是不写账号信息的
-    /// 旧版本（App 据此提醒更新，不自己比版本）, "why": 按天看的这一段里（往前多一天：传来的只到天）有回复认不出账号的原因}；
-    /// 没有诊断（旧版 cca 的设备）是 None
+    /// 旧版本, "why": 按天看的这一段里（往前多一天：传来的只到天）有回复认不出账号的原因}；没有诊断（旧版 cca 的设备）是 None。
+    /// 3.7.5 起 App 不显示诊断（这些不是漏统计的原因），接口只加不删，照旧给
     fn diag_view(&self, d: &Option<Dict>) -> Option<Dict> {
         let d = d.as_ref()?;
         let lo = self.days[0].s() - 86400.0;
@@ -3300,11 +3300,6 @@ impl CostView {
         let opt = |k: &str| d.get(k).unwrap_or(V::None);
         let old = d.str("claude_code").is_some_and(|v| claude_code_old(&v));
         Some(dict! { "cca" => opt("cca"), "claude_code" => opt("claude_code"), "claude_code_old" => old, "why" => why })
-    }
-
-    /// 这台设备最近有回复认不出账号（要提醒）
-    fn warns(&self, d: &Option<Dict>) -> bool {
-        self.diag_view(d).is_some_and(|v| v.list("why").is_some_and(|l| !l.is_empty()))
     }
 
     fn scan_state(&self) -> &'static str {
@@ -3530,7 +3525,7 @@ impl CostView {
         let (devs, ums) = self.devices(tool, &email, &slot, if share { self.hub(kind) } else { None });
         let quota = weeks_view.filter(|w| !w.is_empty()).map(|w| w.at("weeks"));
         let weeks = cost_weeks(quota.as_ref(), self.now);
-        match self.view(&devs, &ums, &weeks, sync, true) {
+        match self.view(&devs, &ums, &weeks, sync) {
             Some((out, m, shares)) => {
                 self.accounts.push((tool.name, Some(m), shares));
                 V::Dict(out)
@@ -3544,15 +3539,7 @@ impl CostView {
 
     /// 一个账号（或者认不出是哪个账号的那些）的 cost，PROTOCOL 2.2 的样子：devs 是有数据的设备（devices 给的），ums 是没有标价的模型，
     /// weeks 是按周的时段。还没有任何记录是 None；不然还给整个的各项、用过它的各台设备的那一份（cost_total 按设备加起来）。
-    /// diag_rows：没有数据、最近却有回复认不出账号的别的设备也列出来（账号的：它用这个账号的可能漏了；认不出是谁的那一份不用）
-    fn view(
-        &self,
-        devs: &[Device],
-        ums: &[String],
-        weeks: &[Period],
-        sync: Dict,
-        diag_rows: bool,
-    ) -> Option<(Dict, Money, Vec<DevMoney>)> {
+    fn view(&self, devs: &[Device], ums: &[String], weeks: &[Period], sync: Dict) -> Option<(Dict, Money, Vec<DevMoney>)> {
         let wk: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(weeks, &d.h)).collect();
         let dy: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(&self.days, &d.h)).collect();
         let requests = |rows: &[Counts]| rows.iter().map(|r| r[1]).sum::<i128>();
@@ -3560,9 +3547,6 @@ impl CostView {
         if data.is_empty() {
             return None;
         }
-        // 这个账号没有数据、最近却有回复认不出账号的别的设备也列出来（金额是 0，带着诊断：它用这个账号的可能漏了）
-        let keep: Vec<usize> =
-            (0..devs.len()).filter(|i| data.contains(i) || (diag_rows && !devs[*i].me && self.warns(&devs[*i].diag))).collect();
         // data 里的设备都有数据
         let since = data.iter().filter_map(|i| devs[*i].h.keys().next()).min().copied().expect("data 里的设备都有数据") as f64;
         let good: Vec<usize> = weeks
@@ -3577,7 +3561,7 @@ impl CostView {
             (0..count)
                 .map(|n| {
                     let mut c = [0i128; 7];
-                    for i in &keep {
+                    for i in &data {
                         for x in 0..7 {
                             c[x] += rows[*i][n][x];
                         }
@@ -3590,7 +3574,7 @@ impl CostView {
         let (mut m, summary) = cost_summary(&wsum, &dsum, &good, &good_days);
         summary.set("requests", count_v(wsum.iter().map(|r| r[1]).sum()));
         summary.set("unpriced_requests", count_v(wsum.iter().map(|r| r[6]).sum()));
-        let mut parts: Vec<(usize, Money, Dict)> = keep
+        let mut parts: Vec<(usize, Money, Dict)> = data
             .iter()
             .map(|i| {
                 let (pm, ps) = cost_summary(&wk[*i], &dy[*i], &good, &good_days);
@@ -3602,11 +3586,9 @@ impl CostView {
             pm.models = device_models(weeks, &self.days, &devs[*i].hm, &wk[*i], &dy[*i]);
             add_models(&mut m.models, &pm.models);
         }
-        // 用过它的各台设备的那一份（cost_total 的 me、devices 按设备加起来；只为诊断列出来的不算）。
-        // 这台设备没有记录时没有它的
+        // 用过它的各台设备的那一份（cost_total 的 me、devices 按设备加起来）。这台设备没有记录时没有它的
         let shares: Vec<DevMoney> = parts
             .iter()
-            .filter(|(i, _, _)| data.contains(i))
             .map(|(i, pm, _)| {
                 let d = &devs[*i];
                 DevMoney { id: d.id.py_str(), name: d.name.clone(), me: d.me, stale: d.stale, money: pm.clone() }
@@ -3619,7 +3601,8 @@ impl CostView {
                 dict! {
                     // revoked：3.6.6 起总是 false（移除了的设备不列；接口只加不删）
                     "id" => &d.id, "name" => d.name.as_str(), "me" => d.me, "revoked" => false, "synced_epoch" => &d.synced_epoch, "stale" => d.stale,
-                    "used" => data.contains(i),
+                    // used：3.7.5 起总是 true（只为诊断列出来的设备不再列；接口只加不删）
+                    "used" => true,
                     "weeks_usd" => wk[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
                     "days_usd" => dy[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
                     "summary" => ps, "diag" => self.diag_view(&d.diag), "models" => models_view(&pm.models, false),
@@ -3675,7 +3658,7 @@ impl CostView {
         }
         let (devs, ums) = self.devices_of(&h, &hm, ums, entries);
         let synced = devs.iter().filter(|d| !d.me).map(|d| d.id.py_str()).collect();
-        match self.view(&devs, &ums, &cost_weeks(None, self.now), self.orphan_sync(), false) {
+        match self.view(&devs, &ums, &cost_weeks(None, self.now), self.orphan_sync()) {
             Some((out, _, shares)) => (Some(out), shares, synced),
             None => (None, Vec::new(), synced),
         }

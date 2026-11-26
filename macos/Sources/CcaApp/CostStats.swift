@@ -87,7 +87,7 @@ struct CostStatsContent: View {
                     message: "按 Anthropic、OpenAI、Google 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
                         + "右上角选看哪台设备（所有设备、本机，或者另一台）、按周还是按天看。"
                         + "每个账号一行，一根竖条是一周（或一天），颜色淡的那一项开始时还没有记录；看所有设备时，有好几台设备的账号下面分台列出。"
-                        + "认不出是哪个账号的用量（Claude App 里的会话、旧版 Claude Code）不算进合计，单独列在最下面。"
+                        + "认不出是哪个账号的用量不算进合计，单独列在最下面。"
                         + "点一行看这个账号的柱状图。")
             if model.state == nil {
                 HStack(spacing: 8) {
@@ -113,8 +113,7 @@ struct CostStatsContent: View {
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    // 认不出是哪个账号的（看哪一方说哪一方的；旧版 cca 只有这台设备的，看另一台设备时不说）、还有哪几台没传它；
-                    // Claude Code 太旧是这台设备的，看另一台设备时不说
+                    // 认不出是哪个账号的（看哪一方说哪一方的；旧版 cca 只有这台设备的，看另一台设备时不说）、还有哪几台没传它
                     if let u = Texts.costUnattributed(total.unattributed, scope: scope, total: total, currency: total.currency) {
                         Label(u, systemImage: "info.circle")
                             .font(.caption)
@@ -126,29 +125,6 @@ struct CostStatsContent: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !scope.isOtherDevice, let u = Texts.costUpdateClaudeCode(total.unattributed) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Label(u, systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                            RowAction("客户端更新", systemImage: "arrow.down.circle") { model.selection = .clientUpdates }
-                                .help("到「客户端更新」更新 Claude Code")
-                        }
-                    }
-                    if !scope.isOtherDevice, let u = Texts.costAppHook(total.unattributed) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Label(u, systemImage: "info.circle")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                            RowAction("记下账号…", systemImage: "person.crop.circle.badge.checkmark") { model.enableCostHook() }
-                                .disabled(model.costHookBusy)
-                                .help("在 Claude Code 的共享设置（~/.claude/settings.json）里加一条 hook：App 里的会话开始时记下它登录的账号（会先问你）")
-                        }
                     }
                     Text(Texts.costFootnote(tools, pricesDate: total.pricesDate))
                         .font(.caption)
@@ -396,7 +372,7 @@ private struct CostStatsGroup: View {
                     CostAccountRow(account: a, scale: scale, now: now, charts: charts)
                     if scale.scope == .all, let c = a.cost, CostChart.listsDevices(c) {
                         VStack(spacing: 0) {
-                            ForEach(c.devices) { d in
+                            ForEach(CostChart.listedDevices(c)) { d in
                                 CostDeviceRow(account: a, cost: c, device: d, scale: scale, now: now, charts: charts)
                             }
                         }
@@ -468,8 +444,8 @@ private struct CostStatsFigures: View {
 }
 
 /// 一个账号一行：点了进账号页的「折合金额」。看所有设备、数字没算全（同步出错、有设备没算进来、很久没同步上来）时名字后面一个橙色的三角，
-/// 原因在悬停提示和读屏里。看本机时是这台设备的数字（它没有这个账号的记录时是 0），看另一台设备时是那一台的（很久没同步上来、
-/// 有用量没算进来时也是一个三角）
+/// 原因在悬停提示和读屏里。看本机时是这台设备的数字（它没有这个账号的记录时是 0），看另一台设备时是那一台的
+/// （很久没同步上来时也是一个三角）
 private struct CostAccountRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -533,8 +509,8 @@ private struct CostAccountRow: View {
 }
 
 /// 账号下面的一台设备（看所有设备时；cca 排好的：这台设备在前，别的按 30 天的金额从多到少）：缩进、灰字，小图和数字是这台设备的。
-/// 很久没同步上来的名字后面一个橙色的钟，有用量没算进来（cca 给的 diag.why）的一个橙色的三角。点了和点账号那一行一样，进账号页。
-/// 「认不出账号」那一组的（account 是 nil）：不是哪个账号的，点了不跳转；认不出的原因只在悬停提示、读屏里（不是要处理的问题，没有三角）
+/// 很久没同步上来的名字后面一个橙色的钟（cca 给的诊断 diag 不显示）。点了和点账号那一行一样，进账号页。
+/// 「认不出账号」那一组的（account 是 nil）：不是哪个账号的，点了不跳转
 private struct CostDeviceRow: View {
     @Environment(AppModel.self) private var model
     let account: Account?
@@ -548,17 +524,12 @@ private struct CostDeviceRow: View {
     var body: some View {
         let d = device
         let stale = Texts.costStale(d, now: now)
-        let why = account == nil ? nil : Texts.costDeviceWhy(d)
-        let reasons = account == nil ? Texts.costOrphanDeviceWhy(d) : nil
-        let lines = [Texts.costCaption(d.summary, granularity: scale.granularity, currency: cost.currency)] + [stale, why, reasons].compactMap { $0 }
+        let lines = [Texts.costCaption(d.summary, granularity: scale.granularity, currency: cost.currency)] + [stale].compactMap { $0 }
         let row = HStack(spacing: CostStatsColumns.spacing) {
             HStack(spacing: 5) {
                 Text(Texts.costDeviceName(d)).lineLimit(1).truncationMode(.middle)
                 if stale != nil {
                     Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
-                }
-                if why != nil {
-                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                 }
             }
             .font(.callout)
@@ -598,9 +569,9 @@ private struct CostDeviceRow: View {
     }
 }
 
-/// 「认不出账号」（cca 给的 `unattributed.cost`，3.6.8 起）：会话记录里认不出是哪个账号的用量（Claude App 里的会话、旧版 Claude Code），
+/// 「认不出账号」（cca 给的 `unattributed.cost`，3.6.8 起）：会话记录里认不出是哪个账号的用量，
 /// 没算进上面的合计，单独一组放在最下面：一行是看的那一方的（所有设备 / 这台设备 / 那台设备），看所有设备、有两台以上设备有这种用量时
-/// 下面分台列出。小图、数字和账号那几行同一个纵轴、横轴。不是哪个账号的，点了不跳转；为什么认不出在悬停提示和读屏里
+/// 下面分台列出。小图、数字和账号那几行同一个纵轴、横轴。不是哪个账号的，点了不跳转
 private struct CostOrphanGroup: View {
     let cost: AccountCost
     let total: CostTotal

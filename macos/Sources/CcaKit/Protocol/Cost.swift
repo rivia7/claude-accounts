@@ -674,7 +674,7 @@ struct CostAppHook: KnownValues {
     static let allKnown: [CostAppHook] = [.on, .off]
 }
 
-/// `cost_total.unattributed`：认不出是哪个账号的用量（旧版 Claude Code、Claude App 里的会话），没算进合计。
+/// `cost_total.unattributed`：认不出是哪个账号的用量，没算进合计。
 /// `daysUSD`、`requests` 是这台设备最近 30 天的；为什么认不出、命令行里最近用的 Claude Code 是不是太旧（旧版 cca 没有：why 空的、
 /// claudeCodeOld 是 false）。3.6.8 起还有所有设备的（`cost`：和账号的折合金额一样的样子）和还没传过它的设备（`unsynced`）
 struct CostUnattributed: Decodable, Sendable, Equatable {
