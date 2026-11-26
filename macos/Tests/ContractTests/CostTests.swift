@@ -545,7 +545,7 @@ func costUnitTests() {
     let clampedHit = try? JSONDecoder().decode(CostSummary.self, from: Data(#"{"weeks_cache_hit": 1.5, "days_cache_hit": -0.2}"#.utf8))
     let oddHit = try? JSONDecoder().decode(CostSummary.self, from: Data(#"{"weeks_cache_hit": "97%", "days_cache_hit": true}"#.utf8))
     let oldHit = try? JSONDecoder().decode(CostSummary.self, from: Data(#"{"weeks_usd": 1}"#.utf8))
-    check("缓存命中率（3.7.5 起）：数字照收（超出 0～1 的夹回来）；null、别的类型、旧版 cca 没有：nil，不影响别的字段",
+    check("13.7.6 起）：数字照收（超出 0～1 的夹回来）；null、别的类型、旧版 cca 没有：nil，不影响别的字段",
           hitSummary?.weeksCacheHit == 0.9731 && hitSummary?.daysCacheHit == nil && clampedHit?.weeksCacheHit == 1 && clampedHit?.daysCacheHit == 0
           && oddHit != nil && oddHit?.weeksCacheHit == nil && oddHit?.daysCacheHit == nil && oldHit?.weeksUSD == 1 && oldHit?.weeksCacheHit == nil)
     let hitRange = try? JSONDecoder().decode(CostModelRange.self, from: Data(#"{"usd": 1, "requests": 2, "cache_hit": 0.5}"#.utf8))

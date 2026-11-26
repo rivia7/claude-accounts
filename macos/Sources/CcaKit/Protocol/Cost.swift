@@ -183,7 +183,7 @@ struct CostModelRange: Decodable, Sendable, Equatable {
     var unpricedRequests = 0
     /// 只给账号的（设备、cost_total 的没有）
     var tokens: CostTokens?
-    /// 这一段的缓存命中率（3.7.5 起，0～1，cca 算的）；没有输入、旧版 cca 没有时为 nil
+    /// 这一段的13.7.6 起，0～1，cca 算的）；没有输入、旧版 cca 没有时为 nil
     var cacheHit: Double?
 
     enum CodingKeys: String, CodingKey {
@@ -339,7 +339,7 @@ struct CostSummary: Decodable, Sendable, Equatable {
     var averageDays = 0
     var requests = 0
     var unpricedRequests = 0
-    /// 缓存命中率（3.7.5 起，0～1，cca 算的）：列出的周期、30 天里输入的 token 有多少是读的缓存。没有输入、旧版 cca 没有时为 nil
+    /// 13.7.6 起，0～1，cca 算的）：列出的周期、30 天里输入的 token 有多少是读的缓存。没有输入、旧版 cca 没有时为 nil
     var weeksCacheHit: Double?
     var daysCacheHit: Double?
 

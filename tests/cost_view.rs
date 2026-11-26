@@ -2233,7 +2233,7 @@ fn models(t: &mut Ctx) {
     assert_eq!(priced(&t["models"]), want, "cost_total 的");
 }
 
-/// 缓存命中率（3.7.5 起，PROTOCOL 2.2 的 weeks_cache_hit、days_cache_hit、models[] 两段的 cache_hit）：缓存读 ÷（没走缓存的输入 + 缓存读 +
+/// 13.7.6 起，PROTOCOL 2.2 的 weeks_cache_hit、days_cache_hit、models[] 两段的 cache_hit）：缓存读 ÷（没走缓存的输入 + 缓存读 +
 /// 缓存写），先把 token 加起来再除（不是把各段、各台设备的比率平均），四位小数；没有输入是 null。账号的、设备的、按模型的、
 /// cost_total 的（顶层、按工具、me、设备菜单）、认不出是哪个账号的都有
 fn cache_hit_rate(t: &mut Ctx) {

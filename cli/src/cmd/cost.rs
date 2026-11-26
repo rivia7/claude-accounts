@@ -3168,12 +3168,7 @@ fn cost_bin_models(periods: &[Period], hm: &ModelHours) -> std::collections::BTr
 fn device_models(weeks: &[Period], days: &[Period], hm: &ModelHours, wk: &[Counts], dy: &[Counts]) -> Models {
     let mut out = Models::new();
     for (n, (periods, rows)) in [(weeks, wk), (days, dy)].into_iter().enumerate() {
-        let mut rest = [0i128; 7];
-        for r in rows {
-            for x in 0..7 {
-                rest[x] += r[x];
-            }
-        }
+        let mut rest = counts_sum(rows);
         for (m, c) in cost_bin_models(periods, hm) {
             for x in 0..7 {
                 rest[x] -= c[x];

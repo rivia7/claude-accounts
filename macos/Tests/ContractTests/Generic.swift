@@ -145,7 +145,7 @@ private func sameModels(_ rows: [CostModelRow], _ parts: [[CostModelRow]]) -> Bo
     }
 }
 
-/// 缓存命中率（PROTOCOL 2.2，3.7.5 起；旧版 cca 没有）：没有、null，或者 0～1 的数
+/// 缓存命中率（13.7.6 起；旧版 cca 没有）：没有、null，或者 0～1 的数
 private func hitValue(_ x: Any?) -> Bool {
     guard let x, !(x is NSNull) else { return true }
     guard isNumber(x), let v = (x as? NSNumber)?.doubleValue else { return false }
@@ -195,7 +195,7 @@ private func modelInvariants(_ n: String, _ raw: Any?, _ rows: [CostModelRow]?, 
         guard tokens, let o = t as? [String: Any] else { return false }
         return ["input", "output", "cache_read", "cache_write"].allSatisfy { wholeCount(o[$0]) }
     })
-    check("\(n) cache_hit（3.7.5 起）没有、null 或者 0～1", ranges.allSatisfy { hitValue($0?["cache_hit"]) })
+    check("\(n) 13.7.6 起）没有、null 或者 0～1", ranges.allSatisfy { hitValue($0?["cache_hit"]) })
     if tokens {
         check("\(n) cache_hit 是这一段的 token 算的", zip(list, rows).allSatisfy { r, row in
             [("weeks", row.weeks), ("days", row.days)].allSatisfy { k, x in
@@ -319,7 +319,7 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
         check("\(n) average_day_usd 是这几天的平均", near(avg, goodDays.map { d[$0].usd }.reduce(0, +) / Double(goodDays.count), terms: goodDays.count),
               "\(avg)")
     }
-    // 缓存命中率（3.7.5 起；旧版 cca 没有）：列出的周期、30 天的 token 加起来算的
+    // 13.7.6 起；旧版 cca 没有）：列出的周期、30 天的 token 加起来算的
     let rawSummary = raw["summary"] as? [String: Any] ?? [:]
     check("\(n) weeks_cache_hit、days_cache_hit 没有、null 或者 0～1", hitValue(rawSummary["weeks_cache_hit"]) && hitValue(rawSummary["days_cache_hit"]))
     if rawSummary["weeks_cache_hit"] != nil, w.allSatisfy({ $0.tokens != nil }) {
@@ -423,7 +423,7 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
         check("\(label) 金额的类型", ["current_usd", "weeks_usd", "days_usd", "today_usd"].allSatisfy { nonNegative(raw[$0]) }
               && (nonNegative(raw["average_usd"]) || isNull(raw["average_usd"])) && (nonNegative(raw["average_day_usd"]) || isNull(raw["average_day_usd"])))
         thirtyDays(label, p.days, raw["days"] as? [[String: Any]], now: now)
-        check("\(label) 缓存命中率（3.7.5 起）没有、null 或者 0～1", hitValue(raw["weeks_cache_hit"]) && hitValue(raw["days_cache_hit"])
+        check("\(label) 13.7.6 起）没有、null 或者 0～1", hitValue(raw["weeks_cache_hit"]) && hitValue(raw["days_cache_hit"])
               && ((raw["by_tool"] as? [String: Any]) ?? [:]).values.allSatisfy { x in
                   let o = x as? [String: Any] ?? [:]
                   return hitValue(o["weeks_cache_hit"]) && hitValue(o["days_cache_hit"])
