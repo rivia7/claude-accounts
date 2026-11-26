@@ -523,7 +523,8 @@ helper_find || exit 1
 # 记下里面的套餐和额度；--then 带着用户自己的状态栏命令时接着运行它（它的输出就是状态栏），不然什么都不输出
 [ "${1:-}" != _agy-statusline ] || { shift; CCA_TOOL=agy exec "$HELPER" agy-statusline "$@"; }
 # cca 启动的 Claude Code 交互会话里状态栏的命令（经 --settings 带上的，见辅助程序的 claude_statusline）：Claude Code 每次状态变了都用 bash
-# 起它，一样马上交给辅助程序。stdin 是 Claude Code 给的 JSON：记下里面的额度（rate_limits；cca 不主动查用量）；--then 同上
+# 起它，一样马上交给辅助程序。stdin 是 Claude Code 给的 JSON：记下里面的额度（rate_limits；cca 不主动查用量）；--then 同上，没有
+# --then 时输出状态栏那一行的字（账号和记下的用量：Claude Code 配了状态栏命令就留出这一行，空着不如写上）
 [ "${1:-}" != _claude-statusline ] || { shift; CCA_TOOL=claude exec "$HELPER" claude-statusline "$@"; }
 # 解好的那一份辅助程序中途没了（系统清了临时目录）：再解一次（看在不在是内建的判断，不起进程）
 py() { [ -x "$HELPER" ] || helper_find || return 127; CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" CCA_VERSION="$VERSION" "$HELPER" "$@"; }

@@ -148,7 +148,7 @@ Team 是一组设备加一份配置：用哪些账号、每个账号走哪个节
 
 ## 安全吗
 
-- **不碰登录凭证**：登录由 Claude Code、Codex、Antigravity 自己完成、自己保存。cca 不保存、不转发登录凭证，也不碰用来访问的 token，只读出登录的邮箱和套餐，核对登录的是不是这个账号。用量也不另外发请求去查：Claude Code、Antigravity 的额度是 cca 开的会话里它们自己给状态栏的，cca 记下来（从不用 `claude -p`、`codex exec` 这类不开界面的模式，也不让经 cca 用）；ChatGPT 账号的让 Codex 自己去查。不发消息、不耗额度。
+- **不碰登录凭证**：登录由 Claude Code、Codex、Antigravity 自己完成、自己保存。cca 不保存、不转发登录凭证，也不碰用来访问的 token，只读出登录的邮箱和套餐，核对登录的是不是这个账号。用量也不另外发请求去查：Claude Code、Antigravity 的额度是 cca 开的会话里它们自己给状态栏的，cca 记下来，没配自己状态栏的 Claude Code 会话里那一行写着账号和刚记下的用量（从不用 `claude -p`、`codex exec` 这类不开界面的模式，也不让经 cca 用）；ChatGPT 账号的让 Codex 自己去查。不发消息、不耗额度。
 - **密码和 key**：路由器密码只用一次，不保存。第三方 API 的 key 存在钥匙串里（Linux 上是只有你能读的文件），不出现在命令行参数和环境变量里。
 - **启动前检查**：
   - 出口在服务商不支持的地区（比如中国大陆、香港）时直接停下；
