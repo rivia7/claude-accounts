@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.5", title: "手机上看账号的额度，用完、恢复时通知你", points: [
+            .init(symbol: "person.crop.rectangle.stack",
+                  text: "iPhone 上的 cca App 多了「账号」页：配对过的每台 Mac 上有哪些账号、现在怎样，5 小时和本周的额度，每周的用量和这个账号的会话。"),
+            .init(symbol: "bell.badge",
+                  text: "账号的 5 小时或本周额度用完了通知一次，到了重置的时间再通知一次：手机经推送，锁着屏也收得到；Mac 上的 App 弹系统通知。两边的设置里都能关。"),
+            .init(symbol: "server.rack",
+                  text: "账号的状态在 Mac 上加密好再交给 Team 的服务器，服务器只经手密文。服务器要更新到这一版（建 Team 的设备点「更新服务器…」），iPhone 上的 App 也要更新。"),
+        ]),
         ReleaseNote(version: "3.7.4", title: "手机接上远程会话，电脑上的不再变窄", points: [
             .init(symbol: "keyboard",
                   text: "远程会话照最后打字的那一处排：iPhone 上的 cca App 只是看着时，电脑上的大小不变；在手机上打字才照手机的宽度。"),
