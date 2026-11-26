@@ -151,6 +151,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.hooks.installedTerminals = { Platform.installedTerminals() }
         model.hooks.systemConditions = { Platform.systemConditions() }
         model.hooks.chooseDirectory = { await Platform.chooseDirectory(startingAt: $0) }
+        model.hooks.chooseTemplateDirectory = {
+            await Platform.chooseDirectory(startingAt: $0, prompt: "选这个文件夹", message: "手机用这个模板起的会话在这个文件夹里运行")
+        }
         model.hooks.chooseSaveFile = { await Platform.chooseSaveFile(suggestedName: $0) }
         model.hooks.chooseOpenFile = { await Platform.chooseOpenFile() }
         model.hooks.openURL = { NSWorkspace.shared.open($0) }

@@ -700,11 +700,51 @@ exit 0
 S
 # 假的 launchctl（cca local udp 的系统服务）：bootstrap / bootout / print system/<label>，命令行记在 launchctl.log。装上的 launchd 配置
 # 拷进 $CCA_T/launchd/<label>.plist；照 KeepAlive 的 PathState 起停程序（和 launchd 一样）：bootstrap 时在后台起一个看门的，开关文件在、
-# 程序没在跑就起它（记 START），launchd 配置没了（bootout）就停掉程序、自己退出。沙箱删掉以后看门的也自己退出
+# 程序没在跑就起它（记 START），launchd 配置没了（bootout）就停掉程序、自己退出。沙箱删掉以后看门的也自己退出。
+# 用户的域（gui/<uid>：远程启动的后台进程，docs/dev/launch.md）另走一支，见下面
 cat > "$T/bin/launchctl" <<'S'
 #!/bin/bash
 echo "LAUNCHCTL $*" >> "$CCA_T/launchctl.log"
 L="$CCA_T/launchd"; mkdir -p "$L"
+# 用户的域：bootstrap gui/<uid> 文件（拷成 $L/gui.<label>.plist，RunAtLoad 的马上起）、kickstart（没在跑就起）、bootout（停掉程序、删掉）、
+# print gui/<uid>/<label>。程序照 ProgramArguments 起在后台，环境像 launchd 给的：HOME、TMPDIR（有的话）、配置里的 EnvironmentVariables，
+# 再加上让假命令找得到沙箱的 CCA_T、CCA_TEST_TRAP；进程号记在 $L/gui.<label>.pid，记一行 START。退出了不再起（KeepAlive 不扮演）
+if [[ "${2:-}" == gui/* ]]; then
+	ct="$CCA_T/cca-test"
+	if [ "$1" = bootstrap ]; then label=$("$ct" plist get "$3" Label) || exit 5; else label=${2#gui/*/}; fi
+	f="$L/gui.$label.plist" p="$L/gui.$label.pid"
+	alive() { local pid; pid=$(cat "$p" 2>/dev/null); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+	start() {
+		local argv=() envs=(HOME="$HOME" CCA_T="$CCA_T" CCA_TEST_TRAP="${CCA_TEST_TRAP:-}") l
+		[ -z "${TMPDIR:-}" ] || envs+=(TMPDIR="$TMPDIR")
+		while IFS= read -r l; do argv+=("$l"); done < <("$ct" plist-json "$f" | "$ct" val -f d=- '"\n".join(d["ProgramArguments"])')
+		while IFS= read -r l; do [ -z "$l" ] || envs+=("$l"); done < <("$ct" plist-json "$f" | "$ct" val -f d=- '"\n".join(k + "=" + v for k, v in d.get("EnvironmentVariables", {}).items())')
+		env -i "${envs[@]}" "${argv[@]}" </dev/null >/dev/null 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
+		echo $! > "$p"; echo "START $label" >> "$CCA_T/launchctl.log"
+	}
+	case "$1" in
+		bootstrap)
+			[ ! -f "$f" ] || { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }
+			cp "$3" "$f"
+			if "$ct" plist-json "$f" | "$ct" check -f d=- 'd.get("RunAtLoad") is True'; then start; fi ;;
+		kickstart)
+			[ -f "$f" ] || { echo "Could not find service \"$label\" in domain for user gui: ${2#gui/}" >&2; exit 113; }
+			alive || start ;;
+		bootout)
+			[ -f "$f" ] || { echo "Boot-out failed: 3: No such process" >&2; exit 3; }
+			rm -f "$f"
+			pid=$(cat "$p" 2>/dev/null)
+			if [ -n "$pid" ]; then
+				kill "$pid" 2>/dev/null
+				for i in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; /bin/sleep 0.1; done
+			fi
+			rm -f "$p" ;;
+		print)
+			[ -f "$f" ] || { echo "Could not find service \"$label\" in domain for user gui: ${2#gui/}" >&2; exit 113; }
+			if alive; then printf '%s = {\n\tstate = running\n\tpid = %s\n}\n' "$2" "$(cat "$p")"; else printf '%s = {\n\tstate = not running\n}\n' "$2"; fi ;;
+	esac
+	exit 0
+fi
 label=${2#system/}
 case "${1:-}" in
 	print)
@@ -815,7 +855,7 @@ cat > "$T/bin/claude" <<'S'
 #!/bin/bash
 LOG="$CCA_T/claude.log"
 echo "ARGS: $*" >> "$LOG"
-echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed) CCA_PROXY=${CCA_PROXY-unset} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL-unset} ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN-unset} ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset} CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} CLAUDECODE=${CLAUDECODE-unset} CLAUDE_CODE_USE_MANTLE=${CLAUDE_CODE_USE_MANTLE-unset} CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST-unset} CLAUDE_CODE_REMOTE_MEMORY_DIR=${CLAUDE_CODE_REMOTE_MEMORY_DIR-unset}" >> "$LOG"
+echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed) CCA_PROXY=${CCA_PROXY-unset} CCA_REMOTE_HOSTED=${CCA_REMOTE_HOSTED-unset} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL-unset} ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN-unset} ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset} CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} CLAUDECODE=${CLAUDECODE-unset} CLAUDE_CODE_USE_MANTLE=${CLAUDE_CODE_USE_MANTLE-unset} CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST-unset} CLAUDE_CODE_REMOTE_MEMORY_DIR=${CLAUDE_CODE_REMOTE_MEMORY_DIR-unset}" >> "$LOG"
 for a in "$@"; do
 	case "$a" in
 		--) break ;;

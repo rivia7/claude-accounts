@@ -269,7 +269,8 @@ func remoteProtocolTests() {
     scheduler.remoteInterval = 3600
     let m = makeModel(t, log: log, scheduler: scheduler)
     await m.start()
-    func asked() -> [[String]] { t.requests.map(\.arguments).filter { $0.first == "remote" } }
+    // 模板（远程启动，RemoteLaunchTests）跟着这一页查：这里只看列表和改配对表的几条
+    func asked() -> [[String]] { t.requests.map(\.arguments).filter { $0.first == "remote" && $0.dropFirst().first != "template" } }
     check("cca 有远程会话", m.remoteAvailable)
     check("看不见的时候不查", !m.scheduler.remotePollingRunning && asked().isEmpty)
     m.setMainVisible(true)

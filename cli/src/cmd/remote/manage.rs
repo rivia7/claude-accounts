@@ -2,7 +2,7 @@
 //! 和配对过的机器上可以接入的会话）。
 
 use super::local::{self, Note, Status};
-use super::{far, peers, relay};
+use super::{far, launch, peers, relay};
 use crate::cmd::arity;
 use crate::cmd::settings::home_tilde;
 use crate::core::base::{Lock, RO};
@@ -289,7 +289,7 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
         paired.push(dict! {
             "id" => p.pid.as_str(), "short" => &p.pid[..8], "name" => p.name.as_str(), "incoming" => p.incoming.word(),
             "shown" => p.shown, "paired_epoch" => p.at, "state" => state, "web" => p.web,
-            "team" => p.hub.team()
+            "team" => p.hub.team(), "launch" => p.launch
         });
     }
     // 用得了哪几台中转服务器（配对时要选在哪一台上）：各个 Team 的。一台都用不了时 message 是原因（不在哪个 Team 里，或者
@@ -305,7 +305,7 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
     };
     Ok(dict! {
         "version" => 1, "kind" => "remote", "generated_epoch" => time(), "enabled" => remote_on(&cfg_load()?), "relay" => relay,
-        "sessions" => sessions, "peers" => paired, "errors" => errors
+        "sessions" => sessions, "peers" => paired, "errors" => errors, "launcher" => launch::summary()
     })
 }
 

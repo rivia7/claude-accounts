@@ -271,7 +271,7 @@ pub(super) const CODEX_BATCH: &[&str] = &[
 
 /// 这一次是 codex 交互的会话：用户参数里头一个不是选项的不是 CODEX_BATCH 里的子命令（没有也算：直接进交互界面，带着开场白
 /// 也是；`--` 后面的都是开场白），前面也没有 --version、--help。带值的选项（settings.rs 的 CODEX_VALUES）跳过它的值
-fn codex_interactive(args: &[String]) -> bool {
+pub(crate) fn codex_interactive(args: &[String]) -> bool {
     let mut i = 0;
     while let Some(a) = args.get(i) {
         match a.as_str() {

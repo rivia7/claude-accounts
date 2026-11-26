@@ -126,6 +126,19 @@ fn spawn_link(sid: &str) -> Option<Child> {
 /// 给转接进程的通知还没写出去的到了这么多，新的不再给它（它卡住了：退出以后宿主再起一个）
 const LINK_HIGH: usize = 64 * 1024;
 
+/// 无头的会话（`--headless`：远程启动的，launch.rs）：没有启动它的终端，等着手机接进来
+struct Headless {
+    /// 客户端退出时还没人接入过：留这么久（秒）等人接上来看它最后说了什么（CCA_HEADLESS_LINGER）
+    linger: f64,
+    /// 一直没人接入：这么久（秒）以后结束会话（CCA_HEADLESS_IDLE）
+    idle: f64,
+}
+
+/// 环境变量里的秒数（测试里调短）；没有、不是正数用 default
+fn env_secs(name: &str, default: f64) -> f64 {
+    std::env::var(name).ok().and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(default)
+}
+
 struct Host {
     meta: Meta,
     dir: String,
@@ -163,6 +176,11 @@ struct Host {
     last_note: Option<(Note, f64)>,
     /// 这台 Mac 上弹通知的 osascript（popup.rs）和什么时候起的：主循环里收尸，POPUP_MAX 秒还没完的结束掉
     popups: Vec<(Child, f64)>,
+    /// 无头的会话（启动器起的）才有
+    headless: Option<Headless>,
+    /// 有人接入过（说过 HELLO）
+    ever_attached: bool,
+    born: f64,
 }
 
 fn push(q: &mut VecDeque<u8>, data: &[u8]) {
@@ -192,18 +210,23 @@ fn flush(fd: RawFd, q: &mut VecDeque<u8>) -> io::Result<()> {
 }
 
 impl Host {
-    /// 开 pty、开 socket、起客户端。Err：宿主起不来（客户端还没起），调用方照原样直接运行客户端
-    fn start(tool: &str, key: &str, name: &str, argv: &[String]) -> io::Result<Host> {
-        if !pty::isatty(0) || !pty::isatty(1) {
-            return Err(io::Error::other("标准输入、输出不是终端"));
-        }
-        let size = pty::get_size(0).unwrap_or(Size { cols: 80, rows: 24 });
-        let termios = pty::get_termios(0)?;
-        let tty = pty::reopen_tty(0)?;
-        let (master, slave) = pty::open(Some(&termios), size)?;
+    /// 开 pty、开 socket、起客户端。Err：宿主起不来（客户端还没起），调用方照原样直接运行客户端。
+    /// headless：无头的（启动器起的）：没有终端，会话的编号、窗口大小是启动器给的
+    fn start(tool: &str, key: &str, name: &str, argv: &[String], headless: Option<(String, Size)>) -> io::Result<Host> {
+        let (sid, size, termios, tty) = match &headless {
+            Some((sid, size)) => (sid.clone(), *size, None, None),
+            None => {
+                if !pty::isatty(0) || !pty::isatty(1) {
+                    return Err(io::Error::other("标准输入、输出不是终端"));
+                }
+                let size = pty::get_size(0).unwrap_or(Size { cols: 80, rows: 24 });
+                (token_hex(16), size, Some(pty::get_termios(0)?), Some(pty::reopen_tty(0)?))
+            }
+        };
+        let (master, slave) = pty::open(termios.as_ref(), size)?;
         let dir = local::ensure_dir()?;
         let meta = Meta {
-            sid: token_hex(16),
+            sid,
             // SAFETY: getpid 没有参数、不会失败
             pid: unsafe { libc::getpid() } as i64,
             tool: tool.to_string(),
@@ -222,7 +245,7 @@ impl Host {
                 return Err(e);
             }
         };
-        let raw = Raw::enter(tty.as_raw_fd()).ok();
+        let raw = tty.as_ref().and_then(|t| Raw::enter(t.as_raw_fd()).ok());
         let _ = meta.save(&dir);
         let now = monotonic();
         Ok(Host {
@@ -232,7 +255,7 @@ impl Host {
             child,
             listener,
             sig: wake,
-            local: Local { tty: Some(tty), raw, out: VecDeque::new(), size, resync: false, route: Route::default() },
+            local: Local { tty, raw, out: VecDeque::new(), size, resync: false, route: Route::default() },
             viewers: Vec::new(),
             next_id: 1,
             input: VecDeque::new(),
@@ -253,7 +276,16 @@ impl Host {
             notes: NoteBudget::new(NOTE_BURST, NOTE_GAP),
             last_note: None,
             popups: Vec::new(),
+            headless: headless
+                .map(|_| Headless { linger: env_secs("CCA_HEADLESS_LINGER", 600.0), idle: env_secs("CCA_HEADLESS_IDLE", 900.0) }),
+            ever_attached: false,
+            born: now,
         })
+    }
+
+    /// 无头的会话，客户端退出时还没人接入过：留着（最多 linger 秒）等人接上来看它最后说了什么
+    fn lingering(&self, now: f64, at: f64) -> bool {
+        self.headless.as_ref().is_some_and(|h| !self.ever_attached && now - at < h.linger)
     }
 
     fn status(&self) -> Status {
@@ -623,6 +655,7 @@ impl Host {
                         break;
                     }
                     self.viewers[i].size = size;
+                    self.ever_attached = true;
                     self.viewers[i].read_only = payload[1] & local::FLAG_READ_ONLY != 0;
                     self.viewers[i].passive = payload[1] & local::FLAG_PASSIVE != 0;
                     self.viewers[i].zoom = payload[1] & local::FLAG_ZOOM != 0;
@@ -741,10 +774,16 @@ impl Host {
                 pty::set_size(self.master.as_raw_fd(), self.size);
             }
             if let Some((code, at)) = self.ended {
-                // 客户端退出以后把它最后的输出读完：pty 关了，或者 0.2 秒没有新的（它起的后台进程可能还开着 pty），最多等 2 秒
-                if self.master_eof || now - self.last_output.max(at) > 0.2 || now - at > 2.0 {
+                // 客户端退出以后把它最后的输出读完：pty 关了，或者 0.2 秒没有新的（它起的后台进程可能还开着 pty），最多等 2 秒。
+                // 无头的会话还没人接入过：再留一阵（lingering），有人接上来、收到回放以后再收场
+                let drained = self.master_eof || now - self.last_output.max(at) > 0.2 || now - at > 2.0;
+                if drained && !self.lingering(now, at) {
                     return code;
                 }
+            } else if self.headless.as_ref().is_some_and(|h| !self.ever_attached && now - self.born > h.idle) {
+                // 无头的会话一直没人接入：照 cca remote end 那样结束。是自己结束的：客户端退出以后不再留着等人来看
+                self.headless = None;
+                self.end();
             }
             let attached = self.viewers.iter().any(|v| v.size.is_some() && !v.dead);
             // 启动的终端太慢：有别的接入方时不等它（待写的丢掉，等它能写了重新回放）；没有时让客户端等着
@@ -784,6 +823,7 @@ impl Host {
                 fds.push(pfd(v.stream.as_raw_fd(), true, !v.out.is_empty()));
             }
             let timeout = match (self.ended, self.restore_at) {
+                (Some((_, at)), _) if self.lingering(now, at) => 1000,
                 (Some(_), _) => 50,
                 (None, Some(t)) => ((t - now) * 1000.0).ceil().clamp(1.0, 1000.0) as i32,
                 (None, None) => 1000,
@@ -912,20 +952,39 @@ impl Host {
     }
 }
 
-/// `remote-host 工具 账号 名字 -- 客户端 参数…`：在宿主里运行客户端，退出码是客户端的。
-/// 宿主起不来（不在终端里、开不了 pty、建不了会话目录）时照原样直接运行客户端：开关开着也不能让会话启动不了
+/// `列x行`（启动器给的窗口大小）
+fn parse_size(s: &str) -> Option<Size> {
+    let (c, r) = s.split_once('x')?;
+    let size = Size { cols: c.parse().ok()?, rows: r.parse().ok()? };
+    size.valid().then_some(size)
+}
+
+/// `remote-host [--headless --sid 会话编号 --size 列x行] 工具 账号 名字 -- 客户端 参数…`：在宿主里运行客户端，退出码是客户端的。
+/// 宿主起不来（不在终端里、开不了 pty、建不了会话目录）时照原样直接运行客户端：开关开着也不能让会话启动不了。
+/// `--headless`：启动器起的（launch.rs），没有终端；起不来就退出（启动器告诉手机没起来）
 pub fn cmd_remote_host(args: &[String]) -> R<()> {
+    const USAGE: &str = "用法：remote-host [--headless --sid 会话编号 --size 列x行] 工具 账号 名字 -- 客户端 参数…";
+    let (headless, args) = match args {
+        [h, s, sid, z, size, rest @ ..] if h == "--headless" && s == "--sid" && z == "--size" => {
+            let Some(size) = parse_size(size).filter(|_| peers::hex32(sid)) else { return die(USAGE) };
+            (Some((sid.clone(), size)), rest)
+        }
+        [h, ..] if h == "--headless" => return die(USAGE),
+        _ => (None, args),
+    };
     let sep = args.iter().position(|a| a == "--");
     let (Some(3), true) = (sep, args.len() >= 5) else {
-        return die("用法：remote-host 工具 账号 名字 -- 客户端 参数…");
+        return die(USAGE);
     };
     let argv = &args[4..];
-    match Host::start(&args[0], &args[1], &args[2], argv) {
+    let no_tty = headless.is_some();
+    match Host::start(&args[0], &args[1], &args[2], argv, headless) {
         Ok(mut host) => {
             let code = host.run();
             host.finish(code);
             exit(code)
         }
+        Err(_) if no_tty => exit(1),
         Err(_) => {
             let e = std::process::Command::new(&argv[0]).args(&argv[1..]).exec();
             crate::err!("cca: 运行 {} 失败：{}", argv[0], e);

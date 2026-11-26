@@ -286,6 +286,27 @@ fn account_status() {
     assert_ne!(status_keys(&p), dir_keys(&p));
 }
 
+#[test]
+fn launcher_notes() {
+    // 启动器的说明（手机上用模板新建会话，3.7.6 起）：密钥是照 server/README.md 用 openssl 算的（和 cli/src/cmd/remote/crypto.rs 的
+    // matches_the_reference_vectors 是同一组数）；辅助程序封的这里解不解得开在 tests/remote_launch.rs 里核对（手机那一头是 kit::relay 的 SpecPeer），
+    // CcaRemoteKit 解这里封的在 tests/ios_kit.rs 的 against_the_spec
+    let p = hx(&Value::Str("7adfdd29f6b23870c135b81e6494fb6c8d24e0af30f50632ca858c5129c3c58a".into()));
+    let (pid, sid, other) = ("36ac6aaa256ba92dfa89065e98f1c4f3", "ab".repeat(16), "cd".repeat(16));
+    let k = launch_keys(&p);
+    assert_eq!(hex(&k.0), "f1db5343f2df6985f3a4c25cb92694444c2f0e68151874f332e07606155aa246");
+    assert_eq!(hex(&k.1), "719d11ae98ee8d882d06ba0b19392c68a588a1073410d2de67bc0180007ab01f");
+    let doc = obj! { "v" => 1, "machine" => "书房", "t" => Value::List(Vec::new()), "more" => 0 };
+    assert_eq!(launch_plain(&doc).len(), 256);
+    let blob = launch_seal(&p, pid, &sid, &doc);
+    assert_eq!(launch_open(&p, pid, &sid, &blob).as_ref(), Some(&doc));
+    assert_eq!(launch_open(&p, pid, &other, &blob), None, "别的启动器的");
+    assert_eq!(launch_open(&p, &"f".repeat(32), &sid, &blob), None, "别的配对的");
+    assert_eq!(dir_open(&p, pid, &sid, &blob), None, "会话的说明的密钥解不开它：旧的 cca、旧的 App 跳过它");
+    assert_eq!(launch_open(&p, pid, &sid, &dir_seal(&p, pid, &sid, &doc)), None, "它的密钥也解不开会话的说明");
+    assert_ne!(launch_keys(&p), dir_keys(&p));
+}
+
 /// 对照数据里长的那几条记录的内容（Python 那边是同一个算法）
 fn fill(n: usize) -> Vec<u8> {
     (0..n).map(|i| (i % 251) as u8).collect()

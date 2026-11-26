@@ -433,6 +433,8 @@ struct ConsentItem: KnownValues {
     static let remotePair = ConsentItem(rawValue: "remote_pair")
     /// `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端（范围是会话的 id，默认不同意）。
     static let remoteEnd = ConsentItem(rawValue: "remote_end")
+    /// `cca remote allow <配对的 id> launch on`：让这台手机能用这台机器上的模板新建会话（远程启动，范围是配对的 id，默认不同意；PROTOCOL 9.4）。
+    static let remoteLaunch = ConsentItem(rawValue: "remote_launch")
     /// `cca team leave`（这台设备是成员）：退出一个 Team（范围是 Team 的编号，默认不同意；PROTOCOL 4.14）。
     static let teamLeave = ConsentItem(rawValue: "team_leave")
     /// `cca team leave`（这台设备是管理员）：这台设备上就没有这个 Team 的根密钥了（范围是 Team 的编号，默认不同意）。
@@ -449,7 +451,7 @@ struct ConsentItem: KnownValues {
     /// （范围为空，默认同意；PROTOCOL 4.2）。
     static let costHook = ConsentItem(rawValue: "cost_hook")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
-                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd,
+                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .remoteLaunch,
                                           .teamLeave, .teamDelete, .teamRevoke, .teamAdminAdd, .teamAdminRemove, .teamConfig, .costHook]
 }
 

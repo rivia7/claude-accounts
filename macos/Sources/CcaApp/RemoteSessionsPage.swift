@@ -144,6 +144,7 @@ private struct RemoteSessionList: View {
                         peers(snap, now: context.date.timeIntervalSince1970)
                     }
                 }
+                if model.remoteLaunchAvailable { RemoteLaunchSection() }
             }
             .padding(.top, 24).padding(.bottom, 36).pageColumn()
         }
@@ -421,6 +422,13 @@ private struct RemotePeerLine: View {
     let unpair: () -> Void
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            line
+            if peer.web, model.remoteLaunchAvailable { launchRow }
+        }
+    }
+
+    private var line: some View {
         MachineLine(name: nonEmpty(peer.name) ?? peer.short, detail: Texts.remotePeerDetail(peer, now: now)) {
             if peer.web { Tag(text: "手机", color: .secondary) }
             if let team = peer.team { Tag(text: model.teams.first { $0.id == team }?.name ?? "Team", color: .secondary) }
@@ -442,6 +450,227 @@ private struct RemotePeerLine: View {
                 .disabled(model.remoteBusy)
                 .help("取消和这台机器的配对：两边都不能再接入对方的会话")
         }
+    }
+
+    /// 手机：能不能用「远程启动」里的模板在这台 Mac 上新建会话（打开时 cca 先问一句）。它得能看和操作这台 Mac 的会话：不然开关停用、说原因
+    private var launchRow: some View {
+        let blocked = model.remoteLaunchBlocked(peer)
+        return HStack(spacing: 8) {
+            Toggle("允许远程启动", isOn: Binding(get: { peer.launch }, set: { model.setRemoteLaunch(peer, $0) }))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .disabled(model.remoteBusy || blocked != nil)
+            Text(blocked ?? (peer.launch ? "它能用「远程启动」里的模板在这台 Mac 上新建会话" : "打开后它能用「远程启动」里的模板在这台 Mac 上新建会话"))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+        }
+        .font(.callout)
+        .padding(.leading, 30)   // 和机器的名字对齐（图标 20 + 间距 10）
+        .help(blocked ?? "打开以后，这台手机能挑一个模板在这台 Mac 上新建会话，再接入它：账号、文件夹、参数都照模板")
+    }
+}
+
+// MARK: 远程启动
+
+/// 「远程启动」（PROTOCOL 9.4）：手机用这台 Mac 上的模板新建会话。模板写好用哪个工具、哪个账号、在哪个文件夹、带哪些参数，
+/// 手机只能挑一个起（可以带一句开场白）；哪台手机能用在「配对过的机器」里开。只有 cca 有远程启动（`hello.remote_launch`）时才有这一节。
+private struct RemoteLaunchSection: View {
+    @Environment(AppModel.self) private var model
+    /// 要删掉的那个模板（等确认）
+    private let deleting = State<RemoteTemplate?>(initialValue: nil)
+
+    var body: some View {
+        let snap = model.remoteTemplates
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader("远程启动") {
+                if model.remoteTemplatesLoading, snap.doc != nil { ProgressView().controlSize(.small) }
+                SectionAction("新建模板…", systemImage: "plus") { model.editRemoteTemplate() }
+                    .disabled(model.remoteBusy)
+                    .help("写好用哪个工具、哪个账号、在哪个文件夹、带哪些参数起会话：允许远程启动的手机能挑一个，在这台 Mac 上新建会话")
+            }
+            VStack(alignment: .leading, spacing: 9) {
+                if let running = model.remoteLauncherRunning { launcher(running) }
+                if let e = snap.error {
+                    Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "没能查到模板", message: e) {
+                        Button("重试") { model.refreshRemoteTemplates() }
+                            .buttonStyle(.borderedProminent).disabled(model.remoteTemplatesLoading)
+                    }
+                }
+                if let doc = snap.doc {
+                    if doc.templates.isEmpty {
+                        Text("还没有模板。").font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(doc.templates) { t in
+                            RemoteTemplateLine(template: t) { deleting.wrappedValue = t }
+                        }
+                    }
+                } else if model.remoteTemplatesLoading {
+                    ProgressView().controlSize(.small)
+                }
+                Text("在「配对过的机器」里打开一台手机的「允许远程启动」，它就能挑一个模板在这台 Mac 上新建会话、接入：账号、文件夹、参数都照模板，手机上改不了，只能带一句开场白。")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 4)
+        }
+        .confirmationDialog(deleting.wrappedValue.map { "删掉模板「\($0.name)」？" } ?? "",
+                            isPresented: Binding(get: { deleting.wrappedValue != nil }, set: { if !$0 { deleting.wrappedValue = nil } }),
+                            titleVisibility: .visible) {
+            Button("删掉", role: .destructive) {
+                if let t = deleting.wrappedValue { model.removeRemoteTemplate(t) }
+                deleting.wrappedValue = nil
+            }
+            Button("不删", role: .cancel) { deleting.wrappedValue = nil }
+        } message: {
+            Text("手机上就看不到它了；已经用它起的会话照常运行。")
+        }
+    }
+
+    /// 等手机来起会话的后台进程在不在跑（有允许远程启动的手机时才说）
+    private func launcher(_ running: Bool) -> some View {
+        Label {
+            Text(running ? "远程启动的后台进程在运行：允许远程启动的手机现在就能新建会话"
+                 : "远程启动的后台进程没在运行：手机现在起不了会话（刚打开的要等几秒；在终端里运行 cca remote launcher 看状态）")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: running ? "checkmark.circle" : "exclamationmark.triangle")
+                .foregroundStyle(running ? Color.green : Color.orange)
+        }
+        .font(.callout)
+    }
+}
+
+/// 一个模板：名字、工具，用不了时标出原因；第二行是账号、文件夹、参数。右边「修改…」「删除…」
+private struct RemoteTemplateLine: View {
+    @Environment(AppModel.self) private var model
+    let template: RemoteTemplate
+    let remove: () -> Void
+
+    var body: some View {
+        let t = template
+        let detail = Texts.remoteTemplateDetail(t, dir: model.displayPath(t.dir))
+        HStack(spacing: 10) {
+            Image(systemName: "doc.text").foregroundStyle(.secondary).frame(width: 20)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text(nonEmpty(t.name) ?? t.id).fontWeight(.medium).lineLimit(1)
+                    if let tool = t.tool { Tag(text: Texts.cliProduct(tool)) }
+                    if let p = t.problem {
+                        Tag(text: Texts.remoteTemplateProblem(p), color: .orange).help(Texts.remoteTemplateProblemHelp(p))
+                    }
+                }
+                if !detail.isEmpty {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            .help(detail)
+            Spacer(minLength: 8)
+            RowAction("修改…", systemImage: "pencil") { model.editRemoteTemplate(t) }
+                .disabled(model.remoteBusy)
+                .help("改这个模板的名字、账号、文件夹、参数")
+            RowAction("删除…", systemImage: "trash") { remove() }
+                .disabled(model.remoteBusy)
+                .help("删掉这个模板：手机上就看不到它了")
+        }
+        .font(.callout)
+        .frame(minHeight: 34)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// 新建、修改一个模板（弹层）：名字、工具、账号、文件夹、参数。存的时候 cca 校验，不行的原因写在下面，接着改。
+struct RemoteTemplateSheet: View {
+    @Environment(AppModel.self) private var model
+    let draft: RemoteTemplateDraft
+
+    var body: some View {
+        let d = draft
+        let tools = model.remoteTemplateTools
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(d.original == nil ? "新建模板" : "修改模板").font(.title3.weight(.semibold))
+                Text("允许远程启动的手机能挑这个模板，在这台 Mac 上新建会话：账号、文件夹、参数都照这里写的，手机上改不了。")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            field("名字") {
+                TextField("", text: Binding(get: { d.name }, set: { d.name = $0 }), prompt: Text("手机上看到的，比如「网站：修 bug」"))
+                    .textFieldStyle(.roundedBorder)
+            }
+            if tools.count > 1 {
+                field("工具") {
+                    Picker("工具", selection: Binding(get: { d.tool }, set: { model.setRemoteTemplateTool(d, $0) })) {
+                        ForEach(tools, id: \.self) { t in Text(Texts.cliProduct(t)).tag(t) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
+            }
+            field("账号", note: accountNote) {
+                Picker("账号", selection: Binding(get: { d.account }, set: { d.account = $0 })) {
+                    if d.account.isEmpty { Text("选一个账号").tag("") }
+                    ForEach(model.accounts(d.tool)) { a in
+                        Text(a.isAPI ? a.displayName + "（第三方 API）" : a.displayName).tag(a.key)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            field("文件夹") {
+                HStack(spacing: 10) {
+                    Text(d.dir.isEmpty ? "还没选" : model.displayPath(d.dir))
+                        .foregroundStyle(d.dir.isEmpty ? Color.secondary : Color.primary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(d.dir)
+                    Spacer(minLength: 8)
+                    Button("选择…") { model.chooseRemoteTemplateDirectory(d) }
+                }
+            }
+            field("参数", note: "照终端里的写法：空格隔开，带空格的用引号引起来，比如 --model opus --append-system-prompt '说中文'。没有就空着") {
+                TextField("", text: Binding(get: { d.args }, set: { d.args = $0 }), axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1...4)
+            }
+            if let e = d.error {
+                Label(e, systemImage: "exclamationmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            HStack {
+                if d.saving { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("取消") { model.dismissSheet() }
+                    .keyboardShortcut(.cancelAction)
+                Button("保存") { model.saveRemoteTemplate(d) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.glassProminent)
+                    .disabled(!d.canSave)
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+    }
+
+    /// 账号下面那一句：这个工具还没有账号；改的模板原来的账号没了
+    private var accountNote: String? {
+        let d = draft
+        if model.accounts(d.tool).isEmpty { return "\(Texts.cliProduct(d.tool)) 还没有账号" }
+        if let t = d.original, d.account.isEmpty { return "模板原来的账号（\(nonEmpty(t.accountName) ?? t.account)）账号表里没有了：换一个" }
+        return nil
+    }
+
+    private func field<Content: View>(_ label: String, note: String? = nil, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label).font(.callout.weight(.medium))
+            content()
+            if let note {
+                Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

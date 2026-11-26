@@ -70,6 +70,10 @@ pub const OUTPUT: u8 = 0x12;
 pub const EXIT: u8 = 0x13;
 /// 会话现在的大小（列数、行数，各两个字节）：只给 HELLO 的标志带了 4（能缩放）的接入方
 pub const SIZE: u8 = 0x17;
+/// 接入方 → 启动器：照模板起一个会话（JSON，3.7.6 起）
+pub const LAUNCH: u8 = 0x09;
+/// 启动器 → 接入方：起成了没有（JSON）
+pub const LAUNCHED: u8 = 0x18;
 
 /// [`dial`] 的连接等多久算超时（原来 create_connection 的 timeout=20）
 pub const DIAL_WAIT: Duration = Duration::from_secs(20);
@@ -1055,11 +1059,12 @@ impl<'a> SpecPeer<'a> {
         fx.good(dev, "pair_commit", &obj! { "rid" => rid, "pid" => self.pid.as_str() });
     }
 
-    /// 经这个配对看得到的会话：解开的说明，各添上 sid
+    /// 经这个配对看得到的会话：解开的说明，各添上 sid。启动器（远程启动，3.7.6 起）也登记成一个会话，它的说明用另一把密钥封：
+    /// 不算会话（拿启动器的密钥解得开的跳过，别的都得是会话的说明）
     pub fn sessions(&self) -> Vec<Value> {
-        let j = self.fx.good(self.dev, "relay_list", &obj! { "pids" => vec![self.pid.as_str()] });
-        let rows = j["sessions"].get(&self.pid).map(|rows| rows.list().to_vec()).unwrap_or_default();
-        rows.iter()
+        self.rows()
+            .iter()
+            .filter(|r| spec::launch_open(&self.p, &self.pid, r["sid"].str(), &r["blob"]).is_none())
             .map(|r| {
                 let sid = r["sid"].str();
                 let mut doc = spec::dir_open(&self.p, &self.pid, sid, &r["blob"]).expect("会话的说明认证得过");
@@ -1067,6 +1072,30 @@ impl<'a> SpecPeer<'a> {
                 doc
             })
             .collect()
+    }
+
+    /// 服务器上这个配对看得到的那几行（relay_list 的 sessions 里这个配对的）
+    fn rows(&self) -> Vec<Value> {
+        let j = self.fx.good(self.dev, "relay_list", &obj! { "pids" => vec![self.pid.as_str()] });
+        j["sessions"].get(&self.pid).map(|rows| rows.list().to_vec()).unwrap_or_default()
+    }
+
+    /// 那台机器的启动器（远程启动）：(它登记成的会话的编号, 解开的说明)；没有（没开远程启动、这台手机不让）是 None
+    pub fn launcher(&self) -> Option<(String, Value)> {
+        self.rows().iter().find_map(|r| {
+            let sid = r["sid"].str();
+            spec::launch_open(&self.p, &self.pid, sid, &r["blob"]).map(|doc| (sid.to_string(), doc))
+        })
+    }
+
+    /// 请启动器 sid 照 ask（LAUNCH 的内容）起一个会话：接上去握手（和接入会话一样），不发 HELLO、直接发 LAUNCH，等 LAUNCHED。
+    /// 返回它的内容（JSON）
+    pub fn launch(&self, sid: &str, ask: &Value) -> Value {
+        let (s, ch) = self.attach(sid);
+        let mut r = Reader::new(s, ch.expect("握手：启动器的证明对得上"));
+        r.send(&frame(LAUNCH, ask.compact().as_bytes()));
+        let got = r.frame_of(LAUNCHED);
+        parsed(std::str::from_utf8(&got).expect("LAUNCHED 是 UTF-8"))
     }
 
     /// 接到会话上，握手。返回 (连接, 通道)；宿主的证明不对时通道是 None
@@ -1104,12 +1133,23 @@ pub struct Reader {
     pub kinds: BTreeSet<u8>,
     /// 解出来的全部明文
     pub raw: Vec<u8>,
+    /// 收到的别的帧（不是输出、退出码、会话的大小的）：(类型, 内容)，[`Reader::frame_of`] 从这里取
+    pub frames: Vec<(u8, Vec<u8>)>,
 }
 
 impl Reader {
     /// s、ch：[`SpecPeer::attach`] 给的连接和通道
     pub fn new(s: TcpStream, ch: Channel) -> Reader {
-        Reader { s, ch, buf: Vec::new(), plain: Vec::new(), out: Vec::new(), kinds: BTreeSet::new(), raw: Vec::new() }
+        Reader {
+            s,
+            ch,
+            buf: Vec::new(),
+            plain: Vec::new(),
+            out: Vec::new(),
+            kinds: BTreeSet::new(),
+            raw: Vec::new(),
+            frames: Vec::new(),
+        }
     }
 
     /// 封成通道上的一条记录发出去（`sock.sendall(ch.seal(data))`；data 多半是 [`frame`] 拼的一帧）
@@ -1127,11 +1167,38 @@ impl Reader {
     pub fn until_in(&mut self, want: impl Fn(&[u8]) -> bool, limit: Duration) -> &[u8] {
         self.s.set_read_timeout(Some(limit)).unwrap_or_else(|e| panic!("设不了读的时限：{e}"));
         while !want(&self.out) {
-            let data = recv(&mut self.s, 65536);
-            if data.is_empty() {
-                let tail = &self.out[self.out.len().saturating_sub(300)..];
-                panic!("连接断了，已收到的输出：{:?}", String::from_utf8_lossy(tail));
+            self.pump();
+        }
+        &self.out
+    }
+
+    /// 读到收到一帧 kind 为止，返回它的内容（之前收到的别的帧照 [`Reader::until`] 那样记下）；每次读最多等 15 秒
+    pub fn frame_of(&mut self, kind: u8) -> Vec<u8> {
+        self.s.set_read_timeout(Some(Duration::from_secs(15))).unwrap_or_else(|e| panic!("设不了读的时限：{e}"));
+        loop {
+            if let Some(i) = self.frames.iter().position(|(k, _)| *k == kind) {
+                return self.frames.remove(i).1;
             }
+            self.pump();
+        }
+    }
+
+    /// 读一次、解开收到的记录、拆成帧
+    fn pump(&mut self) {
+        {
+            let mut data = vec![0u8; 65536];
+            let tail = |out: &[u8]| String::from_utf8_lossy(&out[out.len().saturating_sub(300)..]).to_string();
+            let got = loop {
+                match self.s.read(&mut data) {
+                    Ok(got) => break got,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => panic!("连接上读不到（{e}），已收到的输出：{:?}", tail(&self.out)),
+                }
+            };
+            if got == 0 {
+                panic!("连接断了，已收到的输出：{:?}", tail(&self.out));
+            }
+            data.truncate(got);
             self.buf.extend_from_slice(&data);
             loop {
                 match self.ch.open(&mut self.buf) {
@@ -1161,9 +1228,10 @@ impl Reader {
                 } else if kind == SIZE && payload.len() >= 4 {
                     let (c, r) = (u16::from_be_bytes([payload[0], payload[1]]), u16::from_be_bytes([payload[2], payload[3]]));
                     self.out.extend_from_slice(format!("<SIZE {c} {r}>").as_bytes());
+                } else {
+                    self.frames.push((kind, payload));
                 }
             }
         }
-        &self.out
     }
 }

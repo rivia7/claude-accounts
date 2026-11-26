@@ -5,6 +5,9 @@ import Foundation
 /// 只在调试版里：tests/ios_kit.rs 的 in_the_simulator 在模拟器里开 App，用启动参数让它自己走一遍（不点界面），结果一行一行打到 stdout：
 /// - `-test-pair <链接>`：直接配对（不问那一句）→ `pair ok <配对编号>` / `pair fail <原因>`
 /// - `-test-attach`：配好以后（或者本来就配过）等会话列出来，接入第一个在线的 → `state open` …
+/// - `-test-launch <模板编号>`（可以再给 `-test-line <开场白>`）：配好以后（或者本来就配过）等启动器列出这个模板，照「新建会话」那样启动 →
+///   `launch size 列 行`（新会话照多大起）、`launch ok <新会话的编号>` / `launch fail <原因码> <App 说的那句话>`；起来了接着像 -test-attach 那样
+///   接入它（`state open` …，后面几项照样）
 /// - `-test-type <文字>`：接上以后敲进去（\r 结尾）
 /// - `-test-note`：会话推来的通知不真的弹（不要权限），说出来 → `note 标题|副标题|正文`
 /// - `-test-wheel`：（敲完以后）等会话开了鼠标上报，当成手指往下拖了三行 → `wheel`（会话那头收到三格往上的滚轮）
@@ -61,22 +64,29 @@ enum TestDriver {
                 say("keys \(keys.count) " + keys.map(\.pid).sorted().joined(separator: " "))
             }
         }
-        guard args.contains("-test-attach") else { return }
-        var target: (Peer, RemoteSession)?
-        for _ in 0..<60 where target == nil {
-            await model.fetch()
-            for p in model.peers {
-                if let s = model.listing(p)?.sessions.first(where: \.online) {
-                    target = (p, s)
-                    break
+        let t: TerminalSession
+        if let id = value("-test-launch") {
+            guard let launched = await launch(model, id) else { return }
+            t = launched
+        } else {
+            guard args.contains("-test-attach") else { return }
+            var target: (Peer, RemoteSession)?
+            for _ in 0..<60 where target == nil {
+                await model.fetch()
+                for p in model.peers {
+                    if let s = model.listing(p)?.sessions.first(where: \.online) {
+                        target = (p, s)
+                        break
+                    }
                 }
+                if target == nil { try? await Task.sleep(for: .milliseconds(500)) }
             }
-            if target == nil { try? await Task.sleep(for: .milliseconds(500)) }
+            guard let (peer, session) = target else { return say("attach fail no_session") }
+            say("session \(session.sid)")
+            model.attach(session, on: peer, readOnly: false)
+            guard let attached = model.terminal else { return }
+            t = attached
         }
-        guard let (peer, session) = target else { return say("attach fail no_session") }
-        say("session \(session.sid)")
-        model.attach(session, on: peer, readOnly: false)
-        guard let t = model.terminal else { return }
         var last = ""
         for _ in 0..<300 {
             let now = "\(t.state)"
@@ -108,6 +118,37 @@ enum TestDriver {
         if value("-test-push-token") != nil {
             await openPushed()
         }
+    }
+
+    /// 等启动器列出这个模板，照「新建会话」那一页那样启动（AppModel.launch），起来了是新会话的终端
+    private static func launch(_ model: AppModel, _ id: String) async -> TerminalSession? {
+        var found: (Peer, LaunchTemplate)?
+        for _ in 0..<60 where found == nil {
+            await model.fetch()
+            for p in model.peers {
+                if let x = model.launcher(p)?.info.templates.first(where: { $0.id == id }) {
+                    found = (p, x)
+                    break
+                }
+            }
+            if found == nil { try? await Task.sleep(for: .milliseconds(500)) }
+        }
+        guard let (peer, template) = found else {
+            say("launch fail no_template")
+            return nil
+        }
+        let size = TerminalGrid.forLaunch
+        say("launch size \(size.cols) \(size.rows)")
+        if let why = await model.launch(template, on: peer, line: value("-test-line")) {
+            say("launch fail \(why.code) \(why.text)")
+            return nil
+        }
+        guard let t = model.terminal else {
+            say("launch fail no_terminal")
+            return nil
+        }
+        say("launch ok \(t.session.sid)")
+        return t
     }
 
     /// 测试把推送服务收到的那一份放进 App 的临时目录：像通知扩展那样拿通知密钥解开、做成要弹的字

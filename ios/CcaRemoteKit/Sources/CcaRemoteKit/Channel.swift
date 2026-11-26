@@ -89,6 +89,8 @@ enum Frame {
     static let output: UInt8 = 0x12, exit: UInt8 = 0x13, notify: UInt8 = 0x16
     /// 会话现在的大小（列数、行数，和 `size` 一样）：新的宿主只给 HELLO 里说了能缩放的，接上时说一次（在回放前面），变了再说
     static let sessionSize: UInt8 = 0x17
+    /// 远程启动（Launch.swift）：接入方 → 启动器，要起哪个模板（握手以后的头一帧，不发 HELLO）；启动器 → 接入方，起没起成（回完就断开）
+    static let launch: UInt8 = 0x09, launched: UInt8 = 0x18
     /// HELLO 的标志：只看；能缩放（会话和这块屏幕不一样大时缩小了画、拖着看：宿主不把这台手机的窗口算进会话的大小，等它打了字
     /// 才照它排，会话多大经 `sessionSize` 告诉它。旧的宿主不认，照旧算进去）
     static let readOnly: UInt8 = 1, zoom: UInt8 = 4

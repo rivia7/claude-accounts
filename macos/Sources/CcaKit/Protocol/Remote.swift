@@ -25,9 +25,11 @@ struct RemoteDoc: CcaDocument, Equatable {
     var sessions: [RemoteSession]
     var peers: [RemotePeer]
     var errors: [RemoteProblem]
+    /// 远程启动（PROTOCOL 9.4）：等手机来起会话的后台进程在不在跑、有几个模板、几台手机能用。旧版 cca 没有这一项（nil）
+    var launcher: RemoteLauncher?
 
     enum CodingKeys: String, CodingKey {
-        case version, kind, enabled, relay, sessions, peers, errors
+        case version, kind, enabled, relay, sessions, peers, errors, launcher
         case generatedEpoch = "generated_epoch"
     }
 
@@ -57,6 +59,7 @@ struct RemoteDoc: CcaDocument, Equatable {
         sessions = c.lossyArray(RemoteSession.self, .sessions) ?? []
         peers = c.lossyArray(RemotePeer.self, .peers) ?? []
         errors = c.lossyArray(RemoteProblem.self, .errors) ?? []
+        launcher = c.lossy(RemoteLauncher.self, .launcher)
     }
 
     func session(_ id: String) -> RemoteSession? { sessions.first { $0.id == id } }
@@ -173,9 +176,12 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     /// 这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）。旧版 cca 没有这个字段、3.6.0 以前经维护者的
     /// 服务器配的（3.6.0 的 cca 不再列出）是 nil：照样列出来，不标是哪个 Team 的
     var team: String?
+    /// 它能用这台 Mac 上的模板新建会话（远程启动，`cca remote allow <配对的 id> launch on`，PROTOCOL 9.4）。只有手机、能看和操作的
+    /// 才会是 true（改成只看、不让时 cca 一起关掉）；旧版 cca 没有这个字段，当成 false
+    var launch: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, short, name, incoming, shown, state, web, team
+        case id, short, name, incoming, shown, state, web, team, launch
         case pairedEpoch = "paired_epoch"
     }
 
@@ -193,6 +199,7 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
         state = c.lossy(RemotePeerState.self, .state) ?? .unknown
         web = c.bool(.web) ?? false
         team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
+        launch = c.bool(.launch) ?? false
     }
 }
 
@@ -268,4 +275,116 @@ struct RemoteSnapshot: Equatable, Sendable {
     /// 最近一次没查成的原因；查成了是 nil（上次查到的照样显示）
     var error: String?
     var fetchedEpoch: Double?
+}
+
+// MARK: 远程启动（PROTOCOL 9.4）
+
+/// 远程启动的后台进程（启动器：等允许远程启动的手机来起会话）的样子：`remote list --json`、`remote template list --json` 的 `launcher`。
+struct RemoteLauncher: Decodable, Sendable, Equatable {
+    /// 在跑：允许远程启动的手机现在就能起会话
+    var running: Bool
+    /// 有几个模板（列表里的这个数和手里的模板对不上时 App 再查一次模板）；没给是 nil
+    var templates: Int?
+    /// 有几台手机能远程启动
+    var peers: Int
+
+    enum CodingKeys: String, CodingKey { case running, templates, peers }
+
+    init(running: Bool, templates: Int?, peers: Int) {
+        self.running = running
+        self.templates = templates
+        self.peers = peers
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        running = c.bool(.running) ?? false
+        templates = c.int(.templates).map { max($0, 0) }
+        peers = max(c.int(.peers) ?? 0, 0)
+    }
+}
+
+/// `cca remote template list --json`（PROTOCOL 9.4）：远程启动用的模板和启动器的样子。只读、不联网。
+/// 手机只能挑一个模板在这台 Mac 上起会话（可以带一句开场白）：账号、文件夹、参数都改不了。
+struct RemoteTemplatesDoc: CcaDocument, Equatable {
+    static let expectedKind: String? = "remote_templates"
+
+    var version: Int?
+    var kind: String?
+    var templates: [RemoteTemplate]
+    var launcher: RemoteLauncher?
+
+    enum CodingKeys: String, CodingKey { case version, kind, templates, launcher }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = c.int(.version)
+        kind = c.string(.kind)
+        templates = c.lossyArray(RemoteTemplate.self, .templates) ?? []
+        launcher = c.lossy(RemoteLauncher.self, .launcher)
+    }
+
+    func template(_ id: String) -> RemoteTemplate? { templates.first { $0.id == id } }
+}
+
+/// 一个模板：用哪个工具、哪个账号、在哪个文件夹、带哪些参数起会话。
+struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
+    /// 模板的编号（8 个十六进制字符）：`cca remote template add --replace`、`rm` 的参数
+    var id: String
+    /// 名字（手机上看到的）
+    var name: String
+    /// 用哪个工具起；不认识的照样列出来
+    var tool: ToolID?
+    /// 存着的账号：邮箱（没有邮箱的账号是账号表的键）
+    var account: String
+    /// 账号表里现在的这个账号叫什么（别名，没起别名的是邮箱）；账号没了是 nil
+    var accountName: String?
+    /// 在哪个文件夹里起（绝对路径）
+    var dir: String
+    /// 起会话时带的参数（一项一个）
+    var args: [String]
+    /// 手机起会话时能带一句开场白
+    var line: Bool
+    /// 现在用不了的原因；用得了是 nil
+    var problem: RemoteTemplateProblem?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, tool, account, dir, args, line, problem
+        case accountName = "account_name"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = nonEmpty(c.string(.id)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "remote template without id"))
+        }
+        self.id = id
+        name = c.string(.name) ?? ""
+        tool = c.lossy(ToolID.self, .tool)
+        account = c.string(.account) ?? ""
+        accountName = nonEmpty(c.string(.accountName))
+        dir = c.string(.dir) ?? ""
+        args = c.lossyArray(String.self, .args) ?? []
+        line = c.bool(.line) ?? false
+        problem = c.lossy(RemoteTemplateProblem.self, .problem)
+    }
+}
+
+/// 模板现在用不了的原因（`templates[].problem`）：`no_account` 账号表里没有这个账号了；`no_dir` 文件夹不在了；`bad_args` 参数用不了
+/// （不是交互的会话，或者启动前的检查过不了）；`no_relay` 这个账号的会话不经中转（这台 Mac 不在哪个 Team 里）。
+struct RemoteTemplateProblem: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    static let noAccount = RemoteTemplateProblem(rawValue: "no_account")
+    static let noDir = RemoteTemplateProblem(rawValue: "no_dir")
+    static let badArgs = RemoteTemplateProblem(rawValue: "bad_args")
+    static let noRelay = RemoteTemplateProblem(rawValue: "no_relay")
+    static let allKnown: [RemoteTemplateProblem] = [.noAccount, .noDir, .badArgs, .noRelay]
+}
+
+/// App 里记着的模板（只在内存里）：最近一次查到的，和最近一次没查成的原因。
+struct RemoteTemplatesSnapshot: Equatable, Sendable {
+    var doc: RemoteTemplatesDoc?
+    /// 最近一次没查成的原因；查成了是 nil（上次查到的照样显示）
+    var error: String?
 }

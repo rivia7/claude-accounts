@@ -129,6 +129,22 @@ pub fn dir_open(p: &[u8], pid: &str, sid: &str, blob: &V) -> Option<Dict> {
     parse(&blob_open(&dir_keys(p), &blob_ad(&["cca-remote-dir", pid, sid]).ok()?, blob)?)
 }
 
+fn launch_keys(p: &[u8]) -> Keys {
+    let k = hmac_sha256(p, b"cca-remote/v1/launch");
+    (hmac_sha256(&k, b"enc"), hmac_sha256(&k, b"mac"))
+}
+
+/// 启动器的说明（这台机器上能远程启动的模板，template.rs 的 `launch_doc`），封给允许远程启动的那台手机看。密钥和会话的说明的
+/// 不一样：旧的 cca、旧的 App 用会话说明的密钥解不开它，就跳过（不会当成一个会话列出来）
+pub fn launch_seal(p: &[u8], pid: &str, sid: &str, doc: &Dict) -> R<Dict> {
+    Ok(blob_seal(&launch_keys(p), &blob_ad(&["cca-remote-launch", pid, sid])?, &padded(doc)))
+}
+
+#[cfg(test)]
+pub fn launch_open(p: &[u8], pid: &str, sid: &str, blob: &V) -> Option<Dict> {
+    parse(&blob_open(&launch_keys(p), &blob_ad(&["cca-remote-launch", pid, sid]).ok()?, blob)?)
+}
+
 fn note_keys(p: &[u8]) -> Keys {
     let k = hmac_sha256(p, b"cca-remote/v1/note");
     (hmac_sha256(&k, b"enc"), hmac_sha256(&k, b"mac"))
@@ -397,6 +413,10 @@ mod tests {
         let sk = status_keys(&p);
         assert_eq!(to_hex(&sk.0), "6a55edc52165b0754462b3e85e129d733c16c26d366132b3576a94c2f6a8e24a");
         assert_eq!(to_hex(&sk.1), "8ec54fb9ca191f90fb8fec987036170e2aa6f75ca8c5c74bea47ec85c8fc6906");
+        // 启动器的说明：openssl 照文档算的
+        let lk = launch_keys(&p);
+        assert_eq!(to_hex(&lk.0), "f1db5343f2df6985f3a4c25cb92694444c2f0e68151874f332e07606155aa246");
+        assert_eq!(to_hex(&lk.1), "719d11ae98ee8d882d06ba0b19392c68a588a1073410d2de67bc0180007ab01f");
 
         let mut v = Channel::new(Role::Viewer, &p, &pid, SID, FPA, FPB).unwrap();
         let mut h = Channel::new(Role::Host, &p, &pid, SID, FPA, FPB).unwrap();
@@ -583,9 +603,21 @@ mod tests {
         assert!(status_open(&p, "ffffffffffffffffffffffffffffffff", &V::Dict(sealed_st.clone())).is_none(), "别的配对的");
         assert!(status_open(&p, &pid, &V::Dict(sealed)).is_none(), "通知不是账号的状态");
         assert!(note_open(&p, &pid, &V::Dict(sealed_st)).is_none());
+        // 启动器的说明：只认这个配对、这个启动器的；和会话的说明的密钥不一样（旧的 App 解不开，跳过它）
+        let tl = crate::dict! { "v" => 1, "machine" => "服务器", "t" => crate::py::obj::List::new(), "more" => 0 };
+        let sealed_tl = launch_seal(&p, &pid, SID, &tl).unwrap();
+        assert_eq!(launch_open(&p, &pid, SID, &V::Dict(sealed_tl.clone())).unwrap().str("machine").unwrap().to_string(), "服务器");
+        assert!(launch_open(&p, &pid, "ffffffffffffffffffffffffffffffff", &V::Dict(sealed_tl.clone())).is_none(), "别的启动器的");
+        assert!(dir_open(&p, &pid, SID, &V::Dict(sealed_tl)).is_none(), "启动器的说明不是会话的说明");
+        assert!(launch_open(&p, &pid, SID, &V::Dict(blob_for_launch(&p, &pid))).is_none(), "会话的说明不是启动器的说明");
         assert_eq!(usage_tag(&p, "x"), usage_tag(&p, "x"));
         assert_ne!(usage_tag(&p, "x"), usage_tag(&[0; 32], "x"));
         assert_eq!(usage_tag(&p, "x").len(), 16);
+    }
+
+    /// 一份会话的说明（拿来试启动器的密钥解不解得开）
+    fn blob_for_launch(p: &[u8], pid: &str) -> Dict {
+        dir_seal(p, pid, SID, &crate::dict! { "v" => 1, "machine" => "服务器" }).unwrap()
     }
 
     impl Channel {

@@ -405,6 +405,15 @@ pub fn agy_plan_seen(key: &str, email: &str) -> String {
 /// 参数（或者 `--`）为止，那个参数是子命令就不开会话。打印模式、--version、--help 不是；自己带了 --settings 的也不加
 /// （agy 只认一个 --settings，用户的那一份要原样生效）
 fn agy_takes_statusline(args: &[String]) -> bool {
+    agy_session(args, false)
+}
+
+/// 是不是 agy 的交互会话（远程启动的模板只能起这种，remote/template.rs）：和上面一样认，只是自己带了 --settings 的也算
+pub(crate) fn agy_interactive(args: &[String]) -> bool {
+    agy_session(args, true)
+}
+
+fn agy_session(args: &[String], own_settings: bool) -> bool {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == "--" {
@@ -414,7 +423,7 @@ fn agy_takes_statusline(args: &[String]) -> bool {
             return !AGY_SUBCOMMANDS.contains(&a.as_str());
         };
         let (name, inline) = flag.split_once('=').map_or((flag, false), |(n, _)| (n, true));
-        if name == "settings" || AGY_ONE_SHOT.contains(&name) {
+        if (name == "settings" && !own_settings) || AGY_ONE_SHOT.contains(&name) {
             return false;
         }
         if !inline && AGY_VALUES.iter().any(|v| v.trim_start_matches('-') == name) {

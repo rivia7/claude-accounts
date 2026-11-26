@@ -4,7 +4,8 @@ import Foundation
 
 /// 一处接入：一条 TCP 连接进数据端口。事件在 queue 上出来。关掉的原因是一个词：
 /// detached（自己断开的）、ended（会话结束了）、lost（连接断了）、unreachable（连不上数据端口）、refused（宿主不认这个配对）、
-/// version、auth（对面证明不了它有密钥：什么都没发给它）、nohost（那台机器这会儿没连着服务器）、busy、ticket、error
+/// version、auth（对面证明不了它有密钥：什么都没发给它）、nohost（那台机器这会儿没连着服务器）、busy、ticket、error；
+/// 进启动器的（远程启动，Launch.swift）收到回话以后是 launched
 final class Link: @unchecked Sendable {
     struct Events {
         var open: () -> Void = {}
@@ -13,6 +14,8 @@ final class Link: @unchecked Sendable {
         var size: (Int, Int) -> Void = { _, _ in }
         var exit: (Int32) -> Void = { _ in }
         var note: (Note) -> Void = { _ in }
+        /// 启动器的回话（LAUNCHED 帧的内容；只在进启动器的连接上）
+        var launched: (Bytes) -> Void = { _ in }
         var close: (String) -> Void = { _ in }
     }
 
@@ -31,12 +34,14 @@ final class Link: @unchecked Sendable {
     private var cols: Int
     private var rows: Int
     private let readOnly: Bool
+    /// 握手以后的头一帧：nil 是 HELLO（接入会话）；进启动器时是 LAUNCH（Launch.swift：不发 HELLO、不用心跳，等它回话）
+    private let first: Bytes?
     private var timer: DispatchSourceTimer?
     private var beat: DispatchSourceTimer?
     /// 最后一次听到对面（秒，单调时钟）
     private(set) var heard = monotonic()
 
-    init(host: String, port: UInt16, tid: String, tkey: Bytes, channel: Channel, cols: Int, rows: Int, readOnly: Bool,
+    init(host: String, port: UInt16, tid: String, tkey: Bytes, channel: Channel, cols: Int, rows: Int, readOnly: Bool, first: Bytes? = nil,
          queue: DispatchQueue, events: Events) {
         self.queue = queue
         self.channel = channel
@@ -44,6 +49,7 @@ final class Link: @unchecked Sendable {
         self.cols = cols
         self.rows = rows
         self.readOnly = readOnly
+        self.first = first
         (line, expect) = relayLine(tid: tid, tkey: tkey)
         stream = TCPStream(host: host, port: port, queue: queue)
     }
@@ -124,14 +130,19 @@ final class Link: @unchecked Sendable {
             phase = .open
             timer?.cancel()
             timer = nil
-            try write(Frame.make(Frame.hello, [1, (readOnly ? Frame.readOnly : 0) | Frame.zoom] + Frame.size(cols, rows)))
-            // 两头每 20 秒说一声（空的记录），60 秒没听到对面就算断了
-            beat = after(20, repeating: 20) { [weak self] in
-                guard let self else { return }
-                if monotonic() - self.heard > 60 {
-                    self.finish("lost")
-                } else {
-                    self.guarded { try self.stream.send(self.channel.seal([])) }
+            if let first {
+                // 进的是启动器：头一帧说要起哪个，一会儿就回话（等多久由调用方定）
+                try write(first)
+            } else {
+                try write(Frame.make(Frame.hello, [1, (readOnly ? Frame.readOnly : 0) | Frame.zoom] + Frame.size(cols, rows)))
+                // 两头每 20 秒说一声（空的记录），60 秒没听到对面就算断了
+                beat = after(20, repeating: 20) { [weak self] in
+                    guard let self else { return }
+                    if monotonic() - self.heard > 60 {
+                        self.finish("lost")
+                    } else {
+                        self.guarded { try self.stream.send(self.channel.seal([])) }
+                    }
                 }
             }
             events.open()
@@ -168,6 +179,10 @@ final class Link: @unchecked Sendable {
                 // 会话现在的大小：不在范围里的不理
                 let c = Int(payload[0]) << 8 | Int(payload[1]), r = Int(payload[2]) << 8 | Int(payload[3])
                 if Frame.validSize(c, r) { events.size(c, r) }
+            } else if kind == Frame.launched, first != nil {
+                // 启动器的回话：它回完就断开，这一头也收了
+                events.launched(payload)
+                finish("launched")
             }
             // 别的帧（宿主那头已经滤掉了）不理
         }
@@ -253,10 +268,15 @@ public final class Attachment: @unchecked Sendable {
     static let retryFor = 300.0                        // 一共试这么久
     static let missingFor = 45.0                       // 服务器说没有这个会话：多半是结束了，再等这么久就不等了
     static let flapsMax = 5                            // 接上不到 10 秒又断，连着这么多次就不再试
+    static let freshFor = 45.0                         // 刚远程启动的会话：还没接上过时，服务器说没有它不算结束，这么久里接着问
+    static let freshGap = 1.5                          // 那时隔多久问一次
 
     public let peer: Peer
     public let sid: String
     public let readOnly: Bool
+    /// 刚远程启动的会话（Launch.swift）：它那头的转接进程可能还没在服务器上登记，头 45 秒里服务器说没有这个会话时隔 1.5 秒再问，
+    /// 状态照旧是正在接入。接上过一次以后和别的会话一样
+    public let fresh: Bool
     private let client: RemoteClient
     private let queue = DispatchQueue(label: "cca.remote.attachment")
     private var cols: Int
@@ -266,6 +286,8 @@ public final class Attachment: @unchecked Sendable {
     private var flaps = 0
     private var tries = 0
     private var openedAt = 0.0
+    private var startedAt = 0.0
+    private var everOpen = false
     private var since: Double?
     private var missing: Double?
     private var timer: DispatchWorkItem?
@@ -283,18 +305,22 @@ public final class Attachment: @unchecked Sendable {
     public var onExit: (Int32) -> Void = { _ in }
     public var onNote: (Note) -> Void = { _ in }
 
-    public init(client: RemoteClient, peer: Peer, sid: String, cols: Int, rows: Int, readOnly: Bool) {
+    public init(client: RemoteClient, peer: Peer, sid: String, cols: Int, rows: Int, readOnly: Bool, fresh: Bool = false) {
         self.client = client
         self.peer = peer
         self.sid = sid
         self.cols = cols
         self.rows = rows
         self.readOnly = readOnly
+        self.fresh = fresh
     }
 
     /// 开始接（回调都设好以后调一次）
     public func start() {
-        queue.async { self.connect(retrying: false) }
+        queue.async {
+            self.startedAt = monotonic()
+            self.connect(retrying: false)
+        }
     }
 
     public var state: State {
@@ -361,6 +387,16 @@ public final class Attachment: @unchecked Sendable {
 
     private func failed(_ me: Int, _ code: String, retrying: Bool) {
         guard attempt == me else { return }
+        if code == "no_session", fresh, !everOpen, monotonic() - startedAt < Self.freshFor {
+            // 刚起的会话还没在服务器上登记：过一会儿再问（不算断了重新接）
+            let w = DispatchWorkItem { [weak self] in
+                guard let self, self.attempt == me else { return }
+                self.connect(retrying: retrying)
+            }
+            timer = w
+            queue.asyncAfter(deadline: .now() + Self.freshGap, execute: w)
+            return
+        }
         if code == "no_session" {
             // 第一次就没有：会话不在了。重新接的时候：多半是结束了，也可能是那头正在重连，留一阵
             if !retrying { return stop("gone") }
@@ -376,6 +412,7 @@ public final class Attachment: @unchecked Sendable {
 
     private func opened(_ me: Int) {
         guard attempt == me else { return }
+        everOpen = true
         openedAt = monotonic()
         since = nil
         missing = nil

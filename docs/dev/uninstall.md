@@ -11,7 +11,7 @@
 3. 每个账号：把会话里新产生的共享内容并回 `~/.claude`、`~/.codex`、`~/.gemini`（`py link`、`py sync`），退出登录、删凭证；钥匙串里 cca 存的
    key、邮箱助手的密码、远程会话配对的密钥；退出各个 Team（`restore_teams`：服务器上移除这台设备；是管理员的，根密钥跟着 `~/.cca` 删掉、
    备份里也不带，第 2 步列出来时说了）；路由器（`router_uninstall`，失败时问要不要接着做本机的）；本机端口池、本机 UDP 的系统服务、内核、
-   crontab 里开机起内核的那一行、上报和统计折合金额的后台进程；`cca cost hook on` 加在共享的 `~/.claude/settings.json` 里的 hook（`py cost-hook off`：
+   crontab 里开机起内核的那一行、上报和统计折合金额的后台进程、远程启动的后台进程（`launcher_remove`：LaunchAgent / crontab 的那两行，launch.md）；`cca cost hook on` 加在共享的 `~/.claude/settings.json` 里的 hook（`py cost-hook off`：
    要拿 `~/.cca` 里的锁，所以在删 `~/.cca` 以前；去不掉（不是合法的 JSON 之类）时说一声、接着做，cca 删掉以后它什么也不做）。
 4. 打包备份 `~/cca-backup-日期.tar.gz`（600；哪些不进包见 `cmd_restore` 里 `tar` 那一句的注释）。没打成就留着 `~/.cca`、停下。
    `--no-backup` 跳过这一步（也就不要 `tar`）。
@@ -29,6 +29,7 @@
 | 界面 App 的缓存、内核日志、窗口状态、设置 | `~/Library/{Caches,HTTPStorages,Saved Application State,WebKit}/local.cca.app…`、`~/Library/Preferences/local.cca.app.plist` | `gui_leftovers`（`cca gui remove` 也调）：按 bundle id 认。设置先 `defaults delete`，它留下的空文件再删 |
 | shell 启动文件里把 `~/.local/bin` 加进 PATH 的那两行 | `path_hint` 写的：`~/.zshrc`、`~/.bash_profile`、`~/.bashrc`、`~/.profile` 之一 | `path_unhint`，见下 |
 | 空了的 `~/.local/bin` | | `path_unhint`（`rmdir`：里面还有东西就删不掉） |
+| 远程启动的后台进程（launch.md） | macOS：`~/Library/LaunchAgents/local.cca.remote-launcher.plist`；Linux：用户 crontab 里带 `# cca-remote-launcher` 的两行 | 第 3 步、`py remote-forget` 之前的 `launcher_remove`：`bootout`、删掉 / 删掉那两行，再停掉在跑的 |
 | Claude App 里的会话记下账号的 hook（3.6.9 起） | 共享的 `~/.claude/settings.json` 的 `hooks.SessionStart` 里命令带 ` _session-start --desktop` 的那一条 | 第 3 步的 `py cost-hook off`（只去掉这一条；第 2 步的清单里开着时才列）。文件是 cca 为它新建的，去掉以后留下 `{}` |
 
 `path_unhint` 的规矩：

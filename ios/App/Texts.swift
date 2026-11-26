@@ -296,4 +296,44 @@ enum Texts {
         default: return "没接上（\(why)）"
         }
     }
+
+    // MARK: 新建会话（远程启动）
+
+    /// 模板的第二行：「Claude Code · 工作」
+    static func templateTool(_ t: LaunchTemplate) -> String {
+        [cliProduct(t.tool), nonEmpty(t.account)].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 那台电脑的启动器说没起：原因码（server/README.md「启动器」）→ App 自己的一句话；不认识的原因码照那台电脑写的原因说，
+    /// 它也没写的说一句通用的
+    static func launchFailure(code: String, text: String) -> String {
+        switch code {
+        case "denied": return "那台电脑现在不让这台手机远程启动会话。在 Mac 上打开 cca App 的「远程会话」，在「配对过的机器」里打开这台手机的「允许远程启动」（终端里是 cca remote allow 这台手机的名字 launch on）"
+        case "no_template": return "那台电脑上已经没有这个模板了。列表刷新过了，重新选一个"
+        case "changed": return "这个模板在那台电脑上改过了。列表刷新过了，看一眼再启动"
+        case "no_account": return "模板用的账号在那台电脑上已经没有了，要在那台电脑上改一下这个模板"
+        case "no_dir": return "模板的文件夹在那台电脑上已经没有了，要在那台电脑上改一下这个模板"
+        case "bad_args": return "模板的参数在那台电脑上用不了（启动前的检查没过），要在那台电脑上改一下这个模板"
+        case "other_hub": return "模板的账号现在走别的 Team 的服务器，这里起不了：从经那个 Team 的配对起"
+        case "busy": return "那台电脑上开着的会话太多了，先结束几个再试"
+        case "rate": return "启动得太频繁了，过一会儿再试"
+        case "spawn": return "会话没起来。在那台电脑上运行 cca remote launcher log 看看原因"
+        case "bad": return "那台电脑看不懂这个请求：把这个 App 和那台电脑上的 cca 都更新到最新"
+        default: return nonEmpty(text) ?? "没启动成功（\(code)）"
+        }
+    }
+
+    /// 没等到启动器回话：原因码（RemoteFailure 的、连接关掉的那几个词，另有 timeout、bad_ask，CcaRemoteKit 的 LaunchResult）→
+    /// 一句话。请求发出去以后断了、没等到回话的，会话可能已经起来了
+    static func launchUnreached(_ code: String) -> String {
+        switch code {
+        case "no_session", "nohost": return "那台电脑这会儿收不到启动的请求：它睡着了、没联网，或者远程启动的后台进程没在运行"
+        case "timeout", "lost": return "没等到那台电脑回话。会话可能已经起来了，过一会儿在列表里看看"
+        case "bad_ask": return "开场白发不了：不能只有空白，最多 500 个字"
+        case "cancelled": return "没等那台电脑回话"
+        case "refused": return "那台电脑不让这台手机远程启动会话"
+        case "pin", "unreachable", "denied", "unknown_device", "no_key", "rate", "busy", "clock": return listFailure(code)
+        default: return closed(code)
+        }
+    }
 }

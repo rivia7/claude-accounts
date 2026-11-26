@@ -28,6 +28,8 @@ pub const STATUS_REQ: u8 = 0x06;
 pub const END: u8 = 0x07;
 /// 推一条通知给接着的各处（`cca remote notify`：会话里的钩子说的）。也只有这台机器上的 socket 上说得了，转接那头不转这一种
 pub const NOTIFY_REQ: u8 = 0x08;
+/// 用一个模板起一个会话（JSON，launch.rs 的 `Ask`）：只在手机和启动器之间的通道上说（转接会话的那头不转这一种）
+pub const LAUNCH: u8 = 0x09;
 /// 宿主 → 接入方
 pub const WELCOME: u8 = 0x11;
 pub const OUTPUT: u8 = 0x12;
@@ -37,6 +39,8 @@ pub const STATUS: u8 = 0x15;
 pub const NOTIFY: u8 = 0x16;
 /// 会话现在的大小（`size_bytes`）：只给说过 `FLAG_ZOOM` 的，接入时说一次（在回放前面），变了再说。转接那头照转
 pub const SIZE: u8 = 0x17;
+/// 启动器 → 手机：起了没有（JSON：新会话的编号，或者原因的代码和说明），说完就断开
+pub const LAUNCHED: u8 = 0x18;
 
 /// 这一版的帧格式
 pub const PROTO: u8 = 1;

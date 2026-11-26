@@ -94,7 +94,8 @@
       "paired_epoch": 1792314000,
       "state": "ok",
       "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
-      "web": false
+      "web": false,
+      "launch": false
     },
     {
       "id": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
@@ -105,7 +106,8 @@
       "paired_epoch": 1793782800,
       "state": "ok",
       "team": "0123456789abcdef0123456789abcdef",
-      "web": false
+      "web": false,
+      "launch": false
     },
     {
       "id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
@@ -116,7 +118,8 @@
       "paired_epoch": 1794000600,
       "state": "ok",
       "web": true,
-      "team": "0123456789abcdef0123456789abcdef"
+      "team": "0123456789abcdef0123456789abcdef",
+      "launch": true
     },
     {
       "id": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
@@ -127,8 +130,14 @@
       "paired_epoch": 1786266000,
       "state": "gone",
       "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
-      "web": false
+      "web": false,
+      "launch": false
     }
   ],
-  "errors": []
+  "errors": [],
+  "launcher": {
+    "running": true,
+    "templates": 3,
+    "peers": 1
+  }
 }

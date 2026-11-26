@@ -4,4 +4,4 @@
 
 - 启动的路上不加东西（每次 `py` 都是一个新进程，一条命令起十几二十次）：系统框架用到时才 `dlopen`（写成 `#[link]` 的话每条子命令都要先载入它），正则用 `re!`（用到才编译），只有一条子命令用的东西别在 `main` 里做
 - 起外部命令照旧按名字起（回归把它们换成 PATH 上的假命令、核对参数）
-- Team、远程会话的代码（`cmd/team*`、`cmd/hub*`、`cmd/remote*`、`server/`）各有一份成对修改的清单：`.claude/rules/team.md`、`remote.md`，读到这些文件时自动加载
+- Team、远程会话的代码（`cmd/team*`、`cmd/hub*`、`cmd/remote*`、`server/`）各有一份成对修改的清单：`.claude/rules/team.md`、`remote.md`、`launch.md`（远程启动），读到这些文件时自动加载

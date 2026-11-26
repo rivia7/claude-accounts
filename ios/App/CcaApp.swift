@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// iOS 上的 cca：接入电脑上开着的远程会话（docs/dev/ios.md）。
-/// 启动参数（截图、界面测试用，ios/test.sh）：`-demo` 进演示模式；`-screen list|accounts|account|terminal|pair|settings` 直接打开那一页
+/// 启动参数（截图、界面测试用，ios/test.sh）：`-demo` 进演示模式；`-screen list|accounts|account|terminal|pair|settings|launch` 直接打开那一页
 /// （演示模式里）
 @main
 struct CcaApp: App {
@@ -59,6 +59,9 @@ struct CcaApp: App {
             if all.indices.contains(n) { model.accountPath = [all[n]] }
         case "terminal":
             if let p = model.peers.first, let s = model.listing(p)?.sessions.first { model.attach(s, on: p, readOnly: false) }
+        case "launch":
+            // 新建会话：头一台有启动器的电脑
+            model.launchFor = model.peers.first { model.launcher($0) != nil }
         case "pair": model.startPairing()
         case "settings": model.showSettings = true
         default: break

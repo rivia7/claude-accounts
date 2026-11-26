@@ -2,7 +2,7 @@ import CcaRemoteKit
 import SwiftUI
 
 /// 最外面一层：没配对过时是欢迎页；配对过是底下两页，会话（可以接入的远程会话）和账号（各台电脑上账号的状态、用量）。
-/// 终端推进当时那一页的导航里（开着终端时底下那一排收起来），配对、设置是弹出的一页
+/// 终端推进当时那一页的导航里（开着终端时底下那一排收起来），配对、设置、新建会话是弹出的一页
 struct RootView: View {
     @Environment(AppModel.self) private var model
 
@@ -37,6 +37,9 @@ struct RootView: View {
         }
         .sheet(isPresented: $model.showSettings) {
             SettingsView()
+        }
+        .sheet(item: $model.launchFor) { p in
+            LaunchSheet(peer: p)
         }
     }
 }

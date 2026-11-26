@@ -250,6 +250,70 @@ if let un = v["usage"] as? [String: Any] {
     }
 }
 
+// 远程启动：启动器的说明（kit::spec 封的，和辅助程序的 launch_seal 一样），这边解开、清理；LAUNCH 帧这边出（Rust 那头核对），
+// LAUNCHED 的回话这边读
+if let ln = v["launch"] as? [String: Any] {
+    let p = hx(ln["p"]), pid = ln["pid"] as? String ?? "", sid = ln["sid"] as? String ?? ""
+    let keys = launchKeys(p)
+    let info = launchOpen(keys, pid: pid, sid: sid, ln["blob"])
+    let w = ln["want"] as? [String: Any] ?? [:]
+    let wt = w["t"] as? [[String: Any]] ?? []
+    check(info != nil && info?.machine == w["machine"] as? String && info?.more == jsonInt(w["more"]) && info?.templates.count == wt.count,
+          "启动器的说明：\(String(describing: info?.machine)) \(String(describing: info?.more)) \(info?.templates.count ?? -1) 个模板")
+    for (t, x) in zip(info?.templates ?? [], wt) {
+        check(t.id == x["i"] as? String && t.digest == x["h"] as? String && t.name == x["n"] as? String && t.tool == x["k"] as? String
+              && t.account == x["a"] as? String && t.aid == (x["aid"] as? String ?? "") && t.dir == x["d"] as? String
+              && t.args == x["x"] as? String && t.line == jsonBool(x["l"]), "模板：\(t)")
+    }
+    check(launchOpen(keys, pid: pid, sid: sid, ln["forged"]) == nil, "启动器的说明：别的密钥封的不认")
+    check(launchOpen(keys, pid: pid, sid: sid, ln["dir"]) == nil, "启动器的说明：会话的说明不是它")
+    check(dirOpen(dirKeys(p), pid: pid, sid: sid, ln["blob"]) == nil, "启动器的说明不是会话的说明（旧的 App 当它不存在）")
+    check(launchOpen(keys, pid: pid, sid: ln["other_sid"] as? String ?? "", ln["blob"]) == nil, "启动器的说明：编号不对解不开")
+    if let a = ln["ask"] as? [String: Any] {
+        let id = a["t"] as? String ?? "", h = a["h"] as? String ?? "", c = jsonInt(a["c"]) ?? 0, r = jsonInt(a["r"]) ?? 0
+        out["launch_frame"] = LaunchAsk.frame(id: id, digest: h, cols: c, rows: r, line: a["l"] as? String)?.hex ?? ""
+        out["launch_frame_plain"] = LaunchAsk.frame(id: id, digest: h, cols: c, rows: r)?.hex ?? ""
+        for bad in ln["bad_lines"] as? [String] ?? [] {
+            check(LaunchAsk.frame(id: id, digest: h, cols: c, rows: r, line: bad) == nil, "开场白不能发：\(bad.debugDescription.prefix(40))")
+        }
+    }
+    for row in ln["launched"] as? [[String: Any]] ?? [] {
+        let payload = hx(row["payload_hex"])
+        var want: LaunchResult?
+        if let x = row["want"] as? [String: Any] {
+            want = jsonBool(x["ok"]) == true ? .launched(sid: x["sid"] as? String ?? "")
+                : .refused(code: x["code"] as? String ?? "", text: x["text"] as? String ?? "")
+        }
+        let got = LaunchResult.parse(payload)
+        check(got == want, "LAUNCHED \(String(decoding: payload, as: UTF8.self).prefix(80))：\(String(describing: got))")
+    }
+}
+// LAUNCH 帧（不靠输入的几条）：键的先后、转义、范围，和辅助程序 launch.rs 的 Ask::parse 认的一样
+let askOK = LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcdef", cols: 80, rows: 24)
+check(askOK.map { String(decoding: $0, as: UTF8.self) } == #"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24}"#, "LAUNCH 的内容")
+check(LaunchAsk.frame(id: "0123abcd", digest: "0123456789abcdef", cols: 80, rows: 24) == askOK.map { [Frame.launch] + u32be($0.count) + $0 }
+      && Frame.launch == 0x09 && Frame.launched == 0x18, "LAUNCH 帧")
+check(LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcdef", cols: 20, rows: 300, line: #"看 "a\b" 好"#)
+        .map { String(decoding: $0, as: UTF8.self) } == #"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":20,"r":300,"l":"看 \"a\\b\" 好"}"#,
+      "LAUNCH 的开场白：引号、反斜杠转义，非 ASCII 原样")
+check([(19, 24), (501, 24), (80, 4), (80, 301)].allSatisfy { LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcdef", cols: $0.0, rows: $0.1) == nil },
+      "LAUNCH：大小不在范围里不发")
+check(LaunchAsk.payload(id: "0123ABCD", digest: "0123456789abcdef", cols: 80, rows: 24) == nil
+      && LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcde", cols: 80, rows: 24) == nil, "LAUNCH：编号、摘要不对不发")
+check(LaunchAsk.lineOK(String(repeating: "字", count: 500)) && !LaunchAsk.lineOK(String(repeating: "字", count: 501)) && !LaunchAsk.lineOK("")
+      && !LaunchAsk.lineOK(" \u{3000}") && !LaunchAsk.lineOK("a\u{7f}") && !LaunchAsk.lineOK("a\u{85}b") && LaunchAsk.lineOK("a\u{2028}b"),
+      "开场白：500 个字以内、不是空白、没有控制字符")
+check(LaunchAsk.clamp(cols: 9999, rows: 1) == (500, 5) && LaunchAsk.clamp(cols: 3, rows: 900) == (20, 300), "新会话的大小夹到范围里")
+let newSid = String(repeating: "ab", count: 16)
+check(LaunchResult.parse(Bytes(utf8: #"{"v":1,"ok":true,"sid":"\#(newSid)"}"#)) == .launched(sid: newSid)
+      && LaunchResult.parse(Bytes(utf8: #"{"v":1,"ok":false,"code":"no_dir","text":" 文件夹\u001b没了 "}"#)) == .refused(code: "no_dir", text: "文件夹没了")
+      && LaunchResult.parse(Bytes(utf8: #"{"v":1,"ok":false,"code":"spawn"}"#)) == .refused(code: "spawn", text: ""),
+      "LAUNCHED：起来了、没起（原因清理过）")
+for bad in [#"{"v":2,"ok":true,"sid":"\#(newSid)"}"#, #"{"v":1,"ok":1,"sid":"\#(newSid)"}"#, #"{"v":1,"ok":true,"sid":"\#(newSid.uppercased())"}"#,
+            #"{"v":1,"ok":false,"code":"No-Dir"}"#, #"{"v":1,"ok":false,"code":"no_dir\n"}"#, #"{"v":1,"ok":false}"#, #"["ok"]"#, "起来了"] {
+    check(LaunchResult.parse(Bytes(utf8: bad)) == nil, "LAUNCHED 不认：\(bad)")
+}
+
 // 签名：Rust 那头拿 ssh-keygen -Y verify 核对
 if let s = v["sign"] as? [String: Any], let id = Identity(raw: hx(s["raw"])) {
     out["sign"] = ["pub": id.pub, "fp": id.fp, "sig": id.sign(hx(s["data"]))]

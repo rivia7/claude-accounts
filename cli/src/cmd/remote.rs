@@ -3,6 +3,7 @@
 //! - `remote/host.rs`：会话宿主（remote-host）：客户端跑在它开的 pty 里，启动它的终端没了会话照样运行，别的终端能接进来
 //! - `remote/attach.rs`：接入端（remote-attach）：把一个终端接到宿主上；`remote/keys.rs`：从按键里认出“断开”
 //! - `remote/manage.rs`：开关、列表、结束一个会话（remote-set、remote-list、remote-end）、推通知（remote-notify）
+//! - `remote/template.rs`：远程启动用的模板（remote-template）；`remote/launch.rs`：远程启动的后台进程、起会话（remote-launcher）
 //! - `remote/hook.rs`：cca 自己带给 Claude Code 的钩子（remote-hook：做完了、在等你），Codex、Antigravity 的这两种也从这里推
 //! - `remote/popup.rs`：这台 Mac 上弹的通知（Codex、Antigravity 的会话）
 //! - `remote/status.rs`：给配对的手机放账号的状态、推额度用完 / 恢复的通知（remote-status）
@@ -18,6 +19,7 @@ mod far;
 mod hook;
 mod host;
 mod keys;
+mod launch;
 mod link;
 mod local;
 mod manage;
@@ -28,6 +30,7 @@ mod pty;
 mod relay;
 mod sig;
 mod status;
+mod template;
 mod vt;
 
 pub use hook::{agy_note, deliver as notify_deliver, hooks as notify_hooks, AgyEvent};
@@ -56,4 +59,6 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("remote-forget", pair::cmd_remote_forget),
     Cmd::all("remote-hubs", pair::cmd_remote_hubs),
     Cmd::all("remote-status", status::cmd_remote_status),
+    Cmd::all("remote-template", template::cmd_remote_template),
+    Cmd::all("remote-launcher", launch::cmd_remote_launcher),
 ];

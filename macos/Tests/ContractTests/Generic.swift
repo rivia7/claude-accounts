@@ -1113,9 +1113,50 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
             // 3.6.0 起配对都记在某个 Team 的服务器上（以前经维护者的服务器配的，cca 读配对表时去掉了）
             check("\(name) \(p.short) 记在某个 Team 的服务器上", p.team?.count == 32)
         }
+        if let l = r["launch"] {
+            // 远程启动（9.4）：只有手机、能看和操作的才开得了
+            check("\(name) \(p.short) 的 launch 是布尔，开着的是手机、能看和操作", isBool(l) && (!p.launch || (p.web && p.incoming == .control)))
+        }
+    }
+    if let l = raw["launcher"] as? [String: Any] {
+        check("\(name) launcher：running 是布尔，模板个数是数字，能远程启动的手机就是 launch 开着的那几台",
+              isBool(l["running"]) && wholeCount(l["templates"]) && doc.launcher?.peers == doc.peers.filter(\.launch).count)
     }
     check("\(name) 用不了中转时不列别的机器上的会话", doc.relayAvailable || doc.sessions.allSatisfy(\.isLocal))
     knownEnums(name, auditRemote(doc))
+    return doc
+}
+
+/// `cca remote template list --json`（PROTOCOL 9.4）：模板的编号是 8 个十六进制字符、不重复，名字不空不重复，文件夹是绝对路径，
+/// 参数都是字符串；账号没了（`account_name` 是 null）和 `no_account` 是一回事；启动器的模板个数就是列出来的这几个
+@discardableResult
+func genericRemoteTemplates(_ name: String, _ d: Data) -> RemoteTemplatesDoc? {
+    guard let doc = decodeOrFail(RemoteTemplatesDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) kind remote_templates", doc.kind == "remote_templates")
+    let rows = raw["templates"] as? [[String: Any]] ?? []
+    check("\(name) 模板都解码了", raw["templates"] is [Any] && rows.count == doc.templates.count)
+    check("\(name) 编号是 8 个十六进制字符、不重复", doc.templates.allSatisfy { $0.id.count == 8 && $0.id.allSatisfy(\.isHexDigit) }
+          && Set(doc.templates.map(\.id)).count == doc.templates.count)
+    check("\(name) 名字不空、不重复", doc.templates.allSatisfy { !$0.name.isEmpty } && Set(doc.templates.map(\.name)).count == doc.templates.count)
+    for (i, t) in doc.templates.enumerated() {
+        let r = i < rows.count ? rows[i] : [:]
+        check("\(name) \(t.id) 有账号、文件夹是绝对路径", !t.account.isEmpty && t.dir.hasPrefix("/"))
+        check("\(name) \(t.id) 的参数都是字符串，line 是布尔", (r["args"] as? [Any])?.count == t.args.count && r["args"] is [String] && isBool(r["line"]))
+        check("\(name) \(t.id) 账号没了（account_name 是 null）就是 no_account", (t.accountName == nil) == (t.problem == .noAccount)
+              && (isNull(r["account_name"]) || r["account_name"] is String) && (isNull(r["problem"]) || r["problem"] is String))
+        if let h = r["digest"] {
+            check("\(name) \(t.id) 的摘要是 16 个十六进制字符", (h as? String).map { $0.count == 16 && $0.allSatisfy(\.isHexDigit) } == true)
+        }
+    }
+    if let l = raw["launcher"] as? [String: Any] {
+        check("\(name) launcher：running 是布尔，模板个数就是列出来的这几个，手机的台数是数字",
+              isBool(l["running"]) && (l["templates"] == nil || doc.launcher?.templates == doc.templates.count) && wholeCount(l["peers"]))
+    } else {
+        check("\(name) 有 launcher", false)
+    }
+    knownEnums(name, auditRemoteTemplates(doc))
     return doc
 }
 
@@ -1248,7 +1289,7 @@ func injectUnknown(_ x: Any, parentKey: String? = nil, inData: Bool = false) -> 
 }
 
 private let enumKeys: Set<String> = ["login", "source", "error_code", "result", "state", "sync", "local_sync", "route", "route_pref",
-                                     "client", "backend", "dns", "webrtc", "severity", "default", "item", "plan_tier", "basis"]
+                                     "client", "backend", "dns", "webrtc", "severity", "default", "item", "plan_tier", "basis", "problem"]
 
 /// 把枚举字段换成不认识的值（顶层的 kind 不动）。
 func futureEnums(_ x: Any, depth: Int = 0) -> Any {
@@ -1272,7 +1313,7 @@ func wrongTypes(_ x: Any) -> Any {
                                 "sessions", "since_epoch", "last_used_epoch", "seen_epoch", "left_percent", "from_epoch", "until_epoch",
                                 "usd", "requests", "unpriced_requests", "weeks_usd", "days_usd", "synced_epoch", "average_usd", "files"]
     let boolean: Set<String> = ["stale", "pinned", "is_last", "running", "applies", "reset", "reachable", "hook", "cron", "listening", "saved",
-                                "me", "revoked", "partial", "current", "first", "alias_locked", "alias_lock"]
+                                "me", "revoked", "partial", "current", "first", "alias_locked", "alias_lock", "launch"]
     let text: Set<String> = ["plan", "plan_tier", "label", "message", "org", "trust_label", "balance", "error", "local_node", "selected",
                              "currency", "prices_date", "date"]
     if var d = x as? [String: Any] {
@@ -1428,7 +1469,10 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
             tolerance(DevicesDoc.self, f, d) { [$0.accounts.count, $0.accounts.reduce(0) { $0 + $1.devices.count }] }
         case "remote":
             genericRemote(f, d)
-            tolerance(RemoteDoc.self, f, d) { [$0.sessions.count, $0.peers.count, $0.errors.count] }
+            tolerance(RemoteDoc.self, f, d) { [$0.sessions.count, $0.peers.count, $0.errors.count, $0.launcher == nil ? 0 : 1] }
+        case "remote_templates":
+            genericRemoteTemplates(f, d)
+            tolerance(RemoteTemplatesDoc.self, f, d) { [$0.templates.count, $0.templates.reduce(0) { $0 + $1.args.count }, $0.launcher == nil ? 0 : 1] }
         case "mail-list":
             genericMailList(f, d)
             tolerance(MailListDoc.self, f, d) { [$0.rows.count, $0.folders.count] }
@@ -1618,6 +1662,15 @@ func auditRemote(_ doc: RemoteDoc) -> [String] {
         a.add("peers[\(p.short)].state", p.state)
     }
     for (i, e) in doc.errors.enumerated() { a.add("errors[\(i)].code", e.code) }
+    return a.unknown
+}
+
+func auditRemoteTemplates(_ doc: RemoteTemplatesDoc) -> [String] {
+    let a = EnumAudit()
+    for t in doc.templates {
+        a.add("templates[\(t.id)].tool", t.tool)
+        a.add("templates[\(t.id)].problem", t.problem)
+    }
     return a.unknown
 }
 

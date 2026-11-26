@@ -66,6 +66,9 @@ pub struct Peer {
     pub web: bool,
     /// 这个配对是在哪台服务器上做的（记在它上面）：经它只看得到走这台服务器的会话——某个 Team 的同步服务器
     pub hub: HubKind,
+    /// 对方能用这台机器上的模板新建会话（远程启动，launch.rs；`cca remote allow 名字 launch on`）。只有手机、看和操作都让的
+    /// 才算（读的时候不是这样的当它没开）；配对表里只在开着时写这一项
+    pub launch: bool,
 }
 
 /// 配对表里 hub 这一项（Team 的编号）是哪台服务器。没有这一项的是以前在维护者那一台上配的：3.6.0 起那台服务器没了，
@@ -95,8 +98,13 @@ fn file() -> String {
 pub type Stamp = Option<(i64, i64, u64, u64)>;
 
 pub fn stamp() -> Stamp {
+    stamp_of(&file())
+}
+
+/// 一个文件现在的样子（同上：模板、cca 自己也这样看变了没有）
+pub fn stamp_of(f: &str) -> Stamp {
     use std::os::unix::fs::MetadataExt;
-    let m = std::fs::metadata(file()).ok()?;
+    let m = std::fs::metadata(f).ok()?;
     Some((m.mtime(), m.mtime_nsec(), m.size(), m.ino()))
 }
 
@@ -118,6 +126,11 @@ fn row_of(pid: &str, d: &Dict) -> Option<Peer> {
         web: d.get("web").and_then(|v| v.as_bool()) == Some(true),
         // 没有这一项（维护者那一台上的旧配对）、写了却看不懂的（以后的版本加的别的种类）：这一项不算
         hub: hub_of(d.get("hub").filter(|v| !v.is_none()).map(|v| v.py_str()).as_deref())?,
+        launch: false,
+    })
+    .map(|mut p| {
+        p.launch = d.get("launch").and_then(|v| v.as_bool()) == Some(true) && p.web && p.incoming == Incoming::Control;
+        p
     })
 }
 
@@ -143,6 +156,9 @@ pub fn save(peers: &[Peer]) -> R<()> {
         let row = dict! { "fp" => p.fp.as_str(), "name" => p.name.as_str(), "incoming" => p.incoming.word(), "shown" => p.shown, "at" => p.at };
         if p.web {
             row.set("web", true); // 只有网页端的才写这一项：别的机器的那几行和以前逐字节一样
+        }
+        if p.launch {
+            row.set("launch", true); // 同样只在开着时写（旧版的 cca 写回配对表时丢掉它：等于关上）
         }
         row.set("hub", p.hub.team());
         all.set(p.pid.as_str(), row);
@@ -231,6 +247,19 @@ mod tests {
         assert!(row_of(&pid, &full).unwrap().web);
         full.set("web", "yes");
         assert!(!row_of(&pid, &full).unwrap().web, "不是 true 的都不算");
+        // 远程启动：只有手机、看和操作都让的才算开着
+        full.set("launch", true);
+        assert!(!row_of(&pid, &full).unwrap().launch, "不是手机");
+        full.set("web", true);
+        assert!(!row_of(&pid, &full).unwrap().launch, "只让看");
+        full.set("incoming", "control");
+        assert!(row_of(&pid, &full).unwrap().launch);
+        full.set("launch", 1);
+        assert!(!row_of(&pid, &full).unwrap().launch, "不是 true 的都不算");
+        full.pop("launch");
+        assert!(!row_of(&pid, &full).unwrap().launch);
+        full.set("incoming", "view");
+        full.set("web", "yes");
         // 缺了该有的、样子不对：这一项不算，不崩
         for (k, bad) in [("fp", V::None), ("incoming", "all".into()), ("shown", "x".into()), ("at", "x".into())] {
             let d = dict! { "fp" => "SHA256:x", "name" => "box", "incoming" => "view", "shown" => true, "at" => 5.0, "hub" => tid };
@@ -264,6 +293,7 @@ mod tests {
             at: 1.0,
             web: false,
             hub: HubKind::Team(TeamTag::new(&"01".repeat(16)).expect("是个 Team 的编号")),
+            launch: false,
         };
         let peers = vec![peer("ab", "服务器"), peer("cd", "服务器"), peer("ef", "笔记本")];
         assert_eq!(find(&peers, "笔记本").unwrap().pid, "ef".repeat(16));

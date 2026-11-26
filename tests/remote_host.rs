@@ -36,6 +36,7 @@ pub const MODULE: Module = Module {
         case!(attach_errors),
         case!(end_a_session),
         case!(a_host_that_does_not_answer_is_not_cleaned_up),
+        case!(headless_sessions),
         case!(switch),
     ],
 };
@@ -527,6 +528,72 @@ fn end_a_session(t: &mut Ctx) {
         assert_eq!(h2.wait(), 137);
         assert_eq!(fx.files(), NO_FILES);
         assert_eq!(fx.run_helper(&["remote-end", sid]).status.py(), 65, "已经结束的：没有这个会话");
+    });
+}
+
+/// 无头的会话（远程启动起的，docs/dev/launch.md）：没有终端，会话编号、窗口大小是给的。客户端退出时还没人接入过：留着
+/// （CCA_HEADLESS_LINGER）等人接上来看它最后说了什么；一直没人接入：过一阵（CCA_HEADLESS_IDLE）照 cca remote end 那样结束
+fn headless_sessions(t: &mut Ctx) {
+    both(t, |fx| {
+        let sid = "0123456789abcdef0123456789abcdef";
+        let start = |size: &str, env: &[(&str, &str)], client: &[&str]| {
+            let mut args =
+                vec!["remote-host", "--headless", "--sid", sid, "--size", size, "claude", "工作(alice@example.com)", "工作", "--"];
+            args.extend(client);
+            let mut cmd = fx.cmd(&args);
+            cmd.envs(env.iter().copied());
+            kit::relay::Popen::spawn(&mut cmd)
+        };
+        // 参数不对：不起（不会像没有终端时那样直接运行客户端）
+        for bad in [
+            &["--headless", "claude", "k", "n", "--", "/bin/echo", "x"][..],
+            &["--headless", "--sid", "xyz", "--size", "80x24", "claude", "k", "n", "--", "/bin/echo"][..],
+        ] {
+            let mut args = vec!["remote-host"];
+            args.extend(bad);
+            let r = fx.run_helper(&args);
+            assert!(r.status.py() != 0 && r.out().is_empty() && r.err().contains("用法"), "{bad:?}：{}", r.err());
+        }
+        assert_eq!(fx.files(), NO_FILES);
+
+        // 起来：编号是给的那个，列表里是“没有终端接着”；接上去照常（接入时的窗口是接入的终端的）
+        let mut h = start("100x30", &[], &[fx.client.as_str()]);
+        let m = wait_for("会话说明", Duration::from_secs(10), || fx.metas(h.pid()).into_iter().next());
+        assert_eq!(m["sid"].str(), sid);
+        let listed = fx.run_helper(&["remote-list"]).out();
+        assert!(listed.starts_with(&sid[..8]) && listed.contains("没有终端接着"), "{listed}");
+        let mut a = fx.attach_sized(&[&sid[..8]], 30, 100);
+        a.expect("<ready");
+        a.send("say headless\r");
+        a.expect("<headless>");
+        a.send("exit 4\r");
+        assert_eq!(a.wait(), 4);
+        assert_eq!(h.wait(Duration::from_secs(10)), 4);
+        assert_eq!(fx.files(), NO_FILES);
+
+        // 客户端马上就退出了、还没人接入过：留着；接上来的看得到它最后说的话和退出码，之后宿主才收场
+        let linger = [("CCA_HEADLESS_LINGER", "30")];
+        let mut h = start("80x24", &linger, &["/bin/sh", "-c", "echo bye-bye; exit 5", fx.client.as_str()]);
+        wait_for("会话说明", Duration::from_secs(10), || fx.metas(h.pid()).into_iter().next());
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(h.poll(), None, "还没人接入过：宿主留着");
+        let mut a = fx.attach(&[&sid[..8]]);
+        a.expect("bye-bye");
+        assert_eq!(a.wait(), 5);
+        assert!(a.text().contains("会话已经结束（退出码 5）"), "{:?}", a.text());
+        assert_eq!(h.wait(Duration::from_secs(10)), 5);
+        assert_eq!(fx.files(), NO_FILES);
+        // 一直没人来：留够了就收场
+        let mut h = start("80x24", &[("CCA_HEADLESS_LINGER", "1")], &["/bin/sh", "-c", "exit 6", fx.client.as_str()]);
+        assert_eq!(h.wait(Duration::from_secs(10)), 6);
+        assert_eq!(fx.files(), NO_FILES);
+
+        // 一直没人接入：过了 CCA_HEADLESS_IDLE 结束它（客户端收到 SIGHUP，128 + 1）
+        let t0 = Instant::now();
+        let mut h = start("80x24", &[("CCA_HEADLESS_IDLE", "1")], &[fx.client.as_str()]);
+        assert_eq!(h.wait(Duration::from_secs(15)), 129);
+        assert!(t0.elapsed() >= Duration::from_secs(1), "{:?}", t0.elapsed());
+        assert_eq!(fx.files(), NO_FILES);
     });
 }
 

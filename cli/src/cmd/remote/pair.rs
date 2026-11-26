@@ -211,7 +211,7 @@ fn entry(
         .find(|n| !n.is_empty())
         .unwrap_or_else(|| format!("{} {}", if web { "手机" } else { "机器" }, &pid[..6]));
     let incoming = if shown { Incoming::Control } else { before.unwrap_or(Incoming::None) };
-    let peer = Peer { pid: pid.to_string(), fp: fp.to_string(), name, incoming, shown, at: time(), web, hub };
+    let peer = Peer { pid: pid.to_string(), fp: fp.to_string(), name, incoming, shown, at: time(), web, hub, launch: false };
     all.push(peer.clone());
     (peer, old)
 }
@@ -341,14 +341,16 @@ pub fn cmd_remote_pair_join(args: &[String]) -> R<()> {
 
 fn row(p: &Peer, note: &str) -> String {
     let kind = if p.web { "（手机）" } else { "" };
+    let launch = if p.launch { "、能用模板新建会话" } else { "" };
     // 记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）
     let via = format!("  经{}", relay::label(p.hub));
     format!(
-        "{}  {}{}  对方{}  {} 配对{}{}",
+        "{}  {}{}  对方{}{}  {} 配对{}{}",
         &p.pid[..8],
         p.name,
         kind,
         p.incoming.text(),
+        launch,
         strftime_local("%Y-%m-%d", p.at),
         via,
         note
@@ -475,16 +477,47 @@ fn pick<'a>(all: &'a [Peer], who: &str) -> R<&'a Peer> {
     }
 }
 
+const ALLOW_USAGE: &str = "用法：remote-allow 名字 control|view|none | remote-allow 名字 launch on|off | remote-allow --show 名字";
+
 /// `remote-allow 名字 control|view|none`：对方能对这台机器的会话做什么。开着的会话几秒钟内照新的来
-/// （不让了的、改成只看的，正接着的那一处会被断开）。stdout 一行：对方的名字
+/// （不让了的、改成只看的，正接着的那一处会被断开；不再是看和操作都让的，远程启动也一起关上）。stdout 一行：对方的名字。
+/// `remote-allow 名字 launch on|off`：能不能用这台机器上的模板新建会话（launch.rs）：只给手机、看和操作都让的（同意 bash 问过）。
+/// `remote-allow --show 名字`：只是找出是哪一个（bash 照它问同意）：一行 `配对编号<TAB>名字<TAB>手机 1|0<TAB>control|view|none<TAB>远程启动 1|0`
 pub fn cmd_remote_allow(args: &[String]) -> R<()> {
-    arity("cmd_remote_allow", args, 2, 2)?;
-    let Some(incoming) = Incoming::parse(&args[1]) else { return die("用法：remote-allow 名字 control|view|none") };
+    arity("cmd_remote_allow", args, 2, 3)?;
+    if args[0] == "--show" {
+        if args.len() != 2 {
+            return die(ALLOW_USAGE);
+        }
+        let all = peers::load();
+        let p = pick(&all, &args[1])?;
+        crate::out!("{}\t{}\t{}\t{}\t{}", p.pid, p.name, u8::from(p.web), p.incoming.word(), u8::from(p.launch));
+        return Ok(());
+    }
     let _lock = Lock::acquire()?;
     let mut all = peers::load();
     let pid = pick(&all, &args[0])?.pid.clone();
     let p = all.iter_mut().find(|p| p.pid == pid).expect("刚找到的");
-    p.incoming = incoming;
+    match (args[1].as_str(), args.get(2).map(String::as_str)) {
+        ("launch", Some(word @ ("on" | "off"))) => {
+            let on = word == "on";
+            if on && !p.web {
+                return die("只有手机能远程启动会话（iPhone 上的 cca App）：和别的机器的配对不能开");
+            }
+            if on && p.incoming != Incoming::Control {
+                return die(format!("「{}」现在{}：先让它能看和操作（cca remote allow 名字 control）", p.name, p.incoming.text()));
+            }
+            p.launch = on;
+        }
+        (word, None) => {
+            let Some(incoming) = Incoming::parse(word) else { return die(ALLOW_USAGE) };
+            p.incoming = incoming;
+            if incoming != Incoming::Control {
+                p.launch = false;
+            }
+        }
+        _ => return die(ALLOW_USAGE),
+    }
     crate::out!("{}", p.name);
     let web = p.web;
     peers::save(&all)?;

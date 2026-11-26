@@ -112,7 +112,7 @@ rm -rf "$SHOTS"
 mkdir -p "$SHOTS"
 for mode in light dark; do
 	xcrun simctl ui "$UDID" appearance "$mode"
-	for screen in list accounts account terminal pair settings; do
+	for screen in list accounts account terminal pair settings launch; do
 		xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
 		xcrun simctl launch "$UDID" "$BUNDLE" -demo -screen "$screen" >/dev/null
 		sleep "$([ "$screen" = terminal ] && echo 7 || echo 3)"

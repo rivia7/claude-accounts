@@ -1,4 +1,4 @@
-// 客户端：身份、配对表、配对、列会话、接入。和 server/web/core.js 的 Client 是同一套流程（那一份以后去掉）。
+// 客户端：身份、配对表、配对、列会话、接入、远程启动。和 server/web/core.js 的 Client 是同一套流程（那一份以后去掉；远程启动它没有）。
 import Foundation
 
 /// 配对过的一台机器（这台手机能接入它上面的会话）
@@ -55,15 +55,18 @@ public struct PeerListing: Sendable {
     public let status: HostStatus?
     /// 那台服务器转不转账号的状态（3.7.5 起的才转：旧的服务器上 status 总是 nil，要管理员更新服务器）
     public let statusServed: Bool
+    /// 那台机器的启动器（Launch.swift）：这台手机能照它的模板远程启动会话。那台机器没让这台手机远程启动、旧版的 cca 是 nil
+    public let launcher: RemoteLauncher?
 
     public init(peer: Peer, gone: Bool, sessions: [RemoteSession], failure: RemoteFailure?, status: HostStatus? = nil,
-                statusServed: Bool = false) {
+                statusServed: Bool = false, launcher: RemoteLauncher? = nil) {
         self.peer = peer
         self.gone = gone
         self.sessions = sessions
         self.failure = failure
         self.status = status
         self.statusServed = statusServed
+        self.launcher = launcher
     }
 }
 
@@ -302,17 +305,24 @@ public final class RemoteClient: @unchecked Sendable {
             guard let p = store.secret(pKey(peer.pid)) else {
                 return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: [], failure: RemoteFailure("no_key"), statusServed: served)
             }
-            let keys = dirKeys(p)
+            let keys = dirKeys(p), lkeys = launchKeys(p)
             var sessions = [RemoteSession]()
+            var launcher: RemoteLauncher?
             for r in rows[peer.pid] as? [Any] ?? [] {
-                guard let r = r as? [String: Any], let sid = r["sid"] as? String, sid.count == 32, Bytes.unhex(sid) != nil,
-                      let info = dirOpen(keys, pid: peer.pid, sid: sid, r["blob"])   // 不是这个配对的密钥封的（服务器、别人塞进来的）：不显示
-                else { continue }
-                sessions.append(RemoteSession(sid: sid, info: info, online: r["online"] as? Bool == true, viewers: jsonInt(r["viewers"]) ?? 0))
+                guard let r = r as? [String: Any], let sid = r["sid"] as? String, sid.count == 32, Bytes.unhex(sid) != nil else { continue }
+                let online = r["online"] as? Bool == true
+                if let info = dirOpen(keys, pid: peer.pid, sid: sid, r["blob"]) {
+                    sessions.append(RemoteSession(sid: sid, info: info, online: online, viewers: jsonInt(r["viewers"]) ?? 0))
+                } else if launcher == nil, let info = launchOpen(lkeys, pid: peer.pid, sid: sid, r["blob"]) {
+                    // 那台机器的启动器：在服务器上它也是一个“会话”，说明是另一把密钥封的（有几个时认头一个）
+                    launcher = RemoteLauncher(sid: sid, info: info, online: online)
+                }
+                // 都解不开的：不是这个配对的密钥封的（服务器、别人塞进来的），不显示
             }
             sessions.sort { $0.info.since > $1.info.since }
             let st = known[peer.pid] == nil ? nil : statusOf(peer.pid, p: p, row: status[peer.pid], now: now)
-            return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: sessions, failure: nil, status: st, statusServed: served)
+            return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: sessions, failure: nil, status: st, statusServed: served,
+                               launcher: launcher)
         }
     }
 
@@ -340,8 +350,9 @@ public final class RemoteClient: @unchecked Sendable {
         return s
     }
 
-    /// 接入一个会话（一次连接；断了要不要重新接上由调用方定，见 Attachment）
-    func link(_ peer: Peer, sid: String, cols: Int, rows: Int, readOnly: Bool, queue: DispatchQueue, events: Link.Events) async throws -> Link {
+    /// 接入一个会话（一次连接；断了要不要重新接上由调用方定，见 Attachment）。first：握手以后的头一帧，进启动器时是 LAUNCH（launch）
+    func link(_ peer: Peer, sid: String, cols: Int, rows: Int, readOnly: Bool, first: Bytes? = nil, queue: DispatchQueue,
+              events: Link.Events) async throws -> Link {
         guard Frame.validSize(cols, rows), let p = store.secret(pKey(peer.pid)) else { throw RemoteFailure("error") }
         let req = try requester(peer.server)
         let t = try await req.post("relay_attach", ["sid": sid, "pid": peer.pid])
@@ -350,9 +361,22 @@ public final class RemoteClient: @unchecked Sendable {
               let channel = Channel(p: p, pid: peer.pid, sid: sid, fpH: peer.fp, fpV: req.identity.fp)
         else { throw RemoteFailure("error") }
         let link = Link(host: peer.server.host, port: UInt16(port), tid: tid, tkey: tkey, channel: channel, cols: cols, rows: rows,
-                        readOnly: readOnly, queue: queue, events: events)
+                        readOnly: readOnly, first: first, queue: queue, events: events)
         link.start()
         return link
+    }
+
+    /// 请那台机器上的启动器照模板起一个新的会话（Launch.swift）：进启动器（票据、开场白、握手都和接入会话一样），头一帧说要起哪个
+    /// （LAUNCH），等它回话（LAUNCHED），从要票据算起最多 20 秒。cols、rows：新会话的大小（LaunchAsk 的范围）；line：开场白（模板
+    /// 能带的才给）。起来了回新会话的编号：接着用 Attachment（fresh）接入它
+    public func launch(_ peer: Peer, launcher: String, template: LaunchTemplate, cols: Int, rows: Int, line: String? = nil) async -> LaunchResult {
+        guard let ask = LaunchAsk.frame(id: template.id, digest: template.digest, cols: cols, rows: rows, line: line) else {
+            return .failed(RemoteFailure("bad_ask"))
+        }
+        return await awaitLaunch { events in
+            try await self.link(peer, sid: launcher, cols: cols, rows: rows, readOnly: false, first: ask,
+                                queue: DispatchQueue(label: "cca.remote.launch"), events: events)
+        }
     }
 }
 

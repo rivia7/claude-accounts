@@ -4588,23 +4588,28 @@ core_launch() {   # 内核由界面 App 托管：App 没开就在后台打开它
 # root、不靠 systemd），运行 cca _core-keep（它看内置代理还在用、配置文件在才起内核）。只动带 # cca-core 记号的那一行，别的原样
 # 留着。cca local setup 选内置代理时问一次，不再用内置代理（cca local off、cca restore）时删掉：加、删都看 core_headless
 CORE_BOOT_TAG="# cca-core"
-core_boot() {   # core_boot has|on|off；没有 crontab 命令、读不了用户的 crontab（不是"还没有"）、写不进去时返回 1
-	local cur line err="$CCA_HOME/crontab.err.$$" nl=$'\n'
+cron_tagged() {   # cron_tagged 记号 has|on|off 行…：用户 crontab 里带这个记号的那几行（每一行以记号结尾），别的原样留着。has：这几行都在；
+	              # on：带记号的换成这几行；off：带记号的删掉。没有 crontab 命令、读不了用户的 crontab（不是"还没有"）、写不进去时返回 1
+	local tag="$1" op="$2" cur l all=1 err="$CCA_HOME/crontab.err.$$" nl=$'\n'
+	shift 2
 	command -v crontab >/dev/null 2>&1 || return 1
 	if ! cur=$(LC_ALL=C crontab -l 2>"$err"); then   # 还没有 crontab 时 cron 说 no crontab for …，busybox 说 No such file
 		grep -qiE 'no crontab|no such file' "$err" 2>/dev/null || { rm -f "$err"; return 1; }
 		cur=""
 	fi
 	rm -f "$err"
-	line="@reboot $(shq "$SELF") _core-keep >/dev/null 2>&1 $CORE_BOOT_TAG"
-	case "$1" in
-		has) printf '%s\n' "$cur" | grep -qxF "$line"; return ;;
-		on) printf '%s\n' "$cur" | grep -qxF "$line" && return 0 ;;
-		off) printf '%s\n' "$cur" | grep -qF "$CORE_BOOT_TAG" || return 0 ;;
+	for l in "$@"; do printf '%s\n' "$cur" | grep -qxF "$l" || all=""; done
+	case "$op" in
+		has) [ -n "$all" ]; return ;;
+		on) [ -n "$all" ] && [ "$(printf '%s\n' "$cur" | grep -cF "$tag")" = $# ] && return 0 ;;
+		off) printf '%s\n' "$cur" | grep -qF "$tag" || return 0 ;;
 	esac
-	cur=$(printf '%s\n' "$cur" | grep -vF "$CORE_BOOT_TAG")
-	[ "$1" = on ] && cur="${cur:+$cur$nl}$line"
+	cur=$(printf '%s\n' "$cur" | grep -vF "$tag")
+	if [ "$op" = on ]; then for l in "$@"; do cur="${cur:+$cur$nl}$l"; done; fi
 	printf '%s\n' "$cur" | crontab -
+}
+core_boot() {   # core_boot has|on|off；没有 crontab 命令、读不了用户的 crontab（不是"还没有"）、写不进去时返回 1
+	cron_tagged "$CORE_BOOT_TAG" "$1" "@reboot $(shq "$SELF") _core-keep >/dev/null 2>&1 $CORE_BOOT_TAG"
 }
 core_boot_offer() {   # 后台托管内核时（Linux，macOS 26 以下）配置好内置代理之后：问要不要开机后自动起内核（已经加过就不问）
 	core_headless || return 0
@@ -5289,11 +5294,17 @@ session_close() { rm -f "$ACC_DIR/cli-$$.json"; }
 # 启动的，客户端就放进会话宿主里运行（辅助程序的 remote-host）：启动它的终端关了会话照样运行，别的终端能接进来。
 # 结果在 HOSTCMD 里（加在客户端前面的那几个参数）；空的就照原样直接运行，一个字都不变。先 eval "$(py env 名称)"（CFG_REMOTE）
 remote_prepare() {
-	HOSTCMD=()
+	HOSTCMD=() HOSTED=""
+	if [ -n "${CCA_REMOTE_HOSTED:-}" ]; then   # 远程启动的会话（辅助程序的 remote/launch.rs）：已经在无头的宿主里了，不再套一层，但算是在宿主里
+		unset CCA_REMOTE_HOSTED                # （Codex 的 --hosted）；只认这一次，不往会话里传
+		HOSTED=1
+		return 0
+	fi
 	case "${CCA_REMOTE:-${CFG_REMOTE:-}}" in 1) ;; *) return 0 ;; esac
 	[ -z "${CCA_GUI:-}" ] && [ -t 0 ] && [ -t 1 ] || return 0
 	[ -x "$HELPER" ] || helper_find || return 0
 	HOSTCMD=("$HELPER" remote-host "$TOOL" "$ACC_KEY" "$ACC_NAME" --)
+	HOSTED=1
 }
 # 两台机器之间：一台 cca remote pair 显示配对码，另一台 cca remote join 输入；之后输入的那台能经服务器（配对时选的那个 Team 的，
 # relay.rs 的 session_hub、home_hub）接入显示的那台上的会话（两头之间端到端加密，服务器只转字节）。配对表、对方能做什么
@@ -5415,7 +5426,8 @@ cmd_remote() {
 			if [ -n "$rows" ]; then
 				n=$(printf '%s\n' "$rows" | grep -c .)
 				say "  配对过 ${n} 台机器（cca remote peers 看是哪些；连同它们上面的会话一起列：cca remote list）"
-			fi ;;
+			fi
+			if py remote-launcher wanted; then say "  远程启动开着：允许的手机能用模板新建会话（cca remote launcher 看后台进程，cca remote template 管模板）"; fi ;;
 		ls|list) shift; py remote-list "$@" ;;   # --json 是给界面 App 的（PROTOCOL 9.1）
 		pair)   # 这台机器显示配对码：输入它的那台机器之后能接入这台机器上的会话，所以先问。--web：和手机配对
 			      # （手机没有 cca：iPhone 上的 cca App 扫二维码或者粘贴链接；同意的范围是 web，和两台机器配对分开问）。
@@ -5460,7 +5472,11 @@ cmd_remote() {
 			if [ -n "$rows" ]; then printf '%s\n' "$rows"
 			else info "还没有配对过的机器（在要被接入的那台上运行 cca remote pair，在另一台上运行 cca remote join）"; fi ;;
 		allow)
-			[ $# -eq 3 ] || die "用法：cca remote allow 名字 control|view|none"
+			if [ $# -eq 4 ] && [ "$3" = launch ]; then
+				case "$4" in on|off) remote_allow_launch "$2" "$4"; return ;; esac
+				die "用法：cca remote allow 名字 launch on|off"
+			fi
+			[ $# -eq 3 ] || die "用法：cca remote allow 名字 control|view|none（launch on|off：手机能不能用模板新建会话）"
 			case "$3" in control|view|none) ;; *) die "用法：cca remote allow 名字 control|view|none（control 看和操作，view 只看，none 不让接入）" ;; esac
 			out=$(py remote-allow "$2" "$3" 2>&1) || die "${out:-没有改成}"
 			case "$3" in
@@ -5468,13 +5484,28 @@ cmd_remote() {
 				view) rows="「${out}」只能看这台机器上的会话（正在操作的那一处几秒钟内断开，再接入就是只看）" ;;
 				none) rows="「${out}」不能接入这台机器了（正接着的几秒钟内断开）" ;;
 			esac
+			launcher_sync   # 改成只看、不让时辅助程序也关掉了它的远程启动：没有手机要了就卸掉后台进程
 			okay "$rows"; gui_done remote_updated "$rows" ;;
 		unpair)
 			[ $# -eq 2 ] || die "用法：cca remote unpair 名字"
 			out=$(py remote-unpair "$2" 2>&1) || die "${out:-没有取消成}"
 			rows=""; case "$out" in *$'\n'*) rows=${out#*$'\n'}; out=${out%%$'\n'*} ;; esac   # 第二行：这台机器上取消了、服务器上的记录却没删掉时的说明
 			[ -z "$rows" ] || warn "$rows"
+			launcher_sync
 			okay "已经取消和「${out}」的配对"; gui_done remote_updated "已经取消和「${out}」的配对" ;;
+		template) shift; remote_template "$@" ;;   # 远程启动用的模板（docs/dev/launch.md）
+		launcher)   # 远程启动的后台进程：status（默认）、serve（常驻：LaunchAgent、crontab 起它）、log（哪台手机什么时候起过会话）
+			shift
+			case "${1:-status}" in
+				status) [ $# -le 1 ] || die "用法：cca remote launcher [status|serve [--if-down]|log]"; py remote-launcher status ;;
+				log) py remote-launcher log ;;
+				serve)   # 常驻的：直接换成辅助程序（进程号不变，launchd 照旧管着它）
+					shift
+					case "$#:${1:-}" in 0:|1:--if-down) ;; *) die "用法：cca remote launcher serve [--if-down]" ;; esac
+					[ -x "$HELPER" ] || helper_find || exit 127
+					CCA_SELF="$SELF" exec "$HELPER" remote-launcher serve "$@" 3<&- </dev/null ;;
+				*) die "用法：cca remote launcher [status|serve [--if-down]|log]" ;;
+			esac ;;
 		attach)   # 一个普通的终端程序：直接换成辅助程序，中间不留 bash
 			shift
 			[ -x "$HELPER" ] || helper_find || exit 127
@@ -5499,8 +5530,119 @@ cmd_remote() {
 			esac
 			out=$(py remote-end "$code" 2>&1) || die "${out:-没有结束成}"
 			okay "会话 ${code:0:8} 已经结束"; gui_done remote_updated "会话已经结束" ;;
-		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|notify [--title 标题] [--subtitle 副标题] 正文|pair [--web] [--team 名字]|join [--team 名字]|peers|allow 名字 control|view|none|unpair 名字]" ;;
+		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|notify [--title 标题] [--subtitle 副标题] 正文|pair [--web] [--team 名字]|join [--team 名字]|peers|allow 名字 control|view|none|allow 名字 launch on|off|unpair 名字|template [list|add|rm]|launcher [status|log]]" ;;
 	esac
+}
+
+remote_template() {   # cca remote template …：远程启动用的模板（docs/dev/launch.md）。list [--json]、add、rm；存取、校验都在辅助程序（remote-template）
+	local name="" tool="" acct="" dir="" replace="" out
+	local usage="用法：cca remote template [list [--json] | add [--name 名字] [--tool claude|codex|agy] [--account 账号] [--dir 文件夹] [--replace 编号] [-- 参数…] | rm 名字或编号]"
+	case "${1:-list}" in
+		list|ls)
+			case "$#:${2:-}" in 0:|1:|2:--json) ;; *) die "$usage" ;; esac
+			if [ "${2:-}" = --json ]; then py remote-template list --json; return; fi   # 给界面 App 的（PROTOCOL 9.4）
+			out=$(py remote-template list) || exit 1
+			if [ -z "$out" ]; then info "还没有模板（加一个：cca remote template add）"; return 0; fi
+			printf '%s\n' "$out"
+			if ! py remote-launcher wanted; then say "  还没有手机能用它们：cca remote allow 手机的名字 launch on"; fi ;;
+		add)   # 没写的在终端里问（App 都给全）
+			shift
+			while [ $# -gt 0 ]; do
+				case "$1" in
+					--) shift; break ;;
+					--name|--tool|--account|--dir|--replace)
+						[ $# -ge 2 ] || die "$usage"
+						case "$1" in --name) name=$2 ;; --tool) tool=$2 ;; --account) acct=$2 ;; --dir) dir=$2 ;; *) replace=$2 ;; esac
+						shift 2 ;;
+					*) die "$usage" ;;
+				esac
+			done
+			[ -n "$name" ] || name=$(ask "模板的名字（手机上看到的）: " "")
+			[ -n "$tool" ] || tool=$(ask "哪个工具（claude、codex、agy）: " claude)
+			[ -n "$acct" ] || acct=$(ask "哪个账号（别名、邮箱或编号）: " "")
+			[ -n "$dir" ] || dir=$(ask "在哪个文件夹里启动: " "$PWD")
+			[ -n "$name" ] && [ -n "$acct" ] || { say "已取消"; gui_cancelled; return 1; }
+			out=$(py remote-template add "$name" "$tool" "$acct" "$dir" ${replace:+--replace "$replace"} -- "$@" 2>&1) || die "${out:-没有存成}"
+			IFS=$'\t' read -r replace name <<<"$out"
+			okay "已存好模板「${name}」（编号 ${replace}）"
+			if ! py remote-launcher wanted; then say "  手机上要能用它：cca remote allow 手机的名字 launch on"; fi
+			gui_done remote_updated "已存好模板「${name}」" ;;
+		rm|remove)
+			[ $# -eq 2 ] || die "用法：cca remote template rm 名字或编号"
+			out=$(py remote-template rm "$2" 2>&1) || die "${out:-没有删成}"
+			okay "已删掉模板「${out}」"; gui_done remote_updated "已删掉模板「${out}」" ;;
+		*) die "$usage" ;;
+	esac
+}
+remote_allow_launch() {   # remote_allow_launch 名字 on|off：这台手机能不能用这台机器上的模板新建会话（远程启动，docs/dev/launch.md）。打开要同意
+	                        # （范围是配对编号），只给手机、只给能看和操作的；改好以后照配对表装上 / 卸掉后台进程（launcher_sync）
+	local row pid name web inc n out
+	row=$(py remote-allow --show "$1" 2>&1) || die "${row:-没有这个配对}"
+	IFS=$'\t' read -r pid name web inc _ <<<"$row"
+	if [ "$2" = on ]; then
+		[ "$web" = 1 ] || die "只有手机能远程启动会话（iPhone 上的 cca App）：「${name}」是和另一台机器的配对"
+		[ "$inc" = control ] || die "「${name}」现在不能操作这台机器上的会话：先运行 cca remote allow $(shq "$name") control"
+		n=$(py remote-template list | grep -c .)
+		out="打开以后，「${name}」可以用这台机器上的模板新建会话（现在有 ${n} 个：cca remote template 看），不用你在这台机器前面。起的会话和在终端里启动的一样：用模板的账号、在模板的文件夹里运行、带着模板的参数（模板里有 --dangerously-skip-permissions 这类参数的话，手机上起的会话也不问就执行命令）。这台机器上会装一个登录以后自己起来的后台进程等手机来（关掉：cca remote allow $(shq "$name") launch off）"
+		[ -n "$PROMPT_GUI" ] || say "$out"
+		consent remote_launch "$pid" "远程启动" "让「${name}」能用模板新建会话吗？" "$out" n
+		case $? in
+			0) ;;
+			1) say "已取消"; gui_cancelled; return 1 ;;
+			*) die "要先同意：在终端里运行 cca remote allow $(shq "$name") launch on（会先问你）" ;;
+		esac
+	fi
+	out=$(py remote-allow "$1" launch "$2" 2>&1) || die "${out:-没有改成}"
+	launcher_sync
+	if [ "$2" = on ]; then n="「${out}」可以用这台机器上的模板新建会话了（模板：cca remote template）"
+	else n="「${out}」不能再用模板新建会话了"; fi
+	okay "$n"; gui_done remote_updated "$n"
+}
+# 远程启动的后台进程（docs/dev/launch.md）：有允许远程启动的手机（py remote-launcher wanted）时装上、起来，一台都没有了卸掉。
+# macOS 上是 LaunchAgent（登录以后自己起来；出错退出了 launchd 过 30 秒再起，正常退出——没有手机了——不再起）；Linux 上是用户 crontab
+# 里带 # cca-remote-launcher 记号的两行（@reboot 和每 10 分钟一次 serve --if-down：已经在跑就不说话地退出）。都不用 root
+LAUNCHER_LABEL=local.cca.remote-launcher   # 辅助程序 launch.rs 的 LABEL
+LAUNCHER_TAG="# cca-remote-launcher"
+launcher_sync() {   # 照配对表装上或卸掉。没装上只说一句（开关已经改好了，下次再装）
+	if py remote-launcher wanted; then
+		launcher_install || warn "远程启动的后台进程没装上：手机上起会话要等它（cca remote launcher 看状态；在终端里运行 cca remote launcher serve 也行）"
+	else
+		launcher_remove
+	fi
+}
+launcher_install() {   # 装上、起来（装着的、在跑的不动）。macOS：plist 由辅助程序写，内容变了（cca 挪了地方、PATH 变了）才换
+	local f="$HOME/Library/LaunchAgents/${LAUNCHER_LABEL}.plist" new uid
+	if on_linux; then
+		launcher_cron on || return 1
+		( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" remote launcher serve --if-down </dev/null >/dev/null 2>&1 3<&- & )
+		return 0
+	fi
+	uid=$(id -u)
+	new=$(py remote-launcher plist "$SELF") || return 1
+	if [ ! -f "$f" ] || [ "$(cat "$f")" != "$new" ]; then
+		mkdir -p "${f%/*}" || return 1
+		launchctl bootout "gui/${uid}/${LAUNCHER_LABEL}" >/dev/null 2>&1   # 换了内容：先卸掉旧的
+		{ printf '%s\n' "$new" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"; } || { rm -f "$f.tmp.$$"; return 1; }
+	fi
+	launchctl bootstrap "gui/${uid}" "$f" >/dev/null 2>&1   # 已经装着时它说 Bootstrap failed: 5，不算
+	launchctl kickstart "gui/${uid}/${LAUNCHER_LABEL}" >/dev/null 2>&1   # 没在跑的（正常退出过）起来；在跑的不动
+}
+launcher_remove() {   # 卸掉、停掉（没装的什么都不做）
+	local f="$HOME/Library/LaunchAgents/${LAUNCHER_LABEL}.plist"
+	if on_linux; then
+		if command -v crontab >/dev/null 2>&1; then
+			launcher_cron off || warn "没能从 crontab 里删掉远程启动的那两行（带 ${LAUNCHER_TAG}）：自己删一下（crontab -e）"
+		fi
+	elif [ -f "$f" ]; then
+		launchctl bootout "gui/$(id -u)/${LAUNCHER_LABEL}" >/dev/null 2>&1
+		rm -f "$f"
+	fi
+	py remote-launcher stop 2>/dev/null
+}
+launcher_cron() {   # launcher_cron has|on|off：Linux 上开机以后、每 10 分钟起一次（serve --if-down）
+	local c
+	c="$(shq "$SELF") remote launcher serve --if-down >/dev/null 2>&1 $LAUNCHER_TAG"
+	cron_tagged "$LAUNCHER_TAG" "$1" "@reboot $c" "*/10 * * * * $c"
 }
 
 run_account() {
@@ -5551,7 +5693,7 @@ run_account() {
 	# 会话还有记下用量的状态栏命令），agy 交互的会话带上 cca 的状态栏命令（记下套餐和额度，做完了、在等你时推通知），Codex 交互的会话带上
 	# 推通知的 notify，放进宿主时再让它把在等你写成终端的通知序列（辅助程序的 claude_launch_args、agy_launch_args、codex_launch_args）
 	LAUNCH_ARGS=()
-	if [ ${#HOSTCMD[@]} -gt 0 ]; then la=$(py launch-args "$key" --hosted -- "$@") || die "读取启动参数失败: ${ACC_NAME}"
+	if [ -n "$HOSTED" ]; then la=$(py launch-args "$key" --hosted -- "$@") || die "读取启动参数失败: ${ACC_NAME}"
 	else la=$(py launch-args "$key" -- "$@") || die "读取启动参数失败: ${ACC_NAME}"; fi
 	eval "$la"
 	trap ':' INT TERM HUP
@@ -6086,7 +6228,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/agy.json" ] && ag=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"remote_end":1,"remote_web":1,"team":1,"team_config":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"remote_end":1,"remote_web":1,"remote_launch":1,"team":1,"team_config":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s},"agy":{"enabled":%s,"bin":%s}},' \
 		"$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")" "$ag" "$(jopt "$AGY_BIN")"
@@ -8092,6 +8234,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	done
 	use_tool claude
 	py mail-forget 2>/dev/null   # 邮箱助手：钥匙串里的应用专用密码（没配置过也照样跑：什么都不删）
+	launcher_remove 2>/dev/null   # 远程启动的后台进程：LaunchAgent / crontab 的那两行去掉、停掉（cca 删掉以后 launchd 还会一直试着起它）
 	py remote-forget 2>/dev/null   # 远程会话：和别的机器的配对都取消（告诉服务器），配对的密钥从钥匙串里删掉
 	restore_teams apply   # Team：各个都退出（管理员的那些，根密钥跟着 ~/.cca 一起删掉）
 	if router_ready; then
@@ -8379,6 +8522,12 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
   cca remote pair --web      和手机配对：iPhone 上的 cca App 扫 Mac 上 cca App 里的二维码（或者粘贴这里给的链接），
                              之后在手机上接入这台机器上的会话。要那台服务器认手机（3.7.0 起的服务器都认）
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
+  cca remote template [add|rm]
+                             远程启动用的模板（工具、账号、文件夹、参数）：允许远程启动的手机在 cca App 里挑一个，这台机器照它
+                             新建会话，手机接着接进去（add 没写的在终端里问；rm 名字或编号）
+  cca remote allow 名字 launch on|off
+                             让这台手机能 / 不能用模板新建会话（打开要同意；会装一个登录以后自己起来的后台进程等手机来：
+                             cca remote launcher 看它的状态，cca remote launcher log 看哪台手机什么时候起过会话）
   cca uninstall [--no-backup]
                              完全卸载：撤销 cca 做过的全部改动（账号退出登录、路由器和内置代理还原），删掉 cca 自己和它放在
                              别处的缓存、设置。先把配置打包备份到主目录（--no-backup 不留）。cca restore 是同一条命令

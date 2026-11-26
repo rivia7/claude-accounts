@@ -543,7 +543,7 @@ pub fn project_settings_problems(cwd: &str) -> Vec<String> {
     }
 }
 
-// 必填参数值可能恰好是 -- 或 --settings，必须先消费，才能认出真正的选项边界。statusline.rs 的 claude_takes_statusline 也用
+// 必填参数值可能恰好是 -- 或 --settings，必须先消费，才能认出真正的选项边界。statusline.rs 的 claude_takes_statusline、remote/template.rs 也用
 pub(super) const CLAUDE_VALUES: &[&str] = &[
     "--agent",
     "--agents",
@@ -657,8 +657,13 @@ fn codex_other_subcommand(arg: &str) -> bool {
 /// 和 Codex 的非交互模式（exec、e、review、cloud exec）不能经 cca 用（print_mode）：cca 只开交互的会话，自己也不用它们（用量是
 /// 会话里记下的，statusline.rs）
 pub fn launch_settings_problems(args: &[String]) -> R<Vec<String>> {
+    launch_settings_problems_in(args, &std::env::current_dir()?.to_string_lossy())
+}
+
+/// 同上，只是当前目录换成 dir（远程启动的模板：在模板的文件夹里起，template.rs）
+pub(crate) fn launch_settings_problems_in(args: &[String], dir: &str) -> R<Vec<String>> {
     let mut bad: Vec<String> = Vec::new();
-    let original_cwd = std::env::current_dir()?.to_string_lossy().into_owned();
+    let original_cwd = dir.to_string();
     let mut cwd = original_cwd.clone();
     let mut settings: Vec<&str> = Vec::new();
     let kind = t().kind;

@@ -42,6 +42,7 @@ pub const MODULE: Module = Module {
         case!(pair_list_attach_type).needs(SWIFT).timeout(600),
         case!(wrong_pin_and_used_code).needs(SWIFT).timeout(600),
         case!(session_ends).needs(SWIFT).timeout(600),
+        case!(a_phone_launches_a_session).needs(SWIFT).timeout(600),
         case!(pushes_reach_the_phone).needs(SWIFT).timeout(600),
         case!(accounts_reach_the_phone).needs(SWIFT).timeout(600),
         case!(in_the_simulator).needs(&[Need::MacOs]).timeout(600),
@@ -440,6 +441,69 @@ fn against_the_spec(t: &mut Ctx) {
             ""
         ],
     );
+    // 启动器的说明（远程启动，docs/dev/launch.md：辅助程序 template.rs 的 launch_doc、crypto.rs 的 launch_seal 封的那种）：解开、清理，样子不对的
+    // 模板（编号、摘要不是小写十六进制，不认识的工具，重复的编号）丢掉；会话的说明的密钥解不开它，它的密钥也解不开会话的说明。
+    // LAUNCH 由这一份拼（下面核对），LAUNCHED 照样读
+    let (lp, lpid, lsid) = (crypto::random(32), crypto::token_hex(16), crypto::token_hex(16));
+    let tpl = |i: &str, h: &str, n: &str, k: &str| {
+        obj! { "i" => i, "h" => h, "n" => n, "k" => k, "a" => "a", "d" => "~", "x" => "", "l" => false }
+    };
+    let ldoc = obj! {
+        "v" => 1, "machine" => "box\u{202e}\u{1b}", "more" => 3,
+        "t" => list![
+            obj! {
+                "i" => "0123abcd", "h" => "0123456789abcdef", "n" => "工作\u{1b}[31m", "k" => "claude", "a" => "alice",
+                "aid" => "ab".repeat(16), "d" => "~/work", "x" => "--model opus", "l" => true
+            },
+            obj! {
+                "i" => "89abcdef", "h" => "fedcba9876543210", "n" => "x".repeat(60), "k" => "codex", "a" => "bob", "aid" => "XYZ",
+                "d" => format!("~/{}", "y".repeat(250)), "x" => "z".repeat(400), "l" => false
+            },
+            tpl("XYZ12345", "0123456789abcdef", "编号不对", "claude"),
+            tpl("00000000", "0123", "摘要不对", "claude"),
+            tpl("11111111", "1111111111111111", "别的工具", "vim"),
+            tpl("0123abcd", "1111111111111111", "重复的编号", "claude")
+        ]
+    };
+    let launched = |payload: &str, want: Value| obj! { "payload_hex" => hx(payload.as_bytes()), "want" => want };
+    let new_sid = crypto::token_hex(16);
+    let ok_reply = |sid: &str, v: i64| format!("{{\"v\":{v},\"ok\":true,\"sid\":\"{sid}\"}}");
+    v.insert(
+        "launch",
+        obj! {
+            "p" => hx(&lp), "pid" => &lpid, "sid" => &lsid, "other_sid" => crypto::token_hex(16),
+            "blob" => spec::launch_seal(&lp, &lpid, &lsid, &ldoc),
+            "forged" => spec::launch_seal(&crypto::random(32), &lpid, &lsid, &ldoc),
+            "dir" => spec::dir_seal(&lp, &lpid, &lsid, &obj! { "v" => 1, "machine" => "m", "tool" => "claude", "name" => "n", "cwd" => "~", "since" => 1 }),
+            "want" => obj! {
+                "machine" => "box", "more" => 3,
+                "t" => list![
+                    obj! {
+                        "i" => "0123abcd", "h" => "0123456789abcdef", "n" => "工作[31m", "k" => "claude", "a" => "alice",
+                        "aid" => "ab".repeat(16), "d" => "~/work", "x" => "--model opus", "l" => true
+                    },
+                    obj! {
+                        "i" => "89abcdef", "h" => "fedcba9876543210", "n" => "x".repeat(40), "k" => "codex", "a" => "bob", "aid" => "",
+                        "d" => format!("~/{}", "y".repeat(198)), "x" => "z".repeat(300), "l" => false
+                    }
+                ]
+            },
+            "ask" => obj! { "t" => "0123abcd", "h" => "0123456789abcdef", "c" => 100, "r" => 30, "l" => "你好" },
+            "bad_lines" => list!["", "   ", "a\u{1b}b", "a\nb", "字".repeat(501)],
+            "launched" => list![
+                launched(&ok_reply(&new_sid, 1), obj! { "ok" => true, "sid" => &new_sid }),
+                launched(
+                    "{\"v\":1,\"ok\":false,\"code\":\"changed\",\"text\":\"模板\\n改过了\"}",
+                    obj! { "ok" => false, "code" => "changed", "text" => "模板改过了" }
+                ),
+                launched(&ok_reply(&new_sid, 2), Value::Null),
+                launched(&ok_reply("xyz", 1), Value::Null),
+                launched(&ok_reply(&new_sid.to_uppercase(), 1), Value::Null),
+                launched("{\"v\":1,\"ok\":false,\"code\":\"Bad Code\",\"text\":\"x\"}", Value::Null),
+                launched("nope", Value::Null)
+            ]
+        },
+    );
     let data = b"{\"op\":\"relay_list\",\"pids\":[]}";
     v.insert("sign", obj! { "raw" => crypto::token_hex(32), "data" => hx(data) });
     fsx::write(d.join("in.json"), json::dumps(&Value::Obj(v), &Style::default()));
@@ -461,6 +525,24 @@ fn against_the_spec(t: &mut Ctx) {
     let got: Vec<Vec<u8>> = lens.iter().map(|_| host.open(&mut buf).expect("记录认证得过").expect("够一条")).collect();
     assert_eq!(got, lens.iter().map(|n| pattern(*n)).collect::<Vec<_>>());
     assert!(buf.is_empty(), "多出来 {} 个字节", buf.len());
+    // 这一份拼的 LAUNCH：类型、长度、内容（JSON；开场白只在有的时候带）
+    let launch_frame = |key: &str| {
+        let raw = crypto::unhex(out[key].str()).unwrap_or_else(|e| panic!("{key} 不是十六进制：{e}"));
+        assert_eq!(raw.first(), Some(&relay::LAUNCH), "{key}");
+        let n = u32::from_be_bytes([raw[1], raw[2], raw[3], raw[4]]) as usize;
+        assert_eq!(raw.len(), 5 + n, "{key}");
+        relay::parsed(std::str::from_utf8(&raw[5..]).expect("LAUNCH 是 UTF-8"))
+    };
+    let got = launch_frame("launch_frame");
+    assert_eq!(
+        (got.obj().len(), relay::cols(&got, &["v", "t", "h", "c", "r", "l"])),
+        (6, list![1, "0123abcd", "0123456789abcdef", 100, 30, "你好"])
+    );
+    let got = launch_frame("launch_frame_plain");
+    assert_eq!(
+        (got.obj().len(), relay::cols(&got, &["v", "t", "h", "c", "r"])),
+        (5, list![1, "0123abcd", "0123456789abcdef", 100, 30])
+    );
     // 签名：ssh-keygen 认
     let s = &out["sign"];
     assert!(s["pub"].str().starts_with("ssh-ed25519 "), "{s}");
@@ -724,6 +806,47 @@ fn session_ends(t: &mut Ctx) {
     // 会话没了：再接是 gone
     let r2 = g.run_with(&["attach", &pid, &sid], "");
     assert!(r2.err.contains("closed gone"), "{}", r2.err);
+}
+
+/// 远程启动（docs/dev/launch.md）：手机（ccaguest，和 App 同一份 CcaRemoteKit）列出来那台机器的启动器和模板，照模板起一个会话，
+/// 马上接进去（刚起的会话服务器可能还不知道：--fresh 接着问）。启动器起的会话里的“cca”是假客户端（CCA_SELF 指着它）
+fn a_phone_launches_a_session(t: &mut Ctx) {
+    let (fx, a) = guest_fx(t);
+    let g = Guest::new(&fx, "我的 iPhone");
+    let (out, _) = pair(&a, &g);
+    let pid = out.split_whitespace().nth(1).expect("peer 后面是配对编号").to_string();
+    let work = relay::work(&a);
+    let dir = work.to_str().expect("临时目录的路径是 UTF-8");
+    let added = a.ok(&["remote-template", "add", "修 bug", "claude", "alice", dir, "--", "--model", "opus"]);
+    let tid = added.split('\t').next().expect("编号").to_string();
+    a.ok(&["remote-allow", &pid, "launch", "on"]);
+    let mut cmd = relay::helper_cmd(&a, &["remote-launcher", "serve"]);
+    cmd.env("CCA_SELF", relay::client(&a));
+    let mut l = Popen::spawn(&mut cmd);
+    // 手机上：那台机器有启动器（不算会话），模板的编号、名字、工具、账号、文件夹、参数、能带开场白
+    let row = wait_for("手机看到启动器", secs(30), || g.rows().into_iter().find(|r| r["launcher"].as_obj().is_some()));
+    let launcher = &row["launcher"];
+    assert_eq!(launcher["online"], Value::Bool(true), "{row}");
+    let first = &launcher["t"].list()[0];
+    assert_eq!(
+        relay::cols(first, &["i", "n", "k", "a", "d", "x", "l"]),
+        list![&tid, "修 bug", "claude", "alice", "~/work", "--model opus", true]
+    );
+    assert!(g.rows().iter().all(|r| r.get("sid").is_none()), "启动器不是会话");
+    // 起一个：带开场白，窗口是手机说的；起来了马上接进去
+    let r = g.run(&["launch", &pid, &tid, "--size", "120x40", "--line", "看一下 README"]);
+    assert_eq!(r.code, 0, "{} {}", r.out, r.err);
+    let sid = r.out.trim().strip_prefix("launched ").unwrap_or_else(|| panic!("{:?}", r.out)).to_string();
+    let mut p = g.attach(&pid, &sid, &["--fresh", "--size", "120x40"]);
+    p.wait_open();
+    wait_for("手机看到会话里的客户端", secs(20), || has(&p.out(), "'--model', 'opus', '--', '看一下 README']>"));
+    p.type_in(b"exit 0\r");
+    assert_eq!(p.wait(), 0, "{}", String::from_utf8_lossy(&p.err()));
+    assert!(has(&p.err(), "closed ended"), "{}", String::from_utf8_lossy(&p.err()));
+    // 关掉远程启动：启动器自己退出，手机上看不到它了
+    a.ok(&["remote-allow", &pid, "launch", "off"]);
+    assert_eq!(l.wait(secs(20)), 0);
+    wait_for("手机上启动器没了", secs(30), || g.rows().iter().all(|r| r["launcher"].is_null()));
 }
 
 /// 推送：手机（ccaguest，和 App、通知扩展同一份 CcaRemoteKit）在服务器上登记推送令牌；box、mini 两台都和它配了对，mini 上的会话

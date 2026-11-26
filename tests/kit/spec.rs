@@ -46,6 +46,8 @@ pub const DIR: &str = "cca-remote-dir";
 pub const NOTE: &str = "cca-remote-note";
 /// 账号的状态的标签（手机的「账号」页，3.7.5 起）
 pub const STATUS: &str = "cca-remote-status";
+/// 启动器的说明的标签（手机上用模板新建会话，3.7.6 起）
+pub const LAUNCH: &str = "cca-remote-launch";
 
 /// 两把密钥：（加密, 认证）
 pub type Keys = ([u8; 32], [u8; 32]);
@@ -308,6 +310,27 @@ pub fn dir_seal(p: &[u8], pid: &str, sid: &str, doc: &Value) -> Value {
 /// 解开会话的说明；认证不过是 None
 pub fn dir_open(p: &[u8], pid: &str, sid: &str, blob: &Value) -> Option<Value> {
     unseal(DIR, &dir_keys(p), &[pid, sid], blob).map(|pt| loads(&pt))
+}
+
+/// 封启动器的说明用的两把密钥（启动器：设备上能远程起会话的那个常驻进程，在服务器上登记成一个会话）
+pub fn launch_keys(p: &[u8]) -> Keys {
+    let k = h(p, b"cca-remote/v1/launch");
+    (h(&k, b"enc"), h(&k, b"mac"))
+}
+
+/// 启动器的说明的明文：紧凑的 JSON（非 ASCII 原样写），空格补齐到 256 字节的整数倍
+pub fn launch_plain(doc: &Value) -> Vec<u8> {
+    pad(doc.compact().into_bytes(), 256, b' ')
+}
+
+/// 封一份启动器的说明：认证带着配对的编号和启动器的编号（它登记成的那个会话的）
+pub fn launch_seal(p: &[u8], pid: &str, sid: &str, doc: &Value) -> Value {
+    seal(LAUNCH, &launch_keys(p), &[pid, sid], &launch_plain(doc))
+}
+
+/// 解开启动器的说明；认证不过（包括拿会话的说明来解的）是 None
+pub fn launch_open(p: &[u8], pid: &str, sid: &str, blob: &Value) -> Option<Value> {
+    unseal(LAUNCH, &launch_keys(p), &[pid, sid], blob).map(|pt| loads(&pt))
 }
 
 /// 封推送的通知用的两把密钥（手机上解它的通知扩展只拿得到这两把，拿不到 P）

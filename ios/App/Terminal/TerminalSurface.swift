@@ -35,11 +35,12 @@ final class TerminalSurface {
     /// 终端底色：始终是黑的（会话多半是在深色的终端里启动的，里面的程序照那个底色选的颜色）
     static let background = UIColor(red: 0, green: 0, blue: 0, alpha: 1)
     private static let foreground = UIColor(red: 0.88, green: 0.88, blue: 0.9, alpha: 1)
+    /// 终端的字：等宽的系统字体，iPad 上大一点（新会话照它算多大：TerminalGrid）
+    static let font = UIFont.monospacedSystemFont(ofSize: UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12, weight: .regular)
 
     private init(_ s: TerminalSession) {
         session = s
-        view = SizedTerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 480),
-                                 font: UIFont.monospacedSystemFont(ofSize: UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12, weight: .regular))
+        view = SizedTerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 480), font: Self.font)
         box = TerminalBox(terminal: view)
         view.readOnly = s.readOnly
         view.keyboardAppearance = .dark

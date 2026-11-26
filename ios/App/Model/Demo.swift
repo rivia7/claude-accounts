@@ -2,11 +2,13 @@ import CcaRemoteKit
 import Foundation
 
 /// 演示模式（App 审核、没有电脑时自己看看）：本地模拟两台电脑、它们上面的账号和几个会话，终端里放一段预先写好的输出，敲的字只在
-/// 这台手机上回显。不联网、不碰钥匙串；退出演示时全丢掉
+/// 这台手机上回显；「新建会话」挑的模板一下就“起来”，接着列在会话里。不联网、不碰钥匙串；退出演示时全丢掉
 @MainActor
 final class DemoBackend: Backend {
     private var all: [Peer]
     private let started = Date().timeIntervalSince1970
+    /// 「新建会话」起的会话：在哪台电脑上、开场白（接入时那一屏照它放）
+    private var launched: [(pid: String, session: RemoteSession, line: String?)] = []
 
     init() {
         let server = ServerRef(url: "https://demo.example.com", pins: [])!
@@ -48,9 +50,20 @@ final class DemoBackend: Backend {
             default:
                 sessions = []
             }
-            return PeerListing(peer: p, gone: false, sessions: sessions, failure: nil,
-                               status: DemoAccounts.status(p.pid, machine: p.name, now: Date().timeIntervalSince1970), statusServed: true)
+            return PeerListing(peer: p, gone: false, sessions: sessions + launched.filter { $0.pid == p.pid }.map(\.session), failure: nil,
+                               status: DemoAccounts.status(p.pid, machine: p.name, now: Date().timeIntervalSince1970), statusServed: true,
+                               launcher: DemoLaunch.launcher(p))
         }
+    }
+
+    func launch(peer: Peer, launcher: RemoteLauncher, template: LaunchTemplate, cols: Int, rows: Int, line: String?) async -> LaunchResult {
+        try? await Task.sleep(for: .milliseconds(900))
+        guard launcher.online else { return .failed(RemoteFailure("nohost")) }
+        let sid = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        let info = SessionInfo(machine: peer.name, tool: template.tool, name: template.account, cwd: template.dir,
+                               since: Date().timeIntervalSince1970, viewOnly: false, aid: template.aid)
+        launched.append((peer.pid, RemoteSession(sid: sid, info: info, online: true, viewers: 0), line))
+        return .launched(sid: sid)
     }
 
     func pair(_ invite: PairInvite, progress: @escaping @Sendable (PairStep) -> Void) async throws -> Peer {
@@ -72,8 +85,9 @@ final class DemoBackend: Backend {
         return true
     }
 
-    func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool) -> TerminalLink {
-        DemoLink(session: session, readOnly: readOnly || session.info.viewOnly)
+    func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool, fresh: Bool) -> TerminalLink {
+        let mine = launched.first { $0.session.sid == session.sid }
+        return DemoLink(session: session, readOnly: readOnly || session.info.viewOnly, launched: mine != nil, line: mine?.line)
     }
 
     func fingerprint(on server: ServerRef) -> String? { "SHA256:demo" }
@@ -84,6 +98,32 @@ final class DemoBackend: Backend {
         .failed(RemoteFailure("demo"))
     }
     func syncNoteKeys() {}
+}
+
+/// 演示的「新建会话」：工作室的 Mac mini 上写好了三个模板（两个能带开场白），MacBook Air 的启动器不在线
+enum DemoLaunch {
+    static func launcher(_ p: Peer) -> RemoteLauncher? {
+        switch p.pid.prefix(2) {
+        case "a1":
+            let t = [
+                LaunchTemplate(id: "0a1b2c3d", digest: "0123456789abcdef", name: "修 api 的 bug", tool: "claude", account: "工作",
+                               aid: DemoAccounts.aid(1), dir: "~/srv/api", args: "--model opus", line: true),
+                LaunchTemplate(id: "1b2c3d4e", digest: "123456789abcdef0", name: "整理笔记", tool: "codex", account: "个人",
+                               aid: DemoAccounts.aid(2), dir: "~/notes", args: "", line: true),
+                LaunchTemplate(id: "2c3d4e5f", digest: "23456789abcdef01", name: "看看网站", tool: "claude", account: "备用",
+                               aid: DemoAccounts.aid(3), dir: "~/Projects/site", args: "--permission-mode plan", line: false),
+            ]
+            return RemoteLauncher(sid: String(repeating: "f1", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: true)
+        case "b2":
+            let t = [
+                LaunchTemplate(id: "3d4e5f60", digest: "3456789abcdef012", name: "写周报", tool: "claude", account: "账号 2",
+                               aid: DemoAccounts.aid(4), dir: "~/Documents", args: "", line: true),
+            ]
+            return RemoteLauncher(sid: String(repeating: "f2", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: false)
+        default:
+            return nil
+        }
+    }
 }
 
 /// 演示的账号（「账号」页）：两台电脑上的几个账号，用量、重置时间照现在算。在用的、额度用完了的、建议先用的、登录失效的、
@@ -186,7 +226,8 @@ enum DemoAccounts {
     }
 }
 
-/// 演示的终端：一段预先写好的输出（一点一点放出来），之后是一个提示符，敲的字回显，回车后答一句“这是演示”
+/// 演示的终端：一段预先写好的输出（一点一点放出来），之后是一个提示符，敲的字回显，回车后答一句“这是演示”。「新建会话」起的
+/// 会话是刚起来的样子（有开场白的先放它）
 @MainActor
 final class DemoLink: TerminalLink {
     var onOutput: (Bytes) -> Void = { _ in }
@@ -196,13 +237,17 @@ final class DemoLink: TerminalLink {
     var onNote: (Note) -> Void = { _ in }
     private let session: RemoteSession
     private let readOnly: Bool
+    private let launched: Bool
+    private let opening: String?
     private var line = ""
     private var closed = false
     private var opened = false
 
-    init(session: RemoteSession, readOnly: Bool) {
+    init(session: RemoteSession, readOnly: Bool, launched: Bool = false, line: String? = nil) {
         self.session = session
         self.readOnly = readOnly
+        self.launched = launched
+        opening = line
     }
 
     func start() {
@@ -216,7 +261,7 @@ final class DemoLink: TerminalLink {
             }
             opened = true
             onState(.open)
-            for chunk in Self.script(session) {
+            for chunk in launched ? Self.fresh(session, line: opening) : Self.script(session) {
                 try? await Task.sleep(for: .milliseconds(chunk.delay))
                 guard !closed else { return }
                 say(chunk.text)
@@ -248,6 +293,22 @@ final class DemoLink: TerminalLink {
             (300, "  全部通过了。\r\n"),
             (200, s.info.viewOnly ? "\r\n\(dim)（只看：这个会话那台电脑只让看）\(off)\r\n" : prompt),
         ]
+    }
+
+    /// 「新建会话」刚起的会话：工具、文件夹，有开场白的先放它，然后是提示符
+    private static func fresh(_ s: RemoteSession, line: String?) -> [(delay: Int, text: String)] {
+        let dim = "\u{1b}[2m", off = "\u{1b}[0m", violet = "\u{1b}[38;5;141m", bold = "\u{1b}[1m"
+        let tool = Texts.cliProduct(s.info.tool) ?? "会话"
+        var out: [(delay: Int, text: String)] = [
+            (80, "\u{1b}[2J\u{1b}[H\(dim)演示：这是一屏示意，不是真的会话。敲的字只在这台手机上回显，不发到任何地方。\(off)\r\n\r\n"),
+            (400, "\(violet)\(bold)● \(tool)\(off)  \(dim)\(s.info.cwd)\(off)\r\n\r\n"),
+        ]
+        if let line {
+            out.append((300, "\(violet)›\(off) \(line)\r\n\r\n"))
+            out.append((600, "  \(dim)（演示）真的会话里，开场白是会话起来以后收到的头一句话，\(tool) 接着就开始做。\(off)\r\n"))
+        }
+        out.append((200, prompt))
+        return out
     }
 
     func nudge() {}

@@ -37,6 +37,7 @@ struct SheetView: View {
         case .handoff(let h): HandoffSheet(handoff: h)
         case .failure(let f): FailureSheet(info: f)
         case .flow(let f): FlowSheet(flow: f)
+        case .remoteTemplate(let d): RemoteTemplateSheet(draft: d)
         }
     }
 }
@@ -207,17 +208,18 @@ enum Platform {
         }
     }
 
-    /// 选一个文件夹；取消时是 nil。
+    /// 选一个文件夹；取消时是 nil。prompt、message：按钮上的字、面板上面的说明（默认是账号的终端会话用的）
     @MainActor
-    static func chooseDirectory(startingAt path: String?) async -> String? {
+    static func chooseDirectory(startingAt path: String?, prompt: String = "在这里打开",
+                                message: String = "选择在哪个文件夹里打开（下次默认还是这里）") async -> String? {
         NSApp.activate()
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.prompt = "在这里打开"
-        panel.message = "选择在哪个文件夹里打开（下次默认还是这里）"
+        panel.prompt = prompt
+        panel.message = message
         if let path { panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true) }
         return await panel.begin() == .OK ? panel.url?.path : nil
     }

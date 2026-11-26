@@ -31,6 +31,9 @@ struct HelloDoc: CcaDocument, Equatable {
     var remoteEnd: Int?
     /// 有 `cca remote pair --web`（和手机配对：手机在浏览器里接入，PROTOCOL 9.2）；旧版 cca 没有这个字段，App 不给「和手机配对…」
     var remoteWeb: Int?
+    /// 有远程启动（手机用这台 Mac 上的模板新建会话：`cca remote template`、`cca remote allow <配对的 id> launch on|off`，PROTOCOL 9.4）；
+    /// 旧版 cca 没有这个字段，App 不显示模板、不给「允许远程启动」
+    var remoteLaunch: Int?
     /// 有 Team（`cca team …`，PROTOCOL 4.14；state 的 `config.teams`、账号的 `team`）；旧版 cca 没有这个字段，App 不显示 Team 的那一块、
     /// 不按 Team 筛选、不调 `cca team`（版本不是 TeamAPI.version 时也一样）
     var team: Int?
@@ -51,6 +54,7 @@ struct HelloDoc: CcaDocument, Equatable {
         case installCLI = "install_cli"
         case remoteEnd = "remote_end"
         case remoteWeb = "remote_web"
+        case remoteLaunch = "remote_launch"
         case teamConfig = "team_config"
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
@@ -74,6 +78,7 @@ struct HelloDoc: CcaDocument, Equatable {
         remote = c.int(.remote)
         remoteEnd = c.int(.remoteEnd)
         remoteWeb = c.int(.remoteWeb)
+        remoteLaunch = c.int(.remoteLaunch)
         team = c.int(.team)
         teamConfig = c.int(.teamConfig)
         ccaVersion = c.string(.ccaVersion)

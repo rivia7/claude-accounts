@@ -396,6 +396,33 @@ enum Texts {
         }
     }
 
+    /// 远程启动的模板用不了的原因（PROTOCOL 9.4 的 `problem`）：标在那一行的名字后面
+    static func remoteTemplateProblem(_ p: RemoteTemplateProblem) -> String {
+        switch p {
+        case .noAccount: return "账号没了"
+        case .noDir: return "文件夹没了"
+        case .badArgs: return "参数用不了"
+        case .noRelay: return "不经中转"
+        default: return "现在用不了"
+        }
+    }
+
+    /// 同上，长一点（鼠标停在上面时）：怎么了、怎么办
+    static func remoteTemplateProblemHelp(_ p: RemoteTemplateProblem) -> String {
+        switch p {
+        case .noAccount: return "账号表里没有这个账号了：改一下模板，换一个账号"
+        case .noDir: return "文件夹不在了：改一下模板，换一个文件夹"
+        case .badArgs: return "参数用不了（打印模式这类跑完就退出的，或者启动前的检查过不了）：改一下参数"
+        case .noRelay: return "这个账号的会话不经中转（这台 Mac 还不在哪个 Team 里）：手机上看不到这个模板"
+        default: return "这个模板现在用不了"
+        }
+    }
+
+    /// 模板的第二行：「工作 · ~/projects/site · --model opus」（账号没了时是存着的邮箱；dir 是给人看的那样）
+    static func remoteTemplateDetail(_ t: RemoteTemplate, dir: String) -> String {
+        [nonEmpty(t.accountName) ?? nonEmpty(t.account), nonEmpty(dir), nonEmpty(ShellWords.join(t.args))].compactMap { $0 }.joined(separator: " · ")
+    }
+
     static func product(_ tool: ToolID) -> String {
         switch tool {
         case .claude: return "Claude"

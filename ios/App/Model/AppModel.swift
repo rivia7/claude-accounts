@@ -77,6 +77,8 @@ final class AppModel {
     /// 终端是从哪一页推进去的（账号页里点了这个账号的会话的，返回时回到账号页）
     private(set) var terminalTab: AppTab = .sessions
     var showSettings = false
+    /// 「新建会话」那一页开着的：在哪台电脑上起（nil 是没开）
+    var launchFor: Peer?
     /// 底下选着的那一页（记着，下次打开还是它）
     var tab: AppTab {
         didSet { UserDefaults.standard.set(tab.rawValue, forKey: "tab") }
@@ -131,6 +133,7 @@ final class AppModel {
         closeTerminal()
         pairTask?.cancel()
         pairing = nil
+        launchFor = nil
         backend = b
         peers = b.peers()
         listings = [:]
@@ -261,6 +264,7 @@ final class AppModel {
 
     func unpair(_ p: Peer) {
         if terminal?.peer.pid == p.pid { closeTerminal() }
+        if launchFor?.pid == p.pid { launchFor = nil }
         let b = backend
         Task {
             await b.unpair(p)
@@ -268,6 +272,38 @@ final class AppModel {
             peers = b.peers()
             listings[p.pid] = nil
             Pusher.shared.peersChanged(on: p.server)
+        }
+    }
+
+    // MARK: 新建会话（远程启动）
+
+    /// 一台电脑的启动器：那台电脑让这台手机远程启动会话、它的启动器在服务器上登记着时才有
+    func launcher(_ p: Peer) -> RemoteLauncher? { listings[p.pid]?.launcher }
+
+    /// 请那台电脑照模板起一个会话（多大见 TerminalGrid）。起来了：关掉「新建会话」那一页，打开新会话的终端（fresh：服务器上可能
+    /// 还没有它），回 nil；没起成：回原因码和要说的那句话，列表过时了的（模板变了、没了，不让启动了，启动器不在了）顺手刷新
+    func launch(_ t: LaunchTemplate, on peer: Peer, line: String?) async -> (code: String, text: String)? {
+        guard let l = launcher(peer) else { return ("no_session", Texts.launchUnreached("no_session")) }
+        let size = TerminalGrid.forLaunch
+        let b = backend
+        let r = await b.launch(peer: peer, launcher: l, template: t, cols: size.cols, rows: size.rows, line: line)
+        guard b === backend else { return nil }   // 中途切了演示
+        switch r {
+        case .launched(let sid):
+            let info = SessionInfo(machine: l.info.machine, tool: t.tool, name: t.account, cwd: t.dir, since: Date().timeIntervalSince1970,
+                                   viewOnly: false, aid: t.aid)
+            launchFor = nil
+            closeTerminal()
+            terminalTab = tab
+            terminal = TerminalSession(backend: b, peer: peer, session: RemoteSession(sid: sid, info: info, online: true, viewers: 0),
+                                       readOnly: false, fresh: true)
+            return nil
+        case .refused(let code, let text):
+            if ["changed", "no_template", "denied", "other_hub"].contains(code) { refresh() }
+            return (code, Texts.launchFailure(code: code, text: text))
+        case .failed(let f):
+            if f.code == "no_session" || f.code == "nohost" { refresh() }
+            return (f.code, Texts.launchUnreached(f.code))
         }
     }
 
@@ -345,17 +381,20 @@ final class TerminalSession: Identifiable, Hashable {
         }
     }
     @ObservationIgnored private var pending = Bytes()
+    /// 刚远程启动的会话：头一次接入时服务器上可能还没有它（Attachment 的 fresh）；重新接入时不算
+    @ObservationIgnored private var fresh: Bool
     @ObservationIgnored var surface: AnyObject?
     /// 会话现在的大小（新的宿主说的）：nil 是没说，会话照这台手机的窗口排
     @ObservationIgnored private(set) var hostSize: (cols: Int, rows: Int)?
     /// 宿主说了会话的大小交给谁（TerminalSurface 接上以后设）
     @ObservationIgnored var sizeSink: ((Int, Int) -> Void)?
 
-    init(backend: Backend, peer: Peer, session: RemoteSession, readOnly: Bool) {
+    init(backend: Backend, peer: Peer, session: RemoteSession, readOnly: Bool, fresh: Bool = false) {
         self.backend = backend
         self.peer = peer
         self.session = session
         self.readOnly = readOnly
+        self.fresh = fresh
     }
 
     var isOpen: Bool { state == .open }
@@ -372,7 +411,7 @@ final class TerminalSession: Identifiable, Hashable {
             return
         }
         guard !isClosed else { return }
-        let l = backend.link(peer: peer, session: session, cols: cols, rows: rows, readOnly: readOnly)
+        let l = backend.link(peer: peer, session: session, cols: cols, rows: rows, readOnly: readOnly, fresh: fresh)
         // 换掉了的那一条（重新接入、关掉以后）再来的事件不算数
         l.onOutput = { [weak self, weak l] b in if let self, self.link === l { self.output(b) } }
         l.onSize = { [weak self, weak l] c, r in if let self, self.link === l { self.hostSized(c, r) } }
@@ -399,6 +438,9 @@ final class TerminalSession: Identifiable, Hashable {
     func send(_ b: Bytes) {
         guard !readOnly else { return }
         link?.input(b)
+        // 打了字：新的宿主照这台手机的窗口排会话，下次远程启动就照这个大小起
+        let s = terminalSize
+        TerminalGrid.remember(cols: s.cols, rows: s.rows)
     }
 
     /// 会话推来一条通知（宿主转来的 NOTIFY，或者会话里的程序写的 OSC 777 / 9）：弹成这台手机的通知（Notifier）
@@ -417,6 +459,7 @@ final class TerminalSession: Identifiable, Hashable {
     func reconnect(cols: Int, rows: Int) {
         link?.detach()
         link = nil
+        fresh = false
         state = .connecting
         exitCode = nil
         sized(cols: cols, rows: rows)
@@ -425,5 +468,39 @@ final class TerminalSession: Identifiable, Hashable {
     func close() {
         link?.detach()
         link = nil
+    }
+}
+
+/// 新会话（远程启动）照多大起：这台手机上次在会话里打字时的窗口大小（新的宿主那时照它排会话；记在 UserDefaults）。还没打过字的照屏幕
+/// 算：宽是去掉安全区放得下的列数，高只算一半（终端打开时键盘弹出来，差不多占掉下面一半：宁可矮一点，高了的话新会话开头的那几行在
+/// 屏幕上面、看到的是下面空着的那一截）。夹到 LaunchAsk 的范围里。只管起的时候：起来以后手机上一打字，会话就照这块屏幕排
+enum TerminalGrid {
+    private static let key = "terminalGrid"
+
+    static func remember(cols: Int, rows: Int) {
+        let d = UserDefaults.standard
+        guard (d.array(forKey: key) as? [Int]) != [cols, rows] else { return }
+        d.set([cols, rows], forKey: key)
+    }
+
+    @MainActor
+    static var forLaunch: (cols: Int, rows: Int) {
+        let last = (UserDefaults.standard.array(forKey: key) as? [Int]).flatMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
+        let (c, r) = last ?? guess
+        return LaunchAsk.clamp(cols: c, rows: r)
+    }
+
+    /// 照屏幕算：现在这个窗口去掉安全区、导航栏（44 点），高再减半；一格多大照 SwiftTerm 的算法（字的上下高度加行距取整，“W” 的宽）
+    @MainActor
+    private static var guess: (Int, Int) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let w = scenes.first(where: { $0.activationState == .foregroundActive })?.keyWindow ?? scenes.first?.windows.first else {
+            return (80, 24)
+        }
+        let area = w.bounds.inset(by: w.safeAreaInsets)
+        let f = TerminalSurface.font
+        let cell = CGSize(width: ("W" as NSString).size(withAttributes: [.font: f]).width, height: ceil(f.ascender - f.descender + f.leading))
+        guard cell.width > 0, cell.height > 0 else { return (80, 24) }
+        return (Int(area.width / cell.width), Int((area.height - 44) / cell.height) / 2)
     }
 }

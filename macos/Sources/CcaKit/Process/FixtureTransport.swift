@@ -24,6 +24,9 @@ import Foundation
 /// | `team sync` / `leave` / `revoke` / `grant` / `map` / `export` / `import` | 直接成功（没有真的改、没有写文件） | — |
 /// | `team new`（提问会话） | flow_team_new.flow | — |
 /// | `team deploy <Team>`（提问会话） | flow_team_deploy.flow（哪个 Team 都用它） | — |
+/// | `remote list --json` | remote_list.json | — |
+/// | `remote template list --json` | remote_templates.json | — |
+/// | `remote on` / `off` / `allow` / `unpair` / `end`、`remote template add` / `rm` | 直接成功（没有真的改） | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。
@@ -212,6 +215,11 @@ struct FixtureTransport: Transport {
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
         case ("remote", "list"):
             return json("remote_list.json")
+        case ("remote", "template") where args.dropFirst(2).first == "list":
+            return json("remote_templates.json")
+        case ("remote", "template"):   // add、rm
+            let e = CcaEvent.result(ResultEvent(code: .remoteUpdated, route: nil, node: nil, port: nil, message: "演示数据：模板没有真的改", tool: .claude, key: nil))
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])
         case ("remote", "on"), ("remote", "off"), ("remote", "allow"), ("remote", "unpair"), ("remote", "end"):
             let e = CcaEvent.result(ResultEvent(code: .remoteUpdated, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: .claude, key: nil))
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])

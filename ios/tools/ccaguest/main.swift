@@ -2,10 +2,13 @@
 // 用法：ccaguest --store 目录 --name 名字 <命令>
 //   pair <链接>             配对；stdout：peer 配对编号 名字，没成是 fail 原因（退出码 1）
 //   list                    一行一个 JSON：配对过的机器（没有 sid；served：服务器转不转账号的状态，status：那台机器放上来的账号的状态，
+//                           没有是 null；launcher：那台机器的启动器 {sid, online, machine, more, t: [模板 {i, h, n, k, a, aid, d, x, l}]}，
 //                           没有是 null）、它上面的会话（有 sid）
-//   attach 配对编号 会话编号 [--view] [--size 列x行]   接入（窗口大小默认 80x24）：stdin 是敲的键（读到头就断开），stdout 是终端的字节；
-//                           stderr：state open|retrying、size 会话的列 行（宿主说的）、exit 退出码、note 通知的 JSON、closed 原因。
-//                           detached、ended 退出码 0，别的 1
+//   attach 配对编号 会话编号 [--view] [--size 列x行] [--fresh]   接入（窗口大小默认 80x24）：stdin 是敲的键（读到头就断开），stdout 是终端的
+//                           字节；stderr：state open|retrying、size 会话的列 行（宿主说的）、exit 退出码、note 通知的 JSON、closed 原因。
+//                           detached、ended 退出码 0，别的 1。--fresh：刚远程启动的会话（服务器说没有它时 45 秒里接着问）
+//   launch 配对编号 模板编号 [--size 列x行] [--line 开场白]   远程启动（大小默认 80x24）：先列一遍找那台机器的启动器；stdout：
+//                           launched 新会话的编号，没起是 refused 原因码 原因、没问到是 fail 原因（退出码 1）
 //   unpair 配对编号          取消配对；stdout：unpaired（服务器没问到也删本地的：told-no）
 //   push-set 令牌 环境 [--only 会话编号,…] [--usage]   在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉；--only：只推这几个
 //                           会话，空的是一个都不推；--usage：也推额度的通知）；stdout 一台一行：push 服务器 ok|fail 原因（带了 --only 时
@@ -74,10 +77,25 @@ while args.count >= 2, args[0].hasPrefix("--") {
     args.removeFirst(2)
 }
 guard !store.isEmpty, let cmd = args.first else {
-    say("用法：ccaguest --store 目录 [--name 名字] pair|list|attach|unpair|push-set|push-open …")
+    say("用法：ccaguest --store 目录 [--name 名字] pair|list|attach|launch|unpair|push-set|push-open …")
     exit(64)
 }
 let client = RemoteClient(store: DirStore(URL(fileURLWithPath: store)), deviceName: name)
+
+/// list 里一台机器的启动器：解开、清理以后的样子（测试照它核对）
+func launcherJSON(_ l: RemoteLauncher) -> [String: Any] {
+    let t: [[String: Any]] = l.info.templates.map { x in
+        ["i": x.id, "h": x.digest, "n": x.name, "k": x.tool, "a": x.account, "aid": x.aid, "d": x.dir, "x": x.args, "l": x.line]
+    }
+    return ["sid": l.sid, "online": l.online, "machine": l.info.machine, "more": l.info.more, "t": t]
+}
+
+/// --size 列x行（没有、不对是 80x24）
+func sizeArg(_ args: [String]) -> (Int, Int) {
+    guard let i = args.firstIndex(of: "--size"), i + 1 < args.count else { return (80, 24) }
+    let p = args[i + 1].split(separator: "x").compactMap { Int($0) }
+    return p.count == 2 ? (p[0], p[1]) : (80, 24)
+}
 
 func finish(_ code: Int32) -> Never {
     fflush(stdout)
@@ -105,7 +123,8 @@ case "list":
         let now = Date().timeIntervalSince1970
         for row in await client.list() {
             let base: [String: Any] = ["pid": row.peer.pid, "peer": row.peer.name, "gone": row.gone, "failure": row.failure?.code ?? NSNull()]
-            let head = base.merging(["served": row.statusServed, "status": row.status.map { statusJSON($0, now: now) } ?? NSNull()]) { $1 }
+            let head = base.merging(["served": row.statusServed, "status": row.status.map { statusJSON($0, now: now) } ?? NSNull(),
+                                     "launcher": row.launcher.map(launcherJSON) ?? NSNull()]) { $1 }
             print(String(decoding: try! JSONSerialization.data(withJSONObject: head, options: [.sortedKeys]), as: UTF8.self))
             for s in row.sessions {
                 let j = base.merging(["sid": s.sid, "machine": s.info.machine, "tool": s.info.tool, "name": s.info.name, "cwd": s.info.cwd,
@@ -169,12 +188,9 @@ case "attach":
         print("fail no_peer")
         finish(1)
     }
-    var (cols, rows) = (80, 24)
-    if let i = args.firstIndex(of: "--size"), i + 1 < args.count {
-        let p = args[i + 1].split(separator: "x").compactMap { Int($0) }
-        if p.count == 2 { (cols, rows) = (p[0], p[1]) }
-    }
-    let att = Attachment(client: client, peer: peer, sid: args[2], cols: cols, rows: rows, readOnly: args.contains("--view"))
+    let (cols, rows) = sizeArg(args)
+    let att = Attachment(client: client, peer: peer, sid: args[2], cols: cols, rows: rows, readOnly: args.contains("--view"),
+                         fresh: args.contains("--fresh"))
     att.onOutput = { b in
         FileHandle.standardOutput.write(Data(b))
     }
@@ -211,6 +227,34 @@ case "attach":
         }
     }
     att.start()
+case "launch":
+    guard args.count >= 3, let peer = client.peers().first(where: { $0.pid == args[1] }) else {
+        print("fail no_peer")
+        finish(1)
+    }
+    let (cols, rows) = sizeArg(args)
+    let line = args.firstIndex(of: "--line").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+    Task {
+        guard let l = await client.list().first(where: { $0.peer.pid == peer.pid })?.launcher else {
+            print("fail no_launcher")
+            finish(1)
+        }
+        guard let t = l.info.templates.first(where: { $0.id == args[2] }) else {
+            print("fail no_template")
+            finish(1)
+        }
+        switch await client.launch(peer, launcher: l.sid, template: t, cols: cols, rows: rows, line: line) {
+        case .launched(let sid):
+            print("launched \(sid)")
+            finish(0)
+        case .refused(let code, let text):
+            print("refused \(code) \(text)")
+            finish(1)
+        case .failed(let f):
+            print("fail \(f.code)")
+            finish(1)
+        }
+    }
 default:
     say("不认识的命令 \(cmd)")
     exit(64)

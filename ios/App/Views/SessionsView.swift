@@ -76,12 +76,18 @@ private struct MachineSection: View {
                 } else if let f = l.failure {
                     Label(Texts.listFailure(f.code), systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.orange)
-                } else if l.sessions.isEmpty {
-                    Text("现在没有可以接入的会话。在那台电脑的终端里用 cca 启动一个（比如 cca @账号），它就会出现在这里。")
-                        .font(.callout).foregroundStyle(.secondary)
                 } else {
-                    ForEach(l.sessions) { s in
-                        SessionRow(peer: peer, session: s, now: now)
+                    if l.sessions.isEmpty {
+                        Text(l.launcher == nil ? "现在没有可以接入的会话。在那台电脑的终端里用 cca 启动一个（比如 cca @账号），它就会出现在这里。"
+                             : "现在没有可以接入的会话。点「新建会话」在那台电脑上起一个，或者在那台电脑的终端里用 cca 启动。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(l.sessions) { s in
+                            SessionRow(peer: peer, session: s, now: now)
+                        }
+                    }
+                    if let launcher = l.launcher {
+                        LaunchRow(peer: peer, launcher: launcher)
                     }
                 }
             } else {
@@ -94,6 +100,32 @@ private struct MachineSection: View {
                 if let team = peer.team { Tag(text: team) }
             }
         }
+    }
+}
+
+/// 「新建会话」：那台电脑让这台手机远程启动会话时才有（它的启动器在服务器上登记着），点了弹出挑模板的那一页。启动器不在线时点不了
+private struct LaunchRow: View {
+    @Environment(AppModel.self) private var model
+    let peer: Peer
+    let launcher: RemoteLauncher
+
+    var body: some View {
+        Button {
+            model.launchFor = peer
+        } label: {
+            HStack(spacing: 12) {
+                Label("新建会话", systemImage: "plus.circle")
+                    .foregroundStyle(launcher.online ? Color.accentColor : Color.secondary)
+                Spacer(minLength: 6)
+                if !launcher.online {
+                    Text("不在线").font(.caption).foregroundStyle(.secondary)
+                } else if launcher.info.templates.isEmpty {
+                    Text("还没有模板").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .disabled(!launcher.online)
+        .accessibilityHint(launcher.online ? "挑一个模板，在那台电脑上起一个新的会话" : "那台电脑这会儿没连着服务器")
     }
 }
 

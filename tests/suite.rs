@@ -21,6 +21,7 @@ mod mail_view;
 mod presence;
 mod push_gateway;
 mod remote_host;
+mod remote_launch;
 mod remote_relay;
 mod router_merge;
 mod shared_state;
@@ -54,6 +55,7 @@ fn main() {
             mail_view::MODULE,
             remote_host::MODULE,
             remote_relay::MODULE,
+            remote_launch::MODULE,
             team_relay::MODULE,
             acme::MODULE,
             web_relay::MODULE,

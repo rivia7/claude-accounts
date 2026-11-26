@@ -481,6 +481,7 @@ mod tests {
             at: 0.0,
             web: false,
             hub: test_hub(),
+            launch: false,
         };
         let peer_of_viewer = Peer {
             pid: pid.clone(),
@@ -491,6 +492,7 @@ mod tests {
             at: 0.0,
             web: false,
             hub: test_hub(),
+            launch: false,
         };
 
         let host = std::thread::spawn(move || {
@@ -557,6 +559,7 @@ mod tests {
             at: 0.0,
             web: false,
             hub: test_hub(),
+            launch: false,
         };
         // 宿主那边没有这个配对：说一声“不认识”就关，接入方知道原因
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

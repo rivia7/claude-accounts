@@ -10,7 +10,10 @@ protocol Backend: AnyObject {
     func list() async -> [PeerListing]
     func pair(_ invite: PairInvite, progress: @escaping @Sendable (PairStep) -> Void) async throws -> Peer
     @discardableResult func unpair(_ peer: Peer) async -> Bool
-    func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool) -> TerminalLink
+    /// fresh：刚远程启动的会话（服务器上可能还没有它：Attachment 的 fresh）
+    func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool, fresh: Bool) -> TerminalLink
+    /// 远程启动（CcaRemoteKit 的 Launch.swift）：请那台电脑的启动器照模板起一个会话，等它回话
+    func launch(peer: Peer, launcher: RemoteLauncher, template: LaunchTemplate, cols: Int, rows: Int, line: String?) async -> LaunchResult
     /// 这台手机在这台服务器上的指纹（电脑那头 `cca remote peers` 看得到同一个）
     func fingerprint(on server: ServerRef) -> String?
     /// 配对的电脑所在的服务器（每台一次）
@@ -59,8 +62,12 @@ final class LiveBackend: Backend {
 
     func unpair(_ peer: Peer) async -> Bool { await client.unpair(peer) }
 
-    func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool) -> TerminalLink {
-        Attachment(client: client, peer: peer, sid: session.sid, cols: cols, rows: rows, readOnly: readOnly || session.info.viewOnly)
+    func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool, fresh: Bool) -> TerminalLink {
+        Attachment(client: client, peer: peer, sid: session.sid, cols: cols, rows: rows, readOnly: readOnly || session.info.viewOnly, fresh: fresh)
+    }
+
+    func launch(peer: Peer, launcher: RemoteLauncher, template: LaunchTemplate, cols: Int, rows: Int, line: String?) async -> LaunchResult {
+        await client.launch(peer, launcher: launcher.sid, template: template, cols: cols, rows: rows, line: line)
     }
 
     func fingerprint(on server: ServerRef) -> String? { client.fingerprint(on: server) }

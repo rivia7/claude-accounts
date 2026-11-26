@@ -49,12 +49,15 @@ enum Sheet: Identifiable, Equatable {
     case failure(FailureInfo)
     /// 在 App 里问完的流程（提问会话，PROTOCOL 4.6）。
     case flow(FlowModel)
+    /// 新建、修改一个远程启动的模板（PROTOCOL 9.4）。
+    case remoteTemplate(RemoteTemplateDraft)
 
     var id: String {
         switch self {
         case .handoff(let h): return "handoff:" + h.id
         case .failure(let f): return "failure:" + f.id.uuidString
         case .flow(let f): return "flow:" + f.id.uuidString
+        case .remoteTemplate(let d): return "remote-template:" + d.id.uuidString
         }
     }
 }
@@ -91,6 +94,8 @@ struct AppHooks {
     var installedTerminals: @MainActor () -> [TerminalApp] = { [.system] }
     /// 选一个文件夹（从这里开始看）；取消时是 nil。
     var chooseDirectory: @MainActor (String?) async -> String? = { _ in nil }
+    /// 选远程启动的模板在哪个文件夹里起会话（从这里开始看）；取消时是 nil。
+    var chooseTemplateDirectory: @MainActor (String?) async -> String? = { _ in nil }
     /// 选保存到哪个文件（先填着这个文件名）；取消时是 nil。已经有这个文件时面板自己问过要不要换掉
     var chooseSaveFile: @MainActor (String) async -> String? = { _ in nil }
     /// 选一个要打开的文件；取消时是 nil
@@ -1906,9 +1911,11 @@ final class AppModel {
 
     var remoteVisible: Bool { mainVisible && selection == .remoteSessions }
 
-    /// 这一页看得见时才定时查（马上查一次）；看不见、cca 没有就停
+    /// 这一页看得见时才定时查（马上查一次）；看不见、cca 没有就停。刚看得见时模板也查一次（模板不定时查，见 refreshRemoteTemplates）
     private func reconcileRemotePolling() {
-        scheduler.updateRemotePolling(enabled: phase == .ready && remoteAvailable && remoteVisible)
+        let on = phase == .ready && remoteAvailable && remoteVisible
+        if on && !scheduler.remotePollingRunning { refreshRemoteTemplates() }
+        scheduler.updateRemotePolling(enabled: on)
     }
 
     private func pollRemote() {
@@ -1919,6 +1926,7 @@ final class AppModel {
     /// 查一次可以接入的会话和配对过的机器。查不成时上次查到的照样显示，旁边说原因。正在查时又要查：查完再查一次（刚改过东西）
     func refreshRemote(manual: Bool) {
         guard phase == .ready, remoteAvailable, let client else { return }
+        if manual { refreshRemoteTemplates() }   // 点了「刷新」、刚改过东西：模板也再查一次
         if remoteLoading {
             remoteAgain = remoteAgain || manual
             return
@@ -1930,6 +1938,11 @@ final class AppModel {
             self.remoteLoading = false
             if let doc {
                 self.remote = RemoteSnapshot(doc: doc, error: nil, fetchedEpoch: doc.generatedEpoch ?? Date().timeIntervalSince1970)
+                // 列表里说的模板个数和手里的对不上（还没查过、在终端里加过删过）：再查一次模板（正在查、上次没查成的不跟着列表一遍遍查）
+                if let n = doc.launcher?.templates, n != self.remoteTemplates.doc?.templates.count, !self.remoteTemplatesLoading,
+                   self.remoteTemplates.error == nil {
+                    self.refreshRemoteTemplates()
+                }
             } else if r.failure?.reason != .cancelled {
                 self.remote.error = nonEmpty(r.failure?.message) ?? "没能查到可以接入的会话"
             }
@@ -1994,6 +2007,151 @@ final class AppModel {
     func pairRemotePhone(hub: RemoteHub? = nil) {
         guard phase == .ready, remoteWebAvailable else { return }
         run(Handoff.remotePairWeb.on(hub))
+    }
+
+    // MARK: 远程启动（PROTOCOL 9.4）
+
+    /// cca 有远程启动（`hello.remote_launch`）：手机能用这台 Mac 上的模板新建会话。旧版 cca 没有：不显示模板、不给「允许远程启动」
+    var remoteLaunchAvailable: Bool { remoteAvailable && hello?.remoteLaunch == 1 }
+    /// 最近一次查到的模板（只在内存里）
+    private(set) var remoteTemplates = RemoteTemplatesSnapshot()
+    private(set) var remoteTemplatesLoading = false
+    @ObservationIgnored private var remoteTemplatesAgain = false
+
+    /// 查一次模板（`cca remote template list --json`：只读、不联网）。模板只在这台 Mac 上改，不跟着列表定时查：这一页打开时、点「刷新」、
+    /// 改过东西以后、列表里说的个数和手里的对不上时查。正在查时又要查：查完再查一次
+    func refreshRemoteTemplates() {
+        guard phase == .ready, remoteLaunchAvailable, let client else { return }
+        if remoteTemplatesLoading {
+            remoteTemplatesAgain = true
+            return
+        }
+        remoteTemplatesLoading = true
+        track { [weak self] in
+            let (doc, r) = await client.document(.remoteTemplates, as: RemoteTemplatesDoc.self, prompter: nil)
+            guard let self else { return }
+            self.remoteTemplatesLoading = false
+            if let doc {
+                self.remoteTemplates = RemoteTemplatesSnapshot(doc: doc, error: nil)
+            } else if r.failure?.reason != .cancelled {
+                self.remoteTemplates.error = nonEmpty(r.failure?.message) ?? "没能查到模板"
+            }
+            if self.remoteTemplatesAgain {
+                self.remoteTemplatesAgain = false
+                self.refreshRemoteTemplates()
+            }
+        }
+    }
+
+    /// 启动器（等手机来起会话的后台进程）：列表里的（定时查的）在前，没有就用模板那一份的
+    var remoteLauncher: RemoteLauncher? { remote.doc?.launcher ?? remoteTemplates.doc?.launcher }
+
+    /// 有允许远程启动的手机时，启动器在不在跑（界面说一句）；一台都没有、cca 没说时是 nil：不说
+    var remoteLauncherRunning: Bool? {
+        guard remoteLaunchAvailable, let l = remoteLauncher, l.peers > 0 else { return nil }
+        return l.running
+    }
+
+    /// 这台手机现在为什么不能打开「允许远程启动」（cca 也这么查：只给手机、要它能看和操作这台 Mac 的会话）；能开、已经开着时是 nil
+    func remoteLaunchBlocked(_ peer: RemotePeer) -> String? {
+        if peer.launch { return nil }
+        if !peer.web { return "只有手机能远程启动会话" }
+        if peer.incoming != .control { return "先把「它接入这台 Mac 时」改成「看和操作」" }
+        return nil
+    }
+
+    /// 这台手机能不能用这台 Mac 上的模板新建会话（`cca remote allow <配对的 id> launch on|off`）。打开时 cca 先要同意
+    /// （`consent.remote_launch`，对话框里说的都是 cca 给的），同意了重跑；做完再查一次列表和模板
+    func setRemoteLaunch(_ peer: RemotePeer, _ on: Bool) {
+        guard remoteLaunchAvailable, peer.web, peer.launch != on, !on || remoteLaunchBlocked(peer) == nil else { return }
+        runRemote(.remoteLaunch(peer: peer.id, on: on), failureTitle: on ? "没能让「\(peer.name)」远程启动" : "没能关掉「\(peer.name)」的远程启动")
+    }
+
+    /// 模板可以选的工具（启用了的）
+    var remoteTemplateTools: [ToolID] { visibleTools }
+
+    /// 模板存着的账号在账号表里是哪一个（存的是邮箱，没有邮箱的是键：cca 也这么找）；没有了是 nil
+    func remoteTemplateAccount(_ t: RemoteTemplate) -> Account? {
+        guard let tool = t.tool else { return nil }
+        let want = t.account.lowercased()
+        return accounts(tool).first { $0.key == t.account || nonEmpty($0.email)?.lowercased() == want }
+    }
+
+    /// 新建模板时（换了工具时）先选上的账号：这个工具上次用的，没有就是第一个
+    func remoteTemplateDefaultAccount(_ tool: ToolID) -> String {
+        let list = accounts(tool)
+        if let last = toolState(tool)?.last, list.contains(where: { $0.key == last }) { return last }
+        return list.first?.key ?? ""
+    }
+
+    /// 新建一个模板（不给）、改一个模板：弹层里填名字、工具、账号、文件夹、参数，存的时候 cca 校验
+    func editRemoteTemplate(_ t: RemoteTemplate? = nil) {
+        guard phase == .ready, remoteLaunchAvailable else { return }
+        let tools = remoteTemplateTools
+        let d: RemoteTemplateDraft
+        if let t {
+            // 工具没启用了：换成能选的，账号重新选
+            let tool = t.tool.flatMap { tools.contains($0) ? $0 : nil }
+            d = RemoteTemplateDraft(original: t, name: t.name, tool: tool ?? tools.first ?? .claude,
+                                    account: tool == nil ? "" : remoteTemplateAccount(t)?.key ?? "", dir: t.dir, args: ShellWords.join(t.args))
+        } else {
+            let tool = tools.contains(self.tool) ? self.tool : tools.first ?? .claude
+            d = RemoteTemplateDraft(original: nil, name: "", tool: tool, account: remoteTemplateDefaultAccount(tool),
+                                    dir: sessionDirectories.first ?? "", args: "")
+        }
+        present(.remoteTemplate(d))
+    }
+
+    /// 弹层里换了工具：账号换成这个工具的
+    func setRemoteTemplateTool(_ d: RemoteTemplateDraft, _ tool: ToolID) {
+        guard d.tool != tool else { return }
+        d.tool = tool
+        d.account = remoteTemplateDefaultAccount(tool)
+    }
+
+    /// 选模板的文件夹（面板从现在填的、最近用的文件夹开始）
+    func chooseRemoteTemplateDirectory(_ d: RemoteTemplateDraft) {
+        Task { [weak self] in
+            guard let self, let dir = await self.hooks.chooseTemplateDirectory(nonEmpty(d.dir) ?? self.sessionDirectories.first ?? self.homeDir) else { return }
+            d.dir = dir
+            d.error = nil
+        }
+    }
+
+    /// 存好弹层里的模板（`cca remote template add … [--replace <编号>] -- 参数…`）。参数先照 shell 的写法拆开（拆不开就说，不跑 cca）；
+    /// cca 说不行时把原因写在弹层里，接着改；存好了关掉弹层、说一句、再查一次列表和模板
+    func saveRemoteTemplate(_ d: RemoteTemplateDraft) {
+        guard phase == .ready, remoteLaunchAvailable, let client, d.canSave else { return }
+        let argv: [String]
+        switch ShellWords.split(d.args) {
+        case .success(let a): argv = a
+        case .failure(let p):
+            d.error = p.message
+            return
+        }
+        d.error = nil
+        d.saving = true
+        let command = CcaCommand.remoteTemplateSave(name: d.name.trimmingCharacters(in: .whitespacesAndNewlines), tool: d.tool, account: d.account,
+                                                    dir: d.dir, args: argv, replace: d.original?.id)
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(command, prompter: prompter)
+            guard let self else { return }
+            d.saving = false
+            if case .failed(let f) = r.status, f.reason == .command {
+                d.error = nonEmpty(f.message) ?? "没能存好模板"
+                return
+            }
+            if self.sheet == .remoteTemplate(d) { self.sheet = nil }
+            self.finish(r, failureTitle: "没能存好模板", success: nonEmpty(r.resultEvent?.message) ?? "模板存好了")
+            self.refreshRemote(manual: true)
+        }
+    }
+
+    /// 删掉一个模板（界面先问过一句；cca 不发 consent）
+    func removeRemoteTemplate(_ t: RemoteTemplate) {
+        guard remoteLaunchAvailable else { return }
+        runRemote(.remoteTemplateRemove(id: t.id), failureTitle: "没能删掉模板「\(t.name)」")
     }
 
     /// 这个会话在这里开着的终端（没有就是 nil；断开了、结束了但还没关掉的也算）
