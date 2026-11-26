@@ -24,6 +24,7 @@ use crate::py::time::{monotonic, sleep, time};
 use crate::py::{die, exit, Fail, R};
 use crate::{dict, err, out, re};
 use std::os::unix::fs::MetadataExt;
+use std::rc::Rc;
 
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[Cmd::all("reset-consume", cmd_reset_consume), Cmd::all("login-flow", cmd_login_flow)];
@@ -32,19 +33,24 @@ pub const CMDS: &[Cmd] = &[Cmd::all("reset-consume", cmd_reset_consume), Cmd::al
 
 /// agy 账号登录的身份：账号目录里 token 文件（AGY_TOKEN，JSON）的 id_token_email 和 user_tier 两项（只读这两项，不碰
 /// access / refresh token，也不保存、不转发）。token 文件在、读不出邮箱时（格式和 1.5.5 的不一样了）用 cca 登录时记下的
-/// （agy 登录成功时自己说的 Logged in as，见 agy-login）。没登录、读不了都返回 {}；登录了是 {'email', 'tier'}
+/// （agy 登录成功时自己说的 Logged in as，见 agy-login）。套餐：1.5 的 token 里没有 user_tier 了，先用 cca 的状态栏命令上次记下的
+/// （`agy_plan_seen`：叫法，邮箱要对得上），没有再用 token 里的档位 ID。没登录、读不了都返回 {}；登录了是 {'email', 'tier'}
 pub fn agy_claims(key: &str) -> Dict {
     let token = path::join(&cdir(key), AGY_TOKEN);
+    let tier = |email: &str, id: Option<Rc<str>>| match super::agy::agy_plan_seen(key, email) {
+        seen if !seen.is_empty() => V::from(seen),
+        _ => id.map_or_else(|| V::from(""), V::Str),
+    };
     if let Some(V::Dict(j)) = load_quiet(&token) {
         if let Some(email) = j.str("id_token_email").filter(|e| !e.is_empty()) {
-            return dict! { "email" => email, "tier" => j.str("user_tier").map_or_else(|| V::from(""), V::Str) };
+            return dict! { "email" => &email, "tier" => tier(&email, j.str("user_tier")) };
         }
     }
     if !path::isfile(&token) {
         return Dict::new();
     }
     match load_quiet(&path::join(&adir(key), "agy-login.json")).and_then(|r| r.as_dict()).and_then(|r| r.str("email")) {
-        Some(e) if EMAIL_RE.matches(&e) => dict! { "email" => e, "tier" => "" },
+        Some(e) if EMAIL_RE.matches(&e) => dict! { "email" => &e, "tier" => tier(&e, None) },
         _ => Dict::new(),
     }
 }

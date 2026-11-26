@@ -4,21 +4,34 @@
 //! disabled, remaining_fraction, remaining_amount, reset_time}]}]}`，reset_time 是 UTC 的 RFC 3339）。登录 token 由 agy 自己读取
 //! 和刷新，cca 不碰。这里有查询（agy 账号的 usage-query 走到这里）、`--json` 里的 quota_groups（macos/PROTOCOL.md 3.1）、表格和菜单里
 //! 那一格。查到的原样存进 usage.json（usage_save），显示的时候再算用了多少、过没过重置时间。
+//!
+//! 套餐也在这里：agy 1.5 的登录 token 里没有档位了，只有交互会话的状态栏 JSON 里有（plan_tier）。cca 启动交互的会话时经
+//! `--settings` 带上自己的状态栏命令（`agy_launch_args`），它（agy-statusline）把套餐记进账号目录（`agy_plan_seen` 读），
+//! 用户自己的状态栏命令接在后面照样运行。
 
 use super::login::sys::{interrupted, trap};
+use super::settings::AGY_VALUES;
 use super::usage::{ago, cols_of, dicts, float_arg, parse_ts, py_round, reset_short, usage_why, Row, WhyTable, AGY_STALE};
-use crate::core::model::cdir;
-use crate::core::tool::AGY_FILE_ENV;
+use super::{arity, Cmd};
+use crate::core::base::{EMAIL_RE, SELF_PATH};
+use crate::core::model::{acct_id, adir, cdir};
+use crate::core::tool::{agy, AGY_FILE_ENV};
+use crate::py::fs::{load_quiet, save_json};
 use crate::py::json;
 use crate::py::obj::{Dict, V};
+use crate::py::path;
 use crate::py::proc::{self, Cmd as Proc, In, Out, ProcError};
 use crate::py::shutil::TemporaryDirectory;
-use crate::py::text::{self, fit};
-use crate::py::time::monotonic;
+use crate::py::text::{self, fit, sh_quote};
+use crate::py::time::{monotonic, time};
 use crate::py::uni;
 use crate::py::{die, exit, R};
-use crate::{dict, out};
+use crate::{dict, out, re};
+use std::io::Read;
 use std::os::fd::{AsRawFd, RawFd};
+
+/// 这个模块的子命令
+pub const CMDS: &[Cmd] = &[Cmd::all("agy-statusline", cmd_agy_statusline)];
 
 /// 没登录、登录失效（刷新不了）时 agy 在 stderr 上打出 Google 的登录网址（OAuth 授权的那一个），然后等 60 秒（没有终端也等，
 /// 1.5.16 实测）：看到它就停下，说登录失效。只认授权网址的开头：额度的说明里带个 Google 账号的链接不算
@@ -550,6 +563,152 @@ pub fn agy_cell(rl: &Dict, at: f64, now: f64) -> R<String> {
     Ok(format!("{}{}", cells.join(" · "), old))
 }
 
+// --- 套餐：cca 启动的交互会话里状态栏的命令 -----------------------------------------------------------------------
+
+/// 状态栏记下的套餐（账号目录里：`plan_note` 写、`agy_plan_seen` 读）：`{email, plan_tier, at}`
+const AGY_PLAN_FILE: &str = "agy-plan.json";
+/// 有了它就不是交互的会话（不画状态栏）的选项：打印模式、版本、帮助
+const AGY_ONE_SHOT: &[&str] = &["p", "print", "prompt", "version", "help", "h"];
+/// agy 1.5.18 的子命令（agy --help）：选项后面第一个不是选项的参数是它们之一时，不开会话
+const AGY_SUBCOMMANDS: &[&str] = &[
+    "acp",
+    "agent",
+    "agents",
+    "changelog",
+    "help",
+    "install",
+    "mcp",
+    "mic-serve",
+    "models",
+    "plugin",
+    "plugins",
+    "remote-control",
+    "update",
+];
+
+/// 状态栏上次记下的套餐的叫法（`plan_note`）：记下时的邮箱和现在登录的一样（大小写不论）才算；换了账号登录、没记过是空的
+pub fn agy_plan_seen(key: &str, email: &str) -> String {
+    let Some(d) = load_quiet(&path::join(&adir(key), AGY_PLAN_FILE)).and_then(|v| v.as_dict()) else { return String::new() };
+    match (d.str("email"), d.str("plan_tier")) {
+        (Some(e), Some(p)) if !email.is_empty() && e.to_lowercase() == email.to_lowercase() => p.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// 这次启动是不是 agy 的交互会话（只有它画状态栏）。agy 照 Go 的 flag 认参数：`-x` 和 `--x` 一样，选项认到第一个不是选项的
+/// 参数（或者 `--`）为止，那个参数是子命令就不开会话。打印模式、--version、--help 不是；自己带了 --settings 的也不加
+/// （agy 只认一个 --settings，用户的那一份要原样生效）
+fn agy_takes_statusline(args: &[String]) -> bool {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--" {
+            return it.next().is_none_or(|x| !AGY_SUBCOMMANDS.contains(&x.as_str()));
+        }
+        let Some(flag) = a.strip_prefix("--").or_else(|| a.strip_prefix('-')).filter(|f| !f.is_empty()) else {
+            return !AGY_SUBCOMMANDS.contains(&a.as_str());
+        };
+        let (name, inline) = flag.split_once('=').map_or((flag, false), |(n, _)| (n, true));
+        if name == "settings" || AGY_ONE_SHOT.contains(&name) {
+            return false;
+        }
+        if !inline && AGY_VALUES.iter().any(|v| v.trim_start_matches('-') == name) {
+            it.next();
+        }
+    }
+    true
+}
+
+/// 交给 agy 的 statusLine：用户自己没配（或者停用了、命令是空的）时只有 cca 的，叠在 agy 自己的状态栏上（stack_with_default；
+/// cca 的什么都不输出）；用户配了命令时照用户的那一份（padding 这些都留着），命令换成 cca 的、后面经 `--then` 接着运行用户的
+/// （同一份 JSON，它的输出就是状态栏）。type 不是 command 的（不知道是什么）不动它：返回 None。user 不改
+fn statusline_for(user: Option<&V>, base: &str) -> Option<Dict> {
+    let own =
+        || dict! { "type" => "command", "command" => base, "enabled" => true, "padding" => 0i64, "stack_with_default" => true };
+    let Some(u) = user.and_then(V::as_dict) else { return Some(own()) };
+    if u.get("type").is_some_and(|x| !matches!(x, V::None) && x.as_str() != Some("command")) {
+        return None;
+    }
+    let cmd = u.str("command").map(|c| text::strip(&c).to_string()).unwrap_or_default();
+    if cmd.is_empty() || cmd.contains("_agy-statusline") || matches!(u.get("enabled"), Some(V::Bool(false))) {
+        return Some(own());
+    }
+    let line = u.copy();
+    line.set("type", "command");
+    line.set("command", format!("{base} --then {}", sh_quote(&cmd)));
+    line.set("enabled", true);
+    Some(line)
+}
+
+/// 启动 agy 时只这一次加在用户参数前面的（`py launch-args`，见 accounts.rs 的 `cmd_launch_args`）：交互的会话带上 cca 的状态栏
+/// 命令（`--settings` 里的 statusLine），用来记下套餐：agy 1.5 的登录文件里没有档位了，只有状态栏的 JSON 里有（plan_tier）。
+/// 共享的 settings.json 读不了、不是 JSON 对象时不加：不知道用户配了什么，别把它的状态栏盖掉
+pub fn agy_launch_args(key: &str, args: &[String]) -> Vec<String> {
+    if !agy_takes_statusline(args) {
+        return Vec::new();
+    }
+    let user = match std::fs::read(path::join_all(&[&agy().master, "antigravity-cli", "settings.json"])) {
+        Ok(raw) => match json::loads_file_bytes(&raw).ok().and_then(|v| v.as_dict()) {
+            Some(d) => d.get("statusLine"),
+            None => return Vec::new(),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Vec::new(),
+    };
+    let base = format!("{} _agy-statusline {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, agy())));
+    statusline_for(user.as_ref(), &base).map_or_else(Vec::new, |line| {
+        vec!["--settings".to_string(), json::dumps(&V::Dict(dict! { "statusLine" => line }), json::LINE)]
+    })
+}
+
+/// `cca _agy-statusline 账号目录名 [--then 命令]`：cca 启动的 agy 交互会话里状态栏的命令（`agy_launch_args` 经 --settings 交给 agy）。
+/// agy 刷新状态栏时用 sh -c 起它，JSON 从 stdin 进（1.5.18：最多 300 毫秒一次，5 秒不完就杀掉，连着 30 次失败就不再起）：里面的
+/// plan_tier（套餐的叫法）连同 email 记进账号目录（`plan_note`），自己什么都不输出。--then 是用户自己的状态栏命令：用同一份 JSON
+/// 接着运行它，它的输出和退出码就是这一次的（agy 照它画状态栏）
+fn cmd_agy_statusline(args: &[String]) -> R<()> {
+    arity("cmd_agy_statusline", args, 1, 3)?;
+    let then = match &args[1..] {
+        [] => None,
+        [flag, cmd] if flag == "--then" => Some(cmd),
+        _ => return die("用法：cca _agy-statusline 账号目录名 [--then 命令]"),
+    };
+    // SAFETY: 只是问 fd 0 是不是终端（手动运行时不等输入）
+    let tty = unsafe { libc::isatty(0) } == 1;
+    let mut raw = Vec::new();
+    if !tty {
+        let _ = std::io::stdin().lock().read_to_end(&mut raw);
+        plan_note(&args[0], &raw);
+    }
+    let Some(cmd) = then else { return Ok(()) };
+    let p = Proc::new(["sh", "-c", cmd.as_str()]);
+    match if tty { p } else { p.input(raw) }.run() {
+        Ok(d) if d.rc == 0 => Ok(()),
+        Ok(d) => exit(if d.rc < 0 { 128 - d.rc } else { d.rc }),
+        Err(_) => exit(127),
+    }
+}
+
+/// 记下状态栏 JSON 里的套餐：id 要像账号目录名、目录要在（只往 cca 自己的账号目录里写）；plan_tier 是不空的字符串（最多 64 个字），
+/// email 像个邮箱（读的时候拿它和登录的邮箱比）。和记着的一样就不写（agy 最多 300 毫秒起一次）；写不了也不说（状态栏的命令不出声）
+fn plan_note(id: &str, raw: &[u8]) {
+    if raw.len() > 256 << 10 || re!(r"[a-z0-9][a-z0-9-]{0,63}").fullmatch(id).is_none() {
+        return;
+    }
+    let dir = path::join_all(&[&agy().sroot, "accounts", id]);
+    let Some(d) = json::loads_file_bytes(raw).ok().and_then(|v| v.as_dict()) else { return };
+    let plan = d.str("plan_tier").map(|p| text::strip(&p).to_string()).unwrap_or_default();
+    let email = d.str("email").map(|e| e.to_string()).unwrap_or_default();
+    if plan.is_empty() || plan.chars().count() > 64 || !EMAIL_RE.matches(&email) || !path::isdir(&dir) {
+        return;
+    }
+    let file = path::join(&dir, AGY_PLAN_FILE);
+    if let Some(old) = load_quiet(&file).and_then(|v| v.as_dict()) {
+        if old.str("plan_tier").as_deref() == Some(plan.as_str()) && old.str("email").as_deref() == Some(email.as_str()) {
+            return;
+        }
+    }
+    let _ = save_json(&file, &V::Dict(dict! { "email" => email, "plan_tier" => plan, "at" => time() }), Some(0o600), false);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,5 +899,83 @@ mod tests {
             .unwrap();
         assert_eq!(agy_cell(&plain, now, now).unwrap(), "Claude 60%");
         assert_eq!(agy_cell(&Dict::new(), now, now).unwrap(), "");
+    }
+
+    fn args_of(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn statusline_only_for_interactive_sessions() {
+        // 交互的会话：没有参数、开场白、带值的选项（值不算子命令）、-- 后面不是子命令
+        let yes: &[&[&str]] = &[
+            &[],
+            &["--model", "gemini-x"],
+            &["fix the bug"],
+            &["-i", "update"],
+            &["--resume", "help"],
+            &["-r=x", "-c"],
+            &["--", "hi"],
+            &["-"],
+        ];
+        for a in yes {
+            assert!(agy_takes_statusline(&args_of(a)), "{a:?}");
+        }
+        // 打印模式、版本、帮助、子命令（-- 后面的也算）、自己带了 --settings 的
+        let no: &[&[&str]] = &[
+            &["-p", "hi"],
+            &["-print=hi"],
+            &["--prompt", "x"],
+            &["--version"],
+            &["-h"],
+            &["help"],
+            &["mcp", "list"],
+            &["--model", "x", "update"],
+            &["--", "update"],
+            &["--settings", "{}"],
+            &["-settings={}"],
+            &["--model=x", "--print", "hi"],
+        ];
+        for a in no {
+            assert!(!agy_takes_statusline(&args_of(a)), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn statusline_chains_the_users_own() {
+        let base = "/x/cca _agy-statusline alice-1";
+        let own = r#"{"type": "command", "command": "/x/cca _agy-statusline alice-1", "enabled": true, "padding": 0, "stack_with_default": true}"#;
+        let line = |user: Option<&str>| {
+            let v = user.map(|u| json::loads(u).unwrap());
+            statusline_for(v.as_ref(), base).map(|d| json::dumps(&V::Dict(d), json::LINE))
+        };
+        // 用户没配、停用了、命令是空的、是 cca 自己的：只有 cca 的，叠在 agy 自己的状态栏上
+        for u in [
+            None,
+            Some("true"),
+            Some("{}"),
+            Some(r#"{"command": "~/sl.sh", "enabled": false}"#),
+            Some(r#"{"command": "  "}"#),
+            Some(r#"{"command": "'/y/cca' _agy-statusline bob-2"}"#),
+        ] {
+            assert_eq!(line(u).as_deref(), Some(own), "{u:?}");
+        }
+        // 用户的命令接在后面（照 shlex.quote 引起来）：padding 这些都留着，type、enabled 补上
+        assert_eq!(
+            line(Some(r#"{"command": "~/sl.sh 'a b'", "padding": 2, "stack_with_default": false}"#)).as_deref(),
+            Some(
+                r#"{"command": "/x/cca _agy-statusline alice-1 --then '~/sl.sh '\"'\"'a b'\"'\"''", "padding": 2, "stack_with_default": false, "type": "command", "enabled": true}"#
+            )
+        );
+        assert_eq!(
+            line(Some(r#"{"type": null, "command": "x"}"#)).as_deref(),
+            Some(r#"{"type": "command", "command": "/x/cca _agy-statusline alice-1 --then x", "enabled": true}"#)
+        );
+        // 别的 type（不知道是什么）不动
+        assert_eq!(line(Some(r#"{"type": "builtin", "command": "x"}"#)), None);
+        // 原来的那一份不改
+        let u = json::loads(r#"{"command": "x"}"#).unwrap();
+        assert!(statusline_for(Some(&u), base).is_some());
+        assert_eq!(json::dumps(&u, json::LINE), r#"{"command": "x"}"#);
     }
 }

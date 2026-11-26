@@ -582,10 +582,13 @@ const CLAUDE_VALUES: &[&str] = &[
     "--mcp-config",
     "--tools",
 ];
-const AGY_VALUES: &[&str] = &[
+/// agy 带一个值的选项（agy.rs 的 `agy_takes_statusline` 也用）：-r、--resume 是 --conversation 的别名（1.5.18 的 agy --help）
+pub(super) const AGY_VALUES: &[&str] = &[
     "--add-dir",
     "--agent",
     "--conversation",
+    "-r",
+    "--resume",
     "--effort",
     "--input-format",
     "--json-schema",

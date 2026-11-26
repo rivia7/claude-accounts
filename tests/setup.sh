@@ -920,7 +920,9 @@ S
 # 没有就用一份默认的，重置时间按现在算），agy.log 里记 AGY-USAGE（有没有控制终端、自动更新关没关、工作目录）；没有 token 或者 $CCA_T/agy_usage_auth 时
 # 像没登录一样在 stderr 上打出登录网址、等 60 秒；$CCA_T/agy_usage_error（内容是原因）回 ERROR；$CCA_T/agy_usage_old 像不认 /usage
 # 的旧版本，当成一句话回答（没有 command）；$CCA_T/agy_usage_hang 一直不回
-# 其余（包括 cca 带着 --gemini_dir 传进来的 --version）当作一次会话：装机标识不是正好 36 个字符就重新生成（像真的），写共享的会话、历史、技能，设置用临时文件 + 改名保存，退出码 3
+# 其余（包括 cca 带着 --gemini_dir 传进来的 --version）当作一次会话：装机标识不是正好 36 个字符就重新生成（像真的），写共享的会话、历史、技能，设置用临时文件 + 改名保存；
+# 交互的会话（不是 --version、打印模式、子命令）像 agy 画一次状态栏：--settings 或 settings.json 里的 statusLine.command 用 sh -c 跑（stdin 是状态栏的 JSON，
+# plan_tier 取 $CCA_T/agy_plan_tier），agy.log 里记 AGY-STATUSLINE-CMD 和 AGY-STATUSLINE rc=… out=…；退出码 3
 cat > "$T/bin/agy" <<'S'
 #!/bin/bash
 LOG="$CCA_T/agy.log"

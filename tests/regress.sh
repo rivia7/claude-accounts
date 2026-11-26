@@ -1708,6 +1708,35 @@ rm -rf "$H/.cca/cost" "$G/antigravity-cli/conversations/$AGC.db"   # 10g 从还�
 GF0="$T/guifx"; mkdir -p "$GF0"; out=$(gj state); printf '%s' "$out" > "$GF0/state_agy.json"; out2=$(gj hello); printf '%s' "$out2" > "$GF0/hello_agy.json"
 ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API，有 App 里显示的用量（usage 是缓存里的几组额度 quota_groups，没有 5 小时、本周这些窗口，也没有每周用量的统计）；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": True, \"cost\": True} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is True and \"usage\" not in a[\"can_why\"] and a[\"usage\"][\"source\"] == \"cache\" and \"five_hour\" not in a[\"usage\"] and a[\"usage\"][\"quota_groups\"][0][\"buckets\"][0][\"slot\"] == \"five_hour\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
 ok "_gui hello：agy 已启用，找到了 agy 命令" 'printf "%s" "$out2" | jok "d[\"tools\"][\"agy\"][\"enabled\"] is True and d[\"tools\"][\"agy\"][\"bin\"]"'
+# 套餐：agy 1.5 的登录文件里没有档位（user_tier），cca 启动交互的会话时经 --settings 带上自己的状态栏命令，从状态栏的 JSON 里
+# 记下 plan_tier（账号目录的 agy-plan.json，邮箱对得上才算）；用户自己的状态栏命令接在后面照样运行。token、共享的设置先存一份，最后放回去
+cp "$AG/antigravity-cli/antigravity-oauth-token" "$T/agy_tok.bak"; cp "$G/antigravity-cli/settings.json" "$T/agy_set.bak"
+printf '{"id_token_email": "alice@example.com"}' > "$AG/antigravity-cli/antigravity-oauth-token"
+printf 'Pro' > "$T/agy_plan_tier"; : > agy.log
+out=$(run CCA_TTY="$(ans)" cca agy @alice --model gemini-x 2>&1); rc=$?
+agy_slc=$(sed -n 's/^AGY-STATUSLINE-CMD //p' agy.log | tail -n 1); out2=$(gj state)
+agy_sl1="ARGS: --gemini_dir=$AG --settings {\"statusLine\": {\"type\": \"command\", \"command\": \"$agy_slc\", \"enabled\": true, \"padding\": 0, \"stack_with_default\": true}} --model gemini-x"
+ok "agy 的套餐：交互的会话在用户参数前面带上 --settings（cca 的状态栏命令 cca _agy-statusline 账号目录名，叠在 agy 自己的状态栏上、什么都不输出）；状态栏 JSON 里的 plan_tier 连同邮箱记进账号目录的 agy-plan.json（600）；token 里没有档位时 _gui state 照它显示套餐（Pro 认成 Google AI Pro、standard）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && [ "${agy_slc##* _agy-statusline }" = "$(basename "$AGD")" ] && grep -qx "AGY-STATUSLINE rc=0 out=" agy.log && [ "$(stat -f %Lp "$AGD/agy-plan.json")" = 600 ] && "$TESTBIN" check -f "j=$AGD/agy-plan.json" "j[\"plan_tier\"] == \"Pro\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Pro\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"standard\""'
+printf '#!/bin/sh\ncat > "$CCA_T/agy_sl.json"; printf "mine %%s" "$1"\n' > "$H/sl.sh"; chmod +x "$H/sl.sh"
+printf '{"theme": "dark", "statusLine": {"type": "command", "command": "~/sl.sh x", "padding": 1}}' > "$G/antigravity-cli/settings.json"
+printf 'Ultra' > "$T/agy_plan_tier"; : > agy.log
+out=$(run CCA_TTY="$(ans)" cca agy @alice 2>&1); rc=$?
+agy_slc=$(sed -n 's/^AGY-STATUSLINE-CMD //p' agy.log | tail -n 1); out2=$(gj state)
+agy_sl1="ARGS: --gemini_dir=$AG --settings {\"statusLine\": {\"type\": \"command\", \"command\": \"$agy_slc\", \"padding\": 1, \"enabled\": true}}"
+agy_sl2="$(basename "$AGD") --then '~/sl.sh x'"
+ok "agy 的套餐：共享的 settings.json 里有用户自己的状态栏命令时照用户的那一份（padding 留着），命令换成 cca 的、经 --then 接着运行用户的（同一份 JSON，它的输出就是状态栏）；套餐跟着换（Ultra 认成 Google AI Ultra、premium）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && [ "${agy_slc##* _agy-statusline }" = "$agy_sl2" ] && grep -qx "AGY-STATUSLINE rc=0 out=mine x" agy.log && "$TESTBIN" check -f "j=$T/agy_sl.json" "j[\"plan_tier\"] == \"Ultra\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Ultra\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"premium\""'
+cp "$T/agy_set.bak" "$G/antigravity-cli/settings.json"; : > agy.log
+run CCA_TTY="$(ans)" cca agy @alice -p hi >/dev/null 2>&1; agy_a1=$(alast ARGS)
+run CCA_TTY="$(ans)" cca agy @alice mcp list >/dev/null 2>&1; agy_a2=$(alast ARGS)
+run CCA_TTY="$(ans)" cca agy @alice --settings '{"x": 1}' >/dev/null 2>&1; agy_a3=$(alast ARGS)
+ok "agy 的套餐：打印模式、子命令、自己带了 --settings 的启动不加 cca 的状态栏命令（用户的 --settings 原样生效）" '[ "$agy_a1" = "ARGS: --gemini_dir=$AG -p hi" ] && [ "$agy_a2" = "ARGS: --gemini_dir=$AG mcp list" ] && [ "$agy_a3" = "ARGS: --gemini_dir=$AG --settings {\"x\": 1}" ]'
+printf '{"email": "bob@example.com", "plan_tier": "Pro", "at": 1}' > "$AGD/agy-plan.json"; out2=$(gj state)
+ok "agy 的套餐：状态栏记下时的邮箱和现在登录的不一样（换了账号登录）时不算" 'printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"\""'
+mkdir -p "$H/.cca/agy/x"
+agy_o1=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-statusline ../x --then 'printf ok; exit 4' 2>&1); agy_r1=$?
+agy_o2=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-statusline nobody 2>&1); agy_r2=$?
+ok "cca _agy-statusline：账号目录名不像、目录不在时不记（只往 cca 自己的账号目录里写）；--then 的命令照样运行，它的输出和退出码就是这一次的；没有 --then 时什么都不输出、总是成功" '[ "$agy_o1" = ok ] && [ $agy_r1 -eq 4 ] && [ ! -e "$H/.cca/agy/x/agy-plan.json" ] && [ -z "$agy_o2" ] && [ $agy_r2 -eq 0 ] && [ ! -e "$H/.cca/agy/accounts/nobody" ]'
+rm -rf "$H/.cca/agy/x"; cp "$T/agy_tok.bak" "$AG/antigravity-cli/antigravity-oauth-token"; rm -f "$AGD/agy-plan.json" "$T/agy_plan_tier" "$T/agy_sl.json" "$H/sl.sh"
 ok "agy 的登录 token 从没出现在 cca 写的文件、日志和命令行里（cca 只读里面的邮箱和档位）" '! grep -rqF -e ya29.test -e 1//test --exclude antigravity-oauth-token "$H/.cca" && ! grep -qF -e ya29.test -e 1//test agy.log open.log curl.log "$T/env.log"'
 out=$(run cca help 2>&1)
 ok "cca help 有 Antigravity 一节" 'printf "%s" "$out" | grep -q "cca agy add" && printf "%s" "$out" | grep -q "Antigravity（Google 的 agy 命令行"'

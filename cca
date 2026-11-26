@@ -518,6 +518,10 @@ helper_unpack() {   # helper_unpack 目标 SHA-256 目录：第一次用（或�
 	return 0
 }
 helper_find || exit 1
+# cca 启动的 agy 会话里状态栏的命令（经 --settings 带上的，见辅助程序的 agy_launch_args）：agy 刷新状态栏时用 sh -c 起它，最多 300 毫秒
+# 一次，所以找到辅助程序就交给它、不往下读整个脚本（经 sh -c 起一次约 24 毫秒，读完整个脚本再交是 40 毫秒）。stdin 是 agy 给的 JSON：
+# 记下里面的套餐；--then 带着用户自己的状态栏命令时接着运行它（它的输出就是状态栏），不然什么都不输出
+[ "${1:-}" != _agy-statusline ] || { shift; CCA_TOOL=agy exec "$HELPER" agy-statusline "$@"; }
 # 解好的那一份辅助程序中途没了（系统清了临时目录）：再解一次（看在不在是内建的判断，不起进程）
 py() { [ -x "$HELPER" ] || helper_find || return 127; CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" CCA_VERSION="$VERSION" "$HELPER" "$@"; }
 
@@ -2754,8 +2758,8 @@ codex_logout() {   # codex logout 会去服务器上注销（经账号的出口�
 	fi
 	rm -f "$ACC_HOME/auth.json"
 }
-agy_logout() {   # agy 没有退出登录的命令：删掉账号目录里的登录 token 和 cca 登录时记下的邮箱
-	rm -f "$ACC_HOME/antigravity-cli/antigravity-oauth-token" "$ACC_DIR/agy-login.json"
+agy_logout() {   # agy 没有退出登录的命令：删掉账号目录里的登录 token、cca 登录时记下的邮箱和状态栏记下的套餐
+	rm -f "$ACC_HOME/antigravity-cli/antigravity-oauth-token" "$ACC_DIR/agy-login.json" "$ACC_DIR/agy-plan.json"
 }
 
 auth_email() { tool email; }   # 已登录的邮箱（没登录是空的）
@@ -5538,13 +5542,15 @@ run_account() {
 		if [ "$ACC_KIND" = api ]; then warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（这个账号的接口、key 和模型由 cca 设定）"
 		else warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（官方账号用它自己的登录；要换模型写进 ${TOOL_SETTINGS} 或用 /model）"; fi
 	fi
+	LAUNCH_ARGS=()   # 只这一次加在用户参数前面的（看用户参数）：agy 交互的会话带上 cca 的状态栏命令，记下套餐（辅助程序的 agy_launch_args）
+	[ "$TOOL" != agy ] || eval "$(py launch-args "$key" -- "$@")"
 	remote_prepare
 	trap ':' INT TERM HUP
 	session_open
 	if [ ${#HOSTCMD[@]} -gt 0 ]; then   # 远程会话的开关开着：客户端跑在会话宿主里（它的退出码就是客户端的），别的都一样
-		env "${UNSETS[@]}" "${SETS[@]}" "${HOSTCMD[@]}" "$TOOL_BIN" "${ACC_ARGS[@]}" "$@" 3<&-
+		env "${UNSETS[@]}" "${SETS[@]}" "${HOSTCMD[@]}" "$TOOL_BIN" "${ACC_ARGS[@]}" "${LAUNCH_ARGS[@]}" "$@" 3<&-
 	else
-		env "${UNSETS[@]}" "${SETS[@]}" "$TOOL_BIN" "${ACC_ARGS[@]}" "$@" 3<&-
+		env "${UNSETS[@]}" "${SETS[@]}" "$TOOL_BIN" "${ACC_ARGS[@]}" "${LAUNCH_ARGS[@]}" "$@" 3<&-
 	fi
 	rc=$?
 	[ "$TOOL" != agy ] || py agy-session-end "$key" "$$" >/dev/null 2>&1   # 折合金额：记下这次运行用过哪些会话（辅助程序的 cost/agy.rs）
@@ -8401,6 +8407,7 @@ main() {
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
 		_remote-hook)   # cca 自己带的 Claude Code 钩子（远程会话开着时经 --settings 带上的 Stop、PermissionRequest、Notification）：做完了、在等你时推一条通知给接着这个会话的各处（辅助程序的 remote-hook，stdin 是钩子的输入）。Stop 的退出码 2 会拦着 Claude Code 不让停：什么都不说，总是成功
 			py remote-hook >/dev/null 2>&1 || : ;;
+		# _agy-statusline（agy 状态栏的命令）到不了这里：脚本开头找到辅助程序就交给它了（helper_find 后面）
 		_update-fetch) cmd_update_fetch ;;
 		_policy-fetch) ;;   # 3.6.0 去掉了维护者的映射：以前的版本在后台起的（起的时候还是旧版、跑到这里已经换成新版）什么都不做
 		_team-sync) team_bg_sync ;;   # 后台：各个 Team 同步一次配置，变了马上照它改账号表、同步路由器和内置代理（team_hook 起的）

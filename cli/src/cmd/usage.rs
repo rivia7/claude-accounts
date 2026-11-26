@@ -1944,11 +1944,39 @@ pub fn cmd_reset_done(args: &[String]) -> R<()> {
 
 // --- 各工具和用量、套餐有关的做法（原来 Tool / CodexTool / AgyTool 的方法）-------------------------------------------
 
-/// agy 的档位 ID → (叫法, 档位)；认不出两样都是空的。sub 是查询带回来的，没有就用登录身份里的
-fn agy_tier(key: &str, sub: &V) -> R<(&'static str, &'static str)> {
+/// agy 的套餐 → (叫法, 档位)（`agy_plan_of`）。sub 是查询带回来的，没有就用登录身份里的（状态栏记下的叫法，或者 token 里的档位 ID）
+fn agy_tier(key: &str, sub: &V) -> R<(String, &'static str)> {
     let id = if sub.truthy() { sub.clone() } else { agy_claims(key).get("tier").unwrap_or(V::None) };
     hashable(&id)?;
-    Ok(id.as_str().and_then(|id| AGY_TIERS.iter().find(|(x, _, _)| *x == id)).map_or(("", ""), |(_, name, tier)| (*name, *tier)))
+    Ok(id.as_str().map_or((String::new(), ""), agy_plan_of))
+}
+
+/// agy 的套餐有两种写法：登录 token 里的档位 ID（1.5.5 的 user_tier，如 `g1-pro-tier`）和状态栏 JSON 里的 plan_tier（叫法，
+/// 文档的例子是 "Pro"）。都按 AGY_TIERS 认：去掉 google、ai、g1、tier、plan 这些不分套餐的词，大小写、`-`、`_`、空格不论，认出来
+/// 用表里的叫法和档位。认不出的 ID 不显示；认不出的叫法照原话显示、档位不知道（不猜）；不像个套餐名的不要
+fn agy_plan_of(raw: &str) -> (String, &'static str) {
+    let raw = text::strip(raw);
+    let norm = agy_plan_norm(raw);
+    if norm.is_empty() {
+        return (String::new(), "");
+    }
+    if let Some((_, name, tier)) = AGY_TIERS.iter().find(|(id, _, _)| agy_plan_norm(id) == norm) {
+        return (name.to_string(), tier);
+    }
+    if re!(r"(?i)^[a-z0-9]+(?:[_-][a-z0-9]+)*[_-]tier$").matches(raw) || !plan_name_ok(raw) {
+        return (String::new(), "");
+    }
+    (raw.to_string(), "")
+}
+
+/// 比较 agy 套餐的两种写法用的：小写，按空白、`-`、`_` 拆开，去掉不分套餐的词
+fn agy_plan_norm(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
+        .filter(|w| !w.is_empty() && !["google", "ai", "g1", "tier", "plan"].contains(w))
+        .collect();
+    words.join(" ")
 }
 
 impl Tool {
@@ -1975,7 +2003,7 @@ impl Tool {
             Kind::Codex => {
                 codex_plan_label(&if sub.truthy() { sub.clone() } else { codex_claims(key, None).get("plan").unwrap_or(V::None) })
             }
-            Kind::Agy => agy_tier(key, sub)?.0.to_string(),
+            Kind::Agy => agy_tier(key, sub)?.0,
         })
     }
 
@@ -2196,11 +2224,33 @@ mod tests {
                 r[1].py_repr()
             );
         }
-        // agy 的档位表和 PY_SRC 的 AGY_TIERS 一样
+        // agy 的档位表里有 PY_SRC 的 AGY_TIERS 的每一项，叫法、档位不变（后来加的档位不在 PY_SRC 里）
         let tiers = vectors::load().dict("agy_tiers").unwrap();
-        assert_eq!(tiers.len(), AGY_TIERS.len());
-        for (id, name, tier) in AGY_TIERS {
-            assert_eq!(tiers.list(id).unwrap().strs().iter().map(|s| s.to_string()).collect::<Vec<_>>(), [*name, *tier]);
+        for id in tiers.keys() {
+            let (_, name, tier) = AGY_TIERS.iter().find(|(x, _, _)| *x == &*id).unwrap_or_else(|| panic!("AGY_TIERS 里少了 {id}"));
+            assert_eq!(tiers.list(&id).unwrap().strs().iter().map(|s| s.to_string()).collect::<Vec<_>>(), [*name, *tier]);
+        }
+    }
+
+    #[test]
+    fn agy_plan_names() {
+        // token 里的档位 ID 和状态栏 JSON 里的叫法，按同一张表认
+        for raw in ["g1-pro-tier", "G1_PRO_TIER", "Pro", "Google AI Pro", " pro ", "google-ai-pro"] {
+            assert_eq!(agy_plan_of(raw), ("Google AI Pro".to_string(), "standard"), "{raw}");
+        }
+        assert_eq!(agy_plan_of("Ultra"), ("Google AI Ultra".to_string(), "premium"));
+        assert_eq!(agy_plan_of("Google AI Plus"), ("Google AI Plus".to_string(), "entry"));
+        assert_eq!(agy_plan_of("g1-plus-tier"), ("Google AI Plus".to_string(), "entry"));
+        assert_eq!(agy_plan_of("Free"), ("Free".to_string(), "entry"));
+        assert_eq!(agy_plan_of("free-tier"), ("Free".to_string(), "entry"));
+        assert_eq!(agy_plan_of("legacy-tier"), ("Legacy".to_string(), "standard"));
+        // 认不出的叫法照原话、档位不知道（不猜）
+        for raw in ["Ultra Lite", "Google AI Ultra for Business", "专业版"] {
+            assert_eq!(agy_plan_of(raw), (raw.to_string(), ""), "{raw}");
+        }
+        // 认不出的档位 ID、只有不分套餐的词、不像套餐名的不显示
+        for raw in ["g1-ultra-lite-tier", "GOOGLER_TIER", "", "  ", "Google AI", "_x", &"A".repeat(41)] {
+            assert_eq!(agy_plan_of(raw), (String::new(), ""), "{raw}");
         }
     }
 

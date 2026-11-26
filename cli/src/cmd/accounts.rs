@@ -28,6 +28,7 @@ use std::rc::Rc;
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[
     Cmd::all("env", cmd_env),
+    Cmd::all("launch-args", cmd_launch_args),
     Cmd::all("prompt-emit", cmd_prompt_emit),
     Cmd::all("check", cmd_check),
     Cmd::all("add", cmd_add),
@@ -48,6 +49,21 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("sync-state", cmd_sync_state),
     Cmd::all("node-assign", cmd_node_assign),
 ];
+
+/// `py launch-args 账号 -- 用户参数…`：只这一次启动加在用户参数前面的（bash 的 run_account 记进 LAUNCH_ARGS，放在 ACC_ARGS 后面）。
+/// 和 `py env` 的 ACC_ARGS 分开：它要看用户参数，而切节点时 pick_route 会重新 eval `py env`。现在只有 agy：交互的会话带上
+/// cca 的状态栏命令，记下套餐（`agy_launch_args`）
+pub fn cmd_launch_args(args: &[String]) -> R<()> {
+    if args.get(1).map(String::as_str) != Some("--") {
+        return Err(Fail::Die(format!("TypeError: cmd_launch_args 的参数不对（给了 {} 个）", args.len())));
+    }
+    let out = match t().kind {
+        Kind::Agy => super::agy::agy_launch_args(&args[0], &args[2..]),
+        Kind::Claude | Kind::Codex => Vec::new(),
+    };
+    sh_array("LAUNCH_ARGS", &out);
+    Ok(())
+}
 
 /// 每个账号都输出全部变量（不适用的为空）：bash 里循环 eval 时不会留着上一个账号的值。
 /// ACC_HOME 是交给工具的配置目录（CLAUDE_CONFIG_DIR / CODEX_HOME），ACC_ARGS 是启动时加在用户参数前面的，

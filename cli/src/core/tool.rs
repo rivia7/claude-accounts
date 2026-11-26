@@ -245,11 +245,13 @@ pub const AGY_SSH: &str = "127.0.0.1 22 127.0.0.1 22";
 /// 和 bash 的 agy_env 设的一样（一起改）。AGY_CLI_FORCE_FILE_TOKEN_STORAGE 是 agy 自己的开关（1.5.16 里有，值是 1 或 true；
 /// 这一版在 macOS 上要钥匙串锁着才认 SSH 会话）；SSH_CONNECTION 是以前的做法（1.5.5 看到 SSH 会话就存文件），留给不认开关的版本
 pub const AGY_FILE_ENV: [(&str, &str); 2] = [("SSH_CONNECTION", AGY_SSH), ("AGY_CLI_FORCE_FILE_TOKEN_STORAGE", "1")];
-/// agy 的档位 ID → (叫法, 档位)
+/// agy 的档位 ID → (叫法, 档位)。登录 token 里的 user_tier（1.5.5）是 ID，状态栏 JSON 里的 plan_tier 是叫法，都按这张表认
+/// （usage.rs 的 `agy_plan_of`）。Google AI Plus 比 Pro 便宜一档，和 ChatGPT 的 Go 一样算 entry
 pub const AGY_TIERS: &[(&str, &str, &str)] = &[
     ("free-tier", "Free", "entry"),
     ("legacy-tier", "Legacy", "standard"),
     ("standard-tier", "Standard", "standard"),
+    ("g1-plus-tier", "Google AI Plus", "entry"),
     ("g1-pro-tier", "Google AI Pro", "standard"),
     ("g1-ultra-tier", "Google AI Ultra", "premium"),
 ];

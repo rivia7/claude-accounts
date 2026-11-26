@@ -11,7 +11,8 @@
 //! $CCA_T/agy_usage_auth 时像没登录一样在 stderr 上打出登录网址、等 60 秒；$CCA_T/agy_usage_error（内容是原因）回 ERROR；
 //! $CCA_T/agy_usage_old 像不认 /usage 的旧版本，当成一句话回答（没有 command）；$CCA_T/agy_usage_hang 一直不回。
 //! 其余（包括 cca 带着 --gemini_dir 传进来的 --version）当作一次会话：装机标识不是正好 36 个字符就重新生成（像真的），写共享的会话、历史、技能，
-//! 设置用临时文件 + 改名保存，退出码 3
+//! 设置用临时文件 + 改名保存；交互的会话（不是 --version、打印模式、子命令）像 agy 画一次状态栏（`statusline`：--settings 或者 settings.json
+//! 里的 statusLine.command 用 sh -c 跑，stdin 是状态栏的 JSON，plan_tier 取 $CCA_T/agy_plan_tier），退出码 3
 
 use super::codex::{regex, tag_of, PY_WS};
 use super::*;
@@ -94,10 +95,61 @@ pub fn run(a: &[String]) -> R<i32> {
     if !lexists(&mcp) {
         write_text(&mcp, "")?;
     }
+    statusline(&t, &cli, &args, &log)?;
     if let Some(conv) = mark(&t, "agy_cost")?.filter(|c| !c.is_empty()) {
         reply(&cli, &conv)?;
     }
     Ok(3)
+}
+
+/// 像 agy 画状态栏：交互的会话（不是 --version、打印模式、帮助、子命令）里，--settings（两种写法，最后一个算）里的 statusLine，
+/// 没有就用数据目录 settings.json 里的；它的 command（enabled 不是 false）用 sh -c 跑一次（开头的 ~ 换成 HOME，像 agy），stdin 是
+/// 1.5.18 给的那种 JSON（email 取 token 里的 id_token_email；plan_tier 取 $CCA_T/agy_plan_tier，没有这个文件就不给）。agy.log 里记
+/// AGY-STATUSLINE-CMD 命令 和 AGY-STATUSLINE rc=退出码 out=输出（换行写成 \n）
+fn statusline(t: &str, cli: &str, args: &[String], log: &dyn Fn(&str) -> R<()>) -> R<()> {
+    const ONE_SHOT: &[&str] = &["--version", "-p", "--print", "--prompt", "--help", "-h"];
+    const SUBCOMMANDS: &[&str] =
+        &["acp", "agent", "agents", "changelog", "help", "install", "mcp", "mic-serve", "models", "plugin", "plugins", "update"];
+    if args.iter().any(|a| ONE_SHOT.contains(&a.split('=').next().unwrap_or_default()))
+        || args.first().is_some_and(|a| SUBCOMMANDS.contains(&a.as_str()))
+    {
+        return Ok(());
+    }
+    let mut given = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--settings" {
+            given = it.next().cloned();
+        } else if let Some(v) = a.strip_prefix("--settings=") {
+            given = Some(v.to_string());
+        }
+    }
+    let given = match given {
+        Some(s) => json::parse(&s).or_else(|_| fail("agy: --settings 不是 JSON"))?,
+        None => Value::Null,
+    };
+    let saved = load_json_or_empty(&join(&[cli, "settings.json"]))?;
+    let line = [&given, &saved].into_iter().find_map(|s| s.as_obj().and_then(|o| o.get("statusLine")).filter(|l| !l.is_null()));
+    let Some(line) = line.and_then(Value::as_obj) else { return Ok(()) };
+    if line.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Ok(());
+    }
+    let Some(cmd) = line.get("command").and_then(Value::as_str).filter(|c| !c.trim().is_empty()) else { return Ok(()) };
+    let cmd = match cmd.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{}{rest}", home_dir()),
+        _ => cmd.to_string(),
+    };
+    let token = load_json_or_empty(&join(&[cli, "antigravity-oauth-token"]))?;
+    let mut p = obj! { "cwd" => getcwd()?, "session_id" => "", "version" => "1.5.18", "product" => "antigravity", "agent_state" => "idle", "terminal_width" => 100 };
+    if let Some(e) = token.as_obj().and_then(|o| o.get("id_token_email")) {
+        set_item(&mut p, "email", e.clone())?;
+    }
+    if let Some(tier) = mark(t, "agy_plan_tier")? {
+        set_item(&mut p, "plan_tier", Value::from(tier))?;
+    }
+    log(&format!("AGY-STATUSLINE-CMD {cmd}"))?;
+    let d = run_capture(&["sh".to_string(), "-c".to_string(), cmd], Some(dumps(&p).as_bytes()), Some((5.0, "5")))?;
+    log(&format!("AGY-STATUSLINE rc={} out={}", d.code, d.stdout.replace('\n', "\\n")))
 }
 
 /// 折合金额（$CCA_T/agy_cost 的内容是会话 id）：像 agy 1.5.16，在这次运行的日志（cli-<本地时间>.log）里写下用的会话，往共享的
