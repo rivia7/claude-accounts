@@ -46,6 +46,8 @@ const FORKS_PER_10S: usize = 8;
 const HIGH: usize = 1024 * 1024;
 /// 隔多久看一眼配对表变了没有
 const PEERS_EVERY: f64 = 3.0;
+/// 有读不出密钥的配对时（钥匙串一时读不出来：登录以后钥匙串还没解锁之类），隔多久再读一遍（不然它要等到配对表变了才进得来）
+const SECRET_RETRY: f64 = 30.0;
 /// 和服务器断着时宿主交来的通知最多攒几条、攒多久（连上了再推；再早的推过去也没用了）
 const NOTES_KEPT: usize = 8;
 const NOTE_KEEP: f64 = 60.0;
@@ -83,13 +85,23 @@ struct Session {
 }
 
 /// 这个会话走 hub 这台服务器：只有记在它上面的配对看得到这个会话
-fn allowed_now(hub: HubKind) -> Vec<Allowed> {
-    peers::load()
-        .into_iter()
-        .filter(|p| p.hub == hub && p.incoming != Incoming::None)
-        .filter_map(|peer| peers::secret(&peer.pid).map(|secret| Allowed { peer, secret }))
-        .take(16)
-        .collect()
+fn allowed_now(hub: HubKind) -> (Vec<Allowed>, Vec<Peer>) {
+    with_secrets(peers::load().into_iter().filter(|p| p.hub == hub && p.incoming != Incoming::None), 16)
+}
+
+/// 这些配对各带上配对的密钥，最多 max 个；读不出密钥的另外交出来（`Link` 隔一阵再读）
+pub(super) fn with_secrets(list: impl IntoIterator<Item = Peer>, max: usize) -> (Vec<Allowed>, Vec<Peer>) {
+    let (mut ok, mut missing) = (Vec::new(), Vec::new());
+    for peer in list {
+        if ok.len() >= max {
+            break;
+        }
+        match peers::secret(&peer.pid) {
+            Some(secret) => ok.push(Allowed { peer, secret }),
+            None => missing.push(peer),
+        }
+    }
+    (ok, missing)
 }
 
 /// 配对表里和转接有关的那些（变了才要动）
@@ -356,7 +368,7 @@ pub fn cmd_remote_link(args: &[String]) -> R<()> {
             break;
         }
         for p in &woke.joins {
-            link.join(p, |_| Some(()), |j, ()| if bridge(j, &at).is_ok() { 0 } else { 1 });
+            link.join(p, |_| (), |j, ()| if bridge(j, &at).is_ok() { 0 } else { 1 });
         }
     }
     // 收场：告诉服务器会话结束了；子进程把宿主最后说的（“会话结束了”）转完自己会走
@@ -394,6 +406,9 @@ pub(super) struct Link {
     wake: libc::c_int,
     /// 允许接入的配对（各带配对的密钥）
     pub(super) allowed: Vec<Allowed>,
+    /// 该接却读不出密钥的配对：隔 SECRET_RETRY 秒再读（read_at：上一次读的时候）
+    pub(super) missing: Vec<Peer>,
+    read_at: f64,
     /// 配对表上一次的样子（还没看过是 None）、什么时候看的
     stamp: Option<peers::Stamp>,
     checked: f64,
@@ -444,6 +459,8 @@ impl Link {
             sid: sid.to_string(),
             wake,
             allowed: Vec::new(),
+            missing: Vec::new(),
+            read_at: f64::NEG_INFINITY,
             stamp: None,
             checked: f64::NEG_INFINITY,
             ctl: None,
@@ -469,18 +486,19 @@ impl Link {
         codes
     }
 
-    /// 隔 PEERS_EVERY 秒看一眼配对表。变了就照新的（allowed_now 算的）来：不该再接着的子进程（不让了、改成只看了、取消配对了）
-    /// 结束掉，它们留着等收走；换一条控制连接（新的票据上是新的那几个配对），旧的直接断开，一个都不让了就告诉服务器会话没了。
-    /// 这一轮看了是 true（调用方隔一阵要看的别的也跟着看）
-    pub(super) fn refresh(&mut self, now: f64, allowed_now: impl FnOnce() -> Vec<Allowed>) -> bool {
+    /// 隔 PEERS_EVERY 秒看一眼配对表。变了（有读不出密钥的配对时，隔 SECRET_RETRY 秒也算）就照新的（allowed_now 算的：允许的、
+    /// 读不出密钥的）来：不该再接着的子进程（不让了、改成只看了、取消配对了）结束掉，它们留着等收走；换一条控制连接（新的票据上是
+    /// 新的那几个配对），旧的直接断开，一个都不让了就告诉服务器会话没了。这一轮看了是 true（调用方隔一阵要看的别的也跟着看）
+    pub(super) fn refresh(&mut self, now: f64, allowed_now: impl FnOnce() -> (Vec<Allowed>, Vec<Peer>)) -> bool {
         if now - self.checked < PEERS_EVERY {
             return false;
         }
         self.checked = now;
         let s = peers::stamp();
-        if self.stamp != Some(s) {
-            self.stamp = Some(s);
-            let fresh = allowed_now();
+        if self.stamp != Some(s) || (!self.missing.is_empty() && now - self.read_at >= SECRET_RETRY) {
+            (self.stamp, self.read_at) = (Some(s), now);
+            let (fresh, missing) = allowed_now();
+            self.missing = missing;
             if shape(&fresh) != shape(&self.allowed) {
                 let keep = shape(&fresh);
                 stop(self.kids.iter().filter(|k| !keep.contains(&(k.pid.clone(), k.access))));
@@ -552,10 +570,10 @@ impl Link {
         Some(woke)
     }
 
-    /// 服务器说有接入方来了（JOIN：令牌、配对编号）：是允许的配对、转接着的没到 MAX_KIDS 个、10 秒里分出的没到 FORKS_PER_10S 个、
-    /// admit 也说行（交出给子进程的）时，分出一个子进程做 run（退出码是它返回的）。不然不理：接入方那头等一会儿，服务器告诉它
-    /// 这边没来
-    pub(super) fn join<T>(&mut self, payload: &[u8], admit: impl FnOnce(&Allowed) -> Option<T>, run: impl FnOnce(&Join, T) -> i32) {
+    /// 服务器说有接入方来了（JOIN：令牌、配对编号）：是允许的配对、转接着的没到 MAX_KIDS 个、10 秒里分出的没到 FORKS_PER_10S 个时，
+    /// 分出一个子进程做 run（退出码是它返回的；admit 在这一头先看一眼、记一笔，交出给子进程的）。不然不理：接入方那头等一会儿，
+    /// 服务器告诉它这边没来
+    pub(super) fn join<T>(&mut self, payload: &[u8], admit: impl FnOnce(&Allowed) -> T, run: impl FnOnce(&Join, T) -> i32) {
         let Some(ctl) = self.ctl.as_ref() else { return };
         let Some(j) = std::str::from_utf8(payload).ok().and_then(|s| json::loads(s).ok()).and_then(|j| j.as_dict()) else { return };
         let (Some(token), Some(pid)) = (j.str("token").filter(|t| peers::hex32(t)), j.str("pid")) else { return };
@@ -567,7 +585,7 @@ impl Link {
         if self.kids.len() >= MAX_KIDS || self.forks.len() >= FORKS_PER_10S {
             return;
         }
-        let Some(given) = admit(a) else { return };
+        let given = admit(a);
         self.forks.push_back(now);
         let (srv, sid) = (&self.srv, self.sid.as_str());
         let kid = |parent| run(&Join { srv, ctl, sid, token: &token, a, parent }, given);

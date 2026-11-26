@@ -55,8 +55,9 @@ public struct LauncherInfo: Sendable, Equatable {
     }
 }
 
-/// 一台电脑上的启动器（列会话时认出来的，PeerListing.launcher）
-public struct RemoteLauncher: Sendable, Equatable {
+/// 一台电脑上的启动器（列会话时认出来的，PeerListing.launcher）。和 Mac App 的 `RemoteLauncher`（这台 Mac 上的后台进程在不在跑）
+/// 不是一回事：名字也分开
+public struct HostLauncher: Sendable, Equatable {
     /// 它在服务器上登记成的那个会话的编号：进启动器要的是它的票据
     public let sid: String
     public let info: LauncherInfo

@@ -1,6 +1,6 @@
 import Foundation
 
-// 远程启动（PROTOCOL 9.4）：模板的命令和文档、参数那一行字的拆和拼、App 里查模板、新建 / 修改 / 删掉模板、「允许远程启动」的开关。
+// 远程启动（PROTOCOL 9.4）：模板的命令和文档、App 里查模板、新建 / 修改 / 删掉模板（参数那一行原样交给 cca）、「允许远程启动」的开关。
 
 /// 测试里 cca 那一头：模板列表（可以换）、查模板查不成、存模板时 cca 说的不行（线程安全）
 private final class LaunchScript: @unchecked Sendable {
@@ -23,16 +23,6 @@ private final class LaunchScript: @unchecked Sendable {
     }
 }
 
-private func words(_ s: String) -> [String]? {
-    if case .success(let w) = ShellWords.split(s) { return w }
-    return nil
-}
-
-private func wordsProblem(_ s: String) -> ShellWords.Problem? {
-    if case .failure(let p) = ShellWords.split(s) { return p }
-    return nil
-}
-
 /// 一台配对过的机器（夹具里没有的样子）
 private func remotePeer(_ json: String) -> RemotePeer? {
     (try? DocumentDecoder.decode(RemoteDoc.self, from: Data((#"{"version":1,"kind":"remote","sessions":[],"peers":["# + json + "]}").utf8)))?.peers.first
@@ -49,17 +39,17 @@ func remoteLaunchProtocolTests() {
     check("查模板：cca remote template list --json；只读，不和改东西的排队", list.arguments == ["remote", "template", "list", "--json"] && list.gate == nil
           && !list.runsToCompletion && list.tool == nil && list.key == nil)
     let add = CcaCommand.remoteTemplateSave(name: "网站", tool: .claude, account: "工作(bob@example.com)", dir: "/Users/me/projects/site",
-                                            args: ["--model", "opus"], replace: nil)
-    check("存模板：都给全（cca 不在终端里问），模板的参数放在 -- 后面",
+                                            argsLine: "--model opus 'a b'", replace: nil)
+    check("存模板：都给全（cca 不在终端里问），参数那一行原样放在 --args-line 后面（cca 拆）",
           add.arguments == ["remote", "template", "add", "--name", "网站", "--tool", "claude", "--account", "工作(bob@example.com)",
-                            "--dir", "/Users/me/projects/site", "--", "--model", "opus"], "\(add.arguments)")
-    let replace = CcaCommand.remoteTemplateSave(name: "队列", tool: .codex, account: "frank@example.com", dir: "/Users/me/srv/jobs", args: [],
+                            "--dir", "/Users/me/projects/site", "--args-line", "--model opus 'a b'"], "\(add.arguments)")
+    let replace = CcaCommand.remoteTemplateSave(name: "队列", tool: .codex, account: "frank@example.com", dir: "/Users/me/srv/jobs", argsLine: "",
                                                 replace: "5e6f7a8b")
-    check("改模板：带 --replace <编号>；没有参数也有 --",
+    check("改模板：带 --replace <编号>；没有参数也有 --args-line（空的）",
           replace.arguments == ["remote", "template", "add", "--name", "队列", "--tool", "codex", "--account", "frank@example.com",
-                                "--dir", "/Users/me/srv/jobs", "--replace", "5e6f7a8b", "--"], "\(replace.arguments)")
-    check("参数里的 --、以 - 开头的原样放在 -- 后面",
-          CcaCommand.remoteTemplateSave(name: "n", tool: .claude, account: "a", dir: "/d", args: ["--", "-x"], replace: nil).arguments.suffix(3) == ["--", "--", "-x"])
+                                "--dir", "/Users/me/srv/jobs", "--replace", "5e6f7a8b", "--args-line", ""], "\(replace.arguments)")
+    check("参数那一行是 --、以 - 开头的也原样是 --args-line 的值",
+          CcaCommand.remoteTemplateSave(name: "n", tool: .claude, account: "a", dir: "/d", argsLine: "-- -x", replace: nil).arguments.suffix(2) == ["--args-line", "-- -x"])
     check("删模板：按编号", CcaCommand.remoteTemplateRemove(id: "1a2b3c4d").arguments == ["remote", "template", "rm", "1a2b3c4d"])
     check("允许、不允许远程启动：按配对的 id", CcaCommand.remoteLaunch(peer: pid, on: true).arguments == ["remote", "allow", pid, "launch", "on"]
           && CcaCommand.remoteLaunch(peer: pid, on: false).arguments == ["remote", "allow", pid, "launch", "off"])
@@ -71,26 +61,6 @@ func remoteLaunchProtocolTests() {
           (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1,"remote_launch":1}"#.utf8)))?.remoteLaunch == 1
           && (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1}"#.utf8)))?.remoteLaunch == nil)
 
-    // 参数那一行字：照 shell 的写法拆开、拼回去
-    check("拆参数：空白隔开（几个空格、Tab、换行都一样）", words("  --model   opus\t--verbose\n-c ") == ["--model", "opus", "--verbose", "-c"])
-    check("什么都没写是没有参数", words("") == [] && words(" \t\n ") == [])
-    check("单引号里的原样（反斜杠、双引号、$ 都不特别）",
-          words(#"--append-system-prompt '说中文，"别" \改 $HOME'"#) == ["--append-system-prompt", #"说中文，"别" \改 $HOME"#])
-    check("双引号里：反斜杠只让双引号、反斜杠、$、反引号原样，别的反斜杠留着", words(#""a \"b\" \\ \$x \` \n""#) == [#"a "b" \ $x ` \n"#],
-          "\(String(describing: words(#""a \"b\" \\ \$x \` \n""#)))")
-    check("引号外的反斜杠让下一个字符原样（空格、引号）", words(#"a\ b \'c \"d"#) == ["a b", "'c", "\"d"])
-    check("引号和字连着是一项；空的引号也是一项", words(#"--name='a b'c "" ''"#) == ["--name=a bc", "", ""])
-    check("反斜杠加换行是续行", words("--model \\\nopus") == ["--model", "opus"])
-    check("~、$HOME、* 不展开：原样交给 cca", words("~/x $HOME *.md") == ["~/x", "$HOME", "*.md"])
-    check("引号没配对、最后多一个反斜杠：说哪里不对，不猜", wordsProblem("--x 'abc") == .openSingle && wordsProblem(#"--x "abc"#) == .openDouble
-          && wordsProblem(#""a\""#) == .openDouble && wordsProblem(#"abc\"#) == .trailingBackslash
-          && ShellWords.Problem.openSingle.message == "参数里的单引号没有配对")
-    let samples: [[String]] = [[], ["--model", "opus"], ["--append-system-prompt", "说中文，改完跑一遍测试"],
-                               ["a b", "it's", #""q""#, "$HOME", "~", "", #"back\slash"#, "tab\tx", "new\nline", "*", "--", "-", "a=b,c:d@e%f+g"]]
-    check("拼成一行再拆开：原样", samples.allSatisfy { words(ShellWords.join($0)) == $0 }, samples.map(ShellWords.join).joined(separator: " | "))
-    check("拼的时候只引要引的", ShellWords.join(["--model", "opus", "a b", "it's", ""]) == #"--model opus 'a b' 'it'\''s' ''"#,
-          ShellWords.join(["--model", "opus", "a b", "it's", ""]))
-
     // 模板的文档
     guard let d = fixture("remote_templates.json"), let doc = try? DocumentDecoder.decode(RemoteTemplatesDoc.self, from: d) else {
         check("夹具 remote_templates.json", false)
@@ -100,7 +70,10 @@ func remoteLaunchProtocolTests() {
     check("模板：编号、名字、工具、账号、文件夹、参数", t.map(\.id) == ["1a2b3c4d", "5e6f7a8b", "9c0d1e2f"] && t.map(\.tool) == [.claude, .codex, .claude]
           && t[0].name == "网站：修 bug" && t[0].account == "bob@example.com" && t[0].accountName == "工作" && t[0].dir == "/Users/me/projects/site"
           && t[0].args == ["--model", "opus", "--append-system-prompt", "说中文，改完跑一遍测试"] && t[1].args.isEmpty && t.allSatisfy(\.line))
-    check("用不了的说原因：账号没了（现在叫什么是 null）", t[2].problem == .noAccount && t[2].accountName == nil && t.prefix(2).allSatisfy { $0.problem == nil })
+    check("用不了的说原因：账号没了（现在叫什么、键都是 null）", t[2].problem == .noAccount && t[2].accountName == nil && t[2].accountKey == nil
+          && t.prefix(2).allSatisfy { $0.problem == nil })
+    check("账号表里现在的键、参数拼成的那一行：cca 给的", t.map(\.accountKey) == ["工作(bob@example.com)", "frank@example.com", nil]
+          && t.map(\.argsLine) == ["--model opus --append-system-prompt '说中文，改完跑一遍测试'", "", "--permission-mode plan"], "\(t.map(\.argsLine))")
     check("启动器：在跑、几个模板、几台手机", doc.launcher == RemoteLauncher(running: true, templates: 3, peers: 1))
     check("按编号找", doc.template("5e6f7a8b")?.name == "任务队列" && doc.template("nope") == nil)
     let odd = try? DocumentDecoder.decode(RemoteTemplatesDoc.self, from: Data(#"""
@@ -110,6 +83,13 @@ func remoteLaunchProtocolTests() {
     check("没有编号的丢掉；不认识的工具、原因留着；参数里不是字符串的丢掉；没有 launcher 是 nil",
           odd?.templates.count == 1 && odd?.templates.first?.tool?.isKnown == false && odd?.templates.first?.problem?.isKnown == false
           && odd?.templates.first?.args == ["--a", "b"] && odd?.templates.first?.line == false && odd?.launcher == nil)
+    let older = try? DocumentDecoder.decode(RemoteTemplatesDoc.self, from: Data(#"""
+        {"version":1,"kind":"remote_templates","templates":[{"id":"0a0b0c0d","name":"x","tool":"claude","account":"a@example.com",
+         "account_name":"a","dir":"/x","args":["--append-system-prompt","it's 中文",""]}]}
+        """#.utf8))
+    check("文档里缺了 args_line、account_key：参数照 shell 的写法拼（要引的才引，不然改模板时参数会被清空），账号的键是 nil",
+          older?.templates.first?.argsLine == #"--append-system-prompt 'it'\''s 中文' ''"# && older?.templates.first?.accountKey == nil,
+          older?.templates.first?.argsLine ?? "nil")
 
     // 列表里的：哪台手机能远程启动、启动器
     guard let ld = fixture("remote_list.json"), let rl = try? DocumentDecoder.decode(RemoteDoc.self, from: ld) else {
@@ -273,16 +253,18 @@ func remoteLaunchProtocolTests() {
     m.chooseRemoteTemplateDirectory(draft)
     check("选文件夹", await waitUntil { draft.dir == "/Users/me/projects/docs" } && draft.canSave && draft.account == "工作(bob@example.com)")
     draft.args = "--model opus --append-system-prompt '说中文"
-    n = asked().count
+    box.saveError = "参数里的引号没有配对：拆不开"
     m.saveRemoteTemplate(draft)
-    check("参数拆不开：弹层里说，不调 cca", draft.error == "参数里的单引号没有配对" && asked().count == n && m.sheet == .remoteTemplate(draft) && !draft.saving)
+    check("参数那一行原样交给 cca 拆；拆不开：cca 说的原因写在弹层里，接着改",
+          await waitUntil { !draft.saving && draft.error != nil } && asked().last?.suffix(2) == ["--args-line", "--model opus --append-system-prompt '说中文"]
+          && draft.error == "参数里的引号没有配对：拆不开" && m.sheet == .remoteTemplate(draft), "\(asked().suffix(2)) \(draft.error ?? "nil")")
     draft.args = "--model opus --append-system-prompt '说中文，别改测试'"
     box.saveError = "已经有叫「网站：写文档」的模板了"
     m.saveRemoteTemplate(draft)
     let added = ["remote", "template", "add", "--name", "网站：写文档", "--tool", "claude", "--account", "工作(bob@example.com)",
-                 "--dir", "/Users/me/projects/docs", "--", "--model", "opus", "--append-system-prompt", "说中文，别改测试"]
-    check("存：名字去掉两头的空白，参数拆开放在 -- 后面；cca 说不行：原因写在弹层里，接着改",
-          await waitUntil { !draft.saving && draft.error != nil } && asked().last == added && draft.error == "已经有叫「网站：写文档」的模板了"
+                 "--dir", "/Users/me/projects/docs", "--args-line", "--model opus --append-system-prompt '说中文，别改测试'"]
+    check("存：名字去掉两头的空白，参数那一行原样放在 --args-line 后面；cca 说不行：原因写在弹层里，接着改",
+          await waitUntil { !draft.saving && draft.error == "已经有叫「网站：写文档」的模板了" } && asked().last == added
           && m.sheet == .remoteTemplate(draft), "\(asked().suffix(2)) \(draft.error ?? "nil")")
     box.saveError = nil
     let lists = templateLists()
@@ -301,14 +283,14 @@ func remoteLaunchProtocolTests() {
         check("修改模板：弹层", false)
         return
     }
-    check("修改：填好原来的；账号按存着的邮箱认出账号表里的那个；参数拼回一行（照 shell 的写法）",
+    check("修改：填好原来的；账号是 cca 给的键（account_key）；参数是 cca 拼好的那一行（args_line）",
           e.original?.id == "1a2b3c4d" && e.name == "网站：修 bug" && e.tool == .claude && e.account == "工作(bob@example.com)"
           && e.dir == "/Users/me/projects/site" && e.args == "--model opus --append-system-prompt '说中文，改完跑一遍测试'" && e.canSave, e.args)
     e.args += " --verbose"
     m.saveRemoteTemplate(e)
     let replaced = ["remote", "template", "add", "--name", "网站：修 bug", "--tool", "claude", "--account", "工作(bob@example.com)",
-                    "--dir", "/Users/me/projects/site", "--replace", "1a2b3c4d", "--", "--model", "opus", "--append-system-prompt",
-                    "说中文，改完跑一遍测试", "--verbose"]
+                    "--dir", "/Users/me/projects/site", "--replace", "1a2b3c4d", "--args-line",
+                    "--model opus --append-system-prompt '说中文，改完跑一遍测试' --verbose"]
     check("存修改：带 --replace <编号>", await waitUntil { m.sheet == nil && !e.saving && settled() } && asked().contains(replaced), "\(asked().suffix(3))")
     m.editRemoteTemplate(gone)
     if case .remoteTemplate(let g)? = m.sheet {

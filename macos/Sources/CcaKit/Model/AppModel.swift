@@ -2070,11 +2070,10 @@ final class AppModel {
     /// 模板可以选的工具（启用了的）
     var remoteTemplateTools: [ToolID] { visibleTools }
 
-    /// 模板存着的账号在账号表里是哪一个（存的是邮箱，没有邮箱的是键：cca 也这么找）；没有了是 nil
+    /// 模板存着的账号在账号表里是哪一个（cca 找好了给的键 `account_key`）；没有了是 nil
     func remoteTemplateAccount(_ t: RemoteTemplate) -> Account? {
-        guard let tool = t.tool else { return nil }
-        let want = t.account.lowercased()
-        return accounts(tool).first { $0.key == t.account || nonEmpty($0.email)?.lowercased() == want }
+        guard let tool = t.tool, let key = t.accountKey else { return nil }
+        return accounts(tool).first { $0.key == key }
     }
 
     /// 新建模板时（换了工具时）先选上的账号：这个工具上次用的，没有就是第一个
@@ -2093,7 +2092,7 @@ final class AppModel {
             // 工具没启用了：换成能选的，账号重新选
             let tool = t.tool.flatMap { tools.contains($0) ? $0 : nil }
             d = RemoteTemplateDraft(original: t, name: t.name, tool: tool ?? tools.first ?? .claude,
-                                    account: tool == nil ? "" : remoteTemplateAccount(t)?.key ?? "", dir: t.dir, args: ShellWords.join(t.args))
+                                    account: tool == nil ? "" : remoteTemplateAccount(t)?.key ?? "", dir: t.dir, args: t.argsLine)
         } else {
             let tool = tools.contains(self.tool) ? self.tool : tools.first ?? .claude
             d = RemoteTemplateDraft(original: nil, name: "", tool: tool, account: remoteTemplateDefaultAccount(tool),
@@ -2118,21 +2117,14 @@ final class AppModel {
         }
     }
 
-    /// 存好弹层里的模板（`cca remote template add … [--replace <编号>] -- 参数…`）。参数先照 shell 的写法拆开（拆不开就说，不跑 cca）；
-    /// cca 说不行时把原因写在弹层里，接着改；存好了关掉弹层、说一句、再查一次列表和模板
+    /// 存好弹层里的模板（`cca remote template add … [--replace <编号>] --args-line <参数那一行>`）。参数那一行原样交给 cca 拆；
+    /// cca 说不行（拆不开、校验不过）时把原因写在弹层里，接着改；存好了关掉弹层、说一句、再查一次列表和模板
     func saveRemoteTemplate(_ d: RemoteTemplateDraft) {
         guard phase == .ready, remoteLaunchAvailable, let client, d.canSave else { return }
-        let argv: [String]
-        switch ShellWords.split(d.args) {
-        case .success(let a): argv = a
-        case .failure(let p):
-            d.error = p.message
-            return
-        }
         d.error = nil
         d.saving = true
         let command = CcaCommand.remoteTemplateSave(name: d.name.trimmingCharacters(in: .whitespacesAndNewlines), tool: d.tool, account: d.account,
-                                                    dir: d.dir, args: argv, replace: d.original?.id)
+                                                    dir: d.dir, argsLine: d.args, replace: d.original?.id)
         let prompter = hooks.prompter
         Task { [weak self] in
             let r = await client.execute(command, prompter: prompter)

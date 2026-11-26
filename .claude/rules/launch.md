@@ -37,10 +37,11 @@ paths:
 - 刚起的会话接入时的宽限：CcaRemoteKit `Attachment` 的 `freshFor`、`freshGap`（45 秒、1.5 秒）↔ docs/dev/launch.md；`launch.rs` 的 `SPAWN_WAIT` 比它短得多
 - 起的会话：`spawn_session` 的参数 ↔ `host.rs` 的 `--headless` 那几个参数、`CCA_HEADLESS_LINGER` / `CCA_HEADLESS_IDLE` ↔ `tests/remote_host.rs` 的 `headless_sessions`；
   环境 `KEEP_ENV` ↔ docs/dev/launch.md ↔ `tests/remote_launch.rs` 核对的那几个；`CCA_REMOTE_HOSTED`：`spawn_session` ↔ bash 的 `remote_prepare` ↔ 回归 3e
-- 模板：bash `remote_template` 的参数 ↔ 辅助程序 `remote-template add` ↔ Mac App 的 `CcaCommand`（模板命令）；`list --json` ↔ PROTOCOL 9.4 ↔ Swift 的 `RemoteTemplatesDoc` ↔
+- 模板：bash `remote_template` 的参数（`--args-line`）↔ 辅助程序 `remote-template add` ↔ Mac App 的 `CcaCommand`（模板命令）；拆那一行的规矩（`sh_split`）↔ PROTOCOL 9.4；
+  `args_line` 的拼法（`sh_quote`）↔ Swift 缺这一项时的 `shellQuoteIfNeeded`；`list --json` ↔ PROTOCOL 9.4 ↔ Swift 的 `RemoteTemplatesDoc` ↔
   `macos/Tests/Fixtures/remote_templates.json`、回归 11b3c 写的 `guifx3/remote_templates.json`；`problem` 的取值 ↔ Swift 的 `RemoteTemplateProblem`、`Texts`
 - 开关：peers.json 的 `launch`（`peers.rs`：只有手机、control 的读得出 true）、`remote list --json` 的 `peers[].launch`、`launcher`（`launch::summary`）↔ PROTOCOL 9.1 ↔
   Swift 的 `RemotePeer.launch`、`RemoteLauncher` ↔ `macos/Tests/Fixtures/remote_list.json`；同意项 `remote_launch`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`；
   hello 的 `remote_launch`：`cca` ↔ PROTOCOL 2.1 ↔ `HelloDoc.remoteLaunch` ↔ `macos/Tests/Fixtures/hello.json`
-- 后台进程：bash 的 `LAUNCHER_LABEL` ↔ `launch.rs` 的 `LABEL`；`plist_text` ↔ 回归 11b3c 核对 LaunchAgent 的那一条 ↔ `tests/setup.sh` 假的 launchctl 的用户域（`gui/<uid>`）；
-  Linux 的记号 `LAUNCHER_TAG`（crontab 那两行，改了的话旧的那两行也要认得、删得掉）；`cca restore` 先 `launcher_remove`（docs/dev/uninstall.md）
+- 后台进程：bash 的 `REMOTE_LAUNCHER_LABEL` ↔ `launch.rs` 的 `LABEL`；`plist_text` ↔ 回归 11b3c 核对 LaunchAgent 的那一条 ↔ `tests/setup.sh` 假的 launchctl 的用户域（`gui/<uid>`）；
+  Linux 的记号 `REMOTE_LAUNCHER_TAG`（crontab 那两行，改了的话旧的那两行也要认得、删得掉）；`cca restore` 先 `remote_launcher_remove`（docs/dev/uninstall.md）

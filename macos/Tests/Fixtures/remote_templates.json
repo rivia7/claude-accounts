@@ -7,6 +7,7 @@
       "name": "网站：修 bug",
       "tool": "claude",
       "account": "bob@example.com",
+      "account_key": "工作(bob@example.com)",
       "account_name": "工作",
       "dir": "/Users/me/projects/site",
       "args": [
@@ -15,6 +16,7 @@
         "--append-system-prompt",
         "说中文，改完跑一遍测试"
       ],
+      "args_line": "--model opus --append-system-prompt '说中文，改完跑一遍测试'",
       "line": true,
       "digest": "3f9a0c1d2e4b5a69",
       "problem": null
@@ -24,9 +26,11 @@
       "name": "任务队列",
       "tool": "codex",
       "account": "frank@example.com",
+      "account_key": "frank@example.com",
       "account_name": "frank@example.com",
       "dir": "/Users/me/srv/jobs",
       "args": [],
+      "args_line": "",
       "line": true,
       "digest": "a1b2c3d4e5f60718",
       "problem": null
@@ -36,12 +40,14 @@
       "name": "旧笔记",
       "tool": "claude",
       "account": "old@example.com",
+      "account_key": null,
       "account_name": null,
       "dir": "/Users/me/notes",
       "args": [
         "--permission-mode",
         "plan"
       ],
+      "args_line": "--permission-mode plan",
       "line": true,
       "digest": "0f1e2d3c4b5a6978",
       "problem": "no_account"

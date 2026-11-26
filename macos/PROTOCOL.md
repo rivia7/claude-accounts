@@ -1530,10 +1530,11 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 {
   "version": 1, "kind": "remote_templates",
   "templates": [
-    {"id": "1a2b3c4d", "name": "网站：修 bug", "tool": "claude", "account": "bob@example.com", "account_name": "工作",
-     "dir": "/Users/me/projects/site", "args": ["--model", "opus"], "line": true, "digest": "3f9a0c1d2e4b5a69", "problem": null},
-    {"id": "9c0d1e2f", "name": "旧笔记", "tool": "claude", "account": "old@example.com", "account_name": null,
-     "dir": "/Users/me/notes", "args": [], "line": true, "digest": "0f1e2d3c4b5a6978", "problem": "no_account"}
+    {"id": "1a2b3c4d", "name": "网站：修 bug", "tool": "claude", "account": "bob@example.com", "account_key": "工作(bob@example.com)",
+     "account_name": "工作", "dir": "/Users/me/projects/site", "args": ["--model", "opus", "--append-system-prompt", "说中文"],
+     "args_line": "--model opus --append-system-prompt '说中文'", "line": true, "digest": "3f9a0c1d2e4b5a69", "problem": null},
+    {"id": "9c0d1e2f", "name": "旧笔记", "tool": "claude", "account": "old@example.com", "account_key": null, "account_name": null,
+     "dir": "/Users/me/notes", "args": [], "args_line": "", "line": true, "digest": "0f1e2d3c4b5a6978", "problem": "no_account"}
   ],
   "launcher": {"running": true, "templates": 2, "peers": 1}
 }
@@ -1542,9 +1543,12 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 - 退出 0 就有文档；没有模板时 `templates` 是空的。
 - `templates[]`：照加的先后（改过的位置不变），最多 16 个。
   - `id`：8 个十六进制字符，`add --replace`、`rm` 的参数。`name`：手机上看到的名字（不重名，最长 40 个字）。`tool`：`claude` | `codex` | `agy`。
-  - `account`：存着的账号：邮箱（没有邮箱的账号是账号表的键）。`account_name`：账号表里现在的这个账号叫什么（别名，没起别名的是邮箱）；
-    账号没了是 null（这时 `problem` 是 `no_account`）。App 找账号表里的这个账号也照 cca 的规矩：键一样，或者邮箱一样（不分大小写）。
+  - `account`：存着的账号：邮箱（没有邮箱的账号是账号表的键）。`account_key`：账号表里现在的这个账号的键（App 在弹层里选上它，不自己找）；
+    `account_name`：它叫什么（别名，没起别名的是邮箱）。账号没了时这两项都是 null（这时 `problem` 是 `no_account`），App 不选账号，
+    要重新选。
   - `dir`：在哪个文件夹里起（绝对路径；App 显示时主目录写成 `~`）。`args`：起会话时带的参数，一项一个，原样交给工具（不经 shell）。
+    `args_line`：`args` 拼成的一行，照 shell 的写法（要引的才用单引号引起来，空格隔开；没有参数是空字符串）：App 显示它、修改时填它，
+    `add --args-line` 拆回去是原样。缺了这一项时 App 照同样的写法拼（不然改模板时参数会被清空）。
   - `line`：手机起会话时能带一句开场白（Claude Code、Codex 的模板，参数里没有 `--` 的）。
   - `digest`：工具、账号、文件夹、参数的摘要（16 个十六进制字符）：手机起会话时带回来，和现在的对不上（模板改过了）就不起。App 不用。
   - `problem`：现在用不了的原因，用得了是 null：`no_account`（账号表里没有这个账号了）| `no_dir`（文件夹不在了）| `bad_args`（不是交互的会话
@@ -1557,13 +1561,12 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 
 | 命令 | 做什么 | 方式 |
 |---|---|---|
-| `cca remote template add --name <名字> --tool <工具> --account <账号> --dir <文件夹> [--replace <编号>] -- [参数…]` | 新建一个模板；带 `--replace` 是改那一个（编号、位置不变）。`--account` 照 `cca @账号` 那样认（App 给账号表的键），存成邮箱；`--dir` 要已经在；参数放在 `--` 后面，原样存（没有参数也写 `--`）。校验不过（名字重了、没有这个账号、文件夹不在、模板太多、参数太多或者用不了）时 `fail`，`message` 说原因 | 无交互命令（都给全时不问；缺了的只在终端里问）；`result` 的 `remote_updated` |
+| `cca remote template add --name <名字> --tool <工具> --account <账号> --dir <文件夹> [--replace <编号>] (--args-line <一行参数> \| -- [参数…])` | 新建一个模板；带 `--replace` 是改那一个（编号、位置不变）。`--account` 照 `cca @账号` 那样认（App 给账号表的键），存成邮箱；`--dir` 要已经在。参数两种给法，只能用一种：`--args-line` 后面是照 shell 的写法写成的一行（App 一律用它，弹层里的那一行原样给；没有参数是空字符串），cca 拆成一项一项（空白隔开；单引号里的原样；双引号里反斜杠只让 `"`、`\` 原样；引号外的反斜杠让下一个字符原样；不展开 `~`、`$HOME`、`*`）；或者一项一项放在 `--` 后面（终端里用）。校验不过（参数那一行拆不开、名字重了、没有这个账号、文件夹不在、模板太多、参数太多或者用不了）时 `fail`，`message` 说原因 | 无交互命令（都给全时不问；缺了的只在终端里问）；`result` 的 `remote_updated` |
 | `cca remote template rm <编号>` | 删掉一个模板（也认名字，App 一律给编号）；已经用它起的会话照常运行。App 先自己问一句（cca 不发 `consent`） | 无交互命令；`result` 的 `remote_updated` |
 | `cca remote allow <配对的 id> launch on\|off` | 这台手机能不能用这台 Mac 上的模板新建会话（9.2） | 无交互命令；打开时先 `consent.remote_launch`（4.2、4.3）；`result` 的 `remote_updated` |
 
 - App 里新建、修改模板是一个弹层：名字；工具（启用了的）；账号（`state` 里这个工具的账号，传账号表的键；新建时先选上这个工具上次用的）；
-  文件夹（打开面板选）；参数是一行字，照 shell 的写法拆成一项一项：空白隔开；单引号里的原样；双引号里反斜杠只让 `"`、`\`、`$`、`` ` `` 原样，
-  别的反斜杠留着；引号外的反斜杠让下一个字符原样；不展开 `~`、`$HOME`、`*`。拆不开（引号没配对、最后多一个反斜杠）时弹层里说，不调 cca。
-  修改时把 `args` 照同样的写法拼回一行（要引的才用单引号引起来）。cca 说不行时原因写在弹层里，接着改。
+  文件夹（打开面板选）；参数是一行字（修改时填 `args_line`），存的时候原样交给 cca（`--args-line`），App 不自己拆。cca 说不行（拆不开、
+  校验不过）时原因写在弹层里，接着改。
 - 「允许远程启动」只给手机（`peers[].web`）；`incoming` 不是 `control` 时开关停用、旁边说先改成「看和操作」（cca 也这么查）。
 - 终端里给人看的：`cca remote template`（不带 `--json` 的 `list`）、`cca remote launcher [status|log]`；App 不用。

@@ -1128,7 +1128,8 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
 }
 
 /// `cca remote template list --json`（PROTOCOL 9.4）：模板的编号是 8 个十六进制字符、不重复，名字不空不重复，文件夹是绝对路径，
-/// 参数都是字符串；账号没了（`account_name` 是 null）和 `no_account` 是一回事；启动器的模板个数就是列出来的这几个
+/// 参数都是字符串、拼成的那一行（`args_line`）有参数才不空；账号没了（`account_name`、`account_key` 是 null）和 `no_account` 是一回事；
+/// 启动器的模板个数就是列出来的这几个
 @discardableResult
 func genericRemoteTemplates(_ name: String, _ d: Data) -> RemoteTemplatesDoc? {
     guard let doc = decodeOrFail(RemoteTemplatesDoc.self, name, d) else { return nil }
@@ -1146,6 +1147,9 @@ func genericRemoteTemplates(_ name: String, _ d: Data) -> RemoteTemplatesDoc? {
         check("\(name) \(t.id) 的参数都是字符串，line 是布尔", (r["args"] as? [Any])?.count == t.args.count && r["args"] is [String] && isBool(r["line"]))
         check("\(name) \(t.id) 账号没了（account_name 是 null）就是 no_account", (t.accountName == nil) == (t.problem == .noAccount)
               && (isNull(r["account_name"]) || r["account_name"] is String) && (isNull(r["problem"]) || r["problem"] is String))
+        check("\(name) \(t.id) 有 account_key（账号没了是 null，和 account_name 一起）", r.keys.contains("account_key")
+              && (isNull(r["account_key"]) || r["account_key"] is String) && (t.accountKey == nil) == (t.accountName == nil))
+        check("\(name) \(t.id) 的 args_line 是字符串，有参数才不空", r["args_line"] is String && t.argsLine.isEmpty == t.args.isEmpty, t.argsLine)
         if let h = r["digest"] {
             check("\(name) \(t.id) 的摘要是 16 个十六进制字符", (h as? String).map { $0.count == 16 && $0.allSatisfy(\.isHexDigit) } == true)
         }

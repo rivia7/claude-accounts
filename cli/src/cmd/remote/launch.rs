@@ -15,7 +15,7 @@
 use super::far::clean;
 use super::link::{self, Allowed, Join, Link, Respawn};
 use super::local::{self, Asked, Decoder};
-use super::peers::{self, Incoming, Peer};
+use super::peers::{self, Peer};
 use super::pty::{self, Size};
 use super::relay::{self, ctl_frame, Tunnel};
 use super::template::{self, Template};
@@ -42,7 +42,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 
 const USAGE: &str = "用法：remote-launcher [status] | serve [--if-down] | stop | plist cca的路径 | wanted | log";
-/// LaunchAgent 的名字（bash 的 launcher_install 也用它）
+/// LaunchAgent 的名字（bash 的 remote_launcher_install 也用它）
 const LABEL: &str = "local.cca.remote-launcher";
 /// 一台服务器上最多给几台手机放说明：一台一份、最长 4 KB 多，控制连接上一帧最多 32 KB
 const PEERS_MAX: usize = 6;
@@ -100,10 +100,7 @@ fn file(name: &str) -> String {
 
 /// 允许远程启动的手机（只有手机、看和操作都让的才开得了：peers.rs 读的时候核对过，这里再守一道）；hub：只要在这台服务器上配的
 pub fn launch_peers(hub: Option<HubKind>) -> Vec<Peer> {
-    peers::load()
-        .into_iter()
-        .filter(|p| p.launch && p.web && p.incoming == Incoming::Control && hub.is_none_or(|h| p.hub == h))
-        .collect()
+    peers::load().into_iter().filter(|p| p.launch && p.can_launch() && hub.is_none_or(|h| p.hub == h)).collect()
 }
 
 /// 后台进程在不在跑：它一直拿着 launcher.lock 的锁。只读着打开、试一下（不建文件：CCA_RO 下也能问）
@@ -128,7 +125,7 @@ pub fn cmd_remote_launcher(args: &[String]) -> R<()> {
             crate::out!("{}", plist_text(cca)?);
             Ok(())
         }
-        // 有没有允许远程启动的手机：bash 的 launcher_sync 照它装上 / 卸掉后台进程
+        // 有没有允许远程启动的手机：bash 的 remote_launcher_sync 照它装上 / 卸掉后台进程
         [a] if a == "wanted" => {
             if launch_peers(None).is_empty() {
                 exit(1)
@@ -192,9 +189,14 @@ impl HubLink {
     }
 }
 
-/// launcher.json 里记着的各台服务器上的编号（Team 编号 → 会话编号）：重启以后还用这个，服务器顶掉原来那一条
-fn saved_sids() -> Dict {
-    fs::load_quiet(&file("launcher.json")).and_then(|v| v.as_dict()).and_then(|d| d.dict("sids")).unwrap_or_default()
+/// launcher.json：后台进程的进程号（`pid`）、开始的时间（`started`），各台服务器上的编号（`sids`：Team 编号 → 会话编号，重启以后
+/// 还用这个，服务器顶掉原来那一条）。没有、看不懂是空的（缺了哪一项也不崩：读的时候都用 `get`）
+fn state() -> Dict {
+    fs::load_quiet(&file("launcher.json")).and_then(|v| v.as_dict()).unwrap_or_default()
+}
+
+fn state_int(d: &Dict, k: &str) -> i64 {
+    d.get(k).and_then(|v| v.as_int()).unwrap_or(0)
 }
 
 fn save_state(pid: i64, started: i64, sids: &Dict) {
@@ -228,7 +230,7 @@ fn serve(if_down: bool) -> R<()> {
     // SAFETY: getpid 没有参数、不会失败
     let me = i64::from(unsafe { libc::getpid() });
     let started = proc_starts(&[me]).get(&me).copied().unwrap_or(0);
-    let sids = saved_sids();
+    let sids = state().dict("sids").unwrap_or_default();
     save_state(me, started, &sids);
     let wake = sig::install()?;
     let self_was = peers::stamp_of(&SELF_PATH);
@@ -326,9 +328,8 @@ fn stop_running() -> R<()> {
     if !running() {
         return Ok(());
     }
-    let st = fs::load_quiet(&file("launcher.json")).and_then(|v| v.as_dict());
-    let at = |k: &str| st.as_ref().and_then(|d| d.at(k).as_int()).unwrap_or(0);
-    let (pid, started) = (at("pid"), at("started"));
+    let st = state();
+    let (pid, started) = (state_int(&st, "pid"), state_int(&st, "started"));
     // 进程号可能已经给了别的进程：开始的时间也要对得上
     if pid > 1 && started != 0 && proc_starts(&[pid]).get(&pid) == Some(&started) {
         // SAFETY: 给记着的那个进程（核对过是它）发 SIGTERM
@@ -374,7 +375,7 @@ fn status() -> R<()> {
         crate::out!("远程启动开着：{} 台手机能用模板新建会话（{}）", phones.len(), names.join("、"));
     }
     if running() {
-        let pid = fs::load_quiet(&file("launcher.json")).and_then(|v| v.as_dict()).and_then(|d| d.at("pid").as_int()).unwrap_or(0);
+        let pid = state_int(&state(), "pid");
         crate::out!("后台进程：在运行（进程号 {pid}）");
     } else if !phones.is_empty() {
         crate::out!("后台进程：没在运行（cca remote launcher serve 起它；装上了的话登录以后自己起来）");
@@ -406,13 +407,9 @@ fn print_log() -> R<()> {
 // 转接进程（一台服务器一个）
 // ---------------------------------------------------------------------------
 
-/// 这台服务器上允许远程启动的手机，各带配对的密钥
-fn allowed_now(hub: HubKind) -> Vec<Allowed> {
-    launch_peers(Some(hub))
-        .into_iter()
-        .filter_map(|peer| peers::secret(&peer.pid).map(|secret| Allowed { peer, secret }))
-        .take(PEERS_MAX)
-        .collect()
+/// 这台服务器上允许远程启动的手机，各带配对的密钥；读不出密钥的另外交出来
+fn allowed_now(hub: HubKind) -> (Vec<Allowed>, Vec<Peer>) {
+    link::with_secrets(launch_peers(Some(hub)), PEERS_MAX)
 }
 
 /// ANNOUNCE：同一份说明给每台手机各封一份
@@ -434,18 +431,19 @@ struct Gate {
 }
 
 impl Gate {
-    /// 一台手机接进来：同一台两次隔得不够 JOIN_GAP 秒的不接（None）。接的记下时候，交出这一次是不是起得太勤了（一分钟里起成的
-    /// 会话够 LAUNCHES_PER_MIN 个：照样接，接上以后回它 `rate`）
-    fn admit(&mut self, pid: &str) -> Option<bool> {
+    /// 一台手机接进来（分得出子进程的都接）：交出这一次是不是起得太勤了——同一台手机两次接进来隔得不够 JOIN_GAP 秒，或者一分钟里
+    /// 起成的会话已经有 LAUNCHES_PER_MIN 个——是的话接上以后回它 `rate`（不理它的话，手机等到服务器说这边没来，说的原因就错了）。
+    /// 隔得够的记下这一次的时候
+    fn admit(&mut self, pid: &str) -> bool {
         let now = monotonic();
         while self.launched.front().is_some_and(|t| now - t > 60.0) {
             self.launched.pop_front();
         }
-        if self.joined.get(pid).is_some_and(|t| now - t < JOIN_GAP) {
-            return None;
+        let again = self.joined.get(pid).is_some_and(|t| now - t < JOIN_GAP);
+        if !again {
+            self.joined.insert(pid.to_string(), now);
         }
-        self.joined.insert(pid.to_string(), now);
-        Some(self.launched.len() >= LAUNCHES_PER_MIN)
+        again || self.launched.len() >= LAUNCHES_PER_MIN
     }
 }
 
@@ -460,6 +458,7 @@ pub fn cmd_launcher_link(args: &[String]) -> R<()> {
     let sid = args[1].as_str();
     let mut link = Link::new(srv, sid)?;
     let mut gate = Gate::default();
+    let mut unread: Vec<String> = Vec::new(); // 记过「读不出密钥」的手机：读出来以前不再记
     let (mut tstamp, mut built) = (None, f64::NEG_INFINITY);
     let (mut doc, mut doc_text) = (Dict::new(), String::new());
     let mut buf = [0u8; 256];
@@ -472,6 +471,11 @@ pub fn cmd_launcher_link(args: &[String]) -> R<()> {
         }
         // 配对表变了：不该再接着的子进程结束掉；手机变了要换一条控制连接（新的票据上是新的那几台）
         if link.refresh(now, || allowed_now(hub)) {
+            // 读不出配对密钥的手机（link.rs 隔一阵再读）：它上面没有「新建会话」，在 launch.log 里说一句（cca remote launcher 看得到）
+            for p in link.missing.iter().filter(|p| !unread.contains(&p.pid)) {
+                log_line(&p.name, "读不出这台手机配对的密钥（钥匙串），过一会儿再试：读出来以前它上面没有「新建会话」");
+            }
+            unread = link.missing.iter().map(|p| p.pid.clone()).collect();
             // 模板变了（隔一阵也重新算一遍）：说明不一样了就在原来的控制连接上再说一遍（服务器整份换掉）
             let t = template::stamp();
             if tstamp != Some(t) || now - built >= DOC_EVERY {
@@ -612,14 +616,15 @@ impl Ask {
             return None;
         }
         let d = json::loads(std::str::from_utf8(p).ok()?).ok()?.as_dict()?;
-        if d.at("v").as_int() != Some(1) {
+        // 缺了哪一项都是看不懂（回 `bad`）：用 `get`（`at` 取不存在的键会崩，手机那头就收不到回话了）
+        let int = |k: &str| d.get(k).and_then(|v| v.as_int());
+        if int("v") != Some(1) {
             return None;
         }
-        let id = d.str("t").filter(|t| template::hex8(t))?.to_string();
-        let hex16 = |h: &str| h.len() == 16 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-        let digest = d.str("h").filter(|h| hex16(h))?.to_string();
-        let cols = u16::try_from(d.at("c").as_int()?).ok().filter(|c| (20..=500).contains(c))?;
-        let rows = u16::try_from(d.at("r").as_int()?).ok().filter(|r| (5..=300).contains(r))?;
+        let id = d.str("t").filter(|t| peers::lower_hex(t, 8))?.to_string();
+        let digest = d.str("h").filter(|h| peers::lower_hex(h, 16))?.to_string();
+        let cols = u16::try_from(int("c")?).ok().filter(|c| (20..=500).contains(c))?;
+        let rows = u16::try_from(int("r")?).ok().filter(|r| (5..=300).contains(r))?;
         let line = match d.get("l") {
             None | Some(V::None) => None,
             Some(v) => {
@@ -690,18 +695,23 @@ fn fail_text(code: &str) -> &'static str {
     }
 }
 
-/// launch.log 记一行：什么时候、哪台手机、哪个模板、起没起成（不记开场白、参数）。到 LOG_MAX 换一个文件
+/// launch.log 记一行：什么时候、哪台手机、哪个模板、起没起成（不记开场白、参数）
 fn log(peer: &str, what: &str, result: &Result<String, &'static str>) {
-    let f = file("launch.log");
-    if std::fs::metadata(&f).is_ok_and(|m| m.len() > LOG_MAX) {
-        let _ = std::fs::rename(&f, format!("{f}.1"));
-    }
     let tail = match result {
         Ok(sid) => format!("起了会话 {}", local::short(sid)),
         Err(code) => format!("没起（{code}）"),
     };
+    log_line(peer, &format!("{}  {tail}", clean(what, 40)));
+}
+
+/// launch.log 记一行 `时间  手机  text`。到 LOG_MAX 换一个文件（launch.log.1）
+fn log_line(peer: &str, text: &str) {
+    let f = file("launch.log");
+    if std::fs::metadata(&f).is_ok_and(|m| m.len() > LOG_MAX) {
+        let _ = std::fs::rename(&f, format!("{f}.1"));
+    }
     let when = strftime_local("%Y-%m-%d %H:%M:%S", time());
-    let line = format!("{when}  {}  {}  {tail}\n", clean(peer, 40), clean(what, 40));
+    let line = format!("{when}  {}  {text}\n", clean(peer, 40));
     if let Ok(mut fh) = std::fs::OpenOptions::new().append(true).create(true).mode(0o600).open(&f) {
         let _ = fh.write_all(line.as_bytes());
     }
@@ -732,6 +742,15 @@ mod tests {
             r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"l":"a\u001b[2J"}"#,
             r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"l":7}"#,
             "[]",
+            // 缺了哪一项都是看不懂（不能崩：崩了手机那头收不到回话）
+            r#"{"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24}"#,
+            r#"{"v":1,"h":"0123456789abcdef","c":80,"r":24}"#,
+            r#"{"v":1,"t":"0123abcd","c":80,"r":24}"#,
+            r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","r":24}"#,
+            r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80}"#,
+            r#"{"v":"1","t":"0123abcd","h":"0123456789abcdef","c":80,"r":24}"#,
+            r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":"80","r":24}"#,
+            "{}",
         ] {
             assert!(ask(bad).is_none(), "{bad}");
         }
@@ -739,6 +758,23 @@ mod tests {
         assert!(ask(&long).is_none());
         let pad = format!(r#"{{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24{}}}"#, " ".repeat(ASK_MAX));
         assert!(ask(&pad).is_none(), "太长");
+    }
+
+    #[test]
+    fn rapid_joins_get_rate() {
+        let mut g = Gate::default();
+        assert!(!g.admit("p1"), "头一次");
+        assert!(g.admit("p1"), "同一台 3 秒内又来：接上以后回 rate");
+        assert!(!g.admit("p2"), "别的手机不受影响");
+        // 隔得不够的那一次不算：从上一次接上的时候算
+        g.joined.insert("p1".into(), monotonic() - JOIN_GAP - 0.1);
+        assert!(!g.admit("p1"), "隔够了");
+        for _ in 0..LAUNCHES_PER_MIN {
+            g.launched.push_back(monotonic());
+        }
+        assert!(g.admit("p3"), "一分钟里起成的已经够多了");
+        g.launched.iter_mut().for_each(|t| *t -= 61.0);
+        assert!(!g.admit("p4") && g.launched.is_empty(), "一分钟以前的不算");
     }
 
     #[test]

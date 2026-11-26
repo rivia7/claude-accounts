@@ -1108,6 +1108,9 @@ out=$(run CCA_TTY="$(ans)" cca limit-resets kimi 2>&1); rc=$?
 ok "第三方 API 账号：cca limit-resets 说明只能用官方账号，不打开浏览器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用量页只能用官方账号" && [ ! -s open.log ]'
 out=$(run CCA_TTY="$(ans)" cca @kimi --settings '{}' --version 2>&1); rc=$?
 ok "第三方 API 账号不能再加 --settings（会把 cca 传的地址和 key 整个顶掉）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不能再加 --settings"'
+out=$(run CCA_TTY="$(ans)" cca @kimi --settings='{}' --version 2>&1); rc=$?
+out2=$(run CCA_TTY="$(ans)" cca @kimi --version -- "别再加 --settings 了" 2>&1); rc2=$?; a5=$(lastline ARGS)
+ok "--settings=… 这种写法也拦；-- 后面是给 claude 的话（远程启动的开场白）：里面提到 --settings 不算，照常启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不能再加 --settings" && ! printf "%s" "$out2" | grep -q "不能再加 --settings" && printf "%s" "$a5" | grep -qF -- "--version -- 别再加 --settings 了"'
 m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "菜单：第三方 API 账号显示接口的域名、API、直连或节点；菜单里能直接添加第三方 API 账号" 'printf "%s" "$m" | grep -qE "kimi +api.example.com +API +直连" && printf "%s" "$m" | grep -qE "relay +api.example.com +API +US-C" && printf "%s" "$m" | grep -q "p      添加第三方 API 账号"'
 out=$(run cca check 2>&1)
@@ -3398,8 +3401,16 @@ ok "模板只能起交互的会话（-p 这类跑完就退出的不行）、工�
 out=$(runev cca remote template add --name 审代码 --tool claude --account alice --dir "$H/work" --replace "$LT2" -- --permission-mode plan --model sonnet 2>&1); rc=$?
 out2=$(run cca remote template 2>&1)
 ok "--replace 编号：改那一个（编号、位置不变）；cca remote template 一行一个（编号、名字、工具、账号、文件夹、参数），还没有手机能用时说怎么打开" '[ $rc -eq 0 ] && printf "%s" "$out2" | sed -n 1p | grep -q "^$LT1  修 bug  Claude  .*  ~/work  --model opus$" && printf "%s" "$out2" | sed -n 2p | grep -q "^$LT2  审代码  Claude  .*  ~/work  --permission-mode plan --model sonnet$" && printf "%s" "$out2" | grep -q "还没有手机能用它们"'
+want="--model opus --append-system-prompt '说中文，别改测试' ''"
+out=$(runev cca remote template add --name 一行 --tool claude --account alice --dir "$H/work" --args-line "$want" 2>&1); rc=$?
+LT3=$(run cca remote template list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- '[t["id"] for t in d["templates"] if t["name"] == "一行"][0]' 2>/dev/null)
+la_line=$(run cca remote template list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- '[t["args_line"] for t in d["templates"] if t["name"] == "一行"][0]' 2>/dev/null)
+out2=$(runev cca remote template add --name 一行二 --tool claude --account alice --dir "$H/work" --args-line "--append-system-prompt '说中文" 2>&1); rc2=$?
+out3=$(runev cca remote template add --name 一行三 --tool claude --account alice --dir "$H/work" --args-line "--model opus" -- --model opus 2>&1); rc3=$?
+ok "--args-line（界面 App 用它）：照 shell 的写法写成的一行，cca 拆成一项一项（单引号里的原样，'' 也是一项）；list --json 的 args_line 是同一种写法，拆回去是原样；拆不开说原因，和 -- 只能用一种：都不存" '[ $rc -eq 0 ] && [ -n "$LT3" ] && [ "$la_line" = "$want" ] && run cca remote template list --json 2>/dev/null </dev/null | jok "[t[\"args\"] for t in d[\"templates\"] if t[\"name\"] == \"一行\"] == [[\"--model\", \"opus\", \"--append-system-prompt\", \"说中文，别改测试\", \"\"]] and [t[\"name\"] for t in d[\"templates\"]] == [\"修 bug\", \"审代码\", \"一行\"]" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "参数里的引号没有配对" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "用法：cca remote template"'
+run cca remote template rm "$LT3" >/dev/null 2>&1
 out=$(run cca remote template list --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/remote_templates.json"
-ok "cca remote template list --json（给界面 App，PROTOCOL 9.4）：模板的编号、名字、工具、账号（存的是邮箱）、文件夹（绝对路径）、参数、能不能带开场白、摘要、用得了；还没有手机能用：后台进程没在跑、0 台手机" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"remote_templates\" and [t[\"id\"] for t in d[\"templates\"]] == [\"$LT1\", \"$LT2\"] and (lambda a, b: a[\"name\"] == \"修 bug\" and a[\"tool\"] == \"claude\" and a[\"account\"] == \"alice@example.com\" and a[\"dir\"] == \"$H/work\" and a[\"args\"] == [\"--model\", \"opus\"] and a[\"line\"] is True and a[\"problem\"] is None and len(a[\"digest\"]) == 16 and b[\"args\"] == [\"--permission-mode\", \"plan\", \"--model\", \"sonnet\"] and b[\"digest\"] != a[\"digest\"])(d[\"templates\"][0], d[\"templates\"][1]) and d[\"launcher\"] == {\"running\": False, \"templates\": 2, \"peers\": 0}"'
+ok "cca remote template list --json（给界面 App，PROTOCOL 9.4）：模板的编号、名字、工具、账号（存的是邮箱；账号表里现在的键）、文件夹（绝对路径）、参数（一项一项的、拼成的那一行）、能不能带开场白、摘要、用得了；还没有手机能用：后台进程没在跑、0 台手机" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"remote_templates\" and [t[\"id\"] for t in d[\"templates\"]] == [\"$LT1\", \"$LT2\"] and (lambda a, b: a[\"name\"] == \"修 bug\" and a[\"tool\"] == \"claude\" and a[\"account\"] == \"alice@example.com\" and a[\"dir\"] == \"$H/work\" and a[\"args\"] == [\"--model\", \"opus\"] and a[\"args_line\"] == \"--model opus\" and a[\"account_key\"] is not None and len(a[\"account_key\"]) > 0 and a[\"line\"] is True and a[\"problem\"] is None and len(a[\"digest\"]) == 16 and b[\"args\"] == [\"--permission-mode\", \"plan\", \"--model\", \"sonnet\"] and b[\"args_line\"] == \"--permission-mode plan --model sonnet\" and b[\"digest\"] != a[\"digest\"])(d[\"templates\"][0], d[\"templates\"][1]) and d[\"launcher\"] == {\"running\": False, \"templates\": 2, \"peers\": 0}"'
 out=$(run cca remote allow "$DPID" launch on 2>&1); rc=$?
 ok "cca remote allow … launch on：只给手机（dan-air 是另一台机器）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "只有手机能远程启动会话（iPhone 上的 cca App）：「dan-air」是和另一台机器的配对" && [ ! -e "$LAF" ]'
 out=$(runev cca remote allow "$WPID" launch on 2>&1); rc=$?
@@ -3424,6 +3435,18 @@ ok "界面 App 的 hello 说能远程启动（没有这个字段的旧版 cca，
 : > "$T/launchctl.log"
 out=$(runev CCA_GRANT="remote_launch:$WPID" cca remote allow "$WPID" launch on 2>&1); rc=$?
 ok "再打开一次：LaunchAgent 没变就不换（不 bootout），在跑的后台进程不重起" '[ $rc -eq 0 ] && ! grep -q bootout "$T/launchctl.log" && ! grep -q "^START" "$T/launchctl.log" && [ "$(cat "$LAP")" = "$la_pid" ] && kill -0 "$la_pid"'
+# 装的时候的 LANG 和这一次的不一样（在 App 里、ssh 进来时装的）：改别的配对（allow、unpair）不重写 LaunchAgent，只有开关远程启动才换
+dinc=$(lal | "$TESTBIN" val -f d=- "[p[\"incoming\"] for p in d[\"peers\"] if p[\"id\"] == \"$DPID\"][0]" 2>/dev/null)
+sed -i '' 's|<string>en_US.UTF-8</string>|<string>C</string>|' "$LAF"; laf_sum=$(cksum < "$LAF")
+: > "$T/launchctl.log"
+out=$(run cca remote allow "$DPID" view 2>&1); rc=$?
+out2=$(run cca remote allow "$DPID" "$dinc" 2>&1); rc2=$?
+ok "改别的配对能做什么（cca remote allow 别的机器 …）：照配对表装上 / 卸掉，但装着的 LaunchAgent 不重写——内容和这一次的 PATH、LANG 对不上也不 bootout（会打断正在起的会话），在跑的后台进程不动" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ -n "$dinc" ] && grep -q "<string>C</string>" "$LAF" && [ "$(cksum < "$LAF")" = "$laf_sum" ] && ! grep -q bootout "$T/launchctl.log" && ! grep -q "^START" "$T/launchctl.log" && [ "$(cat "$LAP")" = "$la_pid" ] && kill -0 "$la_pid"'
+: > "$T/launchctl.log"
+out=$(runev CCA_GRANT="remote_launch:$WPID" cca remote allow "$WPID" launch on 2>&1); rc=$?
+la_up; la_rc=$?
+ok "打开远程启动：LaunchAgent 的内容和这一次的对不上就换（先 bootout 再 bootstrap），后台进程重起" '[ $rc -eq 0 ] && grep -qx "LAUNCHCTL bootout $LAG" "$T/launchctl.log" && ! grep -q "<string>C</string>" "$LAF" && "$TESTBIN" plist-json "$LAF" | jok "d[\"EnvironmentVariables\"][\"LANG\"] == \"en_US.UTF-8\"" && [ "$(grep -c "^START local.cca.remote-launcher$" "$T/launchctl.log")" = 1 ] && [ $la_rc -eq 0 ]'
+la_pid=$(cat "$LAP" 2>/dev/null)
 out=$(run cca remote allow phone view 2>&1); rc=$?
 ok "改成只让看：远程启动跟着关掉（不能操作的手机不能起会话）；没有能远程启动的手机了：LaunchAgent 卸掉（bootout、删掉配置），后台进程停了" '[ $rc -eq 0 ] && lal | jok "[p[\"launch\"] for p in d[\"peers\"] if p[\"id\"] == \"$WPID\"] == [False] and d[\"launcher\"][\"running\"] is False and d[\"launcher\"][\"peers\"] == 0" && [ ! -e "$LAF" ] && grep -qx "LAUNCHCTL bootout $LAG" "$T/launchctl.log" && ! kill -0 "$la_pid" 2>/dev/null'
 out=$(run cca remote allow phone control 2>&1); rc=$?
@@ -4607,7 +4630,7 @@ ok "restore：以前的自己的同步服务器留下的加入信息、私钥、
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'
-ok "restore：远程会话的配对也取消，配对的密钥从钥匙串删掉（确认清单里说了）；3.6.0 以前在维护者的服务器上配的（配对表里没有 hub）留下的密钥也删掉；远程启动的 LaunchAgent 卸掉（bootout、删掉配置）" '[ ! -e "$T/keychain/cca-remote-$RSP" ] && [ ! -e "$T/keychain/cca-remote-$RSO" ] && printf "%s" "$out" | grep -q "远程会话：取消和别的机器的配对" && [ ! -e "$H/Library/LaunchAgents/local.cca.remote-launcher.plist" ] && tail -n +$((la_n + 1)) "$T/launchctl.log" | grep -qx "LAUNCHCTL bootout gui/$(id -u)/local.cca.remote-launcher"'
+ok "restore：远程会话的配对也取消，配对的密钥从钥匙串删掉（确认清单里说了）；3.6.0 以前在维护者的服务器上配的（配对表里没有 hub）留下的密钥也删掉；远程启动的 LaunchAgent 卸掉（bootout、删掉配置；确认清单里也说了）" '[ ! -e "$T/keychain/cca-remote-$RSP" ] && [ ! -e "$T/keychain/cca-remote-$RSO" ] && printf "%s" "$out" | grep -q "远程会话：取消和别的机器的配对" && printf "%s" "$out" | grep -q "远程启动：停掉等手机来起会话的后台进程，卸掉 LaunchAgent（local.cca.remote-launcher）" && [ ! -e "$H/Library/LaunchAgents/local.cca.remote-launcher.plist" ] && tail -n +$((la_n + 1)) "$T/launchctl.log" | grep -qx "LAUNCHCTL bootout gui/$(id -u)/local.cca.remote-launcher"'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 # --no-backup：不打包、直接删。上面已经卸载干净了：放一份只有空配置和空账号表的 ~/.cca，用仓库里的 cca 再卸载一次；
 # ~/.local/bin 这回是空的（前面各节装进去的假命令、keepme 都拿走），启动文件里那两行跟着去掉
@@ -4655,7 +4678,7 @@ ok "折合金额：读会话记录（增量、去重、按账号身份认）、�
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'suite_ok mail_view'
 ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询；远程启动起的无头会话（没人接入时等多久、接入以后照常）" 'suite_ok remote_host'
 ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'suite_ok remote_relay'
-ok "远程启动：手机照模板新建会话（经服务器中转到这台机器上的启动器，起在无头的会话宿主里：账号、文件夹、参数、开场白、窗口大小照模板和手机说的，环境只带该带的），启动器拒绝什么（模板改过了、没有这个模板、大小和开场白不对、文件夹没了、只能看的手机、经会话的通道发来的），日志不记开场白，重启后接着用同一个编号，关掉以后启动器自己退出" 'suite_ok remote_launch'
+ok "远程启动：手机照模板新建会话（经服务器中转到这台机器上的启动器，起在无头的会话宿主里：账号、文件夹、参数、开场白、窗口大小照模板和手机说的，环境只带该带的），启动器拒绝什么（模板改过了、没有这个模板、同一台手机接得太勤、请求缺项、大小和开场白不对、文件夹没了、只能看的手机、经会话的通道发来的），日志不记开场白，重启后接着用同一个编号，关掉以后启动器自己退出" 'suite_ok remote_launch'
 ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'suite_ok team_relay'
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'suite_ok acme'
 # 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测

@@ -5484,14 +5484,14 @@ cmd_remote() {
 				view) rows="「${out}」只能看这台机器上的会话（正在操作的那一处几秒钟内断开，再接入就是只看）" ;;
 				none) rows="「${out}」不能接入这台机器了（正接着的几秒钟内断开）" ;;
 			esac
-			launcher_sync   # 改成只看、不让时辅助程序也关掉了它的远程启动：没有手机要了就卸掉后台进程
+			remote_launcher_sync keep   # 改成只看、不让时辅助程序也关掉了它的远程启动：没有手机要了就卸掉后台进程（装着的不重写）
 			okay "$rows"; gui_done remote_updated "$rows" ;;
 		unpair)
 			[ $# -eq 2 ] || die "用法：cca remote unpair 名字"
 			out=$(py remote-unpair "$2" 2>&1) || die "${out:-没有取消成}"
 			rows=""; case "$out" in *$'\n'*) rows=${out#*$'\n'}; out=${out%%$'\n'*} ;; esac   # 第二行：这台机器上取消了、服务器上的记录却没删掉时的说明
 			[ -z "$rows" ] || warn "$rows"
-			launcher_sync
+			remote_launcher_sync keep
 			okay "已经取消和「${out}」的配对"; gui_done remote_updated "已经取消和「${out}」的配对" ;;
 		template) shift; remote_template "$@" ;;   # 远程启动用的模板（docs/dev/launch.md）
 		launcher)   # 远程启动的后台进程：status（默认）、serve（常驻：LaunchAgent、crontab 起它）、log（哪台手机什么时候起过会话）
@@ -5535,8 +5535,8 @@ cmd_remote() {
 }
 
 remote_template() {   # cca remote template …：远程启动用的模板（docs/dev/launch.md）。list [--json]、add、rm；存取、校验都在辅助程序（remote-template）
-	local name="" tool="" acct="" dir="" replace="" out
-	local usage="用法：cca remote template [list [--json] | add [--name 名字] [--tool claude|codex|agy] [--account 账号] [--dir 文件夹] [--replace 编号] [-- 参数…] | rm 名字或编号]"
+	local name="" tool="" acct="" dir="" replace="" out line="" byline=""
+	local usage="用法：cca remote template [list [--json] | add [--name 名字] [--tool claude|codex|agy] [--account 账号] [--dir 文件夹] [--replace 编号] [-- 参数… | --args-line 一行参数] | rm 名字或编号]"
 	case "${1:-list}" in
 		list|ls)
 			case "$#:${2:-}" in 0:|1:|2:--json) ;; *) die "$usage" ;; esac
@@ -5550,19 +5550,21 @@ remote_template() {   # cca remote template …：远程启动用的模板（doc
 			while [ $# -gt 0 ]; do
 				case "$1" in
 					--) shift; break ;;
-					--name|--tool|--account|--dir|--replace)
+					--name|--tool|--account|--dir|--replace|--args-line)   # --args-line：照 shell 的写法写成的一行参数（App 给的），辅助程序拆
 						[ $# -ge 2 ] || die "$usage"
-						case "$1" in --name) name=$2 ;; --tool) tool=$2 ;; --account) acct=$2 ;; --dir) dir=$2 ;; *) replace=$2 ;; esac
+						case "$1" in --name) name=$2 ;; --tool) tool=$2 ;; --account) acct=$2 ;; --dir) dir=$2 ;; --replace) replace=$2 ;; *) line=$2 byline=1 ;; esac
 						shift 2 ;;
 					*) die "$usage" ;;
 				esac
 			done
+			[ -z "$byline" ] || [ $# -eq 0 ] || die "$usage"   # 两种写法只能用一种
 			[ -n "$name" ] || name=$(ask "模板的名字（手机上看到的）: " "")
 			[ -n "$tool" ] || tool=$(ask "哪个工具（claude、codex、agy）: " claude)
 			[ -n "$acct" ] || acct=$(ask "哪个账号（别名、邮箱或编号）: " "")
 			[ -n "$dir" ] || dir=$(ask "在哪个文件夹里启动: " "$PWD")
 			[ -n "$name" ] && [ -n "$acct" ] || { say "已取消"; gui_cancelled; return 1; }
-			out=$(py remote-template add "$name" "$tool" "$acct" "$dir" ${replace:+--replace "$replace"} -- "$@" 2>&1) || die "${out:-没有存成}"
+			if [ -n "$byline" ]; then set -- --args-line "$line"; else set -- -- "$@"; fi
+			out=$(py remote-template add "$name" "$tool" "$acct" "$dir" ${replace:+--replace "$replace"} "$@" 2>&1) || die "${out:-没有存成}"
 			IFS=$'\t' read -r replace name <<<"$out"
 			okay "已存好模板「${name}」（编号 ${replace}）"
 			if ! py remote-launcher wanted; then say "  手机上要能用它：cca remote allow 手机的名字 launch on"; fi
@@ -5575,7 +5577,7 @@ remote_template() {   # cca remote template …：远程启动用的模板（doc
 	esac
 }
 remote_allow_launch() {   # remote_allow_launch 名字 on|off：这台手机能不能用这台机器上的模板新建会话（远程启动，docs/dev/launch.md）。打开要同意
-	                        # （范围是配对编号），只给手机、只给能看和操作的；改好以后照配对表装上 / 卸掉后台进程（launcher_sync）
+	                        # （范围是配对编号），只给手机、只给能看和操作的；改好以后照配对表装上 / 卸掉后台进程（remote_launcher_sync）
 	local row pid name web inc n out
 	row=$(py remote-allow --show "$1" 2>&1) || die "${row:-没有这个配对}"
 	IFS=$'\t' read -r pid name web inc _ <<<"$row"
@@ -5593,7 +5595,7 @@ remote_allow_launch() {   # remote_allow_launch 名字 on|off：这台手机能�
 		esac
 	fi
 	out=$(py remote-allow "$1" launch "$2" 2>&1) || die "${out:-没有改成}"
-	launcher_sync
+	remote_launcher_sync
 	if [ "$2" = on ]; then n="「${out}」可以用这台机器上的模板新建会话了（模板：cca remote template）"
 	else n="「${out}」不能再用模板新建会话了"; fi
 	okay "$n"; gui_done remote_updated "$n"
@@ -5601,52 +5603,64 @@ remote_allow_launch() {   # remote_allow_launch 名字 on|off：这台手机能�
 # 远程启动的后台进程（docs/dev/launch.md）：有允许远程启动的手机（py remote-launcher wanted）时装上、起来，一台都没有了卸掉。
 # macOS 上是 LaunchAgent（登录以后自己起来；出错退出了 launchd 过 30 秒再起，正常退出——没有手机了——不再起）；Linux 上是用户 crontab
 # 里带 # cca-remote-launcher 记号的两行（@reboot 和每 10 分钟一次 serve --if-down：已经在跑就不说话地退出）。都不用 root
-LAUNCHER_LABEL=local.cca.remote-launcher   # 辅助程序 launch.rs 的 LABEL
-LAUNCHER_TAG="# cca-remote-launcher"
-launcher_sync() {   # 照配对表装上或卸掉。没装上只说一句（开关已经改好了，下次再装）
+REMOTE_LAUNCHER_LABEL=local.cca.remote-launcher   # 辅助程序 launch.rs 的 LABEL
+REMOTE_LAUNCHER_TAG="# cca-remote-launcher"
+remote_launcher_sync() {   # remote_launcher_sync [keep]：照配对表装上或卸掉。没装上只说一句（开关已经改好了，下次再装）。keep：不是开关远程启动的命令
+	                       # （allow 别的、unpair）用，装着的不重写——plist 照这个 shell 的 PATH、LANG 写，App 里、ssh 进来的不一样，
+	                       # 换了内容就要先 bootout，正在起的会话会被打断
 	if py remote-launcher wanted; then
-		launcher_install || warn "远程启动的后台进程没装上：手机上起会话要等它（cca remote launcher 看状态；在终端里运行 cca remote launcher serve 也行）"
+		remote_launcher_install "${1:-}" || warn "远程启动的后台进程没装上：手机上起会话要等它（cca remote launcher 看状态；在终端里运行 cca remote launcher serve 也行）"
 	else
-		launcher_remove
+		remote_launcher_remove
 	fi
 }
-launcher_install() {   # 装上、起来（装着的、在跑的不动）。macOS：plist 由辅助程序写，内容变了（cca 挪了地方、PATH 变了）才换
-	local f="$HOME/Library/LaunchAgents/${LAUNCHER_LABEL}.plist" new uid
+remote_launcher_install() {   # remote_launcher_install [keep]：装上、起来（在跑的不动）。macOS：plist 由辅助程序写，内容变了（cca 挪了地方、
+	                          # PATH 变了）才换；keep 时装着的不换
+	local f="$HOME/Library/LaunchAgents/${REMOTE_LAUNCHER_LABEL}.plist" new uid
 	if on_linux; then
-		launcher_cron on || return 1
+		remote_launcher_cron on || return 1
 		( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" remote launcher serve --if-down </dev/null >/dev/null 2>&1 3<&- & )
 		return 0
 	fi
 	uid=$(id -u)
-	new=$(py remote-launcher plist "$SELF") || return 1
-	if [ ! -f "$f" ] || [ "$(cat "$f")" != "$new" ]; then
+	if [ ! -f "$f" ] || [ "${1:-}" != keep ]; then
+		new=$(py remote-launcher plist "$SELF") || return 1
+	fi
+	if [ ! -f "$f" ] || { [ "${1:-}" != keep ] && [ "$(cat "$f")" != "$new" ]; }; then
 		mkdir -p "${f%/*}" || return 1
-		launchctl bootout "gui/${uid}/${LAUNCHER_LABEL}" >/dev/null 2>&1   # 换了内容：先卸掉旧的
+		launchctl bootout "gui/${uid}/${REMOTE_LAUNCHER_LABEL}" >/dev/null 2>&1   # 换了内容：先卸掉旧的
 		{ printf '%s\n' "$new" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"; } || { rm -f "$f.tmp.$$"; return 1; }
 	fi
 	launchctl bootstrap "gui/${uid}" "$f" >/dev/null 2>&1   # 已经装着时它说 Bootstrap failed: 5，不算
-	launchctl kickstart "gui/${uid}/${LAUNCHER_LABEL}" >/dev/null 2>&1   # 没在跑的（正常退出过）起来；在跑的不动
+	launchctl kickstart "gui/${uid}/${REMOTE_LAUNCHER_LABEL}" >/dev/null 2>&1   # 没在跑的（正常退出过）起来；在跑的不动
 }
-launcher_remove() {   # 卸掉、停掉（没装的什么都不做）
-	local f="$HOME/Library/LaunchAgents/${LAUNCHER_LABEL}.plist"
+remote_launcher_installed() {   # 装着没有：macOS 看 LaunchAgent 的文件，Linux 看 crontab 里带记号的那两行（读不了 crontab 的当没装）
 	if on_linux; then
-		if command -v crontab >/dev/null 2>&1; then
-			launcher_cron off || warn "没能从 crontab 里删掉远程启动的那两行（带 ${LAUNCHER_TAG}）：自己删一下（crontab -e）"
+		command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -qF "$REMOTE_LAUNCHER_TAG"
+	else
+		[ -f "$HOME/Library/LaunchAgents/${REMOTE_LAUNCHER_LABEL}.plist" ]
+	fi
+}
+remote_launcher_remove() {   # 卸掉、停掉（没装的不碰 LaunchAgent、crontab；在跑的照样停掉：终端里 serve 起的）
+	local f="$HOME/Library/LaunchAgents/${REMOTE_LAUNCHER_LABEL}.plist"
+	if on_linux; then
+		if remote_launcher_installed; then   # 没装的不碰 crontab（读不了它的那种机器上每次 allow 都会多说一句）
+			remote_launcher_cron off || warn "没能从 crontab 里删掉远程启动的那两行（带 ${REMOTE_LAUNCHER_TAG}）：自己删一下（crontab -e）"
 		fi
 	elif [ -f "$f" ]; then
-		launchctl bootout "gui/$(id -u)/${LAUNCHER_LABEL}" >/dev/null 2>&1
+		launchctl bootout "gui/$(id -u)/${REMOTE_LAUNCHER_LABEL}" >/dev/null 2>&1
 		rm -f "$f"
 	fi
 	py remote-launcher stop 2>/dev/null
 }
-launcher_cron() {   # launcher_cron has|on|off：Linux 上开机以后、每 10 分钟起一次（serve --if-down）
+remote_launcher_cron() {   # remote_launcher_cron has|on|off：Linux 上开机以后、每 10 分钟起一次（serve --if-down）
 	local c
-	c="$(shq "$SELF") remote launcher serve --if-down >/dev/null 2>&1 $LAUNCHER_TAG"
-	cron_tagged "$LAUNCHER_TAG" "$1" "@reboot $c" "*/10 * * * * $c"
+	c="$(shq "$SELF") remote launcher serve --if-down >/dev/null 2>&1 $REMOTE_LAUNCHER_TAG"
+	cron_tagged "$REMOTE_LAUNCHER_TAG" "$1" "@reboot $c" "*/10 * * * * $c"
 }
 
 run_account() {
-	local key="$1" rc e dropped bad pn la
+	local key="$1" rc e dropped bad pn la arg
 	shift
 	need_bin
 	[ "$TOOL" != agy ] || agy_guard   # 这个版本的 agy 确实把登录存进账号目录的文件，才能让各账号分开登录
@@ -5655,7 +5669,10 @@ run_account() {
 	if [ "$ACC_KIND" = api ]; then
 		# Claude：地址、模型和 apiKeyHelper 经 --settings 交给 claude，再传一个 --settings 会把它整个顶掉
 		if [ "$TOOL" = claude ]; then
-			case " $* " in *" --settings "*|*" --settings="*) die "${ACC_NAME} 是第三方 API 账号：cca 用 --settings 传它的地址和 key，不能再加 --settings" ;; esac
+			for arg in "$@"; do   # 一项一项看，只看 -- 前面的：后面的是给 claude 的话（远程启动的开场白），提到 --settings 不算
+				[ "$arg" != -- ] || break
+				case "$arg" in --settings|--settings=*) die "${ACC_NAME} 是第三方 API 账号：cca 用 --settings 传它的地址和 key，不能再加 --settings" ;; esac
+			done
 		fi
 		api_key_ready || exit 1
 	fi
@@ -8207,6 +8224,10 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	mail_user=$(py mail-get-user 2>/dev/null)
 	[ -z "$mail_user" ] || say "  · 邮箱助手：删掉${KEYSTORE}里 ${mail_user} 的应用专用密码（Google 账号里的那个应用专用密码要你自己去撤销）"
 	[ -z "$(py remote-peers 2>/dev/null)" ] || say "  · 远程会话：取消和别的机器的配对（那些机器不能再接入这台机器，这台也接不了它们），配对的密钥从${KEYSTORE}里删掉"
+	if remote_launcher_installed; then   # 远程启动的后台进程（docs/dev/launch.md）
+		if on_linux; then a="删掉 crontab 里带 ${REMOTE_LAUNCHER_TAG} 的那两行"; else a="卸掉 LaunchAgent（${REMOTE_LAUNCHER_LABEL}）"; fi
+		say "  · 远程启动：停掉等手机来起会话的后台进程，${a}"
+	fi
 	restore_teams plan
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 内置代理（用过的话）：停掉它的内核，删掉配置和拷来的节点"
@@ -8234,7 +8255,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	done
 	use_tool claude
 	py mail-forget 2>/dev/null   # 邮箱助手：钥匙串里的应用专用密码（没配置过也照样跑：什么都不删）
-	launcher_remove 2>/dev/null   # 远程启动的后台进程：LaunchAgent / crontab 的那两行去掉、停掉（cca 删掉以后 launchd 还会一直试着起它）
+	remote_launcher_remove 2>/dev/null   # 远程启动的后台进程：LaunchAgent / crontab 的那两行去掉、停掉（cca 删掉以后 launchd 还会一直试着起它）
 	py remote-forget 2>/dev/null   # 远程会话：和别的机器的配对都取消（告诉服务器），配对的密钥从钥匙串里删掉
 	restore_teams apply   # Team：各个都退出（管理员的那些，根密钥跟着 ~/.cca 一起删掉）
 	if router_ready; then

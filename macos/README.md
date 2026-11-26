@@ -249,7 +249,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   （终端里说一句，App 不用管）。会话自己结束、没重新接上时终端留着，
   上面说一句怎么了，可以「重新接入」「关闭」。看得见时 15 秒查一次列表。做法和坑在 docs/dev/remote.md「界面 App」。
   cca 有 `hello.remote_launch` 时还有「远程启动」（PROTOCOL 9.4）：最下面一节列出这台 Mac 上的模板（名字、工具、账号、文件夹、参数，用不了的标出原因），
-  「新建模板…」「修改…」是一个弹层（`RemoteTemplateSheet`：名字、工具、账号、文件夹面板、一行参数，照 shell 的写法拆开：`ShellWords`），「删除…」先问一句；
+  「新建模板…」「修改…」是一个弹层（`RemoteTemplateSheet`：名字、工具、账号、文件夹面板、一行参数，原样交给 cca 拆：`--args-line`），「删除…」先问一句；
   「配对过的机器」里手机那一行多一个「允许远程启动」开关（只让看、不让接入的停用、说原因；打开时 cca 先发同意事件），有允许的手机时那一节说一句
   启动器在不在跑。模板不定时查：这一页打开时、「刷新」、改过以后，列表里说的个数对不上时再查。
 - **共享与同步**（`SharingPage`，PROTOCOL 4.14；hello 有 App 认识的 `team` 时侧栏才有这一页，`AppModel.teamAvailable`）：只有「Team」（`TeamsCard`）：

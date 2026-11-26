@@ -83,7 +83,7 @@ guard !store.isEmpty, let cmd = args.first else {
 let client = RemoteClient(store: DirStore(URL(fileURLWithPath: store)), deviceName: name)
 
 /// list 里一台机器的启动器：解开、清理以后的样子（测试照它核对）
-func launcherJSON(_ l: RemoteLauncher) -> [String: Any] {
+func launcherJSON(_ l: HostLauncher) -> [String: Any] {
     let t: [[String: Any]] = l.info.templates.map { x in
         ["i": x.id, "h": x.digest, "n": x.name, "k": x.tool, "a": x.account, "aid": x.aid, "d": x.dir, "x": x.args, "l": x.line]
     }

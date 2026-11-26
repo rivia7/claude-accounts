@@ -56,7 +56,7 @@ final class DemoBackend: Backend {
         }
     }
 
-    func launch(peer: Peer, launcher: RemoteLauncher, template: LaunchTemplate, cols: Int, rows: Int, line: String?) async -> LaunchResult {
+    func launch(peer: Peer, launcher: HostLauncher, template: LaunchTemplate, cols: Int, rows: Int, line: String?) async -> LaunchResult {
         try? await Task.sleep(for: .milliseconds(900))
         guard launcher.online else { return .failed(RemoteFailure("nohost")) }
         let sid = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
@@ -102,7 +102,7 @@ final class DemoBackend: Backend {
 
 /// 演示的「新建会话」：工作室的 Mac mini 上写好了三个模板（两个能带开场白），MacBook Air 的启动器不在线
 enum DemoLaunch {
-    static func launcher(_ p: Peer) -> RemoteLauncher? {
+    static func launcher(_ p: Peer) -> HostLauncher? {
         switch p.pid.prefix(2) {
         case "a1":
             let t = [
@@ -113,13 +113,13 @@ enum DemoLaunch {
                 LaunchTemplate(id: "2c3d4e5f", digest: "23456789abcdef01", name: "看看网站", tool: "claude", account: "备用",
                                aid: DemoAccounts.aid(3), dir: "~/Projects/site", args: "--permission-mode plan", line: false),
             ]
-            return RemoteLauncher(sid: String(repeating: "f1", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: true)
+            return HostLauncher(sid: String(repeating: "f1", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: true)
         case "b2":
             let t = [
                 LaunchTemplate(id: "3d4e5f60", digest: "3456789abcdef012", name: "写周报", tool: "claude", account: "账号 2",
                                aid: DemoAccounts.aid(4), dir: "~/Documents", args: "", line: true),
             ]
-            return RemoteLauncher(sid: String(repeating: "f2", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: false)
+            return HostLauncher(sid: String(repeating: "f2", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: false)
         default:
             return nil
         }

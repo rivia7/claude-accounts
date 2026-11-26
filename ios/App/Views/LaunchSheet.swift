@@ -13,7 +13,7 @@ struct LaunchSheet: View {
     @State private var working: Task<Void, Never>?
     @State private var failure: String?
 
-    private var launcher: RemoteLauncher? { model.launcher(peer) }
+    private var launcher: HostLauncher? { model.launcher(peer) }
     private var templates: [LaunchTemplate] { launcher?.info.templates ?? [] }
     private var template: LaunchTemplate? { templates.first { $0.id == picked } }
 

@@ -420,7 +420,7 @@ enum Texts {
 
     /// 模板的第二行：「工作 · ~/projects/site · --model opus」（账号没了时是存着的邮箱；dir 是给人看的那样）
     static func remoteTemplateDetail(_ t: RemoteTemplate, dir: String) -> String {
-        [nonEmpty(t.accountName) ?? nonEmpty(t.account), nonEmpty(dir), nonEmpty(ShellWords.join(t.args))].compactMap { $0 }.joined(separator: " · ")
+        [nonEmpty(t.accountName) ?? nonEmpty(t.account), nonEmpty(dir), nonEmpty(t.argsLine)].compactMap { $0 }.joined(separator: " · ")
     }
 
     static func product(_ tool: ToolID) -> String {

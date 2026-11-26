@@ -278,7 +278,7 @@ final class AppModel {
     // MARK: 新建会话（远程启动）
 
     /// 一台电脑的启动器：那台电脑让这台手机远程启动会话、它的启动器在服务器上登记着时才有
-    func launcher(_ p: Peer) -> RemoteLauncher? { listings[p.pid]?.launcher }
+    func launcher(_ p: Peer) -> HostLauncher? { listings[p.pid]?.launcher }
 
     /// 请那台电脑照模板起一个会话（多大见 TerminalGrid）。起来了：关掉「新建会话」那一页，打开新会话的终端（fresh：服务器上可能
     /// 还没有它），回 nil；没起成：回原因码和要说的那句话，列表过时了的（模板变了、没了，不让启动了，启动器不在了）顺手刷新

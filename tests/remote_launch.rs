@@ -226,6 +226,13 @@ fn what_the_launcher_refuses(t: &mut Ctx) {
     // 没有这个模板；请求不对（窗口太小、开场白是空白、有控制字符）
     std::thread::sleep(GAP);
     assert_eq!(refused(&peer.launch(&lsid, &ask("0badc0de", &digest, None))), ("no_template".to_string(), true));
+    // 同一台手机接得太勤（上一次接进来不到 3 秒）：照样接上、回它 rate（不理的话手机要等到服务器说启动器不在，说的原因就错了）
+    assert_eq!(refused(&peer.launch(&lsid, &ask(&id, &changed, None))), ("rate".to_string(), true));
+    // LAUNCH 缺了一项：看不懂（bad），不能崩（崩了手机收不到回话）
+    std::thread::sleep(GAP);
+    let mut short = ask(&id, &changed, None);
+    short.as_obj_mut().expect("对象").remove("r");
+    assert_eq!(refused(&peer.launch(&lsid, &short)).0, "bad");
     std::thread::sleep(GAP);
     let mut small = ask(&id, &changed, None);
     small.as_obj_mut().expect("对象").insert("c", 10);
@@ -240,7 +247,7 @@ fn what_the_launcher_refuses(t: &mut Ctx) {
     a.ok(&["remote-template", "rm", "要删掉的文件夹"]);
     wait_for("说明里只剩一个模板", secs(30), || peer.launcher().filter(|(_, d)| d["t"].list().len() == 1));
     let log = log_of(&a);
-    for code in ["changed", "no_template", "bad", "no_dir"] {
+    for code in ["changed", "no_template", "rate", "bad", "no_dir"] {
         assert!(log.contains(&format!("没起（{code}）")), "{code}：{log}");
     }
     // 一个会话都没起

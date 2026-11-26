@@ -86,7 +86,7 @@ enum CcaCommand: Sendable, Hashable {
     case remoteTemplates
     /// 存一个模板（`cca remote template add --name … --tool … --account … --dir … [--replace <编号>] -- 参数…`）：account 是账号表的键，
     /// dir 是绝对路径，replace 是改的那一个的编号（新建是 nil）。cca 校验（账号、文件夹在不在，参数能不能起交互的会话），不行时 `fail` 说原因
-    case remoteTemplateSave(name: String, tool: ToolID, account: String, dir: String, args: [String], replace: String?)
+    case remoteTemplateSave(name: String, tool: ToolID, account: String, dir: String, argsLine: String, replace: String?)
     /// 删掉一个模板（`cca remote template rm <编号>`）。
     case remoteTemplateRemove(id: String)
     /// 这台手机能不能用这台 Mac 上的模板新建会话（`cca remote allow <配对的 id> launch on|off`）：打开时 cca 先发 `consent.remote_launch`
@@ -204,10 +204,10 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteUnpair(let peer): return ["remote", "unpair", peer]
         case .remoteEnd(let session): return ["remote", "end", session]
         case .remoteTemplates: return ["remote", "template", "list", "--json"]
-        case .remoteTemplateSave(let name, let tool, let account, let dir, let args, let replace):
-            // 参数一律放在 -- 后面（没有也写）：参数里的 --name 这些不会被当成 cca 的选项
+        case .remoteTemplateSave(let name, let tool, let account, let dir, let argsLine, let replace):
+            // 参数是弹层里的那一行字，原样交给 cca 拆（照 shell 的写法；拆不开的 cca 说原因）：放在最后，没有参数也写
             return ["remote", "template", "add", "--name", name, "--tool", tool.rawValue, "--account", account, "--dir", dir]
-                + (replace.map { ["--replace", $0] } ?? []) + ["--"] + args
+                + (replace.map { ["--replace", $0] } ?? []) + ["--args-line", argsLine]
         case .remoteTemplateRemove(let id): return ["remote", "template", "rm", id]
         case .remoteLaunch(let peer, let on): return ["remote", "allow", peer, "launch", on ? "on" : "off"]
         case .teamDevices(let team, _): return ["team", "devices", team, "--json"]

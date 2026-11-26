@@ -23,6 +23,13 @@ pub enum Incoming {
     None,
 }
 
+impl Peer {
+    /// 能不能让它远程启动（launch.rs）：只有手机、看和操作都让的
+    pub fn can_launch(&self) -> bool {
+        self.web && self.incoming == Incoming::Control
+    }
+}
+
 impl Incoming {
     pub fn parse(s: &str) -> Option<Incoming> {
         match s {
@@ -108,9 +115,14 @@ pub fn stamp_of(f: &str) -> Stamp {
     Some((m.mtime(), m.mtime_nsec(), m.size(), m.ino()))
 }
 
+/// n 个小写十六进制字符（配对、会话的编号和令牌是 32 个，模板的编号 8 个、摘要 16 个）
+pub fn lower_hex(s: &str, n: usize) -> bool {
+    s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
 /// 32 个小写十六进制字符（配对、会话的编号，令牌）
 pub fn hex32(s: &str) -> bool {
-    s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    lower_hex(s, 32)
 }
 
 /// 配对表里的一项；缺了该有的、样子不对是 None（这一项不算）
@@ -129,7 +141,7 @@ fn row_of(pid: &str, d: &Dict) -> Option<Peer> {
         launch: false,
     })
     .map(|mut p| {
-        p.launch = d.get("launch").and_then(|v| v.as_bool()) == Some(true) && p.web && p.incoming == Incoming::Control;
+        p.launch = d.get("launch").and_then(|v| v.as_bool()) == Some(true) && p.can_launch();
         p
     })
 }

@@ -56,10 +56,10 @@ public struct PeerListing: Sendable {
     /// 那台服务器转不转账号的状态（3.7.5 起的才转：旧的服务器上 status 总是 nil，要管理员更新服务器）
     public let statusServed: Bool
     /// 那台机器的启动器（Launch.swift）：这台手机能照它的模板远程启动会话。那台机器没让这台手机远程启动、旧版的 cca 是 nil
-    public let launcher: RemoteLauncher?
+    public let launcher: HostLauncher?
 
     public init(peer: Peer, gone: Bool, sessions: [RemoteSession], failure: RemoteFailure?, status: HostStatus? = nil,
-                statusServed: Bool = false, launcher: RemoteLauncher? = nil) {
+                statusServed: Bool = false, launcher: HostLauncher? = nil) {
         self.peer = peer
         self.gone = gone
         self.sessions = sessions
@@ -307,7 +307,7 @@ public final class RemoteClient: @unchecked Sendable {
             }
             let keys = dirKeys(p), lkeys = launchKeys(p)
             var sessions = [RemoteSession]()
-            var launcher: RemoteLauncher?
+            var launcher: HostLauncher?
             for r in rows[peer.pid] as? [Any] ?? [] {
                 guard let r = r as? [String: Any], let sid = r["sid"] as? String, sid.count == 32, Bytes.unhex(sid) != nil else { continue }
                 let online = r["online"] as? Bool == true
@@ -315,7 +315,7 @@ public final class RemoteClient: @unchecked Sendable {
                     sessions.append(RemoteSession(sid: sid, info: info, online: online, viewers: jsonInt(r["viewers"]) ?? 0))
                 } else if launcher == nil, let info = launchOpen(lkeys, pid: peer.pid, sid: sid, r["blob"]) {
                     // 那台机器的启动器：在服务器上它也是一个“会话”，说明是另一把密钥封的（有几个时认头一个）
-                    launcher = RemoteLauncher(sid: sid, info: info, online: online)
+                    launcher = HostLauncher(sid: sid, info: info, online: online)
                 }
                 // 都解不开的：不是这个配对的密钥封的（服务器、别人塞进来的），不显示
             }

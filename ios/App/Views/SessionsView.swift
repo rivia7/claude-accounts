@@ -107,7 +107,7 @@ private struct MachineSection: View {
 private struct LaunchRow: View {
     @Environment(AppModel.self) private var model
     let peer: Peer
-    let launcher: RemoteLauncher
+    let launcher: HostLauncher
 
     var body: some View {
         Button {

@@ -337,12 +337,17 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
     var tool: ToolID?
     /// 存着的账号：邮箱（没有邮箱的账号是账号表的键）
     var account: String
+    /// 账号表里现在的这个账号的键（弹层里选上它；cca 找的，App 不自己找）；账号没了、旧版 cca 没给是 nil
+    var accountKey: String?
     /// 账号表里现在的这个账号叫什么（别名，没起别名的是邮箱）；账号没了是 nil
     var accountName: String?
     /// 在哪个文件夹里起（绝对路径）
     var dir: String
     /// 起会话时带的参数（一项一个）
     var args: [String]
+    /// 参数拼成的一行（照 shell 的写法，要引的才用单引号引起来）：给人看、给人改，存的时候原样交给 cca 拆（`--args-line`），拆回去是
+    /// 原样。旧版 cca 没给时照同样的写法拼
+    var argsLine: String
     /// 手机起会话时能带一句开场白
     var line: Bool
     /// 现在用不了的原因；用得了是 nil
@@ -350,7 +355,7 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, tool, account, dir, args, line, problem
-        case accountName = "account_name"
+        case accountKey = "account_key", accountName = "account_name", argsLine = "args_line"
     }
 
     init(from decoder: Decoder) throws {
@@ -362,9 +367,11 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
         name = c.string(.name) ?? ""
         tool = c.lossy(ToolID.self, .tool)
         account = c.string(.account) ?? ""
+        accountKey = nonEmpty(c.string(.accountKey))
         accountName = nonEmpty(c.string(.accountName))
         dir = c.string(.dir) ?? ""
         args = c.lossyArray(String.self, .args) ?? []
+        argsLine = c.string(.argsLine) ?? args.map(shellQuoteIfNeeded).joined(separator: " ")
         line = c.bool(.line) ?? false
         problem = c.lossy(RemoteTemplateProblem.self, .problem)
     }

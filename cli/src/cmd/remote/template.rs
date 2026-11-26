@@ -24,7 +24,7 @@ use crate::py::json;
 use crate::py::obj::{Dict, List, V};
 use crate::py::path;
 use crate::py::rand::token_hex;
-use crate::py::text::sh_quote;
+use crate::py::text::{sh_quote, sh_split};
 use crate::py::time::time;
 use crate::py::{die, R};
 
@@ -36,7 +36,8 @@ const ARGS_MAX: usize = 64;
 const ARGS_BYTES: usize = 4096;
 /// 给手机的说明（明文）最多这么大：服务器收的密文最长 4096 个字符（base64），正好是 3072 个字节
 pub const DOC_MAX: usize = 3072;
-const USAGE: &str = "用法：remote-template list [--json] | add 名字 工具 账号 文件夹 [--replace 编号] -- 参数… | rm 名字或编号";
+const USAGE: &str =
+    "用法：remote-template list [--json] | add 名字 工具 账号 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数) | rm 名字或编号";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template {
@@ -61,10 +62,6 @@ pub fn stamp() -> peers::Stamp {
     peers::stamp_of(&file())
 }
 
-pub fn hex8(s: &str) -> bool {
-    s.len() == 8 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-}
-
 fn row_of(d: &Dict) -> Option<Template> {
     let args: Option<Vec<String>> = d.get("args")?.as_list()?.items().iter().map(|v| v.as_str().map(str::to_string)).collect();
     let t = Template {
@@ -76,9 +73,9 @@ fn row_of(d: &Dict) -> Option<Template> {
         args: args?,
         at: d.get("at").and_then(|v| v.as_num()).unwrap_or(0.0),
     };
-    let ok = hex8(&t.id)
+    let ok = peers::lower_hex(&t.id, 8)
         && !t.name.is_empty()
-        && tools().iter().any(|x| x.name == t.tool)
+        && tool_named(&t.tool).is_some()
         && !t.account.is_empty()
         && t.dir.starts_with('/');
     ok.then_some(t)
@@ -102,19 +99,15 @@ pub fn load() -> Vec<Template> {
 }
 
 fn save(all: &[Template]) -> R<()> {
-    let d = local::ensure_dir()?;
+    local::ensure_dir()?;
     let list = List::new();
     for t in all {
-        let args = List::new();
-        for a in &t.args {
-            args.push(a.as_str());
-        }
         list.push(dict! {
             "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "account" => t.account.as_str(),
-            "dir" => t.dir.as_str(), "args" => args, "at" => t.at
+            "dir" => t.dir.as_str(), "args" => t.args_v(), "at" => t.at
         });
     }
-    fs::save_json(&path::join(&d, "templates.json"), &V::Dict(dict! { "v" => 1, "templates" => list }), Some(0o600), true)?;
+    fs::save_json(&file(), &V::Dict(dict! { "v" => 1, "templates" => list }), Some(0o600), true)?;
     Ok(())
 }
 
@@ -127,13 +120,14 @@ impl Template {
         tool_named(&self.tool).expect("读的时候核对过")
     }
 
+    /// 参数（JSON 的数组）
+    fn args_v(&self) -> V {
+        V::from(self.args.iter().map(|a| V::from(a.as_str())).collect::<Vec<V>>())
+    }
+
     /// 摘要：`SHA256(紧凑的 JSON [工具, 账号, 文件夹, [参数…]])` 的前 16 个十六进制字符（server/README.md「启动器」）
     pub fn digest(&self) -> String {
-        let args = List::new();
-        for a in &self.args {
-            args.push(a.as_str());
-        }
-        let doc = crate::list![self.tool.as_str(), self.account.as_str(), self.dir.as_str(), args];
+        let doc = crate::list![self.tool.as_str(), self.account.as_str(), self.dir.as_str(), self.args_v()];
         sha256_hex(json::dumps(&V::List(doc), json::Fmt::new().utf8().compact()))[..16].to_string()
     }
 
@@ -171,9 +165,14 @@ impl Template {
         Ok(None)
     }
 
-    /// 参数给人看的样子（照 shell 的写法引起来、空格隔开；最多 max 个字符，多了截断加 …）
+    /// 参数拼成一行：照 shell 的写法，要引的才用单引号引起来、空格隔开（`sh_split` 拆回去是原样；App 拿它给人改，PROTOCOL 9.4 的 `args_line`）
+    pub fn args_line(&self) -> String {
+        self.args.iter().map(|a| sh_quote(a)).collect::<Vec<_>>().join(" ")
+    }
+
+    /// 参数给人看的样子（`args_line`，去掉控制字符；最多 max 个字符，多了截断加 …）
     pub fn args_text(&self, max: usize) -> String {
-        let full = clean(&self.args.iter().map(|a| sh_quote(a)).collect::<Vec<_>>().join(" "), usize::MAX);
+        let full = clean(&self.args_line(), usize::MAX);
         if full.chars().count() <= max {
             return full;
         }
@@ -283,15 +282,13 @@ fn list(args: &[String]) -> R<()> {
         let rows = List::new();
         for t in &all {
             let problem = t.problem()?;
-            let name = t.account_now().map(|(_, n)| n);
-            let argv = List::new();
-            for a in &t.args {
-                argv.push(a.as_str());
-            }
+            let now = t.account_now();
+            let (key, name) = (now.as_ref().map(|(k, _)| k.as_str()), now.as_ref().map(|(_, n)| n.as_str()));
             rows.push(dict! {
                 "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "account" => t.account.as_str(),
-                "account_name" => name.map_or(V::None, V::from), "dir" => t.dir.as_str(), "args" => argv, "line" => t.line_ok(),
-                "digest" => t.digest(), "problem" => problem.map_or(V::None, V::from)
+                "account_key" => key.map_or(V::None, V::from), "account_name" => name.map_or(V::None, V::from), "dir" => t.dir.as_str(),
+                "args" => t.args_v(), "args_line" => t.args_line(), "line" => t.line_ok(), "digest" => t.digest(),
+                "problem" => problem.map_or(V::None, V::from)
             });
         }
         let doc = dict! { "version" => 1, "kind" => "remote_templates", "templates" => rows, "launcher" => launch::summary() };
@@ -307,16 +304,22 @@ fn list(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// `add 名字 工具 账号 文件夹 [--replace 编号] -- 参数…`：账号照 `cca @账号` 那样认（别名、邮箱、编号、唯一的前缀），存成邮箱；文件夹
-/// 相对当前目录、可以带 ~，要已经在。--replace：改那一个（编号、位置不变）。stdout：`编号<TAB>名字`
+/// `add 名字 工具 账号 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数)`：账号照 `cca @账号` 那样认（别名、邮箱、编号、唯一的
+/// 前缀），存成邮箱；文件夹相对当前目录、可以带 ~，要已经在。--replace：改那一个（编号、位置不变）。参数是一项一项的（`--` 后面），
+/// 或者照 shell 的写法写成的一行（`--args-line`：App 给的，这里拆，不展开 ~、$ 这些）。stdout：`编号<TAB>名字`
 fn add(args: &[String]) -> R<()> {
-    let Some(sep) = args.iter().position(|a| a == "--") else { return die(USAGE) };
-    let (head, argv) = (&args[..sep], &args[sep + 1..]);
-    let (name, tool, account, dir, replace) = match head {
-        [n, t, a, d] => (n, t, a, d, None),
-        [n, t, a, d, flag, id] if flag == "--replace" => (n, t, a, d, Some(id.as_str())),
+    // 照位置认（名字、文件夹、参数那一行本身是 `--` 也不会认错）
+    let [name, tool, account, dir, rest @ ..] = args else { return die(USAGE) };
+    let (replace, rest) = match rest {
+        [flag, id, rest @ ..] if flag == "--replace" => (Some(id.as_str()), rest),
+        _ => (None, rest),
+    };
+    let argv = match rest {
+        [sep, argv @ ..] if sep == "--" => argv.to_vec(),
+        [flag, line] if flag == "--args-line" => split_line(line)?,
         _ => return die(USAGE),
     };
+    let argv = argv.as_slice();
     let name = clean(name.trim(), usize::MAX);
     if name.is_empty() || name.chars().count() > NAME_MAX {
         return die(format!("模板的名字要有，最长 {NAME_MAX} 个字"));
@@ -380,6 +383,17 @@ fn add(args: &[String]) -> R<()> {
     Ok(())
 }
 
+/// `--args-line` 的那一行拆成参数（`sh_split`：POSIX shell 的规则，不展开 ~、$、通配符）；拆不开说哪里不对
+fn split_line(line: &str) -> R<Vec<String>> {
+    sh_split(line).or_else(|e| {
+        die(if e.contains("escaped") {
+            "参数最后多了一个 \\：拆不开"
+        } else {
+            "参数里的引号没有配对：拆不开"
+        })
+    })
+}
+
 /// `rm 名字或编号`：stdout 是删掉的那个的名字
 fn rm(args: &[String]) -> R<()> {
     let [who] = args else { return die(USAGE) };
@@ -409,6 +423,39 @@ mod tests {
             dir: "/srv/项目".into(),
             args: args.iter().map(|a| a.to_string()).collect(),
             at: 1.0,
+        }
+    }
+
+    #[test]
+    fn args_line_round_trips() {
+        let samples: [&[&str]; 3] = [
+            &[],
+            &["--model", "opus", "--append-system-prompt", "说中文，改完跑一遍测试"],
+            &["a b", "it's", "\"q\"", "$HOME", "~", "", "back\\slash", "tab\tx", "new\nline", "*", "--", "-", "a=b,c:d@e%f+g"],
+        ];
+        for args in samples {
+            let t = tpl("claude", args);
+            assert_eq!(split_line(&t.args_line()).ok(), Some(t.args.clone()), "{}", t.args_line());
+        }
+        // 要引的才引（单引号）；App 拿它给人改，终端、手机上看到的也是这样（args_text）
+        let t = tpl("claude", &["--model", "opus", "a b", "it's", ""]);
+        assert_eq!(t.args_line(), r#"--model opus 'a b' 'it'"'"'s' ''"#);
+        assert_eq!(t.args_text(300), t.args_line());
+    }
+
+    #[test]
+    fn split_lines() {
+        assert_eq!(
+            split_line("  --model   opus\t--verbose\n-c ").ok(),
+            Some(vec!["--model".into(), "opus".into(), "--verbose".into(), "-c".into()])
+        );
+        assert_eq!(split_line(" \t\n ").ok(), Some(Vec::<String>::new()));
+        assert_eq!(
+            split_line(r#"--name='a b'c "" '' "x \"y\"" ~ $HOME *.md"#).ok(),
+            Some(["--name=a bc", "", "", "x \"y\"", "~", "$HOME", "*.md"].map(String::from).to_vec())
+        );
+        for bad in ["--x 'abc", "--x \"abc", "abc\\"] {
+            assert!(split_line(bad).is_err(), "{bad}");
         }
     }
 
