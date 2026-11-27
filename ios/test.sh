@@ -110,14 +110,20 @@ xcrun simctl install "$UDID" "$APP"
 SHOTS="$OUT/shots"
 rm -rf "$SHOTS"
 mkdir -p "$SHOTS"
+shot() {   # 文件名 启动参数…（都在演示模式里）
+	xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
+	xcrun simctl launch "$UDID" "$BUNDLE" -demo "${@:2}" >/dev/null
+	sleep "$([ "$1" = terminal ] && echo 7 || echo 3)"
+	xcrun simctl io "$UDID" screenshot "$SHOTS/$1-$mode.png" >/dev/null 2>&1
+}
 for mode in light dark; do
 	xcrun simctl ui "$UDID" appearance "$mode"
 	for screen in list accounts account terminal pair settings launch; do
-		xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
-		xcrun simctl launch "$UDID" "$BUNDLE" -demo -screen "$screen" >/dev/null
-		sleep "$([ "$screen" = terminal ] && echo 7 || echo 3)"
-		xcrun simctl io "$UDID" screenshot "$SHOTS/$screen-$mode.png" >/dev/null 2>&1
+		shot "$screen" -screen "$screen"
 	done
+	# 「账号」页换到 ChatGPT、只看标准套餐的样子
+	shot accounts-codex -screen accounts -tool codex
+	shot accounts-standard -screen accounts -tier standard
 done
 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
 xcrun simctl ui "$UDID" appearance light

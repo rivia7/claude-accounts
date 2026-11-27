@@ -2,7 +2,7 @@ import SwiftUI
 
 /// iOS 上的 cca：接入电脑上开着的远程会话（docs/dev/ios.md）。
 /// 启动参数（截图、界面测试用，ios/test.sh）：`-demo` 进演示模式；`-screen list|accounts|account|terminal|pair|settings|launch` 直接打开那一页
-/// （演示模式里）
+/// （演示模式里；「账号」页另带 `-tool 工具`、`-tier 档位`：看哪个工具的、只看哪一档）
 @main
 struct CcaApp: App {
     /// 推送令牌经它来（Pusher）
@@ -51,6 +51,12 @@ struct CcaApp: App {
         await model.fetch()
         let screen = args[i + 1]
         model.tab = screen.hasPrefix("account") ? .accounts : .sessions
+        // 「账号」页看哪个工具、只看哪一档（-tool codex、-tier standard）：没写的照默认（Claude、全部套餐），上次截图记下的不算
+        func value(_ flag: String) -> String? {
+            args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+        }
+        model.accountTool = value("-tool") ?? "claude"
+        model.accountTier = value("-tier") ?? ""
         switch screen {
         case "account":
             // -account 第几个（从 0 数，各台电脑的账号接着数）：默认第一个

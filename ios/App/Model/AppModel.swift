@@ -85,6 +85,14 @@ final class AppModel {
     }
     /// 「账号」页推进去的账号
     var accountPath: [AccountRef] = []
+    /// 「账号」页看哪个工具的账号（claude、codex、agy）、只看哪一档套餐（entry、standard、advanced、premium，空的是全部）：记着，
+    /// 下次打开还是它们。记着的已经没有账号了时照默认的看（AccountShelf）
+    var accountTool: String {
+        didSet { UserDefaults.standard.set(accountTool, forKey: "accountTool") }
+    }
+    var accountTier: String {
+        didSet { UserDefaults.standard.set(accountTier, forKey: "accountTier") }
+    }
 
     var appearance: AppearanceMode {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance") }
@@ -107,6 +115,8 @@ final class AppModel {
         let d = UserDefaults.standard
         appearance = AppearanceMode(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
         tab = AppTab(rawValue: d.string(forKey: "tab") ?? "") ?? .sessions
+        accountTool = d.string(forKey: "accountTool") ?? "claude"
+        accountTier = d.string(forKey: "accountTier") ?? ""
         let name = Texts.nonEmpty(d.string(forKey: "deviceName")) ?? Self.defaultName
         deviceName = name
         backend = demo ? DemoBackend() : LiveBackend(deviceName: name)
@@ -203,7 +213,13 @@ final class AppModel {
     func openAccount(peer pid: String, account id: String) {
         closeTerminal()
         tab = .accounts
-        accountPath = [AccountRef(pid: pid, id: id)]
+        let ref = AccountRef(pid: pid, id: id)
+        accountPath = [ref]
+        // 返回时列表里要有它：换到它的工具，筛着的档位不是它的就不筛了（还没查到它的照上次的选择）
+        if let a = account(ref)?.account {
+            accountTool = a.tool
+            if !accountTier.isEmpty, a.tier != accountTier { accountTier = "" }
+        }
         refresh()
     }
 

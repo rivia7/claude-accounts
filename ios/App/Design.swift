@@ -108,8 +108,9 @@ struct AccountAvatar: View {
     }
 }
 
-/// 套餐档位的小徽记（Mac App 的 TierMark，一档比一档足）：入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵 Logo 渐变的四角星
-private struct TierMark: View {
+/// 套餐档位的小徽记（Mac App 的 TierMark，一档比一档足）：入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵 Logo 渐变的四角星。
+/// 套餐徽章、「账号」页按档位筛的胶囊都用它
+struct TierMark: View {
     let tier: String
     let size: CGFloat
 

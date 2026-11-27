@@ -127,7 +127,7 @@ enum DemoLaunch {
 }
 
 /// 演示的账号（「账号」页）：两台电脑上的几个账号，用量、重置时间照现在算。在用的、额度用完了的、建议先用的、登录失效的、
-/// Antigravity 的几组额度、Codex 还能重置额度，各有一个
+/// Antigravity 的几组额度、Codex 还能重置额度、第三方 API 的，各有一个；四档套餐都有（按档位筛），ChatGPT 的两台电脑上都有
 enum DemoAccounts {
     /// 第 n 个账号的编号、会话说明里的账号摘要
     static func id(_ n: Int) -> String { String(repeating: String(format: "%x", n), count: 16) }
@@ -136,8 +136,8 @@ enum DemoAccounts {
     static func status(_ pid: String, machine: String, now: Double) -> HostStatus? {
         let accounts: [[String: Any]]
         switch pid.prefix(2) {
-        case "a1": accounts = [work(now), personal(now), spare(now)]
-        case "b2": accounts = [second(now), gemini(now)]
+        case "a1": accounts = [work(now), personal(now), spare(now), api(now)]
+        case "b2": accounts = [second(now), go(now), gemini(now)]
         default: return nil
         }
         // 和真的一样经 JSON 读一遍（数、true / false 的样子和服务器给的一样）
@@ -210,6 +210,20 @@ enum DemoAccounts {
                 "usage": ["source": "cache", "fetched_epoch": now - 5 * 3600, "stale": true, "error_code": "auth",
                           "five_hour": window(12, in: -3600, now), "seven_day": window(35, in: weekly - now, now)],
                 "weeks": weeks([60, 44, 71], current: 35, end: weekly.rounded())]
+    }
+
+    /// 第三方 API 账号：没有套餐、订阅的用量（头像是钥匙）
+    private static func api(_ now: Double) -> [String: Any] {
+        ["id": id(7), "tool": "claude", "name": "API", "kind": "api", "login": "api", "plan": "", "tier": "", "busy": false]
+    }
+
+    /// ChatGPT 的入门套餐（Go），空闲
+    private static func go(_ now: Double) -> [String: Any] {
+        let weekly = now + 6 * 86400 + 2 * 3600
+        return ["id": id(6), "aid": aid(6), "tool": "codex", "name": "副号", "kind": "oauth", "login": "logged_in", "plan": "Go",
+                "tier": "entry", "busy": false, "color": "#12A594", "badge": "副",
+                "usage": usage(now, ["five_hour": window(23, in: 3 * 3600 + 40 * 60, now), "seven_day": window(18, in: weekly - now, now)]),
+                "weeks": weeks([26, 41], current: 18, end: weekly.rounded())]
     }
 
     /// Antigravity：两组额度

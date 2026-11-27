@@ -181,12 +181,28 @@ enum Texts {
         }
     }
 
-    /// 「账号」页顶上那一行（Mac App 的 officeSummary）：「8 个账号 · 2 个在用 · 1 个额度用完 · 1 个没登录」（0 的不写）
-    static func census(_ c: AccountCensus) -> String {
+    /// 账号是哪个工具的：「账号」页上面的工具切换、页头那一句（和 Mac App 侧栏的工具切换一样叫法：Claude、ChatGPT、Antigravity）
+    static func toolName(_ tool: String) -> String {
+        switch tool {
+        case "claude": return "Claude"
+        case "codex": return "ChatGPT"
+        case "agy": return "Antigravity"
+        default: return tool
+        }
+    }
+
+    /// 「账号」页顶上那一行（Mac App 的 officeSummary）：列着的这些账号（这个工具的，筛着档位时只算这一档）
+    /// 「4 个 Claude 账号 · 1 个在用 · 2 个空闲 · 1 个登录失效」（0 的不写）
+    static func census(_ c: AccountCensus, tool: String) -> String {
         if c.total == 0 { return "还没有账号" }
         let rest = [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "没登录"), (c.wrongPerson, "登错号"),
                     (c.expired, "登录失效")]
-        return (["\(c.total) 个账号"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 个\($0.1)" }).joined(separator: " · ")
+        return (["\(c.total) 个 \(toolName(tool)) 账号"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 个\($0.1)" }).joined(separator: " · ")
+    }
+
+    /// 筛着的那一档在这个工具里没有账号：「没有进阶套餐的 ChatGPT 账号」
+    static func tierEmpty(_ tier: String, tool: String) -> String {
+        "没有\(planTier(tier) ?? tier)套餐的 \(toolName(tool)) 账号"
     }
 
     /// 在那台电脑上用这个账号开一个会话的命令

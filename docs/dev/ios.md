@@ -9,7 +9,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 | 服务器认手机不再要网页端（`guest`、`--no-guests`）；二维码改成给 App 的链接（带配对码）；协议核心 `ios/CcaRemoteKit`；测试用的手机 `ios/tools/ccaguest`；`tests/ios_kit.rs` | 做完了，随 3.7.0 发布（2026-11-25） |
-| 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机第一次试（第一个 TestFlight 构建）扫码必定「连不上服务器」：ATS，见下面「App」的 `Info.plist`；修好的第二个构建（20261125.183806）真机上配对、接入都成了（2026-11-26）。用户在真机上试出来的两处改了：接着的会话做完了手机不响（`Notifier`）、Claude Code 的屏幕拖不动（`SizedTerminalView`）；又加了推送（下面「推送」，模拟器里端到端测过）。这些在第三个构建里（20261126.54245，2026-11-26 传的）：真机上锁屏推送收到了、显示的是解开的字（2026-11-26，通知扩展、真的推送服务、Team 的服务器转都对）。之后用户提的两处改了：会话照最后打字的那一处排（手机接上不再让 Mac 上的变窄；下面「App」的 `TerminalBox`）、「关掉的会话也推送」开关（下面「推送」）。这两处随 cca 3.7.4 发布、在第四个构建里（20261126.72224，2026-11-26 传的），两个 Team 的服务器也部署成了 3.7.4（认 `sids`）；真机上还没试。3.7.5：「账号」页（下面「App」，像 Mac App 的总览和账号页）、额度用完 / 恢复的通知（下面「推送」）：协议核心和真的服务器、真的 cca 端到端测过，演示模式里截图看过；随 cca 3.7.5 发布、在第五个构建里（20261126.101645，2026-11-26 传的），两个 Team 的服务器也部署成了 3.7.5（level 2）；真机上还没试。远程启动（会话列表里的「新建会话」，下面「新建会话（远程启动）」）：协议核心、App、演示模式做好了：协议核心和真的 cca 的启动器、真的服务器端到端测过（`tests/ios_kit.rs` 的 `a_phone_launches_a_session`），演示模式里截图看过、模拟器里起过；随 cca 3.7.6 发布、在第六个构建里（20261126.183151，2026-11-27 传的），真机上还没试 |
+| 2 | Xcode 工程、SwiftUI 界面（沿用 Mac App 的样子）、终端（SwiftTerm 的 iOS 视图）、扫码、钥匙串、演示模式 | 做完了，在模拟器里端到端测过（2026-11-25）；真机第一次试（第一个 TestFlight 构建）扫码必定「连不上服务器」：ATS，见下面「App」的 `Info.plist`；修好的第二个构建（20261125.183806）真机上配对、接入都成了（2026-11-26）。用户在真机上试出来的两处改了：接着的会话做完了手机不响（`Notifier`）、Claude Code 的屏幕拖不动（`SizedTerminalView`）；又加了推送（下面「推送」，模拟器里端到端测过）。这些在第三个构建里（20261126.54245，2026-11-26 传的）：真机上锁屏推送收到了、显示的是解开的字（2026-11-26，通知扩展、真的推送服务、Team 的服务器转都对）。之后用户提的两处改了：会话照最后打字的那一处排（手机接上不再让 Mac 上的变窄；下面「App」的 `TerminalBox`）、「关掉的会话也推送」开关（下面「推送」）。这两处随 cca 3.7.4 发布、在第四个构建里（20261126.72224，2026-11-26 传的），两个 Team 的服务器也部署成了 3.7.4（认 `sids`）；真机上还没试。3.7.5：「账号」页（下面「App」，像 Mac App 的总览和账号页）、额度用完 / 恢复的通知（下面「推送」）：协议核心和真的服务器、真的 cca 端到端测过，演示模式里截图看过；随 cca 3.7.5 发布、在第五个构建里（20261126.101645，2026-11-26 传的），两个 Team 的服务器也部署成了 3.7.5（level 2）；真机上还没试。远程启动（会话列表里的「新建会话」，下面「新建会话（远程启动）」）：协议核心、App、演示模式做好了：协议核心和真的 cca 的启动器、真的服务器端到端测过（`tests/ios_kit.rs` 的 `a_phone_launches_a_session`），演示模式里截图看过、模拟器里起过；随 cca 3.7.6 发布、在第六个构建里（20261126.183151，2026-11-27 传的），真机上还没试。「账号」页照 Mac App 侧栏按工具分开（Claude / ChatGPT / Antigravity）、按套餐档位筛（2026-11-27，下面「App」的 `AccountsView`）：演示模式里截图看过，还没传 TestFlight |
 | 3 | TestFlight（`ios/testflight.sh`，见下面「TestFlight」）、App Store 审核（隐私清单、出口合规） | 上传脚本做好了；第一次上传 2026-11-25（1.0，构建号 20261125.110017，在一台登录着付费开发者账号的测试 Mac 上），到 2026-11-26 一共传了五个构建；App Store 审核没开始 |
 | 4 | 去掉网页端，服务器重新部署（每台都先问） | 等 App 上架 |
 
@@ -58,22 +58,30 @@
 （`ios/App/Assets.xcassets`：铺满、不带透明通道，圆角系统自己裁）。
 
 - `CcaApp.swift`：入口。启动参数 `-demo`（演示模式）、`-screen list|accounts|account|terminal|pair|settings|launch`（演示模式里直接开那一页，截图用；
-  `account` 另带 `-account N`：第几个账号，各台电脑的接着数）
+  `account` 另带 `-account N`：第几个账号，各台电脑的接着数；`accounts` 另带 `-tool 工具`、`-tier 档位`：看哪个工具的、只看哪一档，没写的是 Claude、全部套餐）
 - `Model/AppModel.swift`：配对过的电脑、它们上面的会话和账号的状态（同一次查到的：App 在前台、没开着终端时 15 秒查一次，和 Mac App 一样）、
   配对的进度、开着的终端；底下两页（`AppTab`：会话、账号，记着上次选的；设置在右上角的齿轮里）。终端推到点它的那一页的导航里（`terminalTab`：
-  账号页里点的返回账号页），开着终端时底下的标签栏藏起来；`openAccount`：点了额度的通知打开那个账号；
+  账号页里点的返回账号页），开着终端时底下的标签栏藏起来；`openAccount`：点了额度的通知打开那个账号（换到它的工具，筛着的档位不是它的就不筛了）；`accountTool`、`accountTier`：账号页看哪个工具、
+  只看哪一档套餐（记在 UserDefaults）；
   `TerminalSession`：一个终端的连接状态、标题，字节进出；`launchFor`、`launch`、`TerminalGrid`：新建会话（下面「新建会话（远程启动）」）
 - `Model/Backend.swift`：`Backend`（`LiveBackend` 是 CcaRemoteKit 的 `RemoteClient`）、`KeychainStore`：密钥存钥匙串
   （`AfterFirstUnlockThisDeviceOnly`、不同步到 iCloud），配对表存 App 自己的目录；删了 App 再装时第一次打开清掉钥匙串里留下的
 - `Model/Accounts.swift`：账号页的模型：`AccountRef`（配对编号 + 账号编号）、`AccountTrouble`、`AccountMood`（这个账号现在怎样：在用、额度用完 · 几点恢复、
   没登录、登错号、登录失效、先用它、快用完了，照 Mac App 总览的说法；端口、出口的问题手机上不知道）、`AccountCensus`（页头那一句：几个账号、几个在用、
-  空闲、额度用完、没登录……）、`PeerListing.sessions(of:)`（照 `aid`
-  找这个账号的会话）
-- `Model/Demo.swift`：演示模式（审核用、没有电脑时自己看看）：两台模拟的电脑、三个会话（一个只看、一个不在线）、几个账号（`DemoAccounts`）、
+  空闲、额度用完、没登录……）、`AccountShelf`（页头的工具切换和按档位筛：
+  有账号的工具照 claude、codex、agy 的先后，记着的工具没有账号了照头一个看；筛的胶囊是这个工具的账号里有的档位加上筛着的那一档，
+  记着的那一档哪个工具都没有账号了（或者所有账号只有一档）就不筛；一台电脑上列哪些：这个工具、这一档的，官方账号在前、
+  第三方 API 在后）、`PeerListing.sessions(of:)`（照 `aid` 找这个账号的会话）
+- `Model/Demo.swift`：演示模式（审核用、没有电脑时自己看看）：两台模拟的电脑、三个会话（一个只看、一个不在线）、几个账号（`DemoAccounts`：四档套餐、第三方 API 都有，ChatGPT 的两台电脑上都有）、
   新建会话的模板（`DemoLaunch`），终端里放一段写好的输出，敲的字只在本机回显；不联网、不碰钥匙串
 - `Views/`：欢迎页（没配对过）、会话列表（一台电脑一组，点一下接入，长按选只看）、终端页、配对（相机扫码用 VisionKit，扫不了时粘贴；
   经链接打开 App 时先问一句再配）、新建会话（`LaunchSheet`）、设置（外观、这台手机的名字、配对过的电脑和取消配对、演示模式、开源许可）；
-  账号页（`AccountsView`：一台电脑一组，一个账号一行：头像、名字、套餐、现在怎样、5 小时 / 本周的小条；那台电脑还没放、服务器太旧、不让这台手机看、
+  账号页（`AccountsView`：照 Mac App 侧栏、菜单栏面板，上面是工具切换（Claude / ChatGPT / Antigravity 的分段，只有一个工具有账号时不放）和
+  按套餐档位筛（「全部」和这个工具的账号里有的那几档，一档一个胶囊：徽记、叫法、这一档几个；放不下先不写个数，再放不下左右划；
+  这个工具只有一档、又没在筛时不放；换工具时筛着的那一档不变，换到的工具里没有这一档时也列着它、个数是 0，页头说一句「没有……的账号」和「看全部套餐」），
+  下面一句点名（列着的这些）；再下面一台电脑一组，只列这个工具（这一档）的账号，官方账号在前、第三方 API 在后，一个也没有的电脑不列；
+  一个账号一行：头像、名字、套餐（放不下套餐的徽章时只放档位的小徽记）、现在怎样（不写工具，第三方 API 的写上）、5 小时 / 本周的小条；
+  页头这一行的底色是透明的，可分组列表照样按行的圆角裁内容，上下要留出一点（不然左下角那一句的头一个字被裁掉）；那台电脑还在查、还没放、服务器太旧、不让这台手机看、
   账号太多没放下的各说一句，底下是多久以前放的；`AccountDetailView`：现在怎样、额度（`UsageViews`：5 小时、本周、按模型、Codex 还能重置几次、
   Antigravity 的几组）、每周用量的图（13 周，点一根看那一周；Antigravity、第三方 API 没有）、这个账号的会话（点一下接入））
 - `Terminal/TerminalSurface.swift`：唯一 `import SwiftTerm` 的文件，规矩和 Mac App 的同名文件一样：图形协议编的时候就去掉了，
@@ -202,7 +210,7 @@ TestFlight 先用用户自己的付费个人团队（2026-11-25），版本号�
 
 `bash ios/test.sh [--build]`：编（模拟器的调试版、真机的正式版）、查 SwiftTerm 编的是换过的那一份、正式版里没有 TestDriver、两个版本的 Info.plist 都关了 ATS（见「App」）；
 不带 `--build` 时还开一台模拟器（`cca-test iPhone`，没有就建），在里面跑 SwiftTerm 的自检（`macos/tools/swiftterm-check` 链 App 用的那一份
-SwiftTerm，`simctl spawn`），演示模式各页浅色 / 深色截图到 `ios/build/shots/`。要 Xcode 和模拟器的运行时（`xcodebuild -downloadPlatform iOS`）。
+SwiftTerm，`simctl spawn`），演示模式各页浅色 / 深色截图到 `ios/build/shots/`（「账号」页另有换到 ChatGPT 的 `accounts-codex`、只看标准套餐的 `accounts-standard`）。要 Xcode 和模拟器的运行时（`xcodebuild -downloadPlatform iOS`）。
 `bash ios/test.sh --check 派生数据目录 cca.app` 不编，只查编好的正式版那三项（SwiftTerm、TestDriver、ATS）：testflight.sh 拿它查归档。
 
 `cd cli && cargo test --profile kit -p cca-tests --test suite -- ios_kit`（`tests/ios_kit.rs`，回归的 unit 一节里也跑；要先 `cargo build --release`；没有 swiftc 时跳过）：命令行工具的 swiftc 把 CcaRemoteKit 的源码加上一个 main 编成 macOS 上的程序（编出来的在 `ios/build/test/`，源码没变不重编）。
