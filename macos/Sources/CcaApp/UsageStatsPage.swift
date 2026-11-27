@@ -18,8 +18,8 @@ struct UsageStatsPage: View {
                 VStack(alignment: .leading, spacing: 26) {
                     header(accounts, now: now)
                     TipCard(id: .usageStats, title: "这一页怎么看",
-                            message: "每个账号一行，一根竖条是一周：填得越满用得越多，填满就是这一周的额度用完了；填成灰色的那一周结束前一天没查到，实际可能更多。"
-                                + "右边是平均每周用到多少、几周用完、几周没用到一半，和本周到现在。点一行看这个账号的详情。")
+                            message: "每个账号一行，一根竖条代表一周：填得越满用得越多，填满表示这一周的额度已用完；灰色的那一周最后一天没有数据，实际可能更多。"
+                                + "右边是平均每周的用量、用完的周数、不到一半的周数，以及本周至今的用量。点击一行查看这个账号的详情。")
                     if model.state == nil {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -50,8 +50,8 @@ struct UsageStatsPage: View {
         let since = accounts.compactMap { $0.usageWeeks?.sinceEpoch }.min()
         return VStack(alignment: .leading, spacing: 6) {
             StatsPageTitle(text: "用量统计")
-            Text(since.map { "最近 12 周，每周用到额度的百分之几。cca 每次查用量时记一笔，" + Texts.weeksSince($0, now: now) + "。" }
-                    ?? "还没有记录：cca 每次查用量时会记下这一周用到多少，过完一周这里就有统计。")
+            Text(since.map { "最近 12 周每周用了多少额度。" + Texts.weeksSince($0, now: now) + "，cca 每次查询用量时更新。" }
+                    ?? "还没有记录：cca 每次查询用量时会记录本周的用量，满一周后这里就会显示统计。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -207,7 +207,7 @@ private struct StatsRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering.wrappedValue = $0 }
-        .help(summary ?? "点一下看这个账号的详情")
+        .help(summary ?? "点击查看这个账号的详情")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(a.displayName)
         .accessibilityValue(summary ?? (uw == nil ? "还没有记录" : "最近 12 周没有记录"))

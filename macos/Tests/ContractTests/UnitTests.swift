@@ -34,10 +34,10 @@ func textTests() {
     check("闲置：多久没动静", Texts.deviceState(idle, appLabel: "Claude App", now: now, calendar: sh) == "开着，闲置 25 分钟 · 终端里 1 个会话")
     let off = device(#"{"name":"m","state":"offline","cli":1,"last_used_epoch":\#(now - 86400),"seen_epoch":\#(now - 600)}"#)
     check("离线：上次使用，悬停时说可能休眠或断网", Texts.deviceState(off, appLabel: "", now: now, calendar: sh) == "离线 · 上次使用 昨天 17:00"
-          && Texts.deviceOfflineHelp(off, now: now).hasPrefix("10 分钟前最后一次回报"))
+          && Texts.deviceOfflineHelp(off, now: now).hasPrefix("10 分钟前最后一次上报"))
     let gone = device(#"{"name":"m","state":"zz_future","cli":0}"#)
-    check("不认识的状态当没在用", !gone.state.isKnown && Texts.deviceState(gone, appLabel: "", now: now) == "没在用")
-    check("设备的汇总", Texts.devicesSummary([using, idle, off]) == "1 台在用 · 1 台闲置" && Texts.devicesSummary([off]) == "现在没有设备在用")
+    check("不认识的状态当没在用", !gone.state.isKnown && Texts.deviceState(gone, appLabel: "", now: now) == "未使用")
+    check("设备的汇总", Texts.devicesSummary([using, idle, off]) == "1 台在用 · 1 台闲置" && Texts.devicesSummary([off]) == "暂无设备在用")
     check("颜色档", UsageLevel(percent: 69.9) == .normal && UsageLevel(percent: 70) == .warning && UsageLevel(percent: 89.9) == .warning
           && UsageLevel(percent: 90) == .critical && UsageLevel(percent: 120) == .critical)
     check("登录状态", Texts.login(.emailMismatch, loginEmail: "eve@example.com") == "登录的是 eve@example.com"
@@ -48,7 +48,7 @@ func textTests() {
     check("直连", Texts.route(.direct) == "直连" && Texts.via(.direct) == "直连" && Texts.via(.router) == "经路由器"
           && Texts.via(nil) == nil && Route.direct.isKnown)
     check("账号的登录状态读不了", StateErrorCode.accountUnreadable.isKnown && Texts.stateError(try! JSONDecoder().decode(
-        StateIssue.self, from: Data(#"{"code":"account_unreadable","tool":"claude","message":""}"#.utf8))).contains("当作没登录"))
+        StateIssue.self, from: Data(#"{"code":"account_unreadable","tool":"claude","message":""}"#.utf8))).contains("按未登录处理"))
     check("cca 不会用的失败码不在已知列表里", !FailCode(rawValue: "drift").isKnown)
     // 本机 UDP 走节点（config.local.udp，PROTOCOL 7.1）：旧版 cca、Linux 上没有；认不出的状态照原样留着，不当作没开
     func local(_ j: String) -> LocalConfig { try! JSONDecoder().decode(LocalConfig.self, from: Data(j.utf8)) }
@@ -60,15 +60,15 @@ func textTests() {
     let odd = local(#"{"configured":true,"client":"builtin","udp":{"node":"US-A","state":"later","installed":true,"running":true}}"#).udp
     check("本机 UDP：认不出的状态不当作没开、也不算在用", odd?.state.isKnown == false && odd?.state != .off && odd?.active == false
           && Texts.localUDP(odd!).contains("cca local udp"))
-    check("本机 UDP：装着的旧了、开着没在运行", Texts.localUDP(LocalUDP(node: "US-A", state: .stale, installed: true, running: true)).contains("重新装")
-          && Texts.localUDP(LocalUDP(node: "US-A", state: .ok, installed: true, running: false)).contains("没在运行"))
+    check("本机 UDP：装着的旧了、开着没在运行", Texts.localUDP(LocalUDP(node: "US-A", state: .stale, installed: true, running: true)).contains("重新安装")
+          && Texts.localUDP(LocalUDP(node: "US-A", state: .ok, installed: true, running: false)).contains("没有运行"))
     let away = local(#"{"configured":true,"client":"builtin","udp":{"node":"US-A","state":"ok","installed":true,"running":false,"other_vpn":"utun5"}}"#).udp
     check("本机 UDP：给别的 VPN 让开了（不算在用；旧版 cca 没有 other_vpn）", away?.otherVPN == "utun5" && away?.yielded == true && away?.active == false
-          && Texts.localUDP(away!).contains("让给了另一个 VPN（utun5）") && lu?.otherVPN == nil && lu?.yielded == false)
+          && Texts.localUDP(away!).contains("交给了另一个 VPN（utun5）") && lu?.otherVPN == nil && lu?.yielded == false)
     let paused = local(#"{"configured":true,"client":"builtin","udp":{"node":"US-A","state":"ok","installed":true,"running":false,"paused":true}}"#).udp
     check("本机 UDP：在家暂停着（路由器管着）不算没在运行的问题，说出门在外自动打开；旧版 cca 没有 paused 当作 false",
           paused == LocalUDP(node: "US-A", state: .ok, installed: true, running: false, paused: true) && paused?.active == false
-          && Texts.localUDP(paused!).contains("在家时路由器管着") && !Texts.localUDP(paused!).contains("没在运行")
+          && Texts.localUDP(paused!).contains("在家时由路由器处理") && !Texts.localUDP(paused!).contains("没有运行")
           && lu?.paused == false)
 
     section("补救")

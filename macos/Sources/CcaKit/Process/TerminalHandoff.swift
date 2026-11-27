@@ -173,11 +173,11 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     static let localUDPOn = Handoff(arguments: ["local", "udp", "on"], title: "本机 UDP 走节点",
                                     message: "让这台 Mac 的 UDP 也经节点出去；系统会弹出授权框问管理员密码。", inApp: true)
     static let localUDPPick = Handoff(arguments: ["local", "udp", "pick"], title: "本机 UDP 换节点",
-                                      message: "选这台 Mac 的 UDP 经哪个节点出去；系统会弹出授权框问管理员密码。", inApp: true)
-    static let localUDPOff = Handoff(arguments: ["local", "udp", "off"], title: "关掉本机 UDP 走节点",
-                                     message: "这台 Mac 的 UDP 恢复直连（系统服务留着，再打开不用密码）。", inApp: true)
-    static let localUDPUninstall = Handoff(arguments: ["local", "udp", "uninstall"], title: "删掉本机 UDP 走节点的系统服务",
-                                           message: "系统会弹出授权框问管理员密码。", inApp: true)
+                                      message: "选择这台 Mac 的 UDP 经哪个节点出去；系统会弹出授权框，要求输入管理员密码。", inApp: true)
+    static let localUDPOff = Handoff(arguments: ["local", "udp", "off"], title: "关闭本机 UDP 走节点",
+                                     message: "这台 Mac 的 UDP 恢复直连（系统服务保留，再次打开无需密码）。", inApp: true)
+    static let localUDPUninstall = Handoff(arguments: ["local", "udp", "uninstall"], title: "删除本机 UDP 走节点的系统服务",
+                                           message: "系统会弹出授权框，要求输入管理员密码。", inApp: true)
     static let install = Handoff(arguments: ["install"], title: "安装 cca", message: "在终端里完成 cca 的安装。")
     /// 远程会话的配对（PROTOCOL 9.2）：这台 Mac 显示配对码 / 输入另一台机器显示的配对码。
     static let remotePair = Handoff(arguments: ["remote", "pair"], title: "显示配对码",
@@ -201,7 +201,7 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     /// 已经接着的是更新，填别的服务器是搬过去。失败页的「改在终端里完成」也用它：终端里不写服务器时 cca 先问地址、SSH 用户和端口
     static func teamDeploy(team: String) -> Handoff {
         Handoff(arguments: ["team", "deploy", team], title: "部署 Team 的同步服务器",
-                message: "在终端里填服务器地址、SSH 用户和端口，接着部署（ssh 要的密码、私钥的密码也在那里输）。", inApp: true, needsForms: true)
+                message: "在终端中填写服务器地址、SSH 用户和端口，然后部署（ssh 需要的密码、私钥密码也在终端中输入）。", inApp: true, needsForms: true)
     }
 
     /// 删除一个 Team（这台 Mac 是它的管理员：`cca team leave <Team>`，PROTOCOL 4.14）：先问同意（`consent.team_delete`：说要经 SSH 卸掉它的
@@ -209,7 +209,7 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     /// 卸不掉时问要不要照样删、服务器留着（`team.keep_server`）。成员退出不用它（先同意再重跑：`CcaCommand.teamLeave`）
     static func teamDelete(team: String) -> Handoff {
         Handoff(arguments: ["team", "leave", team], title: "删除 Team",
-                message: "在终端里删除：先经 SSH 卸掉它的同步服务器（ssh 要的密码、私钥的密码在那里输），再删掉这台 Mac 上的根密钥。", inApp: true, needsForms: true)
+                message: "在终端中删除：先经 SSH 卸载它的同步服务器（ssh 需要的密码、私钥密码在终端中输入），再删除这台 Mac 上的根密钥。", inApp: true, needsForms: true)
     }
 
     /// 在终端里用编辑器改一个 Team 的配置（`cca team edit <Team>`，要 `hello.team_config`，PROTOCOL 4.14）：存盘退出以后 cca 列出会改什么、
@@ -222,7 +222,7 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
     static func installCLI(prefix: [String], tool: ToolID) -> Handoff {
         Handoff(arguments: prefix + ["install-cli"], title: "安装 \(Texts.cliCommand(tool)) 命令",
-                message: "在终端里用官方安装脚本安装；直连不通时会问要不要经内置代理装。装好后回到 cca。")
+                message: "在终端中用官方安装脚本安装；直连失败时会询问是否经内置代理安装。安装后回到 cca。")
     }
     static let update = Handoff(arguments: ["update"], title: "更新 cca", message: "在终端里把 cca 更新到最新版本。")
 

@@ -51,7 +51,7 @@ struct SessionsView: View {
             } else if let at = model.fetchedAt {
                 Text(Texts.agoPhrase(now - at.timeIntervalSince1970) + "查询").monospacedDigit()
             }
-            Text("电脑上用 cca 启动的会话（打开了「之后启动的会话可以重新接入」）才会列在这里。断开以后会话在电脑上照常运行。")
+            Text("只有电脑上用 cca 启动、且打开了「之后启动的会话可以重新接入」的会话才会显示在这里。断开后，会话仍在电脑上运行。")
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
@@ -70,16 +70,16 @@ private struct MachineSection: View {
         Section {
             if let l = listing {
                 if l.gone {
-                    Label("那台电脑取消了和这台手机的配对。要用得重新配对。", systemImage: "info.circle")
+                    Label("对方已取消配对，需要重新配对才能继续使用。", systemImage: "info.circle")
                         .font(.callout).foregroundStyle(.secondary)
-                    Button("从这里删掉", role: .destructive) { model.unpair(peer) }
+                    Button("移除", role: .destructive) { model.unpair(peer) }
                 } else if let f = l.failure {
                     Label(Texts.listFailure(f.code), systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.orange)
                 } else {
                     if l.sessions.isEmpty {
-                        Text(l.launcher == nil ? "现在没有可以接入的会话。在那台电脑的终端里用 cca 启动一个（比如 cca @账号），它就会出现在这里。"
-                             : "现在没有可以接入的会话。点「新建会话」在那台电脑上起一个，或者在那台电脑的终端里用 cca 启动。")
+                        Text(l.launcher == nil ? "暂无可接入的会话。在电脑的终端里用 cca 启动一个（例如 cca @账号），就会显示在这里。"
+                             : "暂无可接入的会话。点「新建会话」在电脑上启动一个，或在电脑的终端里用 cca 启动。")
                             .font(.callout).foregroundStyle(.secondary)
                     } else {
                         ForEach(l.sessions) { s in
@@ -91,7 +91,7 @@ private struct MachineSection: View {
                     }
                 }
             } else {
-                HStack { ProgressView(); Text("正在查…").foregroundStyle(.secondary) }.font(.callout)
+                HStack { ProgressView(); Text("正在查询…").foregroundStyle(.secondary) }.font(.callout)
             }
         } header: {
             HStack(spacing: 8) {
@@ -118,14 +118,14 @@ private struct LaunchRow: View {
                     .foregroundStyle(launcher.online ? Color.accentColor : Color.secondary)
                 Spacer(minLength: 6)
                 if !launcher.online {
-                    Text("不在线").font(.caption).foregroundStyle(.secondary)
+                    Text("离线").font(.caption).foregroundStyle(.secondary)
                 } else if launcher.info.templates.isEmpty {
-                    Text("还没有模板").font(.caption).foregroundStyle(.secondary)
+                    Text("暂无模板").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
         .disabled(!launcher.online)
-        .accessibilityHint(launcher.online ? "挑一个模板，在那台电脑上起一个新的会话" : "那台电脑这会儿没连着服务器")
+        .accessibilityHint(launcher.online ? "选择一个模板，在电脑上启动新会话" : "电脑暂时没有连接服务器")
     }
 }
 
@@ -154,7 +154,7 @@ struct SessionRow: View {
                 }
                 Spacer(minLength: 6)
                 if !session.online {
-                    Text("不在线").font(.caption).foregroundStyle(.secondary)
+                    Text("离线").font(.caption).foregroundStyle(.secondary)
                 } else {
                     Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                 }
@@ -171,6 +171,6 @@ struct SessionRow: View {
                 Button { model.attach(session, on: peer, readOnly: true) } label: { Label("只看，不操作", systemImage: "eye") }
             }
         }
-        .accessibilityHint(session.online ? (session.info.viewOnly ? "打开终端看这个会话" : "打开终端，看和操作这个会话") : "那台电脑不在线")
+        .accessibilityHint(session.online ? (session.info.viewOnly ? "打开终端查看这个会话" : "打开终端，查看和操作这个会话") : "电脑离线")
     }
 }

@@ -478,7 +478,7 @@ final class AppModel {
                     phase = .missingCca
                     return
                 }
-                message = "没能运行 cca"
+                message = "无法运行 cca"
             case CcaError.timedOut:
                 message = "cca 没有响应（_gui hello 超时）"
             default:
@@ -864,7 +864,7 @@ final class AppModel {
             if f.reason == .cancelled { break }
             if manual {
                 usageFailure[t] = nil   // 已经弹框说过了，不再留着后台那一条
-                present(.failure(FailureInfo(title: "没能刷新用量", failure: f)))
+                present(.failure(FailureInfo(title: "刷新用量失败", failure: f)))
             } else {
                 usageFailure[t] = f
             }
@@ -875,21 +875,21 @@ final class AppModel {
     // MARK: 动作
 
     func openApp(_ ref: AccountRef) {
-        launch(ref, kind: .app, command: .app(ref.tool, key: ref.key), title: "没能打开 \(appLabel(ref.tool))")
+        launch(ref, kind: .app, command: .app(ref.tool, key: ref.key), title: "无法打开 \(appLabel(ref.tool))")
     }
 
     func openWeb(_ ref: AccountRef) {
-        launch(ref, kind: .web, command: .web(ref.tool, key: ref.key), title: "没能打开网页版")
+        launch(ref, kind: .web, command: .web(ref.tool, key: ref.key), title: "无法打开网页版")
     }
 
     /// 查看 API 额度：在账号自己的浏览器里打开控制台的账单页（网址是 cca 的事）。
     func openBilling(_ ref: AccountRef) {
-        launch(ref, kind: .billing, command: .billing(ref.tool, key: ref.key), title: "没能打开账单页")
+        launch(ref, kind: .billing, command: .billing(ref.tool, key: ref.key), title: "无法打开账单页")
     }
 
     /// 查看重置次数：在账号自己的浏览器里打开 claude.ai 的用量页（Claude 账号的次数和到期日只在那里显示）。
     func openLimitResets(_ ref: AccountRef) {
-        launch(ref, kind: .limitResets, command: .limitResets(ref.tool, key: ref.key), title: "没能打开用量页")
+        launch(ref, kind: .limitResets, command: .limitResets(ref.tool, key: ref.key), title: "无法打开用量页")
     }
 
     private func launch(_ ref: AccountRef, kind: ActivityKind, command: CcaCommand, title: String) {
@@ -924,7 +924,7 @@ final class AppModel {
             let health = doc?.accounts.first { $0.key == ref.key }?.health
             var text = nonEmpty(health?.message) ?? "检测完成"
             if let ips = doc?.sharedExitIPs, !ips.isEmpty { text += "（几个账号共用出口 IP：\(ips.joined(separator: "、"))）" }
-            self.finish(r, failureTitle: "没能检测出口", success: text)
+            self.finish(r, failureTitle: "出口检测失败", success: text)
             await self.afterAction()
         }
     }
@@ -972,7 +972,7 @@ final class AppModel {
             })
             guard let self else { return }
             self.syncActivity = nil
-            self.finish(r, failureTitle: "没能同步路由器", success: "路由器已同步")
+            self.finish(r, failureTitle: "路由器同步失败", success: "路由器已同步")
             await self.afterAction()
         }
     }
@@ -990,7 +990,7 @@ final class AppModel {
         case .refused:
             showToast("没有同意，没有做任何改动", .info)
         case .needsConsent:
-            showToast("需要你同意才能继续", .warning)
+            showToast("需要你的同意才能继续", .warning)
         case .terminal(let e):
             presentHandoff(e)
         case .failed(let f):
@@ -1040,14 +1040,14 @@ final class AppModel {
                 self.activities[ref] = nil
                 self.aliasEditing = nil
                 if self.selection == .account(ref) { self.selection = .account(AccountRef(tool: ref.tool, key: newKey)) }
-                self.showToast(newKey == ref.key ? "别名没有变" : "别名改好了：登录、资料和端口都不变", .success)
+                self.showToast(newKey == ref.key ? "别名未改变" : "别名已修改：登录、资料和端口都不变", .success)
             case .failed(let f) where f.reason == .command:
                 self.activities[ref] = nil
-                self.renameError = nonEmpty(f.message) ?? "没能改别名"
+                self.renameError = nonEmpty(f.message) ?? "修改别名失败"
             default:
                 self.activities[ref] = nil
                 self.aliasEditing = nil
-                self.finish(r, failureTitle: "没能改别名", success: "别名改好了")
+                self.finish(r, failureTitle: "修改别名失败", success: "别名已修改")
             }
         }
     }
@@ -1255,7 +1255,7 @@ final class AppModel {
         do {
             url = try TerminalHandoff.write(h, ccaPath: path, directory: handoffDirectory, dockTidy: hello?.dock == 1)
         } catch {
-            showToast("没能写交接文件：\(error.localizedDescription)", .warning)
+            showToast("无法写入交接文件：\(error.localizedDescription)", .warning)
             return
         }
         hooks.openInTerminal(url, app) { [weak self] opened in
@@ -1274,9 +1274,9 @@ final class AppModel {
         hooks.copy(h.pasteCommand(ccaPath: path))
         hooks.openTerminalApp(app) { [weak self] opened in
             if opened {
-                self?.showToast("命令已复制：到 \(app.name) 的本地终端里粘贴运行", .info)
+                self?.showToast("命令已复制：请在 \(app.name) 的本地终端中粘贴运行", .info)
             } else {
-                self?.showToast("打不开 \(app.name)，命令已复制，可以粘贴到别的终端里运行", .warning)
+                self?.showToast("无法打开 \(app.name)，命令已复制，可以粘贴到其他终端中运行", .warning)
             }
         }
     }
@@ -1286,8 +1286,8 @@ final class AppModel {
         guard TerminalHandoff.reclaim(url) else { return }
         var fallback = h
         fallback.systemTerminal = true
-        fallback.title = "\(app.name) 没有运行这条命令"
-        fallback.message = "可能它在等你确认，或者这个版本不支持被别的 App 打开。可以改用系统自带的「终端」，也可以复制命令自己运行（默认终端在「设置」里换）。"
+        fallback.title = "\(app.name) 未运行这条命令"
+        fallback.message = "可能它在等你确认，或当前版本不支持被其他 App 打开。可以改用系统自带的「终端」，也可以复制命令自行运行（默认终端可在「设置」中更换）。"
         present(.handoff(fallback))
     }
 
@@ -1305,10 +1305,10 @@ final class AppModel {
         let r = await client.execute(.keyShow(a.tool, key: a.key), prompter: nil)
         if r.isSuccess, let v = APIKeyValue(cca: r.last?.stdout ?? Data()) { return v }
         if r.isSuccess {
-            present(.failure(FailureInfo(title: "没能读取 API key", failure: Failure(reason: .command, code: nil, message: "cca 给的不是一个 key",
+            present(.failure(FailureInfo(title: "无法读取 API key", failure: Failure(reason: .command, code: nil, message: "cca 返回的不是有效的 key",
                                                                                  stderrTail: "", exitCode: 0, tool: a.tool, key: a.key))))
         } else {
-            finish(r, failureTitle: "没能读取 API key", success: "")
+            finish(r, failureTitle: "无法读取 API key", success: "")
         }
         return nil
     }
@@ -1318,7 +1318,7 @@ final class AppModel {
         Task { [weak self] in
             guard let self, let v = await self.readAPIKey(a) else { return }
             self.hooks.copySecret(v.text)
-            self.showToast("已复制 \(a.displayName) 的 API key（60 秒后从剪贴板清掉）", .success)
+            self.showToast("已复制 \(a.displayName) 的 API key（60 秒后从剪贴板清除）", .success)
         }
     }
 
@@ -1340,7 +1340,7 @@ final class AppModel {
         Task { [weak self] in
             let r = await client.execute(.keyForget(a.tool, key: a.key), prompter: prompter)
             guard let self else { return }
-            self.finish(r, failureTitle: "没能删除 API key", success: r.resultEvent?.message ?? "已删除记下的 API key")
+            self.finish(r, failureTitle: "删除 API key 失败", success: r.resultEvent?.message ?? "已删除记录的 API key")
             await self.afterAction()
         }
     }
@@ -1390,7 +1390,7 @@ final class AppModel {
                 self.mailLoading.remove(ref)
                 if case CcaError.cancelled = error { return }
                 var s = self.mailLists[ref] ?? MailListSnapshot()
-                s.error = (error as? CcaError)?.description ?? "没能查到登录邮件"
+                s.error = (error as? CcaError)?.description ?? "无法查询登录邮件"
                 self.mailLists[ref] = s
             }
         }
@@ -1398,7 +1398,7 @@ final class AppModel {
 
     /// 在这个账号专属的浏览器里打开某封登录邮件（cca 重新取、再核对、打开里面的链接）。
     func openMailMessage(_ ref: AccountRef, _ handle: MailHandle) {
-        launch(ref, kind: .mail, command: .mailOpen(ref.tool, key: ref.key, msg: handle.argument), title: "没能打开登录邮件")
+        launch(ref, kind: .mail, command: .mailOpen(ref.tool, key: ref.key, msg: handle.argument), title: "无法打开登录邮件")
     }
 
     /// 配置 / 更换邮箱助手：account 为 nil 配默认（所有 Claude 账号共用），否则给这个账号单独配。
@@ -1418,7 +1418,7 @@ final class AppModel {
             guard let self else { return }
             self.activities[ref] = nil
             self.mailLists[ref] = nil
-            self.finish(r, failureTitle: "没能移除邮箱助手", success: r.resultEvent?.message ?? "已移除")
+            self.finish(r, failureTitle: "移除邮箱助手失败", success: r.resultEvent?.message ?? "已移除")
             await self.afterAction()
         }
     }
@@ -1439,7 +1439,7 @@ final class AppModel {
             guard let self else { return }
             self.activities[ref] = nil
             self.mailLists[ref] = nil
-            self.finish(r, failureTitle: "没能关掉信任转发中转", success: r.resultEvent?.message ?? "已关掉")
+            self.finish(r, failureTitle: "关闭信任转发中转失败", success: r.resultEvent?.message ?? "已关闭")
             await self.afterAction()
         }
     }
@@ -1487,7 +1487,7 @@ final class AppModel {
             if r.isSuccess, doc?.outcome == .nothingToReset {
                 self.showToast(text, .info)
             } else {
-                self.finish(r, failureTitle: "没能重置额度", success: text)
+                self.finish(r, failureTitle: "重置额度失败", success: text)
             }
             await self.afterAction()
             // 重置成了却没读到重置后的用量：再查一次，不然页面上还是重置前的数
@@ -1531,7 +1531,7 @@ final class AppModel {
                                                     fetchedEpoch: doc.generatedEpoch ?? Date().timeIntervalSince1970)
             } else if r.failure?.reason != .cancelled {
                 var s = self.devices[ref] ?? DevicesSnapshot()
-                s.error = nonEmpty(r.failure?.message) ?? "没能查到这个账号连着的设备"
+                s.error = nonEmpty(r.failure?.message) ?? "无法获取使用这个账号的设备"
                 self.devices[ref] = s
             }
         }
@@ -1672,7 +1672,7 @@ final class AppModel {
                 self.teamSnapshots[t.id] = TeamSnapshot(team: t.id, doc: doc, error: nil, fetchedEpoch: Date().timeIntervalSince1970)
             } else if r.failure?.reason != .cancelled {
                 var s = self.teamSnapshots[t.id] ?? TeamSnapshot(team: t.id)
-                s.error = nonEmpty(r.failure?.message) ?? "没能问到这个 Team 的设备"
+                s.error = nonEmpty(r.failure?.message) ?? "无法获取这个 Team 的设备"
                 self.teamSnapshots[t.id] = s
             }
         }
@@ -1713,7 +1713,7 @@ final class AppModel {
         let name = Self.teamConfigFileName(t)
         Task { [weak self] in
             guard let self, let path = await self.hooks.chooseSaveFile(name) else { return }
-            self.runTeam(.teamExport(team: t.id, path: path), failureTitle: "没能导出「\(t.name)」的配置", success: "导出了", refresh: nil)
+            self.runTeam(.teamExport(team: t.id, path: path), failureTitle: "导出「\(t.name)」的配置失败", success: "已导出", refresh: nil)
         }
     }
 
@@ -1723,7 +1723,7 @@ final class AppModel {
         guard phase == .ready, teamConfigAvailable, t.isAdmin, !teamBusy else { return }
         Task { [weak self] in
             guard let self, let path = await self.hooks.chooseOpenFile() else { return }
-            self.runTeam(.teamImport(team: t.id, path: path), failureTitle: "没能导入「\(t.name)」的配置", success: "换好了",
+            self.runTeam(.teamImport(team: t.id, path: path), failureTitle: "导入「\(t.name)」的配置失败", success: "已导入",
                          refresh: self.teamExpanded.contains(t.id) ? t : nil)
         }
     }
@@ -1742,7 +1742,7 @@ final class AppModel {
 
     /// 各个 Team 同步一次配置：同步到新的，账号表马上照它改
     func syncTeams() {
-        runTeam(.teamSync, failureTitle: "没能同步 Team 的配置", success: "已同步", refresh: nil)
+        runTeam(.teamSync, failureTitle: "同步 Team 的配置失败", success: "已同步", refresh: nil)
     }
 
     /// 退出一个 Team（cca 先问同意：`consent.team_leave`）。管理员是删除：提问会话（`Handoff.teamDelete`，`consent.team_delete`——先经 SSH 卸掉
@@ -1753,18 +1753,18 @@ final class AppModel {
             run(.teamDelete(team: t.id))
             return
         }
-        runTeam(.teamLeave(team: t.id), failureTitle: "没能退出「\(t.name)」", success: "退出了", refresh: nil)
+        runTeam(.teamLeave(team: t.id), failureTitle: "退出「\(t.name)」失败", success: "已退出", refresh: nil)
     }
 
     /// 移除一台设备、撤回还没用的邀请（cca 先问同意：`consent.team_revoke`）
     func revokeTeamDevice(_ t: TeamEntry, _ d: TeamDevice) {
-        runTeam(.teamRevoke(team: t.id, device: d.id), failureTitle: "没能移除「\(d.label)」", success: "移除了", refresh: t)
+        runTeam(.teamRevoke(team: t.id, device: d.id), failureTitle: "移除「\(d.label)」失败", success: "已移除", refresh: t)
     }
 
     /// 授予 / 收回一台设备的管理员身份（只有建 Team 的设备能；cca 先问同意：`consent.team_admin_add` / `team_admin_remove`）
     func setTeamAdmin(_ t: TeamEntry, _ d: TeamDevice, add: Bool) {
         guard t.isOwner else { return }
-        runTeam(.teamAdmin(team: t.id, device: d.id, add: add), failureTitle: add ? "没能授予「\(d.label)」管理员身份" : "没能收回「\(d.label)」的管理员身份",
+        runTeam(.teamAdmin(team: t.id, device: d.id, add: add), failureTitle: add ? "授予「\(d.label)」管理员身份失败" : "收回「\(d.label)」的管理员身份失败",
                 success: add ? "授予了" : "收回了", refresh: t)
     }
 
@@ -1776,13 +1776,13 @@ final class AppModel {
         } else {
             changes = [(on ? "+" : "-") + a.spec]
         }
-        runTeam(.teamGrant(team: t.id, device: d.id, changes: changes), failureTitle: "没能改「\(d.label)」能用的账号", success: "改好了", refresh: t)
+        runTeam(.teamGrant(team: t.id, device: d.id, changes: changes), failureTitle: "修改「\(d.label)」可用的账号失败", success: "已修改", refresh: t)
     }
 
     /// 全部账号都给这台设备（以后加进 Team 的也给）/ 一个都不给
     func setTeamGrantAll(_ t: TeamEntry, _ d: TeamDevice, _ all: Bool) {
-        runTeam(.teamGrant(team: t.id, device: d.id, changes: [all ? "all" : "none"]), failureTitle: "没能改「\(d.label)」能用的账号",
-                success: "改好了", refresh: t)
+        runTeam(.teamGrant(team: t.id, device: d.id, changes: [all ? "all" : "none"]), failureTitle: "修改「\(d.label)」可用的账号失败",
+                success: "已修改", refresh: t)
     }
 
     /// 「改名…」：这台设备的名字换成输入框（先填着现在的名字）
@@ -1799,7 +1799,7 @@ final class AppModel {
             teamRename = nil
             return
         }
-        runTeam(.teamRename(team: t.id, device: d.id, name: name), failureTitle: "没能给「\(d.label)」改名字", success: "改好了", refresh: t) { [weak self] ok in
+        runTeam(.teamRename(team: t.id, device: d.id, name: name), failureTitle: "修改「\(d.label)」的名称失败", success: "已修改", refresh: t) { [weak self] ok in
             if ok, self?.teamRename == draft { self?.teamRename = nil }
         }
     }
@@ -1818,21 +1818,21 @@ final class AppModel {
             teamAlias = nil
             return
         }
-        runTeam(.teamAlias(team: t.id, account: a.spec, alias: alias), failureTitle: "没能改 \(a.email) 的别名", success: "改好了", refresh: t) { [weak self] ok in
+        runTeam(.teamAlias(team: t.id, account: a.spec, alias: alias), failureTitle: "修改 \(a.email) 的别名失败", success: "已修改", refresh: t) { [weak self] ok in
             if ok, self?.teamAlias == draft { self?.teamAlias = nil }
         }
     }
 
     /// 锁定（解开）这个 Team 里账号的别名：锁定了，各台设备上照 Team 给的用，自己改过的换回来，在设备上改不了
     func setTeamAliasLock(_ t: TeamEntry, _ on: Bool) {
-        runTeam(.teamAliasLock(team: t.id, on: on), failureTitle: on ? "没能锁定别名" : "没能解开别名", success: on ? "已锁定别名" : "已解开别名",
+        runTeam(.teamAliasLock(team: t.id, on: on), failureTitle: on ? "锁定别名失败" : "解锁别名失败", success: on ? "已锁定别名" : "已解锁别名",
                 refresh: t)
     }
 
     /// 定一个账号走哪个节点（各台设备下次同步配置时跟着换）
     func mapTeamAccount(_ t: TeamEntry, _ a: TeamAccount, node: String) {
         guard node != a.node, !node.isEmpty else { return }
-        runTeam(.teamMap(team: t.id, tool: a.tool, email: a.email, node: node), failureTitle: "没能改 \(a.email) 走的节点", success: "改好了",
+        runTeam(.teamMap(team: t.id, tool: a.tool, email: a.email, node: node), failureTitle: "修改 \(a.email) 的节点失败", success: "已修改",
                 refresh: t)
     }
 
@@ -1863,7 +1863,7 @@ final class AppModel {
             guard let self else { return }
             self.teamBusy = false
             guard r.isSuccess else {
-                self.finish(r, failureTitle: "没发成邀请", success: nil)
+                self.finish(r, failureTitle: "创建邀请失败", success: nil)
                 return
             }
             let line = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1873,7 +1873,7 @@ final class AppModel {
             }
             self.hooks.copySecret(line)
             self.teamInvite = TeamInviteDraft()
-            self.showToast("给「\(label)」的邀请已复制（60 秒后从剪贴板清掉）：只发给那台设备的主人，它就是那台设备的密钥；对方「粘贴邀请链接…」加入", .success)
+            self.showToast("给「\(label)」的邀请已复制（60 秒后从剪贴板清除）：只发给那台设备的主人，它相当于那台设备的密钥；对方通过「粘贴邀请链接…」加入", .success)
             self.refreshTeamDevices(t, manual: true)
         }
     }
@@ -1939,7 +1939,7 @@ final class AppModel {
                     self.refreshRemoteTemplates()
                 }
             } else if r.failure?.reason != .cancelled {
-                self.remote.error = nonEmpty(r.failure?.message) ?? "没能查到可以接入的会话"
+                self.remote.error = nonEmpty(r.failure?.message) ?? "无法获取可接入的会话"
             }
             if self.remoteAgain {
                 self.remoteAgain = false
@@ -1950,17 +1950,17 @@ final class AppModel {
 
     /// 开关：之后在终端里启动的会话放不放进会话宿主里运行（放进去的才接得上）
     func setRemoteEnabled(_ on: Bool) {
-        runRemote(.remoteSwitch(on: on), failureTitle: on ? "没能打开远程会话" : "没能关闭远程会话")
+        runRemote(.remoteSwitch(on: on), failureTitle: on ? "打开远程会话失败" : "关闭远程会话失败")
     }
 
     /// 配对过的那台机器能对这台 Mac 的会话做什么
     func setRemoteAccess(_ peer: RemotePeer, _ access: RemoteAccess) {
         guard peer.incoming != access else { return }
-        runRemote(.remoteAllow(peer: peer.id, access: access), failureTitle: "没能改「\(peer.name)」能做什么")
+        runRemote(.remoteAllow(peer: peer.id, access: access), failureTitle: "修改「\(peer.name)」的权限失败")
     }
 
     func unpairRemote(_ peer: RemotePeer) {
-        runRemote(.remoteUnpair(peer: peer.id), failureTitle: "没能取消和「\(peer.name)」的配对")
+        runRemote(.remoteUnpair(peer: peer.id), failureTitle: "取消与「\(peer.name)」的配对失败")
     }
 
     /// cca 能结束会话（`hello.remote_end`；旧版 cca 没有：不给「结束」）
@@ -1970,7 +1970,7 @@ final class AppModel {
     /// 意味着什么都是 cca 给的），同意了才结束。别的机器上的会话不归这里管（到那台机器上结束，或者接进去让里面的程序自己退出）
     func endRemote(_ session: RemoteSession) {
         guard remoteEndAvailable, session.isLocal else { return }
-        runRemote(.remoteEnd(session: session.id), failureTitle: "没能结束这个会话")
+        runRemote(.remoteEnd(session: session.id), failureTitle: "结束会话失败")
     }
 
     /// 开关、对方能做什么、取消配对、结束会话（只有它 cca 要先问同意，走平时的重跑流程）：做完显示 cca 说的那句话，再查一次
@@ -1982,7 +1982,7 @@ final class AppModel {
             let r = await client.execute(command, prompter: prompter)
             guard let self else { return }
             self.remoteBusy = false
-            self.finish(r, failureTitle: failureTitle, success: nonEmpty(r.resultEvent?.message) ?? "改好了")
+            self.finish(r, failureTitle: failureTitle, success: nonEmpty(r.resultEvent?.message) ?? "已修改")
             self.refreshRemote(manual: true)
         }
     }
@@ -2029,7 +2029,7 @@ final class AppModel {
             if let doc {
                 self.remoteTemplates = RemoteTemplatesSnapshot(doc: doc, error: nil)
             } else if r.failure?.reason != .cancelled {
-                self.remoteTemplates.error = nonEmpty(r.failure?.message) ?? "没能查到模板"
+                self.remoteTemplates.error = nonEmpty(r.failure?.message) ?? "无法获取模板"
             }
             if self.remoteTemplatesAgain {
                 self.remoteTemplatesAgain = false
@@ -2052,7 +2052,7 @@ final class AppModel {
     func remoteLaunchBlocked(_ peer: RemotePeer) -> String? {
         if peer.launch { return nil }
         if !peer.web, !remoteLaunchMachinesAvailable { return "只有手机能远程启动会话" }
-        if peer.incoming != .control { return "先把「它接入这台 Mac 时」改成「看和操作」" }
+        if peer.incoming != .control { return "请先把「它接入这台 Mac 时」改为「查看和操作」" }
         return nil
     }
 
@@ -2065,7 +2065,7 @@ final class AppModel {
     /// （`consent.remote_launch`，对话框里说的都是 cca 给的），同意了重跑；做完再查一次列表和模板
     func setRemoteLaunch(_ peer: RemotePeer, _ on: Bool) {
         guard remoteLaunchOffered(peer), peer.launch != on, !on || remoteLaunchBlocked(peer) == nil else { return }
-        runRemote(.remoteLaunch(peer: peer.id, on: on), failureTitle: on ? "没能让「\(peer.name)」远程启动" : "没能关掉「\(peer.name)」的远程启动")
+        runRemote(.remoteLaunch(peer: peer.id, on: on), failureTitle: on ? "允许「\(peer.name)」远程启动失败" : "关闭「\(peer.name)」的远程启动失败")
     }
 
     /// 模板可以选的工具（启用了的）
@@ -2132,11 +2132,11 @@ final class AppModel {
             guard let self else { return }
             d.saving = false
             if case .failed(let f) = r.status, f.reason == .command {
-                d.error = nonEmpty(f.message) ?? "没能存好模板"
+                d.error = nonEmpty(f.message) ?? "保存模板失败"
                 return
             }
             if self.sheet == .remoteTemplate(d) { self.sheet = nil }
-            self.finish(r, failureTitle: "没能存好模板", success: nonEmpty(r.resultEvent?.message) ?? "模板存好了")
+            self.finish(r, failureTitle: "保存模板失败", success: nonEmpty(r.resultEvent?.message) ?? "模板已保存")
             self.refreshRemote(manual: true)
         }
     }
@@ -2144,7 +2144,7 @@ final class AppModel {
     /// 删掉一个模板（界面先问过一句；cca 不发 consent）
     func removeRemoteTemplate(_ t: RemoteTemplate) {
         guard remoteLaunchAvailable else { return }
-        runRemote(.remoteTemplateRemove(id: t.id), failureTitle: "没能删掉模板「\(t.name)」")
+        runRemote(.remoteTemplateRemove(id: t.id), failureTitle: "删除模板「\(t.name)」失败")
     }
 
     // MARK: 用别的机器上的模板新建会话（PROTOCOL 9.5）
@@ -2181,7 +2181,7 @@ final class AppModel {
             d.starting = false
             guard let doc else {
                 if r.failure?.reason == .cancelled { return }
-                let why = nonEmpty(r.failure?.message) ?? "没能在「\(d.launcher.machine)」上新建会话"
+                let why = nonEmpty(r.failure?.message) ?? "无法在「\(d.launcher.machine)」上新建会话"
                 d.error = why
                 if self.sheet != .remoteLaunch(d) { self.showToast(why, .warning) }
                 self.refreshRemote(manual: true)
@@ -2192,7 +2192,7 @@ final class AppModel {
             if let s = doc.session, s.attachable {
                 self.attachRemote(s, readOnly: false)
             } else {
-                self.showToast("在「\(d.launcher.machine)」上起好了会话，它还没在服务器上登记好：过一会儿在列表里接入", .info)
+                self.showToast("已在「\(d.launcher.machine)」上启动会话，但它还没在服务器上完成登记：请稍后在列表中接入", .info)
             }
         }
     }
@@ -2214,7 +2214,7 @@ final class AppModel {
             return
         }
         if old == nil, remoteTerminals.count >= AppModel.remoteTerminalLimit {
-            showToast("最多同时开 \(AppModel.remoteTerminalLimit) 个终端：先关掉一个再接入", .warning)
+            showToast("最多同时打开 \(AppModel.remoteTerminalLimit) 个终端：请先关闭一个再接入", .warning)
             return
         }
         let t = RemoteTerminal(session: session, readOnly: viewing) { [weak self] arguments, cols, rows, onEvent in
@@ -2370,7 +2370,7 @@ final class AppModel {
             case .failed(let f) where f.code == .costOff:
                 self.costFailure = nil   // 关掉了、没有能统计的账号：读了 state 金额就不显示了
             case .failed(let f):
-                self.costFailure = nonEmpty(f.message) ?? "没能统计折合金额"
+                self.costFailure = nonEmpty(f.message) ?? "折合金额统计失败"
             default:
                 break
             }
@@ -2397,7 +2397,7 @@ final class AppModel {
             clientUpdatesError = nil
         } catch CcaError.cancelled {
         } catch {
-            clientUpdatesError = "没能读取客户端更新状态：\(error)"
+            clientUpdatesError = "无法读取客户端更新状态：\(error)"
         }
     }
 
@@ -2518,7 +2518,7 @@ final class AppModel {
             } else {
                 self.defaults.set(now - Self.updateCheckInterval + 3 * 3600, forKey: Prefs.updateCheckedAt)
                 if announce, let f = r.failure, f.reason != .cancelled {
-                    self.showToast("没能检查更新：\(f.message)", .warning)
+                    self.showToast("检查更新失败：\(f.message)", .warning)
                 }
             }
         }
@@ -2531,9 +2531,9 @@ final class AppModel {
             defaults.set(nil, forKey: Prefs.updateDismissed)
         }
         if hello?.devMode == true {
-            showToast(u.available ? "有新版本 \(u.latest ?? "")：开发模式下在仓库里 git pull 更新" : "已是最新版本（开发模式）", .info)
+            showToast(u.available ? "有新版本 \(u.latest ?? "")：开发模式下请在仓库中 git pull 更新" : "已是最新版本（开发模式）", .info)
         } else if let v = availableVersion {
-            showToast("有新版本 \(v)：点窗口顶上的「更新并重新打开」", .info)
+            showToast("有新版本 \(v)：点窗口顶部的「更新并重新打开」", .info)
         } else {
             showToast("已是最新版本 \(hello?.ccaVersion ?? u.latest ?? "")", .success)
         }
@@ -2575,7 +2575,7 @@ final class AppModel {
             guard let self else { return }
             guard r.isSuccess else {
                 self.updateStep = nil
-                self.finish(r, failureTitle: "没能把 cca 更新到 \(v)", success: "")
+                self.finish(r, failureTitle: "更新 cca 到 \(v) 失败", success: "")
                 return
             }
             await self.connect()   // hello 换成新版本的 cca（App 的版本对不上了，顶上换成“更新并重新打开”的进度）
@@ -2599,15 +2599,15 @@ final class AppModel {
         let r = await client.execute(.guiUpdate, prompter: hooks.prompter)
         updateStep = nil
         guard r.isSuccess else {
-            finish(r, failureTitle: "没能下载新版本的 cca App", success: "")
+            finish(r, failureTitle: "下载新版本的 cca App 失败", success: "")
             return
         }
         do {
             try await client.relaunchAfterUpdate(pid: ProcessInfo.processInfo.processIdentifier)
         } catch {
-            let f = Failure(reason: .launch, code: nil, message: "没能运行 cca gui update --relaunch：\(error)", stderrTail: "",
+            let f = Failure(reason: .launch, code: nil, message: "无法运行 cca gui update --relaunch：\(error)", stderrTail: "",
                             exitCode: nil, tool: nil, key: nil)
-            present(.failure(FailureInfo(title: "没能重新打开 cca App", failure: f)))
+            present(.failure(FailureInfo(title: "无法重新打开 cca App", failure: f)))
             return
         }
         shutdown()
@@ -2888,7 +2888,7 @@ final class AppModel {
             guard generation == self.orderGeneration else { return }
             self.arrangement.order = [:]
             self.saveArrangement()
-            if let problem { self.showToast("没能把顺序写进账号表：\(problem)", .warning) }
+            if let problem { self.showToast("无法把顺序写入账号表：\(problem)", .warning) }
         }
     }
 

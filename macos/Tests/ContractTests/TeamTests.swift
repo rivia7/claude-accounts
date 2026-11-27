@@ -38,7 +38,7 @@ func teamFixtureTests() {
               && Texts.teamFilter(.team(teamA), teams: teams) == "书房组" && Texts.teamFilter(.team("0123456789abcdef"), teams: teams) == "01234567"
               && Texts.teamFilter(.outside, teams: teams) == "不在 Team 里的")
         check("Team 的状态那一句照 cca 给的说（不说第几版）", Texts.teamState(teams[0]) == "配置已同步" && Texts.teamState(teams[1]).contains("被「设计组」的管理员移除了")
-              && Texts.teamSummary(teams[0]) == "这台设备叫 studio-mac · 给了这台设备 3 个账号 · team.example.com:18445")
+              && Texts.teamSummary(teams[0]) == "设备名 studio-mac · 已分配 3 个账号 · team.example.com:18445")
     }
     if let s = loadFixture(StateDoc.self, "state_cost_sync.json") {
         check("旧版 cca 的 state（没有 config.teams、账号的 team）：不在任何 Team 里", s.config?.teams.isEmpty == true && s.allAccounts.allSatisfy { $0.team == nil })
@@ -65,8 +65,8 @@ func teamFixtureTests() {
     check("服务器要更新（3.7.1 起 server_update）：有时带着级别和原因；没有、旧版 cca、样子不对是 nil",
           fxTeams?.first?.serverUpdate?.need == 2 && fxTeams?.first?.serverUpdate?.level == 0 && fxTeams?.first?.serverUpdate?.why.isEmpty == false
           && fxTeams?.last?.serverUpdate == nil && odd != nil && odd?.serverUpdate == nil && co?.serverUpdate == nil
-          && Texts.teamServerUpdate(fxTeams!.first!, fxTeams!.first!.serverUpdate!).hasPrefix("服务器要更新：")
-          && Texts.teamServerUpdate(odd!, fxTeams!.first!.serverUpdate!).hasSuffix("请建这个 Team 的管理员更新服务器"))
+          && Texts.teamServerUpdate(fxTeams!.first!, fxTeams!.first!.serverUpdate!).hasPrefix("服务器需要更新：")
+          && Texts.teamServerUpdate(odd!, fxTeams!.first!.serverUpdate!).hasSuffix("请联系创建这个 Team 的管理员更新服务器"))
     check("命令：授予、收回管理员身份；同意项、结果码",
           CcaCommand.teamAdmin(team: teamA, device: "0a1b", add: true).arguments == ["team", "admin", teamA, "add", "0a1b"]
           && CcaCommand.teamAdmin(team: teamA, device: "0a1b", add: false).arguments == ["team", "admin", teamA, "remove", "0a1b"]
@@ -90,9 +90,9 @@ func teamFixtureTests() {
         check("team devices：状态；不认识的状态不算还在的；移除了的（以前的 cca 还给）不列", d[2].state == .invited && d[2].state.active
               && d[4].state == .revoked && !d[4].state.active && d[4].state.removed && !d[2].state.removed
               && !d[5].state.isKnown && !d[5].state.active && !d[5].state.removed && d[2].expiresEpoch == 1794600000 && d[3].problem?.contains("公钥") == true)
-        check("team devices：给人看的那一句", Texts.teamDeviceDetail(d[0], accounts: 3, now: now) == "刚刚来过 · 全部账号 · 配置是最新的"
-              && Texts.teamDeviceDetail(d[1], accounts: 3, now: now).hasSuffix("1 个账号 · 还没同步到最新的配置")
-              && Texts.teamDeviceDetail(d[2], accounts: 3, now: now) == "邀请还没用（6 天后过期） · 全部账号"
+        check("team devices：给人看的那一句", Texts.teamDeviceDetail(d[0], accounts: 3, now: now) == "刚刚在线 · 全部账号 · 配置已是最新"
+              && Texts.teamDeviceDetail(d[1], accounts: 3, now: now).hasSuffix("1 个账号 · 配置还不是最新")
+              && Texts.teamDeviceDetail(d[2], accounts: 3, now: now) == "邀请未使用（6 天后过期） · 全部账号"
               && Texts.teamDeviceDetail(d[5], accounts: 3, now: now) == "later-state", Texts.teamDeviceDetail(d[0], accounts: 3, now: now))
     }
     check("命令：看设备（展开时自己查的降优先级）、同步配置、退出、邀请、移除、改授权、改名字、改节点、改别名",
@@ -311,7 +311,10 @@ func teamFixtureTests() {
     m.importTeamConfig(m.teams[1])
     m.editTeamConfig(m.teams[1])
     try? await Task.sleep(nanoseconds: 80_000_000)
-    check("不是管理员的 Team：不导出、不导入、不改", teamRuns(t).count == runs && log.saveNames.count == 2 && log.openAsked == 2 && t.started.isEmpty)
+    // 只看导出、导入、修改：导入成功后 runTeam 刷新设备列表（team devices）可能晚一点才记上，机器忙时会落在这 80 毫秒里
+    let later = Array(teamRuns(t).dropFirst(runs))
+    check("不是管理员的 Team：不导出、不导入、不改",
+          !later.contains { ["export", "import", "edit"].contains($0.dropFirst().first ?? "") } && log.saveNames.count == 2 && log.openAsked == 2 && t.started.isEmpty, "\(later)")
     m.editTeamConfig(a)
     check("在终端里修改：不开提问会话，交给终端（测试里没有 cca 的路径：说找不到 cca）", t.started.isEmpty && m.toast?.text == "找不到 cca", "\(m.toast?.text ?? "")")
     m.joinTeam()

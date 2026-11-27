@@ -108,7 +108,7 @@ struct SettingsView: View {
             }
             Section {
                 Toggle("额度用完、恢复时通知", isOn: Binding(get: { UsageNotifier.shared.enabled }, set: { UsageNotifier.shared.enabled = $0 }))
-                Text("账号的 5 小时或本周额度用完了弹一条，到了重置的时间再弹一条（那时 App 没开着也会弹）。点通知打开那个账号。")
+                Text("账号的 5 小时或本周额度用完时提醒一次，到重置时间再提醒一次（App 没打开也会提醒）。点击通知可打开那个账号。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -116,10 +116,10 @@ struct SettingsView: View {
                 Text("通知")
             }
             Section("新手引导") {
-                Toggle("显示细节（端口、纯净度这些明细）",
+                Toggle("显示细节（端口、纯净度等）",
                        isOn: Binding(get: { guide.showDetails }, set: { if $0 != guide.showDetails { guide.toggleDetails() } }))
                 HStack {
-                    Button("看新手教程") {
+                    Button("查看新手教程") {
                         WindowOpener.shared.showMain()
                         guide.openTutorial()
                     }
@@ -136,9 +136,9 @@ struct SettingsView: View {
     private var terminalCaption: String {
         let t = model.terminalChoice
         guard t.isAutomatic else {
-            return "别的 App 没法让 \(t.name) 运行命令：点账号页的「终端」会打开它、把命令复制好，到它里面粘贴运行。登录、添加账号总是用系统自带的终端。"
+            return "其他 App 无法让 \(t.name) 直接运行命令：点账号页的「终端」会打开它并复制好命令，在其中粘贴运行即可。登录、添加账号始终使用系统自带的终端。"
         }
-        return (["账号页的「终端」用它打开；登录、添加账号这些命令总是用系统自带的终端。"] + [t.note].compactMap { $0 }).joined(separator: "")
+        return (["账号页的「终端」用它打开；登录、添加账号等命令始终使用系统自带的终端。"] + [t.note].compactMap { $0 }).joined(separator: "")
     }
 }
 

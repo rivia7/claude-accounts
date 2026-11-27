@@ -175,7 +175,7 @@ When you quit Claude Code it prints the session ID. In the same project folder, 
 **I closed the app's window. Is it still running?**
 Yes. The cca App normally lives in the menu bar at the top of the screen, so usage keeps updating and the built-in proxy keeps running. To quit for good, click 「退出」 (Quit) in the menu bar icon's panel.
 
-**It says a port is unreachable (“端口不通”; in the app, “端口连不上”).**
+**It says a port is unreachable (“端口不通”; in the app, “端口无法连接”).**
 In the app, click 「同步路由器」 (Sync router) in the toolbar. On the command line, run `cca router status` to see the ports on the router and `cca router sync` to sync them again.
 
 **It says the exit IP's reputation is low.**

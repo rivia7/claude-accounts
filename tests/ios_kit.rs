@@ -857,7 +857,7 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
 
 /// 推送：手机（ccaguest，和 App、通知扩展同一份 CcaRemoteKit）在服务器上登记推送令牌；box、mini 两台都和它配了对，mini 上的会话
 /// 说一条通知，经服务器、推送网关（假的，kit::apnsfake）到推送服务（假的）；推送服务收到的那一份，手机拿每个配对的通知密钥试着解：
-/// 解开的是 mini 的、说话的是那个会话。登记里说了只推哪几个会话（「关掉的会话也推送」关着）：别的会话的不推，说了的照推。
+/// 解开的是 mini 的、说话的是那个会话。登记里说了只推哪几个会话（「已关闭的会话也推送」关着）：别的会话的不推，说了的照推。
 /// 取消和 mini 的配对以后解不开了（通知扩展照推送里写的那句「有新的通知」说）
 fn pushes_reach_the_phone(t: &mut Ctx) {
     let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
@@ -1133,7 +1133,7 @@ fn in_the_simulator(t: &mut Ctx) {
     assert_eq!(rows, [list!["我的 iPhone", true]]);
     // 通知扩展那样读（只在共用的钥匙串分组里找）：正好这个配对的一把通知密钥
     assert_eq!(said("keys "), format!("keys 1 {pid}"));
-    // 在服务器上登记了推送：测试给的令牌，模拟器用的是开发环境的推送服务；「关掉的会话也推送」关着（-test-push-only）：只推开着的
+    // 在服务器上登记了推送：测试给的令牌，模拟器用的是开发环境的推送服务；「已关闭的会话也推送」关着（-test-push-only）：只推开着的
     let reg = said("push ");
     // 额度的通知默认开着：新的服务器认（usage）
     assert!(reg.ends_with(" ok only usage"), "{reg}");

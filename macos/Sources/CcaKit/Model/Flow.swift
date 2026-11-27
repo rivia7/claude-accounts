@@ -125,7 +125,7 @@ final class FlowModel: Identifiable {
             onEnd(self, .cancelled)
             return
         }
-        let message = unreadable ? "这个版本的 App 显示不了这一步，可以在终端里完成，或者更新 App。"
+        let message = unreadable ? "当前版本的 App 无法显示这一步，可以在终端中完成，或更新 App。"
             : nonEmpty(fails.last?.message) ?? "cca 没有完成（退出码 \(resp.exitCode)）"
         phase = .failed(Failure(reason: .command, code: unreadable ? nil : fails.last?.code, message: message,
                                 stderrTail: resp.stderrText.lastLines(12), exitCode: resp.exitCode, tool: nil, key: nil))

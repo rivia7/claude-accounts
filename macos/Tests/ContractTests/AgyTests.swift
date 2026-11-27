@@ -36,9 +36,9 @@ func agyFixtureTests() {
           && s.routing?.nodes.first { $0.name == "US-B" }?.users.contains { $0.tool == .agy && $0.key == gina.key } == true)
     check("unsupported 的说法", Texts.canWhy(.unsupported, appLabel: "桌面 App", tool: .agy) == "Antigravity 账号没有桌面 App"
           && Texts.canWhy(.unsupported, appLabel: "Claude App", tool: .claude) == "这种账号没有这个功能")
-    check("没装 agy 命令", Texts.canWhy(.toolMissing, appLabel: "", tool: .agy) == "没装 agy 命令"
-          && Texts.canWhy(.toolMissing, appLabel: "", tool: .codex) == "没装 codex 命令"
-          && Texts.canWhy(.toolMissing, appLabel: "", tool: .claude) == "没装 claude 命令")
+    check("没装 agy 命令", Texts.canWhy(.toolMissing, appLabel: "", tool: .agy) == "未安装 agy 命令"
+          && Texts.canWhy(.toolMissing, appLabel: "", tool: .codex) == "未安装 codex 命令"
+          && Texts.canWhy(.toolMissing, appLabel: "", tool: .claude) == "未安装 claude 命令")
     check("叫法", Texts.product(.agy) == "Antigravity" && Texts.department(.antigravity) == "Antigravity 账号"
           && Texts.cliName(.agy) == "agy" && Texts.cliName(.codex) == "Codex" && Texts.cliName(.claude) == "Claude Code")
     check("旧版 cca（features.usage 是 false）：用量那一节说更新 cca，或者在终端里用 cca agy usage 看", Texts.noUsage(.agy).contains("cca agy usage")
@@ -114,7 +114,7 @@ func agyGateTests() async {
     await c.setEnabledTools([.claude, .codex])
     let r = await c.execute(.check(.agy, key: "gina@example.com"), prompter: nil)
     expectFailure("没启用 Antigravity 时不运行 cca agy …", r.status) {
-        $0.reason == .codexDisabled && $0.message == "还没启用 Antigravity 账号" && t.requests.isEmpty
+        $0.reason == .codexDisabled && $0.message == "未启用 Antigravity 账号" && t.requests.isEmpty
     }
     await c.setEnabledTools([.agy])
     _ = await c.execute(.check(.agy, key: "gina@example.com"), prompter: nil)

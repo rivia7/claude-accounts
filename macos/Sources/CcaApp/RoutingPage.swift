@@ -34,11 +34,11 @@ struct RoutingPage: View {
             VStack(alignment: .leading, spacing: 22) {
                 RoutingHeader()
                 TipCard(id: .routing, title: "这张图怎么看",
-                        message: "左边是账号，中间是给每个账号留的端口，右边是它走的节点。每条彩色的线是一个账号的流量走向：实线正常，虚线有问题（节点选错了，或者端口连不上），点「同步路由器」通常就能修好。点账号看详情。")
+                        message: "左边是账号，中间是为每个账号保留的端口，右边是它使用的节点。每条彩色的线代表一个账号的流量走向：实线表示正常，虚线表示有问题（节点选错或端口无法连接），点「同步路由器」通常就能修复。点击账号查看详情。")
                 RoutingBanners()
                 let rows = slotRows()
                 if rows.isEmpty {
-                    ContentUnavailableView("还没有分配端口", systemImage: "point.3.connected.trianglepath.dotted",
+                    ContentUnavailableView("尚未分配端口", systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("配置路由器或本机 Clash 之后，每个走节点的账号会分到一个端口。"))
                 } else {
                     RouteMap(rows: rows, nodes: mapNodes(rows), panel: panelTitle, showGroups: guide.showDetails) { ref in
@@ -192,7 +192,7 @@ struct RoutingHeader: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            .help("自动：按 cca 的设置（连得上路由器看路由器，连不上看本机 Clash）")
+            .help("自动：按 cca 的设置（能连接路由器时看路由器，否则看本机 Clash）")
         }
     }
 
@@ -203,7 +203,7 @@ struct RoutingHeader: View {
             switch l.route {
             case .router: parts.append("现在走路由器" + (l.router?.host.map { " \($0)" } ?? ""))
             case .local: parts.append("现在走" + (nonEmpty(l.local?.name) ?? "本机 Clash"))
-            default: parts.append("没配置路由器和本机 Clash")
+            default: parts.append("未配置路由器和本机 Clash")
             }
         } else if model.routerConfigured {
             parts.append("走路由器")
@@ -227,7 +227,7 @@ struct RoutingHeader: View {
         let live = model.live
         if let r = live?.router, r.configured {
             let name = r.backend?.rawValue ?? "路由器"
-            let state = r.reachable == false ? "连不上" : r.running == false ? "没在运行" : r.running == true ? "运行中" : "已配置"
+            let state = r.reachable == false ? "无法连接" : r.running == false ? "未运行" : r.running == true ? "运行中" : "已配置"
             Tag(text: "\(name) \(state)", color: r.reachable == false || r.running == false ? .red : .green, systemImage: "wifi.router")
             statusTag("钩子", r.hook)
             statusTag("定时任务", r.cron)
@@ -236,7 +236,7 @@ struct RoutingHeader: View {
         }
         if let l = live?.local, l.configured {
             let name = nonEmpty(l.name) ?? "本机 Clash"
-            let state = l.running == true ? "运行中" : l.running == false ? "没开" : "这次没看"
+            let state = l.running == true ? "运行中" : l.running == false ? "未运行" : "状态未知"
             Tag(text: "\(name) \(state)", color: l.running == false ? Color.red : l.running == true ? Color.green : nil, systemImage: "laptopcomputer")
         } else if cfg?.localConfigured == true {
             Tag(text: nonEmpty(cfg?.local?.name) ?? "本机 Clash", systemImage: "laptopcomputer")
@@ -244,7 +244,7 @@ struct RoutingHeader: View {
     }
 
     private func statusTag(_ name: String, _ v: Bool?) -> some View {
-        Tag(text: name + (v == true ? "正常" : v == false ? "没装" : "未知"),
+        Tag(text: name + (v == true ? "正常" : v == false ? "未安装" : "未知"),
             color: v == true ? Color.green : v == false ? Color.orange : nil,
             systemImage: v == true ? "checkmark" : v == false ? "xmark" : "questionmark")
     }
@@ -258,7 +258,7 @@ struct RoutingBanners: View {
         let drift = model.live?.summary?.drift ?? 0
         BannerStack {
             if routing?.sync == .pending {
-                Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器还没同步",
+                Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器未同步",
                        message: "路由器上的端口和这台 Mac 的账号表对不上" + (drift > 0 ? "（有 \(drift) 个账号的节点选错了）" : "")
                            + "。下次启动账号时会自动同步，也可以现在同步。") {
                     if model.routerConfigured {
@@ -273,7 +273,7 @@ struct RoutingBanners: View {
                        message: notices.map(Texts.notice).joined(separator: "\n"))
             }
             if routing?.localSync == .pending {
-                Banner(systemImage: "laptopcomputer", tint: .orange, title: "本机 Clash 的端口还没更新",
+                Banner(systemImage: "laptopcomputer", tint: .orange, title: "本机 Clash 的端口未更新",
                        message: "账号表或节点有变化，内置代理还在用原来的端口池。下次启动账号时会自动更新，也可以现在更新。") {
                     Button("现在更新") { model.run(.localRefresh) }.buttonStyle(.borderedProminent)
                 }
@@ -289,7 +289,7 @@ struct RoutingBanners: View {
                 }
             }
             if let e = model.liveError {
-                Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "没能读取路由器 / 本机 Clash 的状态", message: e) {
+                Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "无法读取路由器 / 本机 Clash 的状态", message: e) {
                     Button("重试") { model.refreshLive() }.buttonStyle(.bordered)
                 }
             }
@@ -313,9 +313,9 @@ struct RoutingBanners: View {
         } else if localFallback {
             message = "不在家、或者路由器没开？在外面时账号会走本机 Clash。"
         } else if model.localConfigured {
-            message = "设成了只走路由器：连得上路由器之前，启动账号会失败。"
+            message = "已设为只走路由器：连接上路由器之前，启动账号会失败。"
         } else {
-            message = "连得上路由器之前启动账号会失败；在外面也想用，就配置本机 Clash。"
+            message = "连接上路由器之前，启动账号会失败；如果在外也想使用，请配置本机 Clash。"
         }
         return Banner(systemImage: "wifi.exclamationmark", tint: .red, title: "路由器：\(Texts.liveError(e))", message: message) {
             if e.code == .unreachable, !model.localConfigured {
@@ -517,9 +517,9 @@ struct RouteMap: View {
         var text = "\(port)\(group)：\(who) → \(nonEmpty(r.expected) ?? "—")"
         switch r.state {
         case .drift?: text += "；选中的是 \(r.selected ?? "—")"
-        case .closed?: text += "；连不上"
+        case .closed?: text += "；无法连接"
         case .ok?: text += "；正常"
-        case nil: text += "；还没查"
+        case nil: text += "；未检测"
         default: text += "；" + Texts.slotState(r.state!)
         }
         return text
@@ -527,7 +527,7 @@ struct RouteMap: View {
 
     private func nodeCard(_ n: MapNode, linked: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        let count = n.users == 0 ? "没有账号在用" : "\(n.users) 个账号"
+        let count = n.users == 0 ? "暂无账号在用" : "\(n.users) 个账号"
         return VStack(alignment: .leading, spacing: 2) {
             Text(n.name)
                 .font(.callout.weight(.semibold))
@@ -661,7 +661,7 @@ struct SlotIssues: View {
         if r.state == .drift {
             return "\(who)（\(slot)）选中的是 \(r.selected ?? "—")，应为 \(r.expected ?? "—")"
         }
-        return "\(who)（\(slot)）连不上"
+        return "\(who)（\(slot)）无法连接"
     }
 }
 
@@ -707,13 +707,13 @@ struct LocalUDPRow: View {
                     RowAction("换节点…", systemImage: "arrow.left.arrow.right") { model.run(.localUDPPick) }
                 }
                 if u.state != .off {
-                    RowAction("关掉", systemImage: "xmark.circle") { model.run(.localUDPOff) }
+                    RowAction("关闭", systemImage: "xmark.circle") { model.run(.localUDPOff) }
                 } else if u.installed {
-                    RowAction("删掉系统服务…", systemImage: "trash") { model.run(.localUDPUninstall) }
+                    RowAction("删除系统服务…", systemImage: "trash") { model.run(.localUDPUninstall) }
                 }
             }
             .disabled(model.flow != nil)
-            .help("内置代理只管账号的端口，这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）平时直连。打开后一个系统服务只把 UDP 交给节点，TCP 照旧直连；装、换节点时要输一次管理员密码。")
+            .help("内置代理只负责账号的端口，这台 Mac 自身的 UDP（浏览器的 WebRTC、QUIC 等）平时直连。打开后，一个系统服务只把 UDP 交给节点，TCP 仍然直连；安装或更换节点时需要输入一次管理员密码。")
         }
     }
 

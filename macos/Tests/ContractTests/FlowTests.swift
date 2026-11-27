@@ -175,7 +175,7 @@ func flowProtocolTests() async {
         s.finish(143)
         _ = await waitUntil { f.phase != .working }
         if case .failed(let x) = f.phase {
-            check("显示不了时走失败页（上面有改在终端里完成）", x.message.contains("显示不了") && ends().isEmpty)
+            check("显示不了时走失败页（上面有改在终端里完成）", x.message.contains("无法显示") && ends().isEmpty)
         } else {
             check("显示不了时的失败页", false, "\(f.phase)")
         }

@@ -125,7 +125,7 @@ extension Texts {
         let p = bar.period
         let head: String
         if p.current {
-            head = g == .week ? "本周到现在（" + costRange(p, granularity: g, now: now, calendar: calendar) + "）" : "今天到现在"
+            head = g == .week ? "本周至今（" + costRange(p, granularity: g, now: now, calendar: calendar) + "）" : "今天"
         } else {
             head = costRange(p, granularity: g, now: now, calendar: calendar)
         }
@@ -133,7 +133,7 @@ extension Texts {
         if scope == .all, p.requests > 0 { s += " · " + grouped(p.requests) + " 次请求" }
         var notes: [String] = []
         if p.partial { notes.append("这一项开始时还没有记录，可能偏小") }
-        if scope == .all, p.unpricedRequests > 0 { notes.append("其中 \(grouped(p.unpricedRequests)) 次请求的模型没有公开价格，没算钱") }
+        if scope == .all, p.unpricedRequests > 0 { notes.append("其中 \(grouped(p.unpricedRequests)) 次请求的模型没有公开价格，未计入金额") }
         return s + notes.map { "；" + $0 }.joined()
     }
 
@@ -178,7 +178,7 @@ extension Texts {
             if !vendors.contains(v) { vendors.append(v) }
         }
         let who = vendors.isEmpty ? "官方 API" : " " + vendors.joined(separator: "、") + " 官方 API"
-        return "按\(who) 的价格折算" + (pricesDate.map { "（价格表 \(costPricesDate($0))）" } ?? "") + "，不是实际花费：订阅不按这个收费。"
+        return "按\(who) 的价格折算" + (pricesDate.map { "（价格表 \(costPricesDate($0))）" } ?? "") + "，不是实际花费：订阅并不按此收费。"
     }
 
     /// 同步的状态、还没算进来的设备（看所有设备时，只在要说的时候有）：
@@ -194,16 +194,16 @@ extension Texts {
         var out: [CostNote] = []
         // cca 没给 sync 时（syncState 当作 local_only）不知道为什么只有这台设备，不说
         switch c.sync?.state.shown {
-        case .notLoggedIn?: out.append(CostNote(text: "这台设备没登录这个账号，显示的是上次同步来的"))
-        case .pending?: out.append(CostNote(text: "还没和别的设备同步过"))
-        case .localOnly?: out.append(CostNote(text: "只算了这台设备：这个账号不是哪个 Team 给的，或者这台设备用不了那个 Team 的服务器"))
-        case .off?: out.append(CostNote(text: "只算了这台设备：这台设备关掉了设备统计"))
-        case .error?: out.append(CostNote(text: "上次同步没成功" + (c.sync?.message.map { "：" + $0 } ?? ""), warning: true))
+        case .notLoggedIn?: out.append(CostNote(text: "这台设备未登录这个账号，显示的是上次同步的数据"))
+        case .pending?: out.append(CostNote(text: "尚未与其他设备同步"))
+        case .localOnly?: out.append(CostNote(text: "只统计了这台设备：这个账号不是 Team 分配的，或这台设备无法使用那个 Team 的服务器"))
+        case .off?: out.append(CostNote(text: "只统计了这台设备：这台设备关闭了设备统计"))
+        case .error?: out.append(CostNote(text: "上次同步失败" + (c.sync?.message.map { "：" + $0 } ?? ""), warning: true))
         default: break
         }
         let missing = c.sync?.missing ?? []
         if !missing.isEmpty {
-            out.append(CostNote(text: "还有 \(missing.count) 台设备没有算进来（\(names(missing.map(\.name)))，可能 cca 太旧）", warning: true))
+            out.append(CostNote(text: "还有 \(missing.count) 台设备未统计在内（\(names(missing.map(\.name)))，可能 cca 版本太旧）", warning: true))
         }
         for d in c.devices {
             if let text = costStale(d, now: now, calendar: calendar) { out.append(CostNote(text: text, warning: true)) }
@@ -214,8 +214,8 @@ extension Texts {
     /// 一台很久没同步上来的设备（cca 标的 `stale`；这台设备自己、撤销了的不说）：「office-imac 周四 15:00 以后的还没同步上来」
     static func costStale(_ d: CostDevice, now: Double, calendar: Calendar = .current) -> String? {
         guard d.stale, !d.revoked, !d.isMe else { return nil }
-        return d.syncedEpoch.map { spaced(d.name, pastTime($0, now: now, calendar: calendar)) + " 以后的还没同步上来" }
-            ?? d.name + " 最近用的还没同步上来"
+        return d.syncedEpoch.map { spaced(d.name, pastTime($0, now: now, calendar: calendar)) + " 之后的数据还没同步过来" }
+            ?? d.name + " 最近的用量还没同步过来"
     }
 
     /// 「a、b、c」，再多写「a、b、c 等」（几台前面已经说了）
@@ -227,18 +227,18 @@ extension Texts {
 
     /// 还没有记录（这个账号在这台设备上没用过，别的设备也没同步来）
     static func costEmpty(_ tool: ToolID) -> String {
-        "还没有记录：用 \(cliName(tool)) 干过活以后会显示在这里。"
+        "还没有记录：用 \(cliName(tool)) 工作后会显示在这里。"
     }
 
     /// 还没统计过，现在也没在统计（上次没统计成，或者用户走开了）：App 过一会儿自己再试
-    static let costNotScanned = "还没统计：过一会儿会自动统计，也可以点「刷新」。"
+    static let costNotScanned = "尚未统计：稍后会自动统计，也可以点「刷新」。"
 
     /// 从什么时候开始有记录，哪些会话算不进来（显示细节时）
     static func costSince(_ epoch: Double, tool: ToolID, now: Double, calendar: Calendar = .current) -> String {
         let since = "从 " + dayText(epoch, now: now, calendar: calendar) + "开始有记录。"
         switch tool {
-        case .codex: return since + "Codex 0.157 起的会话才带着账号信息，更早的算不进来。"
-        case .agy: return since + "只有用 cca 启动的 Antigravity 会话认得出是哪个账号的，直接运行 agy 的算进「认不出账号」。"
+        case .codex: return since + "Codex 0.157 及以后的会话才带有账号信息，更早的无法统计。"
+        case .agy: return since + "只有用 cca 启动的 Antigravity 会话能识别账号，直接运行 agy 的会计入「无法识别账号」。"
         default: return since
         }
     }
@@ -246,12 +246,12 @@ extension Texts {
     /// 没有公开价格的模型（显示细节时）：「这些模型没有公开价格，只计了请求数：x、y（近 12 周 4 次请求）」
     static func costUnpriced(_ models: [String], requests: Int) -> String? {
         guard !models.isEmpty else { return nil }
-        return "这些模型没有公开价格，只计了请求数：" + models.joined(separator: "、") + (requests > 0 ? "（近 12 周 \(grouped(requests)) 次请求）" : "")
+        return "这些模型没有公开价格，只统计了请求数：" + models.joined(separator: "、") + (requests > 0 ? "（近 12 周 \(grouped(requests)) 次请求）" : "")
     }
 
     /// 上次和别的设备同步成功（显示细节时）
     static func costSynced(_ epoch: Double, now: Double, calendar: Calendar = .current) -> String {
-        "上次和别的设备同步：" + pastTime(epoch, now: now, calendar: calendar)
+        "上次与其他设备同步：" + pastTime(epoch, now: now, calendar: calendar)
     }
 
     /// 设备的叫法（折合金额页各台设备那一行）：这台设备「studio-mac（这台）」，撤销了的「old-mini（已撤销）」
@@ -297,7 +297,7 @@ extension Texts {
     static func costFreshness(_ scan: CostScan?, now: Double) -> String? {
         guard let scan else { return nil }
         if scan.state == .scanning { return "正在统计…" }
-        if scan.state == .never { return "还没统计" }
+        if scan.state == .never { return "尚未统计" }
         return scan.updatedEpoch.map { agoPhrase(now - $0) + "统计" }
     }
 
@@ -314,7 +314,7 @@ extension Texts {
             case .me: who = "这台设备"
             case .device: who = costOrphanRowName(scope, total: total) + " "
             }
-            return who + "认不出是哪个账号的用量没算进合计，单独列在最下面。"
+            return who + "无法识别账号的用量不计入合计，单独列在最下面。"
         }
         guard !scope.isOtherDevice else { return nil }
         let what: String
@@ -325,7 +325,7 @@ extension Texts {
         } else {
             return nil
         }
-        return "近 30 天另有 \(what)认不出是哪个账号的，没算进来。"
+        return "近 30 天另有 \(what)无法识别属于哪个账号，未计入。"
     }
 
     /// 还没传认不出的用量的设备（cca 给的 `unattributed.unsynced`，3.6.8 起）：看所有设备时
@@ -334,9 +334,9 @@ extension Texts {
     static func costUnsynced(_ u: CostUnattributed?, scope: CostScope) -> String? {
         guard let list = u?.unsynced, !list.isEmpty else { return nil }
         switch scope {
-        case .all: return "还有 \(list.count) 台设备没传认不出账号的用量（\(names(list.map(\.name)))），可能 cca 太旧。"
+        case .all: return "还有 \(list.count) 台设备没有上传无法识别账号的用量（\(names(list.map(\.name)))），可能 cca 版本太旧。"
         case .me: return nil
-        case .device(let id): return list.first { $0.id == id }.map { $0.name + " 还没传认不出账号的用量，可能 cca 太旧。" }
+        case .device(let id): return list.first { $0.id == id }.map { $0.name + " 还没有上传无法识别账号的用量，可能 cca 版本太旧。" }
         }
     }
 
@@ -358,8 +358,8 @@ extension Texts {
 
     /// 一个模型的叫法：模型名；会话记录里没写的「没写模型名」；没有按模型记下的那一部分「没按模型记下的」
     static func costModelName(_ r: CostModelRow) -> String {
-        guard let m = r.model else { return "没按模型记下的" }
-        return m.isEmpty ? "没写模型名" : m
+        guard let m = r.model else { return "未按模型记录的" }
+        return m.isEmpty ? "未记录模型名" : m
     }
 
     /// 金额那一栏：都没有公开价格的写「没有公开价格」；按同系列的标价估算的新模型（cca 给的 priced_as）前面加「≈」
@@ -382,7 +382,7 @@ extension Texts {
         let x = r.range(g)
         var s = costModelMoney(x, currency: currency, estimated: r.pricedAs != nil) + "，" + grouped(x.requests) + " 次请求"
         if let hit = costCacheHit(x.cacheHit) { s += "，缓存命中 " + hit }
-        if !x.allUnpriced, x.unpricedRequests > 0 { s += "，其中 \(grouped(x.unpricedRequests)) 次没有公开价格、没算钱" }
+        if !x.allUnpriced, x.unpricedRequests > 0 { s += "，其中 \(grouped(x.unpricedRequests)) 次没有公开价格、未计入金额" }
         if !x.allUnpriced, let base = r.pricedAs { s += "，按 \(base) 的价格估算" }
         return s
     }
@@ -390,8 +390,8 @@ extension Texts {
     /// 悬停提示：读屏那一句；没按模型记下的那一行再说为什么
     static func costModelHelp(_ r: CostModelRow, granularity g: CostGranularity, currency: String) -> String {
         let value = costModelValue(r, granularity: g, currency: currency)
-        if r.model == nil { return value + "\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开" }
-        if r.pricedAs != nil { return value + "\ncca 的价格表里还没有这个新模型：先按同系列的价格估算，cca 收录了它的价格以后自动重算" }
+        if r.model == nil { return value + "\n旧版本统计的、或旧版 cca 设备上传的数据只有合计，没有按模型区分" }
+        if r.pricedAs != nil { return value + "\ncca 的价格表中还没有这个新模型：暂按同系列的价格估算，收录价格后会自动重算" }
         return value
     }
 
@@ -399,8 +399,8 @@ extension Texts {
     static func costEstimated(_ rows: [CostModelRow], granularity g: CostGranularity) -> String? {
         let est = rows.filter { $0.pricedAs != nil && $0.model != nil && !$0.range(g).isEmpty && !$0.range(g).allUnpriced }
         guard let first = est.first, let model = first.model, let base = first.pricedAs else { return nil }
-        if est.count == 1 { return "检测到新模型 \(model)：cca 的价格表里还没有它，按 \(base) 的价格估算（≈）" }
-        return "检测到新模型 " + est.compactMap(\.model).joined(separator: "、") + "：cca 的价格表里还没有，按同系列的价格估算（≈）"
+        if est.count == 1 { return "检测到新模型 \(model)：cca 的价格表中还没有它，暂按 \(base) 的价格估算（≈）" }
+        return "检测到新模型 " + est.compactMap(\.model).joined(separator: "、") + "：cca 的价格表中还没有，暂按同系列的价格估算（≈）"
     }
 
 }

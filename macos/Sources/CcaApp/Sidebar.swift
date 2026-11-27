@@ -209,13 +209,13 @@ struct AccountManageItems: View {
             let saved = a.apiKey?.saved == true
             Divider()
             if !a.isAPI {
-                Button(saved ? "更换记下的 API key…" : "记录 API key…") { model.recordAPIKey(a) }
+                Button(saved ? "更换记录的 API key…" : "记录 API key…") { model.recordAPIKey(a) }
                     .disabled(busy)
             }
             if saved {
                 Button("复制 API key") { model.copyAPIKey(a) }
                 if !a.isAPI {
-                    Button("删除记下的 API key…") { model.forgetAPIKey(a) }
+                    Button("删除记录的 API key…") { model.forgetAPIKey(a) }
                         .disabled(busy)
                 }
             }
@@ -344,14 +344,14 @@ extension AppModel {
         }
         if routerConfigured { return "路由器" + (state?.config?.router?.host.map { " \($0)" } ?? "") }
         if localConfigured { return nonEmpty(state?.config?.local?.name) ?? "本机 Clash" }
-        return "没配置路由器和本机 Clash"
+        return "未配置路由器和本机 Clash"
     }
 
     /// 分流有问题时的一句话和颜色：待同步、有槽位连不上、选错节点。
     var routeIssue: (String, Color)? {
         if state?.routing?.sync == .pending { return ("待同步", .orange) }
         if let s = live?.summary {
-            if s.closed > 0 { return ("\(s.closed) 个端口连不上", .red) }
+            if s.closed > 0 { return ("\(s.closed) 个端口无法连接", .red) }
             if s.drift > 0 { return ("\(s.drift) 个节点选错", .orange) }
         }
         return nil

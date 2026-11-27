@@ -72,54 +72,69 @@ struct AccountCensus: Equatable {
     }
 }
 
-/// 「账号」页上面的工具切换和按套餐档位筛（照 Mac App 侧栏、菜单栏面板的工具切换和 Team 筛选）：只看一个工具的账号，可以只看一档套餐。
-/// 只管显示；选的记在 AppModel（accountTool、accountTier）。记着的工具、档位已经没有账号了时照默认的看，记着的不改（账号回来了还是它）
+/// 「账号」页上面的工具切换和按套餐筛（照 Mac App 侧栏、菜单栏面板的工具切换和 Team 筛选）：只看一个工具的账号，可以只看一种套餐。
+/// 只管显示；选的记在 AppModel（accountTool、accountPlan）。记着的工具、套餐已经没有账号了时照默认的看，记着的不改（账号回来了还是它）
 struct AccountShelf: Equatable {
-    /// 认得的工具（照 cca 的 TOOLS：claude、codex、agy）和档位（cca 的 plan_tier，一档比一档高）
+    /// 认得的工具（照 cca 的 TOOLS：claude、codex、agy）和档位（cca 的 plan_tier，一档比一档高：只用来给套餐排先后、画小徽记，界面上不写）
     static let knownTools = ["claude", "codex", "agy"]
     static let knownTiers = ["entry", "standard", "advanced", "premium"]
+
+    /// 筛的一个胶囊：套餐照 cca 给的原名（Pro、Max、Plus、Google AI Pro……），档位是前面的小徽记
+    struct PlanChip: Hashable {
+        let plan: String
+        let tier: String
+    }
 
     /// 有账号的工具：Claude、ChatGPT（codex）、Antigravity 的先后，认不出的新工具照出现的先后排在后面
     let tools: [String]
     /// 现在看的工具：记着的那个还有账号就是它，不然是头一个
     let tool: String
-    /// 只看的那一档（空的是全部）：所有工具的账号加起来只有一档时没得筛、记着的那一档哪个工具都没有账号了，都算全部。
-    /// 换工具时不变：换到的工具没有这一档的账号时列表是空的，页头说一句
-    let tier: String
-    /// 这个工具的账号（各台电脑的接在一起，不管档位）：各档后面的个数照它数
+    /// 只看的套餐（空的是全部）：这个工具的账号里有它、又不止一种套餐时才筛，不然算全部。换到没有这个套餐的工具时看全部，换回来还筛着
+    let plan: String
+    /// 这个工具的账号（各台电脑的接在一起，不管套餐）：各个套餐后面的个数照它数
     let ofTool: [AccountStatus]
+    /// 筛的胶囊（「全部」之外的）：这个工具的账号里有的套餐；只有一种套餐时是空的（没得筛，不放）
+    let planChips: [PlanChip]
 
-    init(_ all: [AccountStatus], tool wantedTool: String, tier wantedTier: String) {
+    init(_ all: [AccountStatus], tool wantedTool: String, plan wantedPlan: String) {
         var tools = Self.knownTools.filter { t in all.contains { $0.tool == t } }
         for a in all where !a.tool.isEmpty && !tools.contains(a.tool) { tools.append(a.tool) }
         self.tools = tools
         let tool = tools.contains(wantedTool) ? wantedTool : tools.first ?? ""
         self.tool = tool
-        let tiers = Self.knownTiers.filter { t in all.contains { $0.tier == t } }
-        tier = tiers.count > 1 && tiers.contains(wantedTier) ? wantedTier : ""
-        ofTool = all.filter { $0.tool == tool }
+        let ofTool = all.filter { $0.tool == tool }
+        self.ofTool = ofTool
+        let chips = Self.plans(ofTool)
+        planChips = chips.count > 1 ? chips : []
+        plan = planChips.contains { $0.plan == wantedPlan } ? wantedPlan : ""
     }
 
-    /// 筛的胶囊（「全部」之外的，入门 → 尊贵）：这个工具的账号里有的档位，加上筛着的那一档（这个工具里没有也列出来，看得到在筛什么）。
-    /// 少于两档、又没在筛时是空的：没得筛，不放筛的胶囊
-    var tierChips: [String] {
-        let mine = Self.knownTiers.filter { t in t == tier || ofTool.contains { $0.tier == t } }
-        return mine.count > 1 || !tier.isEmpty ? mine : []
+    /// 这些账号里有的套餐：档位从低到高，同一档照名字（Pro 100、Pro 200 按数字排），认不出档位的排在最后。
+    /// 几台电脑上的 cca 给同一个套餐的档位不一样（版本不同）时用认得的那个
+    static func plans(_ accounts: [AccountStatus]) -> [PlanChip] {
+        var tiers: [String: String] = [:]
+        for a in accounts where !a.plan.isEmpty {
+            if !knownTiers.contains(tiers[a.plan] ?? "") { tiers[a.plan] = a.tier }
+        }
+        func rank(_ t: String) -> Int { knownTiers.firstIndex(of: t) ?? knownTiers.count }
+        return tiers.map { PlanChip(plan: $0.key, tier: $0.value) }.sorted {
+            rank($0.tier) != rank($1.tier) ? rank($0.tier) < rank($1.tier) : $0.plan.localizedStandardCompare($1.plan) == .orderedAscending
+        }
     }
 
-    /// 列出来的：这个工具、这一档的账号（页头的点名照它数）
+    /// 列出来的：这个工具、这个套餐的账号（页头的点名照它数）
     var shown: [AccountStatus] { ofTool.filter(matches) }
 
     func matches(_ a: AccountStatus) -> Bool {
-        a.tool == tool && (tier.isEmpty || a.tier == tier)
+        a.tool == tool && (plan.isEmpty || a.plan == plan)
     }
 
-    /// 这个工具里这一档有几个账号（空的是这个工具的全部）
-    func count(_ t: String) -> Int {
-        t.isEmpty ? ofTool.count : ofTool.filter { $0.tier == t }.count
+    /// 这个工具里这个套餐有几个账号（空的是这个工具的全部）
+    func count(_ p: String) -> Int {
+        p.isEmpty ? ofTool.count : ofTool.filter { $0.plan == p }.count
     }
 
-    /// 一台电脑上要列的：这个工具、这一档的；官方账号在前、第三方 API 在后（和 Mac App 侧栏一样），各自照那台电脑给的先后
+    /// 一台电脑上要列的：这个工具、这个套餐的；官方账号在前、第三方 API 在后（和 Mac App 侧栏一样），各自照那台电脑给的先后
     func rows(_ accounts: [AccountStatus]) -> [AccountStatus] {
         let mine = accounts.filter(matches)
         return mine.filter { !$0.isAPI } + mine.filter(\.isAPI)

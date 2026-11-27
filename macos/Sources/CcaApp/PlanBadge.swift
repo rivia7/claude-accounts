@@ -1,7 +1,8 @@
 import SwiftUI
 
 // 套餐的四档（cca 给的 plan_tier，App 不按套餐名猜）。徽章不抢眼：和 Tag 一样的中性胶囊、secondary 的字，
-// 档位只看前面的小徽记，一档比一档足：入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵（Ultra、Pro 500）Logo 渐变的四角星。
+// 档位只看前面的小徽记，一档比一档足：entry 灰色圆圈、standard 蓝色圆点、advanced 紫色菱形、premium（Ultra、Pro 500）Logo 渐变的四角星。
+// 档位界面上不写字（没有中文的叫法），套餐照 cca 给的原名（Pro、Max、Plus……）。
 // Logo 的整条渐变（蓝 → 紫 → 玫红 → 琥珀）只给最高档：这颗星，和侧栏里它头像的光晕（BadgeAvatar）。画法都在 TierStyle。
 
 enum TierStyle {
@@ -88,8 +89,8 @@ struct PlanBadge: View {
         .padding(.horizontal, compact ? 6.5 : 8)
         .frame(height: size.height)
         .background(Capsule().fill(.quaternary.opacity(0.7)))
-        .help(Texts.planName(plan, tier: tier))
+        .help(Texts.planName(plan))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Texts.planName(plan, tier: tier))
+        .accessibilityLabel(Texts.planName(plan))
     }
 }

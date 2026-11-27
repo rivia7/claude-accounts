@@ -142,7 +142,7 @@ func arrangementTests() {
     let (ft, fm) = await scripted(hello, reorderExit: 1)
     fm.moveAccounts(.claude, shown: fm.accountGroups(.claude)[0].accounts, from: [0], to: 3)
     _ = await waitUntil { fm.arrangement.order.isEmpty && fm.toast != nil }
-    check("写不进账号表：说一声，顺序回到账号表的样子", fm.toast?.text.contains("没能把顺序写进账号表") == true
+    check("写不进账号表：说一声，顺序回到账号表的样子", fm.toast?.text.contains("无法把顺序写入账号表") == true
           && fm.accountGroups(.claude)[0].accounts.first?.key == bob && ft.requests.contains { $0.arguments.contains("reorder") }, fm.toast?.text ?? "")
     fm.shutdown()
 

@@ -23,7 +23,7 @@ struct APIKeyRow: View {
             InfoRow(Text(title), systemImage: "key", value: { value(a, info, r) }) {
                 if info.saved {
                     RowAction("复制", systemImage: "doc.on.doc") { model.copyAPIKey(a) }
-                        .help("复制到剪贴板：标成机密（剪贴板管理器不记），60 秒后自动清掉")
+                        .help("复制到剪贴板：标记为机密（剪贴板管理器不会记录），60 秒后自动清除")
                 } else {
                     RowAction(a.isAPI ? "输入…" : "记录…", systemImage: "plus") { model.recordAPIKey(a) }
                         .disabled(busy)
@@ -77,7 +77,7 @@ struct APIKeyRow: View {
                 .accessibilityLabel(r.phase == .shown ? "隐藏 API key" : "显示 API key")
             }
         } else {
-            Text(a.isAPI ? "还没有" : "还没记录").foregroundStyle(.secondary)
+            Text(a.isAPI ? "暂无" : "未记录").foregroundStyle(.secondary)
         }
     }
 }
@@ -99,7 +99,7 @@ struct APIKeySection: View {
             }
             APIKeyRow(account: a, title: a.apiKey?.source == .table ? "账号表里写的 key" : "钥匙串里的 key").id(a.ref)
             if a.apiKey?.source == .table {
-                Text("这把 key 写在账号表里（明文），启动时优先用它；要换请用 \(Handoff.edit(prefix: model.prefix(a.tool)).display) 改账号表。")
+                Text("这个 key 以明文写在账号表里，启动时优先使用；如需更换，请用 \(Handoff.edit(prefix: model.prefix(a.tool)).display) 修改账号表。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

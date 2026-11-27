@@ -16,7 +16,7 @@ struct ClientUpdatesPage: View {
                                          set: { model.setClientUpdateAutomatic($0) })) {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("自动检查更新")
-                            Text("定期看有没有新版本，桌面 App 的会先下载好；客户端还开着时不会替换。")
+                            Text("定期检查新版本，桌面 App 的更新会先下载好；客户端打开时不会替换。")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                         // 说明占满一行：两个开关都靠右、上下对齐
@@ -32,8 +32,8 @@ struct ClientUpdatesPage: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text("允许自动更新")
                                 Text(model.clientUpdates?.mode == "auto"
-                                     ? "查到新版本就直接装，不再先问。桌面 App 开着时不替换，等你退出它再装；终端里的 Claude Code、Codex 只自动更新官方安装器装的，开着的会话不受影响。"
-                                     : "要先打开自动检查。打开后查到新版本就直接装，不再先问。")
+                                     ? "发现新版本后直接安装，不再询问。桌面 App 打开时不替换，等你退出后再安装；终端里的 Claude Code、Codex 只自动更新用官方安装器安装的，已打开的会话不受影响。"
+                                     : "需要先打开自动检查。打开后发现新版本会直接安装，不再询问。")
                                     .font(.callout).foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -48,7 +48,7 @@ struct ClientUpdatesPage: View {
                 }
                 if let error = model.clientUpdatesError {
                     Banner(systemImage: "exclamationmark.triangle", tint: .orange,
-                           title: "没能读取客户端的更新状态", message: error) {
+                           title: "无法读取客户端的更新状态", message: error) {
                         Button("重新读取") { model.refreshClientUpdates() }
                             .buttonStyle(.borderedProminent).disabled(model.clientUpdatesBusy)
                     }
@@ -58,9 +58,9 @@ struct ClientUpdatesPage: View {
                 }
                 if model.clientUpdates != nil && installed.isEmpty {
                     ContentUnavailableView("这台 Mac 上还没有客户端", systemImage: "shippingbox",
-                                           description: Text("装好 Claude、ChatGPT 桌面 App，或者 Claude Code、Codex、Antigravity（agy）命令后，这里会显示它们的版本和更新。"))
+                                           description: Text("安装 Claude、ChatGPT 桌面 App，或 Claude Code、Codex、Antigravity（agy）命令后，这里会显示它们的版本和更新。"))
                 }
-                Text("安装桌面 App 的更新前，先保存工作、退出它的全部窗口；更新只换程序，账号资料不动。终端里的 Claude Code、Codex 更新后，开着的会话还是旧版本，新开的才是新版本。")
+                Text("安装桌面 App 的更新前，请先保存工作并退出它的所有窗口；更新只替换程序，不影响账号资料。终端里的 Claude Code、Codex 更新后，已打开的会话仍是旧版本，新打开的才是新版本。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(.top, 24).padding(.bottom, 36).pageColumn()
@@ -80,8 +80,8 @@ struct ClientUpdatesPage: View {
                 if model.clientUpdatesBusy { ProgressView().controlSize(.small) }
             }
             Text(model.clientUpdates?.autoInstall == true
-                 ? "这台 Mac 上的桌面 App，和终端里的 Claude Code、Codex。有新版本时自动安装，桌面 App 开着时等你退出它。"
-                 : "这台 Mac 上的桌面 App，和终端里的 Claude Code、Codex。有新版本时由你决定什么时候安装。")
+                 ? "这台 Mac 上的桌面 App，以及终端里的 Claude Code、Codex。有新版本时自动安装，桌面 App 打开时会等你退出后再安装。"
+                 : "这台 Mac 上的桌面 App，以及终端里的 Claude Code、Codex。有新版本时由你决定何时安装。")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }

@@ -81,7 +81,7 @@ struct MailSection: View {
                 Divider()
                 if mail?.trustsForwarder == true {
                     Button("更换信任的转发中转…") { model.mailTrustForwarder(account.ref) }
-                    Button("关掉信任转发中转", role: .destructive) { model.mailTrustForwarderOff(account.ref) }
+                    Button("关闭信任转发中转", role: .destructive) { model.mailTrustForwarderOff(account.ref) }
                 } else {
                     Button("信任一个转发中转（不安全）…") { model.mailTrustForwarder(account.ref) }
                 }
@@ -115,7 +115,7 @@ struct MailSection: View {
 
     private func statusText(_ mail: MailConfig?) -> String {
         guard let mail, mail.configured, let user = nonEmpty(mail.user) else {
-            return "还没配置：把这个账号的邮箱转发到一个 Gmail，登录时 cca 就在它专属的浏览器里打开登录邮件里的链接"
+            return "未配置：把这个账号的邮箱转发到一个 Gmail，登录时 cca 会在它专属的浏览器里打开登录邮件中的链接"
         }
         let where_ = mail.isAccountSpecific ? "这个账号单独用 \(user) 收登录邮件" : "登录邮件走默认 Gmail \(user)"
         let auto = mail.auto ? "，登录时自动打开里面的链接" : "，登录时不自动打开（用下面的列表手动打开）"
@@ -131,7 +131,7 @@ struct MailSection: View {
             let busy = model.activity(account.ref) != nil
             InfoRow(Text("信任来自 \(fwd) 的转发（不安全）：这个中转重签了邮件，cca 没法再验 Anthropic 的签名，只能信这个域名。只在你清楚它可信时才开着"),
                     systemImage: "exclamationmark.shield", tint: .orange) {
-                Button("关掉") { model.mailTrustForwarderOff(account.ref) }
+                Button("关闭") { model.mailTrustForwarderOff(account.ref) }
                     .buttonStyle(.glass)
                     .controlSize(.regular)
                     .disabled(busy)
@@ -159,11 +159,11 @@ struct MailSection: View {
         VStack(alignment: .leading, spacing: 10) {
             // 硬错误（连不上 cca）
             if let e = s?.error {
-                Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "没能查登录邮件", message: e) { EmptyView() }
+                Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "无法查询登录邮件", message: e) { EmptyView() }
             }
             // 软错误（没配置、没密码、连不上 Gmail）
             if let err = s?.doc?.error {
-                Banner(systemImage: "envelope.badge", tint: .orange, title: "查不了这个 Gmail", message: err.text) {
+                Banner(systemImage: "envelope.badge", tint: .orange, title: "无法查询这个 Gmail", message: err.text) {
                     if err.code == "no_password" || err.code == "not_configured" {
                         Button("配置…") { model.mailSetup(account.ref) }.buttonStyle(.borderedProminent).controlSize(.small)
                     }
@@ -262,7 +262,7 @@ struct MailRowView: View {
                     RowAction.web(hasChrome ? "在浏览器打开" : "需要 Chrome") { model.openMailMessage(account.ref, h) }
                         .disabled(busy || !hasChrome)
                         .help(hasChrome ? "cca 重新取这封、再核对一遍，在这个账号专属的 Chrome 里打开里面的登录链接"
-                              : "没装 Google Chrome：登录链接要在账号专属的 Chrome 里打开")
+                              : "未安装 Google Chrome：登录链接需要在账号专属的 Chrome 中打开")
                 }
             }
             Text(detail)
@@ -291,6 +291,6 @@ struct MailRowView: View {
             if parts.isEmpty { parts.append("通过核对") }
             return "✓ " + parts.joined(separator: " · ")
         }
-        return "✗ " + (nonEmpty(row.verdict.whyText) ?? "没通过核对")
+        return "✗ " + (nonEmpty(row.verdict.whyText) ?? "未通过核对")
     }
 }

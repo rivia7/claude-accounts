@@ -18,19 +18,19 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
                 Section {
-                    TextField("名字", text: $model.deviceName)
+                    TextField("名称", text: $model.deviceName)
                         .textInputAutocapitalization(.never)
                         .onSubmit {
                             if Texts.nonEmpty(model.deviceName) == nil { model.deviceName = AppModel.defaultName }
                         }
                 } header: {
-                    Text("这台手机的名字")
+                    Text("这台手机的名称")
                 } footer: {
-                    Text("配对时告诉电脑，电脑上的「配对过的机器」里显示它。改了只影响以后的配对。")
+                    Text("配对时发送给电脑，显示在电脑的「已配对的机器」中。修改后只影响之后的配对。")
                 }
                 Section {
                     if model.peers.isEmpty {
-                        Text("还没有配对过的电脑").foregroundStyle(.secondary)
+                        Text("暂无已配对的电脑").foregroundStyle(.secondary)
                     }
                     ForEach(model.peers) { p in
                         HStack(spacing: 10) {
@@ -51,16 +51,16 @@ struct SettingsView: View {
                         Label("和另一台电脑配对", systemImage: "qrcode.viewfinder")
                     }
                 } header: {
-                    Text("配对过的电脑")
+                    Text("已配对的电脑")
                 } footer: {
                     if let p = model.peers.first, let fp = model.backend.fingerprint(on: p.server) {
-                        Text("这台手机的指纹：\(fp.prefix(19))…（电脑上 cca remote peers 看得到同一个）")
+                        Text("这台手机的指纹：\(fp.prefix(19))…（可在电脑上运行 cca remote peers 核对）")
                     }
                 }
                 Section {
                     LabeledContent("推送", value: pushState)
                     if !model.isDemo {
-                        Toggle("关掉的会话也推送", isOn: Binding(get: { push.closedToo }, set: { push.closedToo = $0 }))
+                        Toggle("已关闭的会话也推送", isOn: Binding(get: { push.closedToo }, set: { push.closedToo = $0 }))
                         Toggle("额度用完、恢复时通知", isOn: Binding(get: { push.usageNotes }, set: { push.usageNotes = $0 }))
                     }
                     if push.allowed == false, !model.isDemo, let u = URL(string: UIApplication.openNotificationSettingsURLString) {
@@ -75,10 +75,10 @@ struct SettingsView: View {
                     if model.isDemo {
                         Button("退出演示") { model.leaveDemo() }
                     } else {
-                        Button("看看演示") { model.enterDemo(); model.showSettings = false }
+                        Button("查看演示") { model.enterDemo(); model.showSettings = false }
                     }
                 } footer: {
-                    Text("演示模式里的电脑和会话是模拟的，不联网，也不动这台手机上真的配对。")
+                    Text("演示模式中的电脑和会话都是模拟的，不会联网，也不影响这台手机上真实的配对。")
                 }
                 Section("关于") {
                     LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
@@ -92,7 +92,7 @@ struct SettingsView: View {
                     Button("完成") { model.showSettings = false }
                 }
             }
-            .confirmationDialog(unpairing.map { "取消和「\($0.name)」的配对？" } ?? "",
+            .confirmationDialog(unpairing.map { "取消与「\($0.name)」的配对？" } ?? "",
                                 isPresented: Binding(get: { unpairing != nil }, set: { if !$0 { unpairing = nil } }),
                                 titleVisibility: .visible) {
                 Button("取消配对", role: .destructive) {
@@ -101,7 +101,7 @@ struct SettingsView: View {
                 }
                 Button("不取消", role: .cancel) { unpairing = nil }
             } message: {
-                Text("这台手机就不能再接入那台电脑上的会话了，正接着的会断开。以后要用得重新配对。")
+                Text("取消后，这台手机将无法再接入那台电脑上的会话，正在接入的会断开；之后需要重新配对。")
             }
         }
     }
@@ -110,36 +110,36 @@ struct SettingsView: View {
 extension SettingsView {
     /// 推送现在怎么样（一个词）
     private var pushState: String {
-        if model.isDemo { return "演示模式里没有" }
+        if model.isDemo { return "演示模式不可用" }
         switch push.allowed {
-        case false: return "关着"
-        case nil: return "还没问过"
-        default: return push.token == nil ? (push.failure == nil ? "正在打开" : "没打开") : "开着"
+        case false: return "已关闭"
+        case nil: return "尚未授权"
+        default: return push.token == nil ? (push.failure == nil ? "正在打开" : "未开启") : "已开启"
         }
     }
 
     private var pushFooter: String {
-        var lines = ["锁着屏、App 没开着时也收得到会话里的通知（做完了、在等你）：经那台电脑所在的服务器和 cca 的推送服务转过来，"
-            + "内容封着，只有这台手机解得开。"]
+        var lines = ["锁屏或没打开 App 时，也能收到会话里的通知（做完了、在等你）。通知经电脑使用的服务器和 cca 的推送服务转发，"
+            + "内容加密，只有这台手机能解密。"]
         if model.isDemo { return lines[0] }
         lines.append(push.closedToo
-            ? "关掉的会话也推送：配对的电脑上的会话都推，在 App 里关掉了的也推。关掉这一项就只推 App 里开着的那个会话。"
-            : "只推 App 里开着的那个会话（锁着屏、切到别的 App 也算开着），关掉以后就不推了。")
-        if push.allowed == false { lines.append("通知关着：在系统的「设置」→「通知」→「cca」里打开。") }
-        if let f = push.failure, push.token == nil { lines.append("向 Apple 要推送的令牌没成：\(f)") }
+            ? "已关闭的会话也推送：已配对电脑上的会话都会推送，包括在 App 中关掉的。关闭此项后，只推送 App 中打开的会话。"
+            : "只推送 App 中打开的会话（锁屏或切到其他 App 也算打开），关掉会话后不再推送。")
+        if push.allowed == false { lines.append("通知已关闭：请在「设置」→「通知」→「cca」中打开。") }
+        if let f = push.failure, push.token == nil { lines.append("获取 Apple 推送令牌失败：\(f)") }
         lines.append(push.usageNotes
-            ? "额度用完、恢复的通知：配对的电脑上有账号的 5 小时或本周额度用完了推一条，到了重置的时间再推一条（那台电脑睡着了也到）。"
-            : "额度用完了、恢复了不推。")
+            ? "额度通知：已配对电脑上的账号 5 小时或本周额度用完时推送一条，到重置时间再推送一条（电脑休眠时也会送达）。"
+            : "额度用完或恢复时不推送。")
         if !push.closedToo, !push.unfiltered.isEmpty {
-            lines.append("「\(push.unfiltered.joined(separator: "」「"))」这台服务器还不认这个开关（要管理员更新服务器）：经它配对的电脑，"
-                + "关掉的会话照样推。")
+            lines.append("服务器「\(push.unfiltered.joined(separator: "」「"))」还不支持这个开关（需要管理员更新服务器）：经它配对的电脑，"
+                + "已关闭的会话仍会推送。")
         }
         if push.usageNotes, !push.usageless.isEmpty {
-            lines.append("「\(push.usageless.joined(separator: "」「"))」这台服务器还推不了额度的通知（要管理员更新服务器）。")
+            lines.append("服务器「\(push.usageless.joined(separator: "」「"))」还不支持额度通知（需要管理员更新服务器）。")
         }
         if !push.unsupported.isEmpty {
-            lines.append("「\(push.unsupported.joined(separator: "」「"))」这台服务器还没接上推送（要管理员更新服务器）：经它配对的电脑，"
-                + "只在 App 开着、接着会话时收得到通知。")
+            lines.append("服务器「\(push.unsupported.joined(separator: "」「"))」还不支持推送（需要管理员更新服务器）：经它配对的电脑，"
+                + "只有在 App 打开并接入会话时才能收到通知。")
         }
         return lines.joined(separator: "\n")
     }
@@ -151,7 +151,7 @@ private struct LicensesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text("SwiftTerm").font(.headline)
-                Text("终端的显示用的是 SwiftTerm（MIT 许可证）。").font(.callout).foregroundStyle(.secondary)
+                Text("终端显示使用 SwiftTerm（MIT 许可证）。").font(.callout).foregroundStyle(.secondary)
                 Text(Self.text("SwiftTerm")).font(.caption.monospaced()).textSelection(.enabled)
             }
             .padding(20)
@@ -163,7 +163,7 @@ private struct LicensesView: View {
 
     static func text(_ name: String) -> String {
         guard let url = Bundle.main.url(forResource: name, withExtension: "txt"),
-              let s = try? String(contentsOf: url, encoding: .utf8) else { return "（没找到许可证的原文）" }
+              let s = try? String(contentsOf: url, encoding: .utf8) else { return "（未找到许可证原文）" }
         return s
     }
 }

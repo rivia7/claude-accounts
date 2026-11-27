@@ -54,7 +54,7 @@ struct DevicesSection: View {
                     }
                 }
             } else if !loading, s?.error == nil {
-                Text("还没查过").font(.callout).foregroundStyle(.secondary)
+                Text("尚未查询").font(.callout).foregroundStyle(.secondary)
             }
             if let e = s?.error {
                 Label(e, systemImage: "exclamationmark.triangle")
@@ -69,7 +69,7 @@ struct DevicesSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if guide.showDetails, let doc = s?.doc, let idle = doc.idleAfter, let offline = doc.offlineAfter {
-                Text("经 cca 打开的终端会话和 \(label) 算在用；\(Texts.span(idle))没动静算闲置（终端看最后一次输入、输出，App 看它用的 CPU）；开着却\(Texts.span(offline))没回报算离线。设备名是 Team 的管理员给每台设备起的名字" + (nonEmpty(doc.me).map { "，这台 Mac 叫 \($0)" } ?? ""))
+                Text("经 cca 打开的终端会话和 \(label) 计为在用；\(Texts.span(idle))无活动计为闲置（终端看最后一次输入输出，App 看 CPU 占用）；开着但\(Texts.span(offline))未上报计为离线。设备名由 Team 管理员为每台设备设定" + (nonEmpty(doc.me).map { "，这台 Mac 名为 \($0)" } ?? ""))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

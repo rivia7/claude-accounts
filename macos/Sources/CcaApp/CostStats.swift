@@ -55,7 +55,7 @@ struct CostStatsPage: View {
         CostGranularityPicker()
         SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
             .disabled(model.costRefreshing)
-            .help("现在统计一次，再和各个账号的其他设备同步")
+            .help("立即统计，并与各账号的其他设备同步")
     }
 }
 
@@ -75,7 +75,7 @@ struct CostStatsContent: View {
 
     /// 标题下面那一句：数字是什么、多久以前统计的（scanning：第一次统计还没做完，AppModel.costScanning）
     static func subtitle(_ total: CostTotal?, scanning: Bool, now: Double) -> String {
-        let what = "每个账号用掉的 token 按官方 API 的价格折成美元，不是实际花费。"
+        let what = "按官方 API 价格把每个账号用掉的 token 折算成美元，不是实际花费。"
         guard let scan = total?.scan else { return what }
         if scanning { return what + "正在统计…" }
         return what + (Texts.costFreshness(scan, now: now).map { $0 + "。" } ?? "")
@@ -84,11 +84,11 @@ struct CostStatsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
             TipCard(id: .costStats, title: "这一页怎么看",
-                    message: "按 Anthropic、OpenAI、Google 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
-                        + "右上角选看哪台设备（所有设备、本机，或者另一台）、按周还是按天看。"
-                        + "每个账号一行，一根竖条是一周（或一天），颜色淡的那一项开始时还没有记录；看所有设备时，有好几台设备的账号下面分台列出。"
-                        + "认不出是哪个账号的用量不算进合计，单独列在最下面。"
-                        + "点一行看这个账号的柱状图。")
+                    message: "按 Anthropic、OpenAI、Google 官方 API 的价格，把每个账号用掉的 token 折算成美元，方便比较哪个账号用得多；订阅并不按此收费。"
+                        + "右上角可以选择设备（所有设备、本机或其他设备），以及按周或按天查看。"
+                        + "每个账号一行，一根竖条代表一周（或一天），颜色较浅的表示那一项开始时还没有记录；查看所有设备时，用过多台设备的账号会分设备列出。"
+                        + "无法识别账号的用量不计入合计，单独列在最下面。"
+                        + "点击一行查看这个账号的柱状图。")
             if model.state == nil {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -100,7 +100,7 @@ struct CostStatsContent: View {
                     if model.costScanning {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("正在统计：第一次要把会话记录全读一遍，可能要一会儿。")
+                            Text("正在统计：首次需要读取全部会话记录，可能需要一些时间。")
                         }
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -133,7 +133,7 @@ struct CostStatsContent: View {
                 }
                 table
             } else {
-                Text("没有可以折算的账号：还没有 Claude、ChatGPT 官方账号，或者在 config.json 里关掉了折合金额（\"cost\": false）。")
+                Text("没有可折算的账号：还没有 Claude、ChatGPT 官方账号，或已在 config.json 中关闭了折合金额（\"cost\": false）。")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -611,7 +611,7 @@ private struct CostOrphanGroup: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("认不出账号")
+            Text("无法识别账号")
                 .font(.title3.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
                 .padding(.top, 10)
@@ -658,7 +658,7 @@ private struct CostOrphanRow: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(name).font(.body.weight(.medium)).lineLimit(1)
-                    Text("没算进合计").font(.caption).foregroundStyle(.secondary)
+                    Text("未计入合计").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .frame(width: CostStatsColumns.name, alignment: .leading)
@@ -674,7 +674,7 @@ private struct CostOrphanRow: View {
         .padding(.vertical, 10)
         .help(lines.joined(separator: "\n"))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("认不出账号：" + name)
+        .accessibilityLabel("无法识别账号：" + name)
         .accessibilityValue(lines.joined(separator: "；"))
     }
 }

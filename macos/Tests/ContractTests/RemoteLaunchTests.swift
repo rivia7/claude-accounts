@@ -149,8 +149,8 @@ func remoteLaunchProtocolTests() {
           Texts.remoteTemplateDetail(t[0], dir: "~/projects/site") == "工作 · ~/projects/site · --model opus --append-system-prompt '说中文，改完跑一遍测试'"
           && Texts.remoteTemplateDetail(t[1], dir: "~/srv/jobs") == "frank@example.com · ~/srv/jobs"
           && Texts.remoteTemplateDetail(t[2], dir: "~/notes") == "old@example.com · ~/notes · --permission-mode plan", Texts.remoteTemplateDetail(t[0], dir: "~/projects/site"))
-    check("用不了的原因：短的标在名字后面，不认识的也有一句", Texts.remoteTemplateProblem(.noAccount) == "账号没了" && Texts.remoteTemplateProblem(.noRelay) == "不经中转"
-          && Texts.remoteTemplateProblem(RemoteTemplateProblem(rawValue: "zz_new")) == "现在用不了"
+    check("用不了的原因：短的标在名字后面，不认识的也有一句", Texts.remoteTemplateProblem(.noAccount) == "账号不存在" && Texts.remoteTemplateProblem(.noRelay) == "不经中转"
+          && Texts.remoteTemplateProblem(RemoteTemplateProblem(rawValue: "zz_new")) == "暂不可用"
           && RemoteTemplateProblem.allKnown.allSatisfy { !Texts.remoteTemplateProblemHelp($0).isEmpty && Texts.remoteTemplateProblem($0) != "现在用不了" })
 }
 
@@ -479,7 +479,7 @@ private final class StartScript: @unchecked Sendable {
         d2.template = "4d4d4d4d"
         m.startRemoteLaunch(d2)
         check("起好了但还没在服务器上登记好：弹层关上、说一句，不开终端",
-              await waitUntil { m.sheet == nil && !d2.starting } && m.remoteTerminals.count == 1 && m.toast?.text.contains("还没在服务器上登记好") == true
+              await waitUntil { m.sheet == nil && !d2.starting } && m.remoteTerminals.count == 1 && m.toast?.text.contains("还没在服务器上完成登记") == true
               && launches().last == ["remote", "launch", office.peer, "4d4d4d4d", "--digest", "1122334455667788", "--size", "120x36", "--json"],
               "\(launches().last ?? []) \(String(describing: m.toast))")
     } else {

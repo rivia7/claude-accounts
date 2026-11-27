@@ -20,7 +20,7 @@ struct FlowSheet: View {
             case .warned(let message, let warnings):
                 FlowWarned(message: message, warnings: warnings) { model.closeFlow(flow) }
             case .failed(let f):
-                FailureContent(title: "没能完成：\(flow.handoff.title)", failure: f, terminal: flow.handoff) {
+                FailureContent(title: "未能完成：\(flow.handoff.title)", failure: f, terminal: flow.handoff) {
                     model.closeFlow(flow)
                 }
             }

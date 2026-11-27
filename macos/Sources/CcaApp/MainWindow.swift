@@ -136,7 +136,7 @@ struct TopBanners: View {
             }
             ForEach(model.invalidTables, id: \.tool) { item in
                 Banner(systemImage: "tablecells.badge.ellipsis", tint: .red,
-                            title: "\(Texts.product(item.tool)) 的账号表校验不过：启动账号会失败",
+                            title: "\(Texts.product(item.tool)) 的账号表校验未通过：启动账号会失败",
                             message: item.issues.map(\.message).filter { !$0.isEmpty }.joined(separator: "\n")) {
                     Button(model.formsSupported ? "编辑账号表…" : "在终端里编辑…") { model.run(.edit(prefix: model.prefix(item.tool))) }
                         .buttonStyle(.bordered)
@@ -145,8 +145,8 @@ struct TopBanners: View {
             ForEach(model.visibleTools, id: \.self) { t in
                 if let problems = model.toolState(t)?.settingsProblems, !problems.isEmpty {
                     Banner(systemImage: "gearshape.2", tint: .orange,
-                                title: "\(Texts.product(t)) 的共享设置里有会盖掉账号代理、接口或凭证的项",
-                                message: problems.joined(separator: "、") + "。启动账号前 cca 会检查，可能要先在终端里处理。")
+                                title: "\(Texts.product(t)) 的共享设置中有会覆盖账号代理、接口或凭证的项",
+                                message: problems.joined(separator: "、") + "。启动账号前 cca 会检查，可能需要先在终端中处理。")
                 }
             }
             ForEach(Array((model.state?.errors ?? []).enumerated()), id: \.offset) { _, e in
@@ -156,13 +156,13 @@ struct TopBanners: View {
             }
             ForEach(model.visibleTools, id: \.self) { t in
                 if let cs = model.usageNeedsConsent[t], let first = cs.first {
-                    Banner(systemImage: "hand.raised", tint: .orange, title: "刷新 \(Texts.product(t)) 的用量要你同意",
+                    Banner(systemImage: "hand.raised", tint: .orange, title: "刷新 \(Texts.product(t)) 的用量需要你的同意",
                                 message: first.title) {
                         Button("现在刷新") { model.refreshUsage(tool: t, manual: true) }
                             .buttonStyle(.bordered)
                     }
                 } else if let f = model.usageFailure[t] {
-                    Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "后台刷新 \(Texts.product(t)) 的用量没有成功",
+                    Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "后台刷新 \(Texts.product(t)) 的用量失败",
                                 message: f.message) {
                         Button("重试") { model.refreshUsage(tool: t, manual: true) }
                             .buttonStyle(.bordered)
@@ -170,7 +170,7 @@ struct TopBanners: View {
                 }
             }
             if let e = model.stateError {
-                Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "没能读取账号状态", message: e) {
+                Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "无法读取账号状态", message: e) {
                     Button("重试") { Task { await model.connect() } }.buttonStyle(.bordered)
                 }
             }
@@ -230,7 +230,7 @@ struct UpdateBanner: View {
             let lines = (update.notes ?? "").split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
             let head = lines.prefix(2).joined(separator: "\n")
-            return head.isEmpty ? "现在是 \(model.hello?.ccaVersion ?? model.appVersion)。更新后会自动重新打开。" : head
+            return head.isEmpty ? "当前版本 \(model.hello?.ccaVersion ?? model.appVersion)。更新后会自动重新打开。" : head
         }
     }
 }
@@ -312,7 +312,7 @@ struct OnboardingView: View {
         case .missingCca:
             Card("先安装 cca", systemImage: "shippingbox") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("这个 App 是 cca 的图形界面，需要先装好 cca。在「终端」里运行：")
+                    Text("这个 App 是 cca 的图形界面，需要先安装 cca。请在「终端」中运行：")
                     Text(Self.installCommand)
                         .font(.system(.callout, design: .monospaced))
                         .textSelection(.enabled)
@@ -322,7 +322,7 @@ struct OnboardingView: View {
                     GlassRow(spacing: 10) {
                         Button("复制命令") { model.copy(Self.installCommand) }
                             .buttonStyle(.glassProminent)
-                        Button("装好了，重新查找") { Task { await model.connect() } }
+                        Button("已安装，重新查找") { Task { await model.connect() } }
                             .buttonStyle(.glass)
                     }
                     Text("会装到 ~/.local/bin/cca（或 ~/.cca/bin/cca）。").font(.caption).foregroundStyle(.secondary)
@@ -331,7 +331,7 @@ struct OnboardingView: View {
         case .notInstalled:
             Card("先在终端里运行 cca install", systemImage: "wrench.and.screwdriver") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("cca 还没完成安装（设置、账号表都还没有）。安装要在终端里回答几个问题。")
+                    Text("cca 尚未完成安装（还没有设置和账号表）。安装需要在终端里回答几个问题。")
                     GlassRow(spacing: 10) {
                         Button("在终端里运行 cca install") { model.runInTerminal(.install) }
                             .buttonStyle(.glassProminent)
@@ -355,8 +355,8 @@ struct OnboardingView: View {
                             }
                         }
                     } else {
-                        Text(api == nil ? "这个版本的 cca 还不支持 cca App。在终端里运行 cca update 更新到最新版本。"
-                             : "cca 太旧了（接口版本 \(api!)）。在终端里运行 cca update 更新。")
+                        Text(api == nil ? "当前版本的 cca 还不支持 cca App，请在终端运行 cca update 更新到最新版本。"
+                             : "cca 版本过旧（接口版本 \(api!)），请在终端运行 cca update 更新。")
                         GlassRow(spacing: 10) {
                             Button("在终端里运行 cca update") { model.runInTerminal(.update) }
                                 .buttonStyle(.glassProminent)
@@ -367,7 +367,7 @@ struct OnboardingView: View {
                 }
             }
         case .failed(let msg):
-            Card("没能连上 cca", systemImage: "exclamationmark.triangle") {
+            Card("无法连接 cca", systemImage: "exclamationmark.triangle") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(msg).textSelection(.enabled)
                     Button("重试") { Task { await model.connect() } }

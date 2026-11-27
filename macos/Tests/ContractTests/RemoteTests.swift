@@ -125,17 +125,17 @@ func remoteProtocolTests() {
     // 文字
     let s = far.first { $0.viewers == 1 }!
     check("会话的名字和第二行", Texts.remoteTitle(s) == "Claude Code · 工作"
-          && Texts.remoteDetail(s, now: (s.sinceEpoch ?? 0) + 7980) == "~/srv/api · 开了 2 小时 13 分 · 另有 1 处接着", Texts.remoteDetail(s, now: (s.sinceEpoch ?? 0) + 7980))
-    check("这台 Mac 上的会话说启动它的终端还在不在", Texts.remoteDetail(local!, now: (local!.sinceEpoch ?? 0) + 60).hasSuffix("启动它的终端还开着"))
-    check("接不上的说原因", Texts.remoteStateNote(far.first { $0.state == .offline }!) == "那台机器不在线" && Texts.remoteStateNote(s) == nil)
+          && Texts.remoteDetail(s, now: (s.sinceEpoch ?? 0) + 7980) == "~/srv/api · 已运行 2 小时 13 分 · 另有 1 处接入", Texts.remoteDetail(s, now: (s.sinceEpoch ?? 0) + 7980))
+    check("这台 Mac 上的会话说启动它的终端还在不在", Texts.remoteDetail(local!, now: (local!.sinceEpoch ?? 0) + 60).hasSuffix("启动它的终端仍开着"))
+    check("接不上的说原因", Texts.remoteStateNote(far.first { $0.state == .offline }!) == "那台机器离线" && Texts.remoteStateNote(s) == nil)
     check("终端结束后的那句话：这边断开的、会话结束的、没接上的",
-          Texts.remoteEnded(code: 0, closedByUser: true, listed: true) == "已断开，会话在那边照常运行"
-          && Texts.remoteEnded(code: 0, closedByUser: false, listed: false) == "会话已经结束"
-          && Texts.remoteEnded(code: 3, closedByUser: false, listed: false) == "会话已经结束（退出码 3）"
-          && Texts.remoteEnded(code: 0, closedByUser: false, listed: true) == "已断开，会话在那边照常运行"
-          && Texts.remoteEnded(code: 66, closedByUser: false, listed: true) == "没能经服务器接上那台机器"
-          && Texts.remoteEnded(code: 65, closedByUser: false, listed: false).hasPrefix("没有这个会话了")
-          && Texts.remoteEnded(code: 68, closedByUser: false, listed: true).hasPrefix("连接断了"))
+          Texts.remoteEnded(code: 0, closedByUser: true, listed: true) == "已断开，会话仍在运行"
+          && Texts.remoteEnded(code: 0, closedByUser: false, listed: false) == "会话已结束"
+          && Texts.remoteEnded(code: 3, closedByUser: false, listed: false) == "会话已结束（退出码 3）"
+          && Texts.remoteEnded(code: 0, closedByUser: false, listed: true) == "已断开，会话仍在运行"
+          && Texts.remoteEnded(code: 66, closedByUser: false, listed: true) == "无法经服务器连接那台机器"
+          && Texts.remoteEnded(code: 65, closedByUser: false, listed: false).hasPrefix("找不到这个会话")
+          && Texts.remoteEnded(code: 68, closedByUser: false, listed: true).hasPrefix("连接已断开"))
 
     check("终端的标题（对方写的）显示之前过滤：控制字符、改文字方向的、零宽的去掉，换行当空格，截短",
           Texts.plainLine("a\u{1b}[31mb\r\nc\u{202e}d\u{200b}e\u{2028}f\u{e0041}g\u{feff}", max: 50) == "a[31mbcde fg"
@@ -451,7 +451,7 @@ func remoteProtocolTests() {
         m.attachRemote(s, readOnly: false)
     }
     check("最多同时开 \(AppModel.remoteTerminalLimit) 个终端：再多的不接，说一声",
-          m.remoteTerminals.count == AppModel.remoteTerminalLimit && m.remoteTerminal(for: extra.last!) == nil && m.toast?.text.contains("最多同时开") == true
+          m.remoteTerminals.count == AppModel.remoteTerminalLimit && m.remoteTerminal(for: extra.last!) == nil && m.toast?.text.contains("最多同时打开") == true
           && m.remoteTerminal?.session.id == extra[extra.count - 2].id && third.closed == 0,
           "\(m.remoteTerminals.count) \(String(describing: m.toast))")
     // 关掉排在最后的那个（正显示着）：换到它前面的；关到一个不剩：回到列表

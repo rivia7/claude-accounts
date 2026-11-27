@@ -14,10 +14,10 @@ struct AccountDetail: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 32) {
                         TipCard(id: .account, title: "这一页怎么看",
-                                message: "名字下面那句话说这个账号现在能不能用、下一步点什么。"
-                                    + (a.isAPI ? "往下是它的 API key 和网络出口。"
-                                       : "往下是用量和网络出口；Team 给的账号，最下面还有它在哪些设备上用。")
-                                    + "端口、纯净度这些细节，点「显示细节」。")
+                                message: "名字下方的提示说明这个账号现在能否使用，以及下一步该点什么。"
+                                    + (a.isAPI ? "下方是它的 API key 和网络出口。"
+                                       : "下方是用量和网络出口；Team 分配的账号，最下面还会列出它在哪些设备上使用。")
+                                    + "端口、纯净度等细节，点「显示细节」查看。")
                         DetailHeader(account: a)
                         SectionColumns {
                             if !a.isAPI, !model.features(a.tool).usage {
@@ -67,8 +67,8 @@ struct AccountDetail: View {
             }
             .navigationTitle(a.displayName)
         } else {
-            ContentUnavailableView("没有这个账号", systemImage: "person.crop.circle.badge.questionmark",
-                                   description: Text("账号表里已经没有它了。"))
+            ContentUnavailableView("找不到这个账号", systemImage: "person.crop.circle.badge.questionmark",
+                                   description: Text("账号表里已没有这个账号。"))
         }
     }
 }
@@ -119,7 +119,7 @@ struct DetailHeader: View {
                         Button("安装 \(Texts.cliCommand(a.tool)) 命令…") { model.runInTerminal(h) }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .help("在终端里运行 \(h.display)：用官方安装脚本安装，直连不通时会问要不要经内置代理装")
+                            .help("在终端里运行 \(h.display)：用官方安装脚本安装，直连失败时会询问是否经内置代理安装")
                     }
                 }
             }
@@ -202,7 +202,7 @@ struct DetailHeader: View {
                 }
                 .buttonStyle(.glass)
                 .disabled(!a.can.web || busy)
-                .help(reason("web", a) ?? "在这个账号自己的 Chrome 资料里打开网页版，走账号的出口")
+                .help(reason("web", a) ?? "在这个账号专属的 Chrome 资料中打开网页版，经账号的出口访问")
             }
             SessionButton(account: a, prominent: (a.isAPI || !hasApp) && !needsLogin, unavailable: reason("cli", a))
             Menu {
@@ -333,7 +333,7 @@ struct AliasTitle: View {
                     .foregroundStyle(.secondary)
                     .opacity(0.5)
             }
-            .help("别名是 Team 给的，管理员锁定了：这台 Mac 上改不了")
+            .help("别名由 Team 管理员锁定，无法在这台 Mac 上修改")
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(a.displayName)，别名由 Team 锁定")
         } else {
@@ -360,8 +360,8 @@ struct AliasTitle: View {
             .padding(.horizontal, -6)
             .onHover { hover.wrappedValue = $0 }
             .disabled(model.activity(a.ref) != nil)
-            .help("点一下改别名（登录、资料和端口都不变）")
-            .accessibilityLabel("\(a.displayName)，点一下改别名")
+            .help("点击修改别名（登录、资料和端口都不变）")
+            .accessibilityLabel("\(a.displayName)，点击修改别名")
         }
     }
 }
@@ -388,7 +388,7 @@ struct InlineAliasEditor: View {
         let busy = model.activity(a.ref) != nil
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
-                TextField(a.isAPI ? "别名" : "别名（空着就只用邮箱）", text: draft.projectedValue)
+                TextField(a.isAPI ? "别名" : "别名（留空则只用邮箱）", text: draft.projectedValue)
                     .textFieldStyle(.plain)
                     .font(.system(size: 22, weight: .semibold))
                     .padding(.horizontal, 8)
@@ -422,7 +422,7 @@ struct InlineAliasEditor: View {
                     .textSelection(.enabled)
             } else {
                 Text(a.isAPI ? "回车保存，Esc 取消。最多 12 个汉字或 24 个字母，不能有空格、引号、括号、反斜杠或 @。"
-                     : "回车保存，Esc 取消。最多 12 个汉字或 24 个字母，不能有空格、引号、括号、反斜杠或 @；空着就只用邮箱。")
+                     : "回车保存，Esc 取消。最多 12 个汉字或 24 个字母，不能有空格、引号、括号、反斜杠或 @；留空则只用邮箱。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

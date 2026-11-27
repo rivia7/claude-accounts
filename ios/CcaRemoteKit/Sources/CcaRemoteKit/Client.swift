@@ -167,7 +167,7 @@ public final class RemoteClient: @unchecked Sendable {
     }
 
     /// 在这台服务器上登记推送（push_set，只有手机能发）：推送服务给这台手机上这个 App 的令牌（小写的十六进制）和推送服务的环境
-    /// （production / sandbox）；令牌空的是拿掉。sids：只推这几个会话（会话编号，最多 8 个；空的是一个都不推：「关掉的会话也推送」
+    /// （production / sandbox）；令牌空的是拿掉。sids：只推这几个会话（会话编号，最多 8 个；空的是一个都不推：「已关闭的会话也推送」
     /// 关着时是 App 里开着的那个），nil 是都推。usage：也推额度的通知（额度用完了、恢复了），nil 是不说（服务器当作不推）。
     /// 没成的原因：no_push（这台服务器没接推送网关）、denied（服务器不认这台手机了）……
     public func pushSet(on server: ServerRef, token: String, env: String, sids: [String]? = nil, usage: Bool? = nil) async -> PushSetResult {

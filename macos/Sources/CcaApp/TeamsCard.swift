@@ -30,7 +30,7 @@ struct TeamsCard: View {
     var body: some View {
         Card("Team", systemImage: "person.3") {
             VStack(alignment: .leading, spacing: 14) {
-                Text("一个 Team 是一组设备加一份配置：哪些账号、各走哪个节点，由管理员的设备维护，存在这个 Team 的同步服务器上。管理员给每台设备发一个邀请链接，定它能用哪些账号；加入以后这些账号自动加进账号表，出口节点由管理员固定。服务器上只有密文。")
+                Text("一个 Team 是一组设备和一份共享配置（有哪些账号、各走哪个节点），由管理员的设备维护，保存在这个 Team 的同步服务器上。管理员给每台设备发送邀请链接，并决定它能用哪些账号；加入后这些账号会自动加入账号表，出口节点由管理员固定。服务器上只保存密文。")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 ForEach(model.teams) { t in
@@ -47,7 +47,7 @@ struct TeamsCard: View {
                                 .help("各个 Team 马上同步一次配置（平时每小时自动同步）：有新的就马上照它改账号表")
                         }
                         SectionAction("新建 Team…", systemImage: "plus") { model.newTeam() }
-                            .help("在这台 Mac 上建一个 Team：它是管理员（根密钥只在它上面）。建好以后部署它的同步服务器，再给别的设备发邀请")
+                            .help("在这台 Mac 上创建一个 Team，这台 Mac 就是管理员（根密钥只保存在这台 Mac 上）。创建后部署同步服务器，再邀请其他设备")
                     }
                     Spacer(minLength: 8)
                     if model.teamBusy { ProgressView().controlSize(.small) }
@@ -83,11 +83,11 @@ private struct TeamBlock: View {
                 if team.isOwner, team.state == .local {
                     RowAction("部署到我的服务器…", systemImage: "server.rack") { model.deployTeam(team) }
                         .disabled(model.flow != nil || model.teamBusy)
-                        .help("经 SSH 把这个 Team 的同步服务器装到你自己的 Linux 服务器上（root 登录；有 Docker 用 Docker，没有用 systemd），装好了自动接上")
+                        .help("经 SSH 把这个 Team 的同步服务器安装到你自己的 Linux 服务器上（root 登录；有 Docker 时用 Docker，否则用 systemd），安装后自动连接")
                 }
                 Menu {
                     if team.isOwner, team.state != .local {
-                        Button("更新服务器、搬到别的服务器…") { model.deployTeam(team) }
+                        Button("更新服务器、迁移到其他服务器…") { model.deployTeam(team) }
                         Divider()
                     }
                     if team.isAdmin, model.teamConfigAvailable {
@@ -96,7 +96,7 @@ private struct TeamBlock: View {
                         Button("在终端里修改配置…") { model.editTeamConfig(team) }
                         Divider()
                     }
-                    Button(team.isOwner ? "删掉这个 Team…" : "退出这个 Team…", role: .destructive) { model.leaveTeam(team) }
+                    Button(team.isOwner ? "删除这个 Team…" : "退出这个 Team…", role: .destructive) { model.leaveTeam(team) }
                 } label: {
                     Label("更多", systemImage: "ellipsis.circle")
                 }
@@ -104,8 +104,8 @@ private struct TeamBlock: View {
                 .buttonStyle(.glass)
                 .fixedSize()
                 .disabled(model.flow != nil || model.teamBusy)
-                .help(team.isOwner ? "删掉：部署过同步服务器的先经 SSH 卸掉它，这台设备上的根密钥跟着没了，这个 Team 再没有谁管得了（先问一句）"
-                      : "退出：这个 Team 给的账号移出账号表，登录都留着（先问一句）")
+                .help(team.isOwner ? "删除：如果部署过同步服务器，会先经 SSH 卸载它；这台设备上的根密钥会一并删除，之后没有人能再管理这个 Team（会先确认）"
+                      : "退出：这个 Team 分配的账号会移出账号表，登录状态保留（会先确认）")
             }
             InfoRow(Text(Texts.teamState(team)), systemImage: Self.symbol(team.state), tint: Self.tint(team.state)) { EmptyView() }
             if let u = team.serverUpdate {
@@ -190,7 +190,7 @@ private struct TeamAdminSection: View {
                                 Toggle("锁定别名", isOn: Binding(get: { locked }, set: { model.setTeamAliasLock(team, $0) }))
                                     .toggleStyle(.switch).controlSize(.small)
                                     .disabled(model.teamBusy || model.flow != nil)
-                                    .help("锁定了：各台设备上照这里的别名用，自己改过的换回来，在设备上改不了（这台 Mac 的账号表不动）")
+                                    .help("锁定后：各设备统一使用这里的别名，自行改过的会恢复，设备上无法修改（不影响这台 Mac 的账号表）")
                             }
                         }
                         ForEach(accounts) { a in
@@ -202,7 +202,7 @@ private struct TeamAdminSection: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else if !loading, snap?.error == nil {
-                    Text("还没问过服务器").font(.callout).foregroundStyle(.secondary)
+                    Text("尚未查询服务器").font(.callout).foregroundStyle(.secondary)
                 }
             }
             .padding(.top, 4)
@@ -257,13 +257,13 @@ private struct TeamDeviceLine: View {
                         RowAction(device.isAdminDevice ? "收回管理员…" : "设为管理员…", systemImage: "person.badge.key") {
                             model.setTeamAdmin(team, device, add: !device.isAdminDevice)
                         }
-                        .help(device.isAdminDevice ? "收回它的管理员身份：服务器不再认它的管理员操作，管理员的密钥换一把；它已经看过的设置收不回来（先问一句）"
-                              : "让它也能管理这个 Team（邀请、移除设备，改账号、节点）：它会拿到这个 Team 的全部设置，包括节点的密码；不能删除 Team、部署服务器（先问一句）")
+                        .help(device.isAdminDevice ? "收回它的管理员身份：服务器不再接受它的管理员操作，管理员密钥会更换；它已看过的设置无法收回（会先确认）"
+                              : "让它也能管理这个 Team（邀请、移除设备，修改账号、节点）：它会获得这个 Team 的全部设置，包括节点密码；但不能删除 Team 或部署服务器（会先确认）")
                     }
                     if !device.me, !device.isOwnerDevice, !device.isAdminDevice {
                         RowAction(device.state == .invited ? "撤回…" : "移除…", systemImage: "xmark.circle") { model.revokeTeamDevice(team, device) }
-                            .help(device.state == .invited ? "撤回这个还没用的邀请（先问一句）"
-                                  : "从这个 Team 里移除这台设备：它的密钥作废、给它的配置和它同步过的折合金额删掉，不再列出来；它已经拿到的节点凭证收不回来（先问一句）")
+                            .help(device.state == .invited ? "撤回这个未使用的邀请（会先确认）"
+                                  : "从这个 Team 中移除这台设备：它的密钥作废，分配给它的配置和它同步过的折合金额会被删除，不再列出；它已拿到的节点凭证无法收回（会先确认）")
                     }
                 }
                 .disabled(model.teamBusy || model.flow != nil)
@@ -292,8 +292,8 @@ private struct TeamDeviceLine: View {
             }
             .disabled(model.teamBusy || model.flow != nil)
             Text(device.state == .joined
-                 ? "它在服务器上的名字跟着改，下次同步配置时它那边也换成新的名字。远程会话里已经配好的对照旧叫配对时的名字（再配一次才换）。"
-                 : "只改这边记着的名字（它还没加入：加入时报的是它自己的名字）。")
+                 ? "它在服务器上的名称会同步修改，下次同步配置时那台设备也会换成新名称。远程会话中已配对的设备仍显示配对时的名称（重新配对后才会更新）。"
+                 : "只修改这里记录的名称（它还没加入：加入时会上报它自己的名称）。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -343,7 +343,7 @@ private struct TeamInviteForm: View {
                 .help("这台设备能用哪些账号（之后还能改）")
                 SectionAction("复制邀请链接", systemImage: "doc.on.doc", prominent: true) { model.sendTeamInvite(team) }
                     .disabled(draft.label.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .help("生成一个邀请，链接放进剪贴板（60 秒后清掉）：发给那台设备的主人，对方「粘贴邀请链接…」加入")
+                    .help("生成一个邀请，链接会复制到剪贴板（60 秒后清除）：发给那台设备的主人，对方通过「粘贴邀请链接…」加入")
             }
             .disabled(model.teamBusy || model.flow != nil)
             Text("一个邀请只能加入一台设备，7 天后过期。链接就是那台设备的密钥：当密码传，别贴到群里。")

@@ -99,7 +99,7 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
     var statusText: String {
         if autoInstallPending { return "退出后自动安装" }
         switch status {
-        case "missing": return "还没装"
+        case "missing": return "未安装"
         case "current": return "已是最新版本"
         case "checking": return "正在检查"
         case "busy": return "正在更新"
@@ -110,7 +110,7 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
         case "blocked": return "现在不能安装"
         case "error": return "检查更新失败"
         case "updated": return "已更新"
-        case "unverified": return "还没通过兼容性检查"
+        case "unverified": return "兼容性待验证"
         case "needs_recheck": return "需要重新检查"
         default: return "等待检查结果"
         }

@@ -26,13 +26,13 @@ struct RouteSection: View {
                     }
                     SectionAction(a.isAPI ? "检测连接" : "检测出口", systemImage: "checkmark.shield") { model.checkExit(a.ref) }
                         .disabled(!a.can.check || model.activity(a.ref) != nil)
-                        .help(a.isAPI ? "检测接口连不连得上" : "检测出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险（会访问检测网站）")
+                        .help(a.isAPI ? "检测接口能否连接" : "检测出口 IP、地区、纯净度，以及 DNS / WebRTC 是否有泄露风险（会访问检测网站）")
                 }
             }
             RouteStrip(stops: guide.showDetails ? stops(a) : simpleStops(a), color: a.lineColor)
                 .padding(.top, 2)
             if a.isRouted, model.state?.routing?.sync == .pending, model.routerConfigured {
-                Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器还没同步",
+                Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器未同步",
                        message: "下次启动账号时会同步，也可以现在同步。") {
                     Button("同步路由器") { model.syncRouter() }
                         .buttonStyle(.borderedProminent)
@@ -89,7 +89,7 @@ struct RouteSection: View {
                 case .closed:
                     broken = true
                     s.status = .bad
-                    s.detail = live.listening == false ? "端口没在监听" : "这台 Mac 连不上这个端口"
+                    s.detail = live.listening == false ? "端口未在监听" : "这台 Mac 无法连接这个端口"
                     s.detailTint = .red
                 default:
                     s.status = .unknown
@@ -104,7 +104,7 @@ struct RouteSection: View {
             if a.pinned { notes.append("Team 锁定") }
             if let local = localName(a), local != node { notes.append("本机叫 \(local)") }
             s.detail = notes.isEmpty ? nil : notes.joined(separator: "\n")
-            if a.pinned { s.help = "Team 的配置锁定了这个账号的节点（\(a.pinnedNode ?? node)），这里不能改" }
+            if a.pinned { s.help = "这个账号的节点已被 Team 的配置锁定（\(a.pinnedNode ?? node)），无法在这里修改" }
             if broken { s.status = .unknown; s.line = .broken }
             if drift { s.line = .warn }
             out.append(s)
@@ -115,7 +115,7 @@ struct RouteSection: View {
 
     /// 最后一站：出口 IP 和地区（第三方 API 账号是接口的地址）。
     private func exitStop(_ a: Account, broken: Bool) -> RouteStop {
-        var s = RouteStop(id: 3, mark: .end, title: "还没检测")
+        var s = RouteStop(id: 3, mark: .end, title: "未检测")
         s.status = .unknown
         s.line = broken ? .broken : .faint
         let h = a.health
@@ -192,11 +192,11 @@ struct RouteSection: View {
         if let sel = s.selected {
             parts.append(s.state == .drift ? "选中的是 \(sel)，应为 \(s.expected ?? "—")" : "选中 \(sel)")
         } else {
-            parts.append("拿不到选中的节点")
+            parts.append("无法获取选中的节点")
         }
-        if s.listening == false { parts.append("端口没在监听") }
-        if s.reachable == false { parts.append("这台 Mac 连不上这个端口") }
-        if s.inKernel == false { parts.append("Clash 里还没有这个端口") }
+        if s.listening == false { parts.append("端口未在监听") }
+        if s.reachable == false { parts.append("这台 Mac 无法连接这个端口") }
+        if s.inKernel == false { parts.append("Clash 中没有这个端口") }
         return Texts.route(model.live?.route) + "：" + parts.joined(separator: "，")
     }
 }
@@ -343,7 +343,7 @@ struct HealthDetails: View {
             let dim = h.stale || !h.applies
             VStack(alignment: .leading, spacing: 12) {
                 if !h.applies {
-                    Label("换了节点：这是旧节点 \(h.node ?? "—") 的结果，现在用的是 \(account.node ?? "直连")。再检测一次看看新的出口。",
+                    Label("节点已更换：这是旧节点 \(h.node ?? "—") 的结果，现在使用的是 \(account.node ?? "直连")。请重新检测新的出口。",
                           systemImage: "arrow.triangle.swap")
                         .font(.callout)
                         .foregroundStyle(.primary)
@@ -388,8 +388,8 @@ struct HealthDetails: View {
                 }
             }
         } else {
-            Text(account.isAPI ? "还没测过。点「检测连接」看看接口连不连得上。"
-                 : "还没测过。点「检测出口」，看看这个账号的出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险。")
+            Text(account.isAPI ? "尚未检测。点「检测连接」检查接口能否连接。"
+                 : "尚未检测。点「检测出口」查看这个账号的出口 IP、地区、纯净度，以及 DNS / WebRTC 是否有泄露风险。")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -415,12 +415,12 @@ struct HealthDetails: View {
                 }
                 Meter(fraction: t / 100, color: Palette.health(h.result), height: 5, dim: dim)
             } else {
-                Text("没有评分").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
+                Text("暂无评分").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("纯净度")
-        .accessibilityValue(h.trust.map { "\(Int($0.rounded()))\(h.trustLabel.map { "，" + $0 } ?? "")" } ?? "没有评分")
+        .accessibilityValue(h.trust.map { "\(Int($0.rounded()))\(h.trustLabel.map { "，" + $0 } ?? "")" } ?? "暂无评分")
     }
 
     private func leakTile(_ what: String, _ s: LeakState?, message: String?, dim: Bool) -> some View {
@@ -486,7 +486,7 @@ struct HealthSummary: View {
             let dim = h.stale || !h.applies
             VStack(alignment: .leading, spacing: 10) {
                 if !h.applies {
-                    Label("换了节点：这是旧节点 \(h.node ?? "—") 的结果，再检测一次看看新的出口。", systemImage: "arrow.triangle.swap")
+                    Label("节点已更换：这是旧节点 \(h.node ?? "—") 的结果，请重新检测新的出口。", systemImage: "arrow.triangle.swap")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -516,8 +516,8 @@ struct HealthSummary: View {
                 }
             }
         } else {
-            Text(account.isAPI ? "还没测过。点「检测连接」看看接口连不连得上。"
-                 : "还没测过。点「检测出口」，看看这个账号的出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险。")
+            Text(account.isAPI ? "尚未检测。点「检测连接」检查接口能否连接。"
+                 : "尚未检测。点「检测出口」查看这个账号的出口 IP、地区、纯净度，以及 DNS / WebRTC 是否有泄露风险。")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

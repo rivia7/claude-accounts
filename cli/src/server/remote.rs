@@ -190,7 +190,7 @@ struct Guest {
 struct PushReg {
     token: String,
     env: String,
-    /// 只推这几个会话（会话的编号）：手机上「关掉的会话也推送」关着时是 App 里正开着的那个，一个都没开着是空的；None 是都推
+    /// 只推这几个会话（会话的编号）：手机上「已关闭的会话也推送」关着时是 App 里正开着的那个，一个都没开着是空的；None 是都推
     sids: Option<Vec<String>>,
     /// 也推额度的通知（push_note、到点的 later：额度用完了、恢复了）。手机说了要才推：旧版的 App 解不开、会显示成一句看不懂的
     usage: bool,

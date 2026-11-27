@@ -9,7 +9,7 @@ final class AlertPrompter: Prompter, @unchecked Sendable {
         await MainActor.run {
             NSApp.activate()
             let alert = NSAlert()
-            alert.messageText = consent.title.isEmpty ? "需要你同意" : consent.title
+            alert.messageText = consent.title.isEmpty ? "需要你的同意" : consent.title
             var info = consent.question
             if !consent.detail.isEmpty { info += (info.isEmpty ? "" : "\n\n") + consent.detail }
             alert.informativeText = info

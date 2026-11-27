@@ -125,8 +125,8 @@ struct UsageSection: View {
             if let u, u.source != .none, let old = u.outdatedLoginPlan {
                 InfoRow(Text(Texts.outdatedLoginPlan(old, current: a.plan)), systemImage: "info.circle") {
                     reloginButton(busy: busy)
-                        .help("Claude Code 只在登录时记下套餐，升降级后不会自己更新（额度照实际套餐算）。"
-                              + "点了会在终端里运行 \(model.loginHandoff(a).display)：先退出现在的登录，再重新登录")
+                        .help("Claude Code 只在登录时记录套餐，升降级后不会自动更新（额度按实际套餐计算）。"
+                              + "点击后会在终端运行 \(model.loginHandoff(a).display)：先退出当前登录，再重新登录")
                 }
             }
             if a.can.limitResets {
@@ -158,11 +158,11 @@ struct UsageSection: View {
         if let why = account.canWhy["usage"], !account.can.usage {
             return Texts.canWhy(why, appLabel: model.appLabel(account.tool), tool: account.tool)
         }
-        if model.loginExpired(account) { return "登录已失效，查不了用量。" }
+        if model.loginExpired(account) { return "登录已失效，无法查询用量。" }
         switch account.login {
-        case .loggedOut: return "还没登录，查不了用量。"
-        case .emailMismatch: return "登录的不是这个账号，查不了用量。"
-        default: return "还没有用量数据：点「刷新用量」查一次。"
+        case .loggedOut: return "未登录，无法查询用量。"
+        case .emailMismatch: return "登录的不是这个账号，无法查询用量。"
+        default: return "还没有用量数据：点「刷新用量」查询。"
         }
     }
 
@@ -182,7 +182,7 @@ struct UsageSection: View {
             } else if c.hasCredits == true, let b = nonEmpty(c.balance) {
                 out.append(MinorQuota(title: "Credits 余额", value: b, systemImage: "creditcard"))
             } else if c.hasCredits == false {
-                out.append(MinorQuota(title: "Credits", value: "没有", systemImage: "creditcard"))
+                out.append(MinorQuota(title: "Credits", value: "无", systemImage: "creditcard"))
             }
         }
         if let e = u.extraUsage, e.isEnabled == true {
@@ -290,7 +290,7 @@ struct QuotaTile: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title)用量")
-        .accessibilityValue((pct == nil ? "没有数据" : reset ? "已重置" : "\(Texts.percent(pct!))\(resetText.map { "，" + $0 } ?? "")")
+        .accessibilityValue((pct == nil ? "暂无数据" : reset ? "已重置" : "\(Texts.percent(pct!))\(resetText.map { "，" + $0 } ?? "")")
                             + (reset ? "" : nonEmpty(note).map { "。" + $0 } ?? ""))
     }
 }
@@ -453,7 +453,7 @@ struct MiniUsage: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken)
-        .accessibilityValue((value == "—" ? "没有数据" : value) + (note.map { "，" + $0 } ?? ""))
+        .accessibilityValue((value == "—" ? "暂无数据" : value) + (note.map { "，" + $0 } ?? ""))
     }
 }
 

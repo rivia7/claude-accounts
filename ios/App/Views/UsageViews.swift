@@ -47,7 +47,7 @@ struct QuotaTile: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title)用量")
-        .accessibilityValue(pct == nil ? "没有数据" : reset ? "已重置" : Texts.percent(pct ?? 0) + (resetText.map { "，" + $0 } ?? ""))
+        .accessibilityValue(pct == nil ? "暂无数据" : reset ? "已重置" : Texts.percent(pct ?? 0) + (resetText.map { "，" + $0 } ?? ""))
     }
 }
 
@@ -152,13 +152,13 @@ struct UsageSection: View {
 
     private var emptyReason: String {
         let a = account
-        if a.isAPI { return "第三方 API 账号没有订阅的用量。" }
+        if a.isAPI { return "第三方 API 账号没有订阅额度。" }
         switch a.login {
-        case "logged_out": return "还没登录，查不了用量。"
-        case "email_mismatch": return "登录的不是这个账号，查不了用量。"
+        case "logged_out": return "未登录，无法查询用量。"
+        case "email_mismatch": return "登录的不是这个账号，无法查询用量。"
         default:
-            if a.usage?.errorCode == "auth" { return "登录已失效，查不了用量。" }
-            return "还没有用量数据：那台电脑上的 cca 查过一次用量以后就有了。"
+            if a.usage?.errorCode == "auth" { return "登录已失效，无法查询用量。" }
+            return "暂无用量数据：电脑上的 cca 查询一次用量后就会显示。"
         }
     }
 }
@@ -303,14 +303,14 @@ struct WeeklySection: View {
                 VStack(alignment: .leading, spacing: 10) {
                     WeeklyChart(weeks: uw.weeks, now: now, picked: $picked)
                         .frame(height: 128)
-                    Text(hit.map { Texts.weekDetail($0, now: now) } ?? Texts.weeksSummary(uw.summary) ?? "这一周过完就有第一周的统计。")
+                    Text(hit.map { Texts.weekDetail($0, now: now) } ?? Texts.weeksSummary(uw.summary) ?? "本周结束后会显示第一周的统计。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if uw.weeks.contains(where: \.partial) {
                         HStack(spacing: 6) {
                             WeekBar(percent: 70, top: 100, color: Meter.dimColor).frame(width: 5, height: 12).accessibilityHidden(true)
-                            Text("填成灰色的：那一周结束前一天没查到，实际可能更多。").fixedSize(horizontal: false, vertical: true)
+                            Text("灰色：那一周最后一天没有数据，实际可能更多。").fixedSize(horizontal: false, vertical: true)
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -320,8 +320,8 @@ struct WeeklySection: View {
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
             } else {
                 Text(weeks != nil ? "最近 12 周没有记录。"
-                    : leftOut ? "那台电脑上的账号太多，每周用量没放上来（在那台电脑的 cca App 里看）。"
-                    : "还没有记录：那台电脑每次查用量时会记下这一周用到多少。")
+                    : leftOut ? "电脑上的账号较多，每周用量没有上传（请在电脑上的 cca App 中查看）。"
+                    : "还没有记录：电脑每次查询用量时会记录本周的用量。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(14)

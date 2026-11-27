@@ -66,7 +66,7 @@ struct CostBarChart: View {
         var value = Texts.money(bar.usd, currency: currency)
         if requests, bar.period.requests > 0 { value += "，\(Texts.grouped(bar.period.requests)) 次请求" }
         if bar.period.partial { value += "，这一项开始时还没有记录" }
-        let label = bar.period.current ? (granularity == .week ? "本周到现在" : "今天到现在")
+        let label = bar.period.current ? (granularity == .week ? "本周至今" : "今天")
             : Texts.costRange(bar.period, granularity: granularity, now: now)
         return (label, value)
     }
@@ -140,7 +140,7 @@ struct CostPartialLegend: View {
             Capsule().fill(Meter.dimColor)
                 .frame(width: 5, height: 12)
                 .accessibilityHidden(true)
-            Text("颜色淡的：那一项开始时还没有记录，实际可能更多。")
+            Text("颜色较浅的：那一项开始时还没有记录，实际可能更多。")
                 .fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption)
@@ -181,13 +181,13 @@ struct CostScopePicker: View {
 
     private var helpText: String {
         let others: String
-        if case .account = page { others = "用过这个账号的那几台，只算那一台上用的" } else { others = "只算那一台上用的" }
-        return "所有设备：整个账号，各台设备加起来；本机：只算这台设备上用的；别的设备：" + others
+        if case .account = page { others = "用过这个账号的设备，只统计那台设备上的用量" } else { others = "只统计那台设备上的用量" }
+        return "所有设备：整个账号在各设备上的合计；本机：只统计这台设备上的用量；其他设备：" + others
     }
 
     var body: some View {
         let others = menuDevices
-        Picker("看哪台设备", selection: Binding(get: { shown }, set: { model.costScope = $0 })) {
+        Picker("选择设备", selection: Binding(get: { shown }, set: { model.costScope = $0 })) {
             Text("所有设备").tag(CostScope.all)
             Text("本机").tag(CostScope.me)
             if !others.isEmpty {
@@ -353,7 +353,7 @@ struct CostSection: View {
         }
         SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
             .disabled(model.costRefreshing)
-            .help("现在统计一次，再和这个账号的其他设备同步")
+            .help("立即统计，并与这个账号的其他设备同步")
     }
 
     // MARK: 内容
@@ -426,7 +426,7 @@ struct CostSection: View {
         let bar = hovered ?? bars.last(where: \.period.current)
         VStack(alignment: .leading, spacing: 4) {
             if scope == .all, let bar, let t = bar.period.tokens, t.total > 0 {
-                let when = hovered == nil || bar.period.current ? (g == .week ? "本周到现在" : "今天到现在")
+                let when = hovered == nil || bar.period.current ? (g == .week ? "本周至今" : "今天")
                     : Texts.costRange(bar.period, granularity: g, now: now)
                 Text(when + "的 token：" + Texts.costTokens(t))
             }
@@ -447,7 +447,7 @@ struct CostSection: View {
             if scanning {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("正在统计：第一次要把会话记录全读一遍，可能要一会儿。")
+                    Text("正在统计：首次需要读取全部会话记录，可能需要一些时间。")
                 }
             } else {
                 Text(never ? Texts.costNotScanned : Texts.costEmpty(account.tool))

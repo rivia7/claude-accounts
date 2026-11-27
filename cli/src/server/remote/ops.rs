@@ -157,7 +157,7 @@ impl Remote {
     /// 字符），空的是不要推送了；env：production（App Store、TestFlight 装的）或者 sandbox（Xcode 装的）。只有配了对的访客能登记
     /// （名单里的设备、正在配对的是 403 denied）；这台服务器没开推送是 404 no_push。一个令牌只记在一个访客上（App 删了重装、
     /// 换了身份：旧的那一项不再推）。和记着的一样时不存。sids（可以不带）：只推这几个会话（`PUSH_SIDS` 个以内的会话编号；手机上
-    /// 「关掉的会话也推送」关着时是 App 里正开着的那个），不带、null 是都推；带了的回的里面多一项 `"sids": true`——旧的服务器不认
+    /// 「已关闭的会话也推送」关着时是 App 里正开着的那个），不带、null 是都推；带了的回的里面多一项 `"sids": true`——旧的服务器不认
     /// 它、照旧都推，手机看这一项知道。usage（可以不带）：true 是也推额度的通知（push_note、到点的 later），不带、别的是不推；
     /// 带了的回的里面多一项 `"usage": true`（旧的服务器不认，手机看这一项知道这台服务器推不了）
     fn push_set(&mut self, fp: &str, guest: bool, j: &Dict, now: f64) -> R<Reply> {

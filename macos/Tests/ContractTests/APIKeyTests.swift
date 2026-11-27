@@ -57,19 +57,19 @@ func apiKeyTests() async {
     cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
     let now = 1794042000.0   // 2026-11-07 17:00（上海）
     let mine = APIKeyInfo(saved: true, hint: "h", source: .keychain, shared: true, savedEpoch: now - 3600)
-    check("同步：这台 Mac 记下的", Texts.apiKeyShare(mine, now: now, calendar: cal) == "这台 Mac 16:00 记下，登录了这个账号的其他设备也能看到（加密同步）。",
+    check("同步：这台 Mac 记下的", Texts.apiKeyShare(mine, now: now, calendar: cal) == "这台 Mac 16:00 记录，登录了这个账号的其他设备也能看到（加密同步）。",
           Texts.apiKeyShare(mine, now: now, calendar: cal) ?? "nil")
     var from = mine
     from.fromDevice = "dan-air"
     from.savedEpoch = now - 86400
-    check("同步：别的设备记下、同步来的", Texts.apiKeyShare(from, now: now, calendar: cal) == "dan-air 昨天 17:00 记下，已加密同步到这台 Mac。",
+    check("同步：别的设备记下、同步来的", Texts.apiKeyShare(from, now: now, calendar: cal) == "dan-air 昨天 17:00 记录，已加密同步到这台 Mac。",
           Texts.apiKeyShare(from, now: now, calendar: cal) ?? "nil")
     from.savedEpoch = nil
-    check("同步：不知道什么时候记下的就不写时间", Texts.apiKeyShare(from, now: now, calendar: cal) == "dan-air 记下，已加密同步到这台 Mac。")
-    check("同步：还没记下", Texts.apiKeyShare(APIKeyInfo(saved: false, hint: "", source: .none, shared: true), now: now)?.hasPrefix("记下后，登录了这个账号的其他设备也能看到") == true)
+    check("同步：不知道什么时候记下的就不写时间", Texts.apiKeyShare(from, now: now, calendar: cal) == "dan-air 记录，已加密同步到这台 Mac。")
+    check("同步：还没记下", Texts.apiKeyShare(APIKeyInfo(saved: false, hint: "", source: .none, shared: true), now: now)?.hasPrefix("记录后，登录了这个账号的其他设备也能看到") == true)
     var failing = from
     failing.syncError = "连不上「书房组」的服务器（https://team.example.com:18445）"
-    check("同步：没同步成时照 cca 的原因说", Texts.apiKeyShare(failing, now: now) == "没能和其他设备同步：连不上「书房组」的服务器（https://team.example.com:18445）")
+    check("同步：没同步成时照 cca 的原因说", Texts.apiKeyShare(failing, now: now) == "与其他设备同步失败：连不上「书房组」的服务器（https://team.example.com:18445）")
     check("不同步的账号：不说", Texts.apiKeyShare(APIKeyInfo(saved: true, hint: "h", source: .keychain, fromDevice: "dan-air"), now: now) == nil)
     check("「记录…」的说明：会同步的说清楚", Texts.apiKeyRecordHelp(isAPI: false, shared: true).contains("加密同步给登录了这个账号的其他设备")
           && Texts.apiKeyRecordHelp(isAPI: false, shared: false).contains("只存进这台 Mac")

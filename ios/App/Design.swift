@@ -108,8 +108,8 @@ struct AccountAvatar: View {
     }
 }
 
-/// 套餐档位的小徽记（Mac App 的 TierMark，一档比一档足）：入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵 Logo 渐变的四角星。
-/// 套餐徽章、「账号」页按档位筛的胶囊都用它
+/// 套餐档位的小徽记（Mac App 的 TierMark，一档比一档足）：entry 灰色圆圈、standard 蓝色圆点、advanced 紫色菱形、premium Logo 渐变的四角星。
+/// 套餐徽章、「账号」页按套餐筛的胶囊都用它（档位界面上不写字，只有这个样子）
 struct TierMark: View {
     let tier: String
     let size: CGFloat
@@ -167,7 +167,7 @@ struct PlanBadge: View {
         .frame(height: 18)
         .background(Capsule().fill(.quaternary.opacity(0.7)))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Texts.planName(plan, tier: tier))
+        .accessibilityLabel(Texts.planName(plan))
     }
 }
 

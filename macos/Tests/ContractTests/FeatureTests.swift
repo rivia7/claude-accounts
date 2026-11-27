@@ -41,27 +41,27 @@ func whatsNewTests() {
 
     section("文字（这一版）")
     check("Fable 和本周总额度的关系（名字写在句子里，不会被看成整个账号最多用一半）",
-          Texts.modelShare("Fable", allowance: 50, used: 3) == "Fable 最多占本周额度的 50%，已占 3%"
-          && Texts.modelShare("Fable", allowance: 50, used: nil) == "Fable 最多占本周额度的 50%"
-          && Texts.modelShare("Spark", allowance: nil, used: 3) == "Spark 的额度单独计")
+          Texts.modelShare("Fable", allowance: 50, used: 3) == "Fable 最多可用本周额度的 50%，已用 3%"
+          && Texts.modelShare("Fable", allowance: 50, used: nil) == "Fable 最多可用本周额度的 50%"
+          && Texts.modelShare("Spark", allowance: nil, used: 3) == "Spark 单独计算额度")
     check("Fable 那份用完了：说别的模型还能用本周剩下多少；本周也用完了只说前半句",
-          Texts.modelShare("Fable", allowance: 50, used: 50, full: true, weeklyLeft: 49) == "Fable 的份额用完了，别的模型还能用本周剩下的 49%"
-          && Texts.modelShare("Fable", allowance: 50, used: 50, full: true, weeklyLeft: 0) == "Fable 的份额用完了"
-          && Texts.modelShare("Fable", allowance: 50, used: 50, full: true) == "Fable 的份额用完了")
+          Texts.modelShare("Fable", allowance: 50, used: 50, full: true, weeklyLeft: 49) == "Fable 的额度已用完，其他模型还能用本周剩余的 49%"
+          && Texts.modelShare("Fable", allowance: 50, used: 50, full: true, weeklyLeft: 0) == "Fable 的额度已用完"
+          && Texts.modelShare("Fable", allowance: 50, used: 50, full: true) == "Fable 的额度已用完")
     let fullFable = try? JSONDecoder().decode(ModelWindow.self, from: Data(#"""
         {"name": "Fable", "utilization": 100, "resets_epoch": 1794779999, "reset": false,
          "allowance_percent_of_weekly": 50, "used_percent_of_weekly": 50}
         """#.utf8))
     check("照 cca 给的数：Fable 100%、本周 51% → 剩下 49%（按显示的百分比减）；本周已重置、Fable 已重置时不这么说",
           fullFable.map { Texts.modelShare($0, weekly: UsageWindow(utilization: 51, resetsEpoch: nil, reset: false)) }
-              == "Fable 的份额用完了，别的模型还能用本周剩下的 49%"
+              == "Fable 的额度已用完，其他模型还能用本周剩余的 49%"
           && fullFable.map { Texts.modelShare($0, weekly: UsageWindow(utilization: 51.4, resetsEpoch: nil, reset: true)) }
-              == "Fable 的份额用完了"
+              == "Fable 的额度已用完"
           && fullFable.map { f -> String in
               var g = f
               g.window.reset = true
               return Texts.modelShare(g, weekly: nil)
-          } == "Fable 最多占本周额度的 50%，已占 50%")
+          } == "Fable 最多可用本周额度的 50%，已用 50%")
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
     let now = 1794042000.0   // 2026-11-07 17:00（上海）
@@ -100,7 +100,7 @@ func whatsNewTests() {
     let fable = bob?.modelScoped.first { $0.name == "Fable" }
     check("bob 的 Fable：份额（最多用一半、已用 17%）", fable?.window.utilization == 34 && fable?.allowancePercentOfWeekly == 50
           && fable?.usedPercentOfWeekly == 17)
-    check("bob 的 Fable 下面那句话", fable.map { Texts.modelShare($0, weekly: bob?.sevenDay) } == "Fable 最多占本周额度的 50%，已占 17%")
+    check("bob 的 Fable 下面那句话", fable.map { Texts.modelShare($0, weekly: bob?.sevenDay) } == "Fable 最多可用本周额度的 50%，已用 17%")
     m.resetQuota(frankRef)
     check("重置中", m.activity(frankRef)?.kind == .reset)
     _ = await waitUntil { m.activity(frankRef) == nil }
@@ -196,7 +196,7 @@ func whatsNewTests() {
     check("过了 3 小时再查", checks(to) == 2)
     mo.checkForUpdates(manual: true)
     _ = await waitUntil { checks(to) == 3 && !mo.updateChecking }
-    check("手动检查查不了：说 cca 的原因（fail 事件的 message）", mo.toast?.text == "没能检查更新：拿不到最新版本号（网络不通，或 GitHub 暂时不可用）",
+    check("手动检查查不了：说 cca 的原因（fail 事件的 message）", mo.toast?.text == "检查更新失败：拿不到最新版本号（网络不通，或 GitHub 暂时不可用）",
           mo.toast?.text ?? "nil")
     mo.shutdown()
 
@@ -230,7 +230,7 @@ func whatsNewTests() {
     mf.installUpdate()
     _ = await waitUntil { !mf.updating }
     if case .failure(let info)? = mf.sheet {
-        check("cca 没更新成：显示原因，不下载 App、不退出", info.title == "没能把 cca 更新到 9.9.10" && info.failure.message.contains("签名校验没通过")
+        check("cca 没更新成：显示原因，不下载 App、不退出", info.title == "更新 cca 到 9.9.10 失败" && info.failure.message.contains("签名校验没通过")
               && !tf.requests.contains { $0.arguments == ["gui", "update"] } && logf.terminated == 0)
     } else {
         check("cca 没更新成：显示原因，不下载 App、不退出", false, "\(String(describing: mf.sheet))")

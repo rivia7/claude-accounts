@@ -90,7 +90,7 @@ struct TerminalScreen: View {
 
     private var exitText: String? {
         guard case .closed("ended") = session.state, let c = session.exitCode, c != 0 else { return nil }
-        return "会话已经结束（退出码 \(c)）"
+        return "会话已结束（退出码 \(c)）"
     }
 
     /// 能再接一次的：连接上的问题（断了、没接上），不是会话没了、配对没了

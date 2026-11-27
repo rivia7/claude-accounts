@@ -490,8 +490,8 @@ private struct DeskGallery: View {
         Look(caption: "快用完 · 命令行", mood: .working, app: false, sessions: 1, flags: [.nearLimit]),
         Look(caption: "快用完 · 空闲", mood: .idle, app: false, sessions: 0, flags: [.nearLimit]),
         Look(caption: "额度用完", mood: .resting(until: Date().timeIntervalSince1970 + 7800), app: false, sessions: 0),
-        Look(caption: "没登录", mood: .absent, app: false, sessions: 0),
-        Look(caption: "登错号", mood: .wrongPerson(loginEmail: "eve@example.com"), app: false, sessions: 0),
+        Look(caption: "未登录", mood: .absent, app: false, sessions: 0),
+        Look(caption: "账号不符", mood: .wrongPerson(loginEmail: "eve@example.com"), app: false, sessions: 0),
         Look(caption: "端口不通", mood: .unwell(.portClosed), app: true, sessions: 0),
         Look(caption: "选错节点", mood: .unwell(.wrongNode), app: false, sessions: 0),
     ]

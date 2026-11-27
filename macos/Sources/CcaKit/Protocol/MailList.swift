@@ -56,7 +56,7 @@ struct MailListError: Decodable, Sendable, Equatable {
         message = c.string(.message)
     }
 
-    var text: String { nonEmpty(message) ?? "连不上邮箱" }
+    var text: String { nonEmpty(message) ?? "无法连接邮箱" }
 }
 
 /// 一封登录相关的邮件（按收到时间倒序）。标题、发件人、收件人是邮件头里的（发件人写的，照实显示，不参与判断）。

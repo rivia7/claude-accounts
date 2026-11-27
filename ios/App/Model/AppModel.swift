@@ -69,7 +69,7 @@ final class AppModel {
     var terminal: TerminalSession? {
         didSet {
             guard oldValue !== terminal else { return }
-            // 开着的会话变了：「关掉的会话也推送」关着时，服务器上登记的只推哪个会话跟着变；开着终端时不查列表
+            // 开着的会话变了：「已关闭的会话也推送」关着时，服务器上登记的只推哪个会话跟着变；开着终端时不查列表
             Pusher.shared.openChanged()
             updatePolling()
         }
@@ -85,13 +85,13 @@ final class AppModel {
     }
     /// 「账号」页推进去的账号
     var accountPath: [AccountRef] = []
-    /// 「账号」页看哪个工具的账号（claude、codex、agy）、只看哪一档套餐（entry、standard、advanced、premium，空的是全部）：记着，
+    /// 「账号」页看哪个工具的账号（claude、codex、agy）、只看哪种套餐（cca 给的原名，如 Pro、Max、Plus，空的是全部）：记着，
     /// 下次打开还是它们。记着的已经没有账号了时照默认的看（AccountShelf）
     var accountTool: String {
         didSet { UserDefaults.standard.set(accountTool, forKey: "accountTool") }
     }
-    var accountTier: String {
-        didSet { UserDefaults.standard.set(accountTier, forKey: "accountTier") }
+    var accountPlan: String {
+        didSet { UserDefaults.standard.set(accountPlan, forKey: "accountPlan") }
     }
 
     var appearance: AppearanceMode {
@@ -116,7 +116,7 @@ final class AppModel {
         appearance = AppearanceMode(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
         tab = AppTab(rawValue: d.string(forKey: "tab") ?? "") ?? .sessions
         accountTool = d.string(forKey: "accountTool") ?? "claude"
-        accountTier = d.string(forKey: "accountTier") ?? ""
+        accountPlan = d.string(forKey: "accountPlan") ?? ""
         let name = Texts.nonEmpty(d.string(forKey: "deviceName")) ?? Self.defaultName
         deviceName = name
         backend = demo ? DemoBackend() : LiveBackend(deviceName: name)
@@ -215,10 +215,10 @@ final class AppModel {
         tab = .accounts
         let ref = AccountRef(pid: pid, id: id)
         accountPath = [ref]
-        // 返回时列表里要有它：换到它的工具，筛着的档位不是它的就不筛了（还没查到它的照上次的选择）
+        // 返回时列表里要有它：换到它的工具，筛着的套餐不是它的就不筛了（还没查到它的照上次的选择）
         if let a = account(ref)?.account {
             accountTool = a.tool
-            if !accountTier.isEmpty, a.tier != accountTier { accountTier = "" }
+            if !accountPlan.isEmpty, a.plan != accountPlan { accountPlan = "" }
         }
         refresh()
     }
@@ -232,7 +232,7 @@ final class AppModel {
     /// 经链接打开 App（系统相机扫了二维码、点了链接）
     func open(_ url: URL) {
         guard let inv = PairInvite(url.absoluteString) else {
-            pairing = .failed(nil, "这不是 cca 的配对链接。在电脑上点「和手机配对…」，用这个 App 扫那里的二维码。")
+            pairing = .failed(nil, "这不是 cca 的配对链接。请在电脑上点「和手机配对…」，然后用本 App 扫描二维码。")
             return
         }
         // 正在配对时不打断
@@ -243,7 +243,7 @@ final class AppModel {
     /// 扫到的、粘贴的文字
     func scanned(_ text: String) {
         guard let inv = PairInvite(text) else {
-            pairing = .failed(nil, "这不是 cca 的配对二维码。在电脑上点「和手机配对…」，扫那里的二维码。")
+            pairing = .failed(nil, "这不是 cca 的配对二维码。请在电脑上点「和手机配对…」，扫描显示的二维码。")
             return
         }
         pair(inv)

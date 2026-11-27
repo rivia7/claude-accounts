@@ -31,7 +31,7 @@ private struct RemoteTabStrip: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                RemoteTab(selected: model.remoteTerminal == nil, help: "可以接入的会话、配对过的机器；开着的终端照样接着") {
+                RemoteTab(selected: model.remoteTerminal == nil, help: "可接入的会话和已配对的机器；已打开的终端保持接入") {
                     model.showRemoteList()
                 } label: {
                     Label("会话列表", systemImage: "list.bullet")
@@ -39,7 +39,7 @@ private struct RemoteTabStrip: View {
                 ForEach(model.remoteTerminals) { t in
                     RemoteTab(selected: model.remoteShown == t.id, help: place(t),
                               close: { model.closeRemoteTerminal(t) },
-                              closeHelp: t.hasEnded ? "关掉这个终端" : "断开并关掉这个终端；会话在那边照常运行") {
+                              closeHelp: t.hasEnded ? "关闭这个终端" : "断开并关闭这个终端；会话会继续运行") {
                         model.showRemoteTerminal(t)
                     } label: {
                         HStack(spacing: 7) {
@@ -157,7 +157,7 @@ private struct RemoteSessionList: View {
             }
             Button("不取消", role: .cancel) { unpairing.wrappedValue = nil }
         } message: {
-            Text("两边都不能再接入对方的会话，正接着的会断开。以后要用得重新配对。")
+            Text("双方都不能再接入对方的会话，正在接入的会断开。之后如需使用，需要重新配对。")
         }
     }
 
@@ -167,7 +167,7 @@ private struct RemoteSessionList: View {
                 Text("远程会话").font(.system(size: 24, weight: .semibold))
                 if model.remoteBusy { ProgressView().controlSize(.small) }
             }
-            Text("终端关了，会话照样运行；在这里重新接入，也可以接入配对过的另一台机器上的会话。")
+            Text("关闭终端后会话仍会运行；可以在这里重新接入，也可以接入另一台已配对机器上的会话。")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -184,7 +184,7 @@ private struct RemoteSessionList: View {
             }
             SectionAction(model.remoteLoading ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshRemote(manual: true) }
                 .disabled(model.remoteLoading)
-                .help("再查一次：这台 Mac 上的会话，和配对过的机器上的（问一次 Team 的服务器）")
+                .help("重新查询这台 Mac 和已配对机器上的会话（会询问 Team 的服务器）")
         }
     }
 
@@ -194,7 +194,7 @@ private struct RemoteSessionList: View {
             Toggle(isOn: Binding(get: { doc?.enabled == true }, set: { model.setRemoteEnabled($0) })) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("之后启动的会话可以重新接入")
-                    Text("打开后，在终端里用 cca 启动的会话，终端关了也照样运行，可以在这里、在配对过的机器上重新接入。已经开着的会话不受影响。")
+                    Text("打开后，在终端中用 cca 启动的会话在关闭终端后仍会运行，可以在这里或已配对的机器上重新接入。已打开的会话不受影响。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -203,7 +203,7 @@ private struct RemoteSessionList: View {
             .disabled(doc == nil || model.remoteBusy)
             if let doc, !doc.relayAvailable {
                 Divider()
-                Label(nonEmpty(doc.relayMessage) ?? "这台 Mac 用不了中转：只能接入这台 Mac 上的会话，不能和别的机器配对。", systemImage: "info.circle")
+                Label(nonEmpty(doc.relayMessage) ?? "这台 Mac 无法使用中转：只能接入这台 Mac 上的会话，无法与其他机器配对。", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if model.isFixtureMode {
@@ -215,14 +215,14 @@ private struct RemoteSessionList: View {
     @ViewBuilder
     private func problems(_ snap: RemoteSnapshot) -> some View {
         if let e = snap.error {
-            Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "没能查到可以接入的会话", message: e) {
+            Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "无法获取可接入的会话", message: e) {
                 Button("重试") { model.refreshRemote(manual: true) }
                     .buttonStyle(.borderedProminent).disabled(model.remoteLoading)
             }
         }
         // 这台 Mac 用不了中转（relay_off）已经写在上面的卡片里，不再重复
         ForEach(Array((snap.doc?.errors ?? []).filter { $0.code != .relayOff }.enumerated()), id: \.offset) { _, p in
-            Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "没问到别的机器上的会话", message: p.message)
+            Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "无法获取其他机器上的会话", message: p.message)
         }
     }
 
@@ -263,8 +263,8 @@ private struct RemoteSessionList: View {
     private func newSession(_ l: RemotePeerLauncher) -> some View {
         RowAction("新建会话…", systemImage: "plus.rectangle.on.rectangle") { model.newRemoteSession(on: l) }
             .disabled(!l.online || l.templates.isEmpty)
-            .help(!l.online ? "「\(l.machine)」暂时没连着服务器：现在起不了会话"
-                  : l.templates.isEmpty ? "「\(l.machine)」上还没有能用的模板" : "照「\(l.machine)」上的模板在那台机器上新建会话，起好了在这里接入")
+            .help(!l.online ? "「\(l.machine)」暂时未连接服务器，无法新建会话"
+                  : l.templates.isEmpty ? "「\(l.machine)」上还没有可用的模板" : "用「\(l.machine)」上的模板在那台机器上新建会话，启动后在这里接入")
     }
 
     @ViewBuilder
@@ -297,7 +297,7 @@ private struct RemoteSessionList: View {
                     }
                 }
             } else if !model.remoteLoading, snap.error == nil {
-                Text("还没查过").font(.callout).foregroundStyle(.secondary).padding(.horizontal, 4)
+                Text("尚未查询").font(.callout).foregroundStyle(.secondary).padding(.horizontal, 4)
             }
         }
     }
@@ -309,19 +309,19 @@ private struct RemoteSessionList: View {
         let doc = snap.doc
         let usable = doc?.relayAvailable == true
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader("配对过的机器") {
+            SectionHeader("已配对的机器") {
                 PairAction(title: "显示配对码…", systemImage: "number.square", hubs: doc?.relayHubs ?? []) { model.pairRemote(show: true, hub: $0) }
                     .disabled(!usable)
                     .help(usable ? "让另一台机器接入这台 Mac 上的会话：这里显示配对码，在那台机器上输入。每个 Team 的账号的会话走这个 Team 自己的服务器：在哪台上配对，对方看得到的就是走那台的会话"
-                          : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
+                          : nonEmpty(doc?.relayMessage) ?? "这台 Mac 无法使用中转")
                 SectionAction("输入配对码…", systemImage: "keyboard") { model.pairRemote(show: false) }
                     .disabled(!usable)
-                    .help(usable ? "接入另一台机器上的会话：在那台机器上显示配对码（cca remote pair），在这里输入" : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
+                    .help(usable ? "接入另一台机器上的会话：在那台机器上显示配对码（cca remote pair），在这里输入" : nonEmpty(doc?.relayMessage) ?? "这台 Mac 无法使用中转")
                 if model.remoteWebAvailable {
                     PairAction(title: "和手机配对…", systemImage: "iphone", hubs: doc?.relayHubs ?? []) { model.pairRemotePhone(hub: $0) }
                         .disabled(!usable)
-                        .help(usable ? "在 iPhone 上接入这台 Mac 上的会话：这里显示二维码，用 iPhone 上的 cca App 扫一下就配好"
-                              : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
+                        .help(usable ? "在 iPhone 上接入这台 Mac 上的会话：这里会显示二维码，用 iPhone 上的 cca App 扫码即可配对"
+                              : nonEmpty(doc?.relayMessage) ?? "这台 Mac 无法使用中转")
                 }
             }
             VStack(alignment: .leading, spacing: 9) {
@@ -330,7 +330,7 @@ private struct RemoteSessionList: View {
                         RemotePeerLine(peer: p, now: now) { unpairing.wrappedValue = p }
                     }
                 } else if doc != nil {
-                    Text("还没有配对过的机器。").font(.callout).foregroundStyle(.secondary)
+                    Text("暂无已配对的机器。").font(.callout).foregroundStyle(.secondary)
                 }
                 Text("配对是有方向的：显示配对码的那台机器上的会话，可以被输入配对码的那台接入。两台机器经 Team 的服务器中转，内容端到端加密，服务器看不到。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -379,12 +379,12 @@ private struct RemoteSessionLine: View {
             if canEnd {
                 RowAction("结束…", systemImage: "stop.circle") { model.endRemote(session) }
                     .disabled(model.remoteBusy)
-                    .help("结束这个会话：等于关掉它的终端，里面的程序会退出（先问一句）")
+                    .help("结束这个会话：相当于关闭它的终端，其中的程序会退出（会先确认）")
             }
             if let open {
                 // 换一种接法（只看 / 操作）是断开原来的再接一次：放在右键里，那台机器只让看的没有这一项
                 RowAction("切换", systemImage: "arrow.right.circle") { model.showRemoteTerminal(open) }
-                    .help(session.access == .view ? "已经接入了：换到它的终端" : "已经接入了：换到它的终端（右键可以改成\(open.readOnly ? "操作" : "只看")）")
+                    .help(session.access == .view ? "已接入：切换到它的终端" : "已接入：切换到它的终端（右键可改为\(open.readOnly ? "操作" : "只看")）")
                     .contextMenu {
                         Button("切换到它的终端") { model.showRemoteTerminal(open) }
                         if session.access != .view {
@@ -400,7 +400,7 @@ private struct RemoteSessionLine: View {
                     .help("在这里打开一个终端看这个会话：那台机器只让看，不能操作")
             } else {
                 RowAction("接入", systemImage: "terminal") { model.attachRemote(session, readOnly: false) }
-                    .help("在这里打开一个终端，看和操作这个会话（右键可以只看）")
+                    .help("在这里打开一个终端，查看和操作这个会话（右键可选择只看）")
                     .contextMenu {
                         Button("接入") { model.attachRemote(session, readOnly: false) }
                         Button("只看，不操作") { model.attachRemote(session, readOnly: true) }
@@ -470,7 +470,7 @@ private struct RemotePeerLine: View {
             .pickerStyle(.menu)
             .fixedSize()
             .disabled(model.remoteBusy)
-            .help("看和操作：它可以接入这台 Mac 上的会话并操作；只看：只能看；不让接入：它接不进来（这台 Mac 照样可以接入它的会话）")
+            .help("查看和操作：它可以接入这台 Mac 上的会话并操作；只看：只能查看；禁止接入：它无法接入（这台 Mac 仍可以接入它的会话）")
             RowAction("取消配对…", systemImage: "xmark.circle", action: unpair)
                 .disabled(model.remoteBusy)
                 .help("取消和这台机器的配对：两边都不能再接入对方的会话")
@@ -498,7 +498,7 @@ private struct RemotePeerLine: View {
 // MARK: 远程启动
 
 /// 「远程启动」（PROTOCOL 9.4）：手机用这台 Mac 上的模板新建会话。模板写好用哪个工具、哪个账号、在哪个文件夹、带哪些参数，
-/// 手机只能挑一个起（可以带一句开场白）；哪台手机能用在「配对过的机器」里开。只有 cca 有远程启动（`hello.remote_launch`）时才有这一节。
+/// 手机只能挑一个起（可以带一句开场白）；哪台手机能用在「已配对的机器」里开。只有 cca 有远程启动（`hello.remote_launch`）时才有这一节。
 private struct RemoteLaunchSection: View {
     @Environment(AppModel.self) private var model
     /// 要删掉的那个模板（等确认）
@@ -511,12 +511,12 @@ private struct RemoteLaunchSection: View {
                 if model.remoteTemplatesLoading, snap.doc != nil { ProgressView().controlSize(.small) }
                 SectionAction("新建模板…", systemImage: "plus") { model.editRemoteTemplate() }
                     .disabled(model.remoteBusy)
-                    .help("写好用哪个工具、哪个账号、在哪个文件夹、带哪些参数起会话：允许远程启动的配对的设备能挑一个，在这台 Mac 上新建会话")
+                    .help("设定用哪个工具、哪个账号、在哪个文件夹、带哪些参数启动会话：允许远程启动的已配对设备可以选择一个模板，在这台 Mac 上新建会话")
             }
             VStack(alignment: .leading, spacing: 9) {
                 if let running = model.remoteLauncherRunning { launcher(running) }
                 if let e = snap.error {
-                    Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "没能查到模板", message: e) {
+                    Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "无法获取模板", message: e) {
                         Button("重试") { model.refreshRemoteTemplates() }
                             .buttonStyle(.borderedProminent).disabled(model.remoteTemplatesLoading)
                     }
@@ -533,16 +533,16 @@ private struct RemoteLaunchSection: View {
                     ProgressView().controlSize(.small)
                 }
                 Text(model.remoteLaunchMachinesAvailable
-                     ? "在「配对过的机器」里打开一台手机或者电脑的「允许远程启动」，它就能挑一个模板在这台 Mac 上新建会话、接入：账号、文件夹、参数都照模板，那边改不了，只能带一句开场白。"
-                     : "在「配对过的机器」里打开一台手机的「允许远程启动」，它就能挑一个模板在这台 Mac 上新建会话、接入：账号、文件夹、参数都照模板，手机上改不了，只能带一句开场白。")
+                     ? "在「已配对的机器」中为一台手机或电脑打开「允许远程启动」后，它就能选择一个模板在这台 Mac 上新建会话并接入：账号、文件夹、参数都按模板设置，对方无法修改，只能附带一句开场白。"
+                     : "在「已配对的机器」中为一台手机打开「允许远程启动」后，它就能选择一个模板在这台 Mac 上新建会话并接入：账号、文件夹、参数都按模板设置，手机上无法修改，只能附带一句开场白。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 4)
         }
-        .confirmationDialog(deleting.wrappedValue.map { "删掉模板「\($0.name)」？" } ?? "",
+        .confirmationDialog(deleting.wrappedValue.map { "删除模板「\($0.name)」？" } ?? "",
                             isPresented: Binding(get: { deleting.wrappedValue != nil }, set: { if !$0 { deleting.wrappedValue = nil } }),
                             titleVisibility: .visible) {
-            Button("删掉", role: .destructive) {
+            Button("删除", role: .destructive) {
                 if let t = deleting.wrappedValue { model.removeRemoteTemplate(t) }
                 deleting.wrappedValue = nil
             }
@@ -556,7 +556,7 @@ private struct RemoteLaunchSection: View {
     private func launcher(_ running: Bool) -> some View {
         Label {
             Text(running ? "远程启动的后台进程在运行：允许远程启动的配对的设备现在就能新建会话"
-                 : "远程启动的后台进程没在运行：现在起不了会话（刚打开的要等几秒；在终端里运行 cca remote launcher 看状态）")
+                 : "远程启动的后台进程未运行，暂时无法新建会话（刚打开时需要等几秒；可在终端运行 cca remote launcher 查看状态）")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } icon: {
             Image(systemName: running ? "checkmark.circle" : "exclamationmark.triangle")
@@ -597,7 +597,7 @@ private struct RemoteTemplateLine: View {
                 .help("改这个模板的名字、账号、文件夹、参数")
             RowAction("删除…", systemImage: "trash") { remove() }
                 .disabled(model.remoteBusy)
-                .help("删掉这个模板：配对的设备上就看不到它了")
+                .help("删除这个模板：已配对的设备将不再看到它")
         }
         .font(.callout)
         .frame(minHeight: 34)
@@ -616,7 +616,7 @@ struct RemoteTemplateSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(d.original == nil ? "新建模板" : "修改模板").font(.title3.weight(.semibold))
-                Text("在「配对过的机器」里允许远程启动的那几台能挑这个模板，在这台 Mac 上新建会话：账号、文件夹、参数都照这里写的，那边改不了。")
+                Text("在「已配对的机器」中允许远程启动的设备可以选择这个模板，在这台 Mac 上新建会话：账号、文件夹、参数都按这里的设置，对方无法修改。")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             field("名字") {
@@ -646,7 +646,7 @@ struct RemoteTemplateSheet: View {
             }
             field("文件夹") {
                 HStack(spacing: 10) {
-                    Text(d.dir.isEmpty ? "还没选" : model.displayPath(d.dir))
+                    Text(d.dir.isEmpty ? "未选择" : model.displayPath(d.dir))
                         .foregroundStyle(d.dir.isEmpty ? Color.secondary : Color.primary)
                         .lineLimit(1).truncationMode(.middle)
                         .help(d.dir)
@@ -654,7 +654,7 @@ struct RemoteTemplateSheet: View {
                     Button("选择…") { model.chooseRemoteTemplateDirectory(d) }
                 }
             }
-            field("参数", note: "照终端里的写法：空格隔开，带空格的用引号引起来，比如 --model opus --append-system-prompt '说中文'。没有就空着") {
+            field("参数", note: "与终端中的写法相同：用空格分隔，含空格的用引号括起来，例如 --model opus --append-system-prompt '说中文'。没有可留空") {
                 TextField("", text: Binding(get: { d.args }, set: { d.args = $0 }), axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
@@ -686,7 +686,7 @@ struct RemoteTemplateSheet: View {
     private var accountNote: String? {
         let d = draft
         if model.accounts(d.tool).isEmpty { return "\(Texts.cliProduct(d.tool)) 还没有账号" }
-        if let t = d.original, d.account.isEmpty { return "模板原来的账号（\(nonEmpty(t.accountName) ?? t.account)）账号表里没有了：换一个" }
+        if let t = d.original, d.account.isEmpty { return "模板原来的账号（\(nonEmpty(t.accountName) ?? t.account)）已不在账号表中，请换一个" }
         return nil
     }
 
@@ -715,7 +715,7 @@ struct RemoteLaunchSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("在「\(machine)」上新建会话").font(.title3.weight(.semibold))
-                Text("挑一个那台机器上的模板：用哪个账号、在哪个文件夹、带哪些参数都照模板（在那台机器上改），起好了在这里接入。")
+                Text("选择那台机器上的一个模板：账号、文件夹、参数都按模板设置（在那台机器上修改），启动后在这里接入。")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Picker("模板", selection: Binding(get: { d.template }, set: { d.template = $0 })) {
@@ -736,7 +736,7 @@ struct RemoteLaunchSheet: View {
                         TextField("", text: Binding(get: { d.line }, set: { d.line = $0 }), prompt: Text("可以不写，比如「先跑一遍测试」"))
                             .textFieldStyle(.roundedBorder)
                             .disabled(d.starting)
-                        Text("写了的话，会话起来以后作为第一句话交给\(t.tool.map(Texts.cliProduct) ?? "它")。")
+                        Text("填写后，会话启动时会作为第一句话发给\(t.tool.map(Texts.cliProduct) ?? "它")。")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
@@ -744,7 +744,7 @@ struct RemoteLaunchSheet: View {
                 }
             }
             if !l.online {
-                Label("「\(machine)」暂时没连着服务器：现在起不了会话", systemImage: "exclamationmark.triangle")
+                Label("「\(machine)」暂时未连接服务器，无法新建会话", systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
             if let e = d.error {
@@ -757,12 +757,12 @@ struct RemoteLaunchSheet: View {
             HStack(spacing: 10) {
                 if d.starting {
                     ProgressView().controlSize(.small)
-                    Text("正在「\(machine)」上起会话…").font(.callout).foregroundStyle(.secondary)
+                    Text("正在「\(machine)」上启动会话…").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(d.starting ? "关掉" : "取消") { model.dismissSheet() }
+                Button(d.starting ? "关闭" : "取消") { model.dismissSheet() }
                     .keyboardShortcut(.cancelAction)
-                    .help(d.starting ? "会话照样起：起好了在「远程会话」页接入，没起成会弹一条提示" : "")
+                    .help(d.starting ? "会话会继续启动：启动后在「远程会话」页接入，启动失败会弹出提示" : "")
                 Button("新建会话") { model.startRemoteLaunch(d) }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.glassProminent)
@@ -840,10 +840,10 @@ private struct RemoteTerminalPane: View {
                     SectionAction("重新接入", systemImage: "arrow.clockwise") { model.attachRemote(s, readOnly: terminal.readOnly) }
                 }
                 SectionAction("关闭", systemImage: "xmark.circle") { model.closeRemoteTerminal(terminal) }
-                    .help("关掉这个终端（最后的输出不留）")
+                    .help("关闭这个终端（不保留最后的输出）")
             } else {
                 SectionAction("断开", systemImage: "xmark.circle") { model.closeRemoteTerminal(terminal) }
-                    .help("断开并关掉这个终端；会话在那边照常运行，别的终端照样接着")
+                    .help("断开并关闭这个终端；会话会继续运行，其他终端仍保持接入")
             }
         }
         .frame(minHeight: 36)
@@ -857,7 +857,7 @@ private struct RemoteTerminalPane: View {
             Label(Texts.remoteEnded(code: code, closedByUser: terminal.closedByUser, listed: listed), systemImage: "info.circle")
                 .font(.callout).foregroundStyle(.secondary)
         case .failed(let message):
-            Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "没能打开终端", message: message)
+            Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "无法打开终端", message: message)
         case .waiting, .running:
             EmptyView()
         }

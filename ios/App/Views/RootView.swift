@@ -67,16 +67,16 @@ struct WelcomeView: View {
                 Spacer(minLength: 40)
                 BrandMark(size: 76)
                 VStack(spacing: 10) {
-                    Text("在手机上接着用电脑上的会话").font(.title2.weight(.semibold)).multilineTextAlignment(.center)
-                    Text("电脑上用 cca 启动的 Claude Code、Codex 会话，在这里看和操作。内容端到端加密，中转的服务器看不到。")
+                    Text("在手机上继续使用电脑上的会话").font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+                    Text("在这里查看和操作电脑上用 cca 启动的会话（Claude Code、Codex、Antigravity）。内容端到端加密，中转服务器无法查看。")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Card("先和电脑配对", systemImage: "qrcode.viewfinder") {
                     VStack(alignment: .leading, spacing: 8) {
-                        step(1, "在 Mac 上打开 cca App 的「远程会话」，点「和手机配对…」（终端里是 cca remote pair --web）")
-                        step(2, "点下面的「扫码配对」，扫电脑上的二维码")
-                        step(3, "电脑上那台机器的会话就会出现在这里")
+                        step(1, "在 Mac 上打开 cca App 的「远程会话」，点「和手机配对…」（或在终端运行 cca remote pair --web）")
+                        step(2, "点下方的「扫码配对」，扫描电脑上的二维码")
+                        step(3, "电脑上的会话就会显示在这里")
                     }
                     Button {
                         model.startPairing()

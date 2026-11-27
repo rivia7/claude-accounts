@@ -127,7 +127,8 @@ enum DemoLaunch {
 }
 
 /// 演示的账号（「账号」页）：两台电脑上的几个账号，用量、重置时间照现在算。在用的、额度用完了的、建议先用的、登录失效的、
-/// Antigravity 的几组额度、Codex 还能重置额度、第三方 API 的，各有一个；四档套餐都有（按档位筛），ChatGPT 的两台电脑上都有
+/// Antigravity 的几组额度、Codex 还能重置额度、第三方 API 的，各有一个；四个档位的套餐都有（按套餐筛：Claude 有 Pro、Max、Ultra），
+/// ChatGPT 的两台电脑上都有
 enum DemoAccounts {
     /// 第 n 个账号的编号、会话说明里的账号摘要
     static func id(_ n: Int) -> String { String(repeating: String(format: "%x", n), count: 16) }
@@ -171,10 +172,10 @@ enum DemoAccounts {
                             "under_half": used.filter { $0 < 50 }.count]]
     }
 
-    /// 在用，Max 20x：5 小时 42%，本周 63%（Fable 另外计），记了 11 周
+    /// 在用，Ultra：5 小时 42%，本周 63%（Fable 另外计），记了 11 周
     private static func work(_ now: Double) -> [String: Any] {
         let weekly = now + 3 * 86400 + 4 * 3600
-        return ["id": id(1), "aid": aid(1), "tool": "claude", "name": "工作", "kind": "oauth", "login": "logged_in", "plan": "Max 20x",
+        return ["id": id(1), "aid": aid(1), "tool": "claude", "name": "工作", "kind": "oauth", "login": "logged_in", "plan": "Ultra",
                 "tier": "premium", "busy": true, "color": "#8E4EC6", "badge": "工",
                 "usage": usage(now, ["five_hour": window(42, in: 2 * 3600 + 13 * 60, now), "seven_day": window(63, in: weekly - now, now),
                                      "model_scoped": [window(18, in: weekly - now, now).merging(["name": "Fable", "allowance_percent_of_weekly": 50,
@@ -217,7 +218,7 @@ enum DemoAccounts {
         ["id": id(7), "tool": "claude", "name": "API", "kind": "api", "login": "api", "plan": "", "tier": "", "busy": false]
     }
 
-    /// ChatGPT 的入门套餐（Go），空闲
+    /// ChatGPT 的 Go 套餐（entry），空闲
     private static func go(_ now: Double) -> [String: Any] {
         let weekly = now + 6 * 86400 + 2 * 3600
         return ["id": id(6), "aid": aid(6), "tool": "codex", "name": "副号", "kind": "oauth", "login": "logged_in", "plan": "Go",
@@ -293,7 +294,7 @@ final class DemoLink: TerminalLink {
         let dim = "\u{1b}[2m", off = "\u{1b}[0m", green = "\u{1b}[32m", violet = "\u{1b}[38;5;141m", bold = "\u{1b}[1m"
         let tool = Texts.cliProduct(s.info.tool) ?? "会话"
         return [
-            (80, "\u{1b}[2J\u{1b}[H\(dim)演示：这是一屏示意，不是真的会话。敲的字只在这台手机上回显，不发到任何地方。\(off)\r\n\r\n"),
+            (80, "\u{1b}[2J\u{1b}[H\(dim)演示：这是示意画面，不是真实的会话。输入的内容只在这台手机上显示，不会发送到任何地方。\(off)\r\n\r\n"),
             (250, "\(violet)\(bold)● \(tool)\(off)  \(dim)\(s.info.cwd)\(off)\r\n\r\n"),
             (300, "\(violet)›\(off) 把 api 的单元测试跑一遍，挂了的修好\r\n\r\n"),
             (500, "  先跑一遍看看现在的情况。\r\n\r\n"),
@@ -305,7 +306,7 @@ final class DemoLink: TerminalLink {
             (500, "  \(green)⏺\(off) \(bold)Bash\(off)(npm test)\r\n"),
             (700, "    \(dim)⎿  Tests: 48 passed, 48 total\(off)\r\n\r\n"),
             (300, "  全部通过了。\r\n"),
-            (200, s.info.viewOnly ? "\r\n\(dim)（只看：这个会话那台电脑只让看）\(off)\r\n" : prompt),
+            (200, s.info.viewOnly ? "\r\n\(dim)（只看：电脑只允许查看这个会话）\(off)\r\n" : prompt),
         ]
     }
 
@@ -314,12 +315,12 @@ final class DemoLink: TerminalLink {
         let dim = "\u{1b}[2m", off = "\u{1b}[0m", violet = "\u{1b}[38;5;141m", bold = "\u{1b}[1m"
         let tool = Texts.cliProduct(s.info.tool) ?? "会话"
         var out: [(delay: Int, text: String)] = [
-            (80, "\u{1b}[2J\u{1b}[H\(dim)演示：这是一屏示意，不是真的会话。敲的字只在这台手机上回显，不发到任何地方。\(off)\r\n\r\n"),
+            (80, "\u{1b}[2J\u{1b}[H\(dim)演示：这是示意画面，不是真实的会话。输入的内容只在这台手机上显示，不会发送到任何地方。\(off)\r\n\r\n"),
             (400, "\(violet)\(bold)● \(tool)\(off)  \(dim)\(s.info.cwd)\(off)\r\n\r\n"),
         ]
         if let line {
             out.append((300, "\(violet)›\(off) \(line)\r\n\r\n"))
-            out.append((600, "  \(dim)（演示）真的会话里，开场白是会话起来以后收到的头一句话，\(tool) 接着就开始做。\(off)\r\n"))
+            out.append((600, "  \(dim)（演示）在真实的会话中，开场白是会话启动后收到的第一句话，\(tool) 会接着开始处理。\(off)\r\n"))
         }
         out.append((200, prompt))
         return out
@@ -335,7 +336,7 @@ final class DemoLink: TerminalLink {
                 let said = line.trimmingCharacters(in: .whitespaces)
                 line = ""
                 say(said.isEmpty ? Self.prompt
-                    : "\r\n\r\n  \u{1b}[2m（演示）真的会话里，这一句会发给那台电脑上的 \(Texts.cliProduct(session.info.tool) ?? "程序")。\u{1b}[0m\r\n" + Self.prompt)
+                    : "\r\n\r\n  \u{1b}[2m（演示）在真实的会话中，这句话会发送给电脑上的 \(Texts.cliProduct(session.info.tool) ?? "程序")。\u{1b}[0m\r\n" + Self.prompt)
             case "\u{7f}", "\u{8}":
                 if !line.isEmpty {
                     line.removeLast()

@@ -132,7 +132,7 @@ struct WeeklyUsageSection: View {
                         WeekBar(percent: 70, top: 100, color: Meter.dimColor)
                             .frame(width: 5, height: 12)
                             .accessibilityHidden(true)
-                        Text("填成灰色的：那一周结束前一天没查到，实际可能更多。")
+                        Text("灰色：那一周最后一天没有数据，实际可能更多。")
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .font(.caption)
@@ -142,7 +142,7 @@ struct WeeklyUsageSection: View {
             .padding(16)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         } else {
-            Text(account.usageWeeks == nil ? "还没有记录：每次查用量时会记下这一周用到多少。" : "最近 12 周没有记录。")
+            Text(account.usageWeeks == nil ? "还没有记录：每次查询用量时会记录本周的用量。" : "最近 12 周没有记录。")
                 .foregroundStyle(.secondary)
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)

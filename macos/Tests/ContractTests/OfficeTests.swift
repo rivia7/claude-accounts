@@ -160,8 +160,8 @@ func officeTests() async {
           && Employee.make(acct(["health": NSNull()]), usage: nil, live: nil, now: now0).flags == [.neverChecked])
     let outdated = Employee.make(acct(["app": ["running": true]]), usage: usage(five: 10, outdated: "Pro"), live: nil, now: now0)
     check("Claude Code 记的套餐过时了：照常在忙，不改头条、没有小标记", outdated.mood == .working && outdated.flags.isEmpty)
-    check("套餐过时的一句（不知道账号现在的套餐时只说前半句）", Texts.outdatedLoginPlan("Pro", current: "Max") == "Claude Code 里记的套餐还是 Pro，账号现在是 Max"
-          && Texts.outdatedLoginPlan("Pro", current: "") == "Claude Code 里记的套餐还是 Pro" && Texts.outdatedLoginPlan("Max", current: nil) == "Claude Code 里记的套餐还是 Max")
+    check("套餐过时的一句（不知道账号现在的套餐时只说前半句）", Texts.outdatedLoginPlan("Pro", current: "Max") == "Claude Code 记录的套餐仍是 Pro，账号现在是 Max"
+          && Texts.outdatedLoginPlan("Pro", current: "") == "Claude Code 记录的套餐仍是 Pro" && Texts.outdatedLoginPlan("Max", current: nil) == "Claude Code 记录的套餐仍是 Max")
     let api = acct(["key": "kimi", "kind": "api", "login": "api", "plan": "", "plan_tier": "", "health": NSNull(),
                     "cli": ["running": true, "sessions": 1, "since_epoch": now0 - 120]])
     let contractor = Employee.make(api, usage: nil, live: nil, now: now0)
@@ -199,17 +199,17 @@ func officeTests() async {
           && Texts.working(app: false, appLabel: "", sessions: 1, since: now0 - 10, now: now0) == "终端里在用，刚开始"
           && Texts.working(app: true, appLabel: "ChatGPT App", sessions: 0, since: nil, now: now0) == "ChatGPT App 开着")
     let resting = Employee.make(acct(), usage: usage(five: 100, week: 20, fiveResets: 1794050010), live: nil, now: now0)
-    check("工位下面那一行", Texts.mood(resting, appLabel: "Claude App", now: now0).hasPrefix("额度用完了，")
-          && Texts.mood(Employee.make(acct(["login": "logged_out"]), usage: nil, live: nil, now: now0), appLabel: "", now: now0) == "还没登录"
-          && Texts.mood(Employee.make(acct(), usage: nil, live: slot("closed"), now: now0), appLabel: "", now: now0) == "端口连不上")
-    check("在用、又有问题：在用在前，问题跟在后面", Texts.mood(sick, appLabel: "Claude App", now: now0) == "Claude App 开着 · 端口连不上"
-          && Texts.mood(sick, appLabel: "Claude App", now: now0, brief: true) == "在用 · 端口连不上"
-          && Texts.mood(away, appLabel: "Claude App", now: now0, brief: true) == "在用 · 还没登录"
-          && Texts.mood(tired, appLabel: "", now: now0, brief: true).hasPrefix("在用 · 额度用完了，"))
-    check("档位的叫法", Texts.planTier(.premium) == "尊贵" && Texts.planTier(.entry) == "入门" && Texts.planTier(.unknown) == nil)
+    check("工位下面那一行", Texts.mood(resting, appLabel: "Claude App", now: now0).hasPrefix("额度已用完，")
+          && Texts.mood(Employee.make(acct(["login": "logged_out"]), usage: nil, live: nil, now: now0), appLabel: "", now: now0) == "未登录"
+          && Texts.mood(Employee.make(acct(), usage: nil, live: slot("closed"), now: now0), appLabel: "", now: now0) == "端口无法连接")
+    check("在用、又有问题：在用在前，问题跟在后面", Texts.mood(sick, appLabel: "Claude App", now: now0) == "Claude App 开着 · 端口无法连接"
+          && Texts.mood(sick, appLabel: "Claude App", now: now0, brief: true) == "在用 · 端口无法连接"
+          && Texts.mood(away, appLabel: "Claude App", now: now0, brief: true) == "在用 · 未登录"
+          && Texts.mood(tired, appLabel: "", now: now0, brief: true).hasPrefix("在用 · 额度已用完，"))
+    check("套餐照原名念，档位不起中文的叫法", Texts.planName("Ultra") == "Ultra 套餐" && Texts.planName("Pro 500") == "Pro 500 套餐")
     check("读屏念的一整句", Texts.deskLabel(Employee.make(acct(["key": "工作(bob@example.com)", "name": "工作", "plan": "Ultra",
           "plan_tier": "premium", "app": ["running": true]]), usage: nil, live: nil, now: now0), appLabel: "Claude App", now: now0)
-          == "工作，Claude 账号，Ultra，尊贵套餐，Claude App 开着")
+          == "工作，Claude 账号，Ultra 套餐，Claude App 开着")
     let oneReset = try? JSONDecoder().decode(ResetCredits.self, from: Data(#"{"availableCount":1}"#.utf8))
     check("读屏也念还能重置几次", Texts.deskLabel(Employee.make(acct(), usage: nil, live: nil, now: now0), appLabel: "", now: now0, resets: oneReset)
           .hasSuffix("，还能重置额度 1 次"))
@@ -228,7 +228,7 @@ func officeTests() async {
               && moods["grace@example.com"] == .unwell(.exit(.restricted, region: "中国大陆"))
               && moods["直连接口"] == .idle && moods["香港接口"] == .working && moods["frank@example.com"] == .idle,
               "\(moods)")
-        check("点名", Texts.officeSummary(o.census) == "8 个账号 · 2 个在用 · 2 个空闲 · 1 个额度用完 · 1 个没登录 · 1 个登错号 · 1 个有问题"
+        check("点名", Texts.officeSummary(o.census) == "8 个账号 · 2 个在用 · 2 个空闲 · 1 个额度用完 · 1 个未登录 · 1 个账号不符 · 1 个有问题"
               && Texts.officeSummary(o.census, brief: true) == "8 个账号 · 2 个在用"
               && o.census.needsAttention == 3, Texts.officeSummary(o.census))
         check("没启用 Codex：没有 ChatGPT 组", Office.make(tools: s.tools, codexEnabled: false, usage: { $0.usage }, live: { _ in nil },

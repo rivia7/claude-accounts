@@ -140,23 +140,23 @@ struct TutorialCard {
         TutorialCard(title: "先把这台 Mac 配置好", points: [
             ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 分三步带你走——有没有 Team 的邀请链接、选这台 Mac 怎么给账号联网、添加账号。"),
             ("person.badge.key", "Team 的邀请链接：没有就选「否」，只用你自己的账号。有的话粘贴进来，加入以后 Team 给这台 Mac 的账号自动加进来，出口节点由 Team 的管理员定好。以后也能在「共享与同步」里加入、退出，或者自己建一个 Team。"),
-            ("list.number", "每一步都有说明，照着填就行；中途点「以后再说」也行，随时能从总览的「开始配置」接着来。"),
+            ("list.number", "每一步都有说明，照着填写即可；中途可以点「以后再说」，之后随时从总览的「开始配置」继续。"),
             ("slider.horizontal.3", "配好的以后都能改：添加账号点账号列表上的「＋」，改或加网络出口点工具栏的「＋」，Team 在「共享与同步」里加入、新建、部署。"),
         ], art: .onboard),
         TutorialCard(title: "选这台 Mac 怎么联网", points: [
             ("wifi.router", "有路由器：家里/办公室有改好的旁路由（装了 OpenClash 或 ShellCrash），向导里填地址、输一次密码装免密登录、勾选允许用的节点，按端口给每个账号分流。"),
             ("laptopcomputer", "没有路由器：用 cca 自带的内置代理（内核在这个 App 里跑），添加账号时粘贴一个你自己的代理（分享链接）当出口；加入了 Team 的话，Team 配置里的节点自动导入。"),
-            ("arrow.forward", "先跳过：还没想好也行，接着添加账号；以后在工具栏的「＋」里再配。"),
+            ("arrow.forward", "先跳过：还没想好也没关系，可以直接添加账号；以后在工具栏的「＋」中再配置。"),
         ], art: .netchoice),
         TutorialCard(title: "添加账号", points: [
             ("person.badge.plus", "最后一步添加账号：填登录邮箱、起个别名（可留空）、选一个出口节点，不用先配置路由器。加入了 Team 的话，Team 给这台 Mac 的账号会自动加进来。"),
             ("globe", "第一次使用时，会在这个账号专属的浏览器窗口里登录——每个账号各用各的登录资料，换账号不用重登。"),
             ("checkmark.circle", "加好就能用了：在总览点这张卡片打开账号。想再加就点账号列表上的「＋」。"),
         ], art: .addacct),
-        TutorialCard(title: "总览：哪个在用，哪个额度用完了", points: [
+        TutorialCard(title: "总览：哪个在用，哪个额度已用完", points: [
             ("square.grid.2x2", "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、第三方 API 账号分开排好。"),
             ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者终端里有会话）。"),
-            ("moon.zzz", "趴在桌上是额度用完了，屏幕上写着几点恢复；椅子空着是没登录，坐着灰色的人是登录的不是这个账号。账号正在用时照样画成在用，有问题写在卡片下面那一行（「在用 · 端口连不上」）。"),
+            ("moon.zzz", "趴在桌上表示额度已用完，屏幕上显示几点恢复；椅子空着表示未登录，坐着灰色的人表示登录的不是这个账号。账号正在使用时仍显示为在用，问题写在卡片下方那一行（「在用 · 端口无法连接」）。"),
             ("sparkle", "套餐看徽章前面的小记号：灰圈、蓝点、紫色菱形，最高档（Ultra、Pro 500）是彩色的四角星。点一张卡片就进这个账号的页面。"),
             ("chart.bar.xaxis", "左边的「用量统计」把每个账号每周用了多少排在一起：哪个总不够用、哪个常常剩一大半，一眼看出来；「折合金额」按官方 API 的价格把每个账号用掉的折成美元。"),
         ], art: .office),
@@ -173,7 +173,7 @@ struct TutorialCard {
             ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
         ], art: .open),
         TutorialCard(title: "看额度还剩多少", points: [
-            ("gauge.with.dots.needle.33percent", "额度分「5 小时」和「本周」两块，没有 5 小时限制的套餐（比如 Ultra）只有本周。Claude 的 Fable 单独一块：它只能用掉本周额度的一部分，用完了别的模型还能接着用。"),
+            ("gauge.with.dots.needle.33percent", "额度分为「5 小时」和「本周」两部分，没有 5 小时限制的套餐（例如 Ultra）只有本周。Claude 的 Fable 单独计算：它只能使用本周额度的一部分，用完后其他模型仍可继续使用。"),
             ("exclamationmark.triangle", "快用完时变橙、变红；到了重置时间自动恢复。"),
             ("hourglass", "本周额度快重置了、还剩不少的账号，名字旁边有个沙漏：建议先用它，别浪费。"),
             ("arrow.counterclockwise", "ChatGPT 账号还有重置次数时，点「重置额度…」能把用量清零（会先问你）。"),
@@ -181,13 +181,13 @@ struct TutorialCard {
         ], art: .quota),
         TutorialCard(title: "看网络出口", points: [
             ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),
-            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：看看出口在哪、纯净度怎么样、DNS / WebRTC 有没有泄露风险。之后会在后台定时重测。"),
-            ("slider.horizontal.3", "想看端口、纯净度这些明细，点「显示细节」。"),
+            ("checkmark.shield", "第一次使用某个账号时，先点「检测出口」：查看出口位置、纯净度，以及 DNS / WebRTC 是否有泄露风险。之后会在后台定期重新检测。"),
+            ("slider.horizontal.3", "想查看端口、纯净度等明细，点「显示细节」。"),
             ("link.badge.plus", "节点没被 Team 锁定的账号，可以点「自定义代理…」改走你自己的代理：粘贴 socks5://、http:// 地址或分享链接。"),
         ], art: .route),
         TutorialCard(title: "节点分流", points: [
             ("wifi.router", "「节点分流」页画出每个账号经路由器连到哪个节点。"),
-            ("line.diagonal", "实线是正常的；虚线说明节点选错了，或者端口连不上。"),
+            ("line.diagonal", "实线表示正常；虚线表示节点选错或端口无法连接。"),
             ("arrow.triangle.2.circlepath", "有问题时点「同步路由器」就能修好（要重载路由器时会先问你）。"),
         ], art: .map),
         TutorialCard(title: "改别名、换外观", points: [
@@ -196,7 +196,7 @@ struct TutorialCard {
             ("plus", "添加账号：点左边账号列表上的「＋」；配置路由器、内置代理：点工具栏的「＋」，按提示完成。"),
         ], art: .rename),
         TutorialCard(title: "菜单栏、更新和帮助", points: [
-            ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。关掉主窗口后 cca 还在后台运行，要彻底退出点这里面的「退出」。"),
+            ("menubar.rectangle", "屏幕顶部菜单栏的 cca 图标：不打开主窗口也能查看额度、一键打开账号。关闭主窗口后 cca 仍在后台运行，要完全退出请点其中的「退出」。"),
             ("arrow.down.circle", "cca 有新版本时窗口顶上会提示，点「更新并重新打开」；点左下角的版本号随时检查 cca 更新。"),
             ("arrow.down.app", "桌面 App 和终端里的 Claude Code、Codex 的更新在左侧「客户端更新」页：自动检查，默认你确认后才安装；也可以打开「允许自动更新」。"),
             ("book", "想再看一遍这个教程：点左下角的「新手教程」或工具栏的问号；「帮助」菜单里还有每个版本的更新说明。"),
@@ -427,7 +427,7 @@ struct TutorialArt: View {
         let desks: [(caption: String, employee: Employee)] = [
             ("在用", Self.demo(0, plan: "Ultra", tier: .premium, mood: .working)),
             ("额度用完", Self.demo(2, plan: "Pro 100", tier: .advanced, mood: .resting(until: now + 7800))),
-            ("没登录", Self.demo(1, plan: "Pro", tier: .standard, mood: .absent)),
+            ("未登录", Self.demo(1, plan: "Pro", tier: .standard, mood: .absent)),
         ]
         return HStack(spacing: 12) {
             ForEach(desks, id: \.caption) { d in
@@ -516,7 +516,7 @@ struct TutorialArt: View {
         let opts: [(String, String, String)] = [
             ("wifi.router", "路由器", "OpenClash / ShellCrash，按端口分流"),
             ("laptopcomputer", "没有路由器", "用 cca 内置的代理，节点由 Team 提供或自己填"),
-            ("arrow.forward", "先跳过", "接着添加账号，以后再配"),
+            ("arrow.forward", "先跳过", "直接添加账号，以后再配置"),
         ]
         return panel {
             VStack(spacing: 0) {
@@ -943,7 +943,7 @@ struct WelcomeBanner: View {
                 HStack(spacing: 10) {
                     Button("开始配置") { model.startOnboarding() }
                         .buttonStyle(.glassProminent)
-                    Button("先看看怎么配置") { guide.openTutorial(at: TutorialCard.setupStart) }
+                    Button("先了解如何配置") { guide.openTutorial(at: TutorialCard.setupStart) }
                         .buttonStyle(.glass)
                     Button("以后再说") { withAnimation(.snappy) { model.onboardingDismissed = true } }
                         .buttonStyle(.glass)
@@ -979,39 +979,39 @@ struct Advice {
         case .useFirst(let f):
             return Advice(level: .suggest, text: Texts.useFirst(f, now: now) + "。")
         case .loggedOut:
-            return Advice(level: .warn, text: "还没登录这个账号：点「登录…」，在终端里按提示登录。")
+            return Advice(level: .warn, text: "这个账号未登录：点「登录…」，在终端中按提示登录。")
         case .emailMismatch(let email):
             let who = email.map { "（现在登录的是 \($0)）" } ?? ""
-            return Advice(level: .warn, text: "登录的不是这个账号\(who)：点「重新登录…」换回来。")
+            return Advice(level: .warn, text: "登录的不是这个账号\(who)：点「重新登录…」换成这个账号。")
         case .loginExpired:
             return Advice(level: .warn, text: "登录已失效（比如改过密码）：点「重新登录…」，在终端里按提示登录。")
         case .appMissing:
-            return Advice(level: .info, text: "这台 Mac 上没装 \(appLabel)：可以先用「网页版」。")
+            return Advice(level: .info, text: "这台 Mac 上未安装 \(appLabel)：可以先用「网页版」。")
         case .portClosed:
-            return Advice(level: .bad, text: "这个账号的端口连不上：先点「同步路由器」，还不行就检查一下路由器。")
+            return Advice(level: .bad, text: "这个账号的端口无法连接：先点「同步路由器」，仍不行请检查路由器。")
         case .portDrift:
             return Advice(level: .warn, text: "路由器给这个账号选错了节点：点「同步路由器」就能修好。")
         case .exitBad(let r, let region):
-            return Advice(level: .bad, text: "出口有问题：\(Texts.healthResult(r, region: region))。点「检测出口」再测一次。")
+            return Advice(level: .bad, text: "出口有问题：\(Texts.healthResult(r, region: region))。点「检测出口」重新检测。")
         case .quota(let windows):
             // 用完的窗口比快用完的要紧
             let w = windows.first(where: \.exhausted) ?? windows[0]
             let name = w.window == .fiveHour ? "5 小时" : "本周"
             if w.exhausted {
                 let back = w.resetsEpoch.map { "，" + Texts.backAt(epoch: $0, now: now) } ?? ""
-                return Advice(level: .warn, text: "\(name)的额度用完了\(back)。可以先换个账号。")
+                return Advice(level: .warn, text: "\(name)的额度已用完\(back)。可以先换个账号。")
             }
             let when = w.resetsEpoch.map { "，" + Texts.resetText(epoch: $0, now: now) } ?? ""
-            return Advice(level: .warn, text: "\(name)的额度快用完了（\(Texts.percent(w.percent))\(when)）。可以先换个账号。")
+            return Advice(level: .warn, text: "\(name)的额度即将用完（\(Texts.percent(w.percent))\(when)）。可以先换个账号。")
         case .outdatedLoginPlan(let old):
-            return Advice(level: .info, text: Texts.outdatedLoginPlan(old, current: a.plan) + "：点用量下面的「重新登录…」更新一次。")
+            return Advice(level: .info, text: Texts.outdatedLoginPlan(old, current: a.plan) + "：点用量下方的「重新登录…」更新。")
         case .lowPurity:
             return Advice(level: .warn, text: "出口 IP 的纯净度偏低，用的时候注意风险。")
         case .leak:
             return Advice(level: .warn, text: "DNS 或 WebRTC 可能泄露，详情看下面的网络出口。")
         case .neverChecked:
-            return Advice(level: .info, text: a.isAPI ? "第一次用这个接口？点「检测连接」看看连不连得上。"
-                          : "第一次用这个账号？先点「检测出口」，看看出口在哪、纯净度怎么样。")
+            return Advice(level: .info, text: a.isAPI ? "第一次使用这个接口？点「检测连接」检查能否连接。"
+                          : "第一次使用这个账号？先点「检测出口」，查看出口位置和纯净度。")
         }
     }
 }

@@ -134,7 +134,7 @@ func costFixtureTests() {
               bm.map(\.id).joined(separator: ","))
         check("bob：价格表里还没有的新模型（claude-haiku-5-6）带 priced_as，别的没有", bm.map(\.pricedAs) == [nil, nil, "claude-haiku-5-5", nil, nil]
               && bob?.me?.models?.first { $0.model == "claude-haiku-5-6" }?.pricedAs == "claude-haiku-5-5"
-              && Texts.costEstimated(bm, granularity: .week) == "检测到新模型 claude-haiku-5-6：cca 的价格表里还没有它，按 claude-haiku-5-5 的价格估算（≈）",
+              && Texts.costEstimated(bm, granularity: .week) == "检测到新模型 claude-haiku-5-6：cca 的价格表中还没有它，暂按 claude-haiku-5-5 的价格估算（≈）",
               "\(bm.map(\.pricedAs))")
         check("bob：各台设备按模型的（没有 tokens；old-mini 是旧版 cca，只有没按模型记下的）",
               bob?.me?.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-6", "claude-research-preview"]
@@ -200,7 +200,7 @@ func costFixtureTests() {
               u?.why.map(\.code) == [.claudeApp, .oldClaudeCode] && u?.why.first?.claudeCode == nil && u?.claudeCode == "2.1.316" && u?.claudeCodeOld == true
               && alice?.me?.diag?.why == u?.why && alice?.me?.diag?.claudeCodeOld == true)
         check("state_cost：合计下面只说有用量认不出账号、没算进来，不说原因、不提醒更新；只看本机时什么都不说",
-              Texts.costUnattributed(u, currency: "USD") == "近 30 天另有 $1.25 认不出是哪个账号的，没算进来。"
+              Texts.costUnattributed(u, currency: "USD") == "近 30 天另有 $1.25 无法识别属于哪个账号，未计入。"
               && alice.map { Texts.costNotes($0, scope: .me, now: 1794042000) } == [],
               "\(String(describing: alice.map { Texts.costNotes($0, scope: .me, now: 1794042000) }))")
     }
@@ -214,8 +214,8 @@ func costFixtureTests() {
               && x.costTotal?.otherDevices.map(Texts.costMenuName) == ["dan-air", "old-air（已撤销）"])
         check("state_cost_sync：dan-air 带着诊断（cca 照给），不说成「有用量没算进来」；没同步过金额的设备照旧说",
               alice?.devices.map { $0.diag?.why.isEmpty == false } == [false, true, false]
-              && alice.map { Texts.costNotes($0, now: 1794042000).filter { $0.text.contains("算进来") } } == [
-                CostNote(text: "还有 1 台设备没有算进来（eve-mini，可能 cca 太旧）", warning: true)],
+              && alice.map { Texts.costNotes($0, now: 1794042000).filter { $0.text.contains("未统计在内") } } == [
+                CostNote(text: "还有 1 台设备未统计在内（eve-mini，可能 cca 版本太旧）", warning: true)],
               "\(String(describing: alice.map { Texts.costNotes($0, now: 1794042000) }))")
     }
     if let d = fixture("cost_sync.json"), let doc = try? DocumentDecoder.decode(CostSyncDoc.self, from: d) {
@@ -384,15 +384,15 @@ func costUnitTests() {
         let list = CostChart.bars(bob, granularity: g, scope: scope)
         return Texts.costBarDetail(list[i], granularity: g, scope: scope, currency: "USD", now: now, calendar: sh)
     }
-    check("指着本周", detail(12, .all, .week) == "本周到现在（11 月 3 日–10 日）：$518 · 2,327 次请求", detail(12, .all, .week))
+    check("指着本周", detail(12, .all, .week) == "本周至今（11 月 3 日–10 日）：$518 · 2,327 次请求", detail(12, .all, .week))
     check("指着开始时还没有记录的一周：补一句", detail(4, .all, .week) == "9 月 8 日–15 日：$607 · 2,768 次请求；这一项开始时还没有记录，可能偏小",
           detail(4, .all, .week))
-    check("有没有公开价格的模型的一周：补一句", detail(7, .all, .week) == "9 月 29 日–10 月 6 日：$785 · 3,609 次请求；其中 3 次请求的模型没有公开价格，没算钱",
+    check("有没有公开价格的模型的一周：补一句", detail(7, .all, .week) == "9 月 29 日–10 月 6 日：$785 · 3,609 次请求；其中 3 次请求的模型没有公开价格，未计入金额",
           detail(7, .all, .week))
     check("还没有记录的一周：$0，不写请求数", detail(0, .all, .week) == "8 月 17 日–23 日：$0；这一项开始时还没有记录，可能偏小", detail(0, .all, .week))
-    check("本机：这台设备的金额，没有请求数", detail(12, .me, .week) == "本周到现在（11 月 3 日–10 日）：$294" && detail(29, .me, .day) == "今天到现在：$29.70",
+    check("本机：这台设备的金额，没有请求数", detail(12, .me, .week) == "本周至今（11 月 3 日–10 日）：$294" && detail(29, .me, .day) == "今天：$29.70",
           detail(12, .me, .week) + " | " + detail(29, .me, .day))
-    check("指着今天、别的一天", detail(29, .all, .day) == "今天到现在：$44.06 · 191 次请求"
+    check("指着今天、别的一天", detail(29, .all, .day) == "今天：$44.06 · 191 次请求"
           && detail(0, .all, .day) == "10 月 9 日 周五：$185 · 864 次请求", detail(29, .all, .day) + " | " + detail(0, .all, .day))
     check("柱子的金额是 cca 给的", bars.map(\.usd) == bob.weeks.map(\.usd))
     check("图下面那一行（按周）", Texts.costCaption(bob.summary, granularity: .week, currency: "USD") == "本周 $518 · 平均每周 $976（7 周） · 近 12 周合计 $7,957 · 缓存命中 97.4%",
@@ -418,23 +418,23 @@ func costUnitTests() {
           weeksCacheHit: 0.5), granularity: .week, currency: "USD") == "本周 $3.00 · 近 12 周合计 $3.00 · 缓存命中 50%"
           && Texts.costCaption(CostSummary(daysUSD: 3, todayUSD: 3, weeksCacheHit: 0.5), granularity: .day, currency: "USD") == "今天 $3.00 · 近 30 天合计 $3.00")
     check("价格的小字：按工具说是谁的价格", Texts.costFootnote([.claude], pricesDate: "2026-11-01")
-          == "按 Anthropic 官方 API 的价格折算（价格表 2026 年 11 月 1 日），不是实际花费：订阅不按这个收费。"
-          && Texts.costFootnote([.codex], pricesDate: nil) == "按 OpenAI 官方 API 的价格折算，不是实际花费：订阅不按这个收费。"
+          == "按 Anthropic 官方 API 的价格折算（价格表 2026 年 11 月 1 日），不是实际花费：订阅并不按此收费。"
+          && Texts.costFootnote([.codex], pricesDate: nil) == "按 OpenAI 官方 API 的价格折算，不是实际花费：订阅并不按此收费。"
           && Texts.costFootnote([.claude, .codex, .claude], pricesDate: "2026-11-01").hasPrefix("按 Anthropic、OpenAI 官方 API 的价格折算（价格表 2026 年 11 月 1 日）")
-          && Texts.costFootnote([], pricesDate: nil) == "按官方 API 的价格折算，不是实际花费：订阅不按这个收费。",
+          && Texts.costFootnote([], pricesDate: nil) == "按官方 API 的价格折算，不是实际花费：订阅并不按此收费。",
           Texts.costFootnote([], pricesDate: nil))
 
     let notes = { (c: AccountCost) in Texts.costNotes(c, now: now, calendar: sh) }
     check("同步过：还有没同步过金额的设备、很久没同步上来的设备（撤销了的不说）；有回复认不出账号的设备不说", notes(bob) == [
-        CostNote(text: "还有 1 台设备没有算进来（carol-air，可能 cca 太旧）", warning: true),
-        CostNote(text: "office-imac 周四 15:00 以后的还没同步上来", warning: true),
+        CostNote(text: "还有 1 台设备未统计在内（carol-air，可能 cca 版本太旧）", warning: true),
+        CostNote(text: "office-imac 周四 15:00 之后的数据还没同步过来", warning: true),
     ], "\(notes(bob))")
     let meNotes = { (c: AccountCost) in Texts.costNotes(c, scope: .me, now: now, calendar: sh) }
     check("只看本机：什么都不说（这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它）",
           meNotes(bob).isEmpty && meNotes(grace).isEmpty && meNotes(frank).isEmpty && meNotes(carol).isEmpty && meNotes(erin).isEmpty)
     let deviceNotes = { (c: AccountCost, id: String) in Texts.costNotes(c, scope: .device(id), now: now, calendar: sh) }
     check("只看另一台设备：只说那一台很久没同步上来（同步的状态、别的设备、诊断不说）",
-          deviceNotes(bob, officeImac) == [CostNote(text: "office-imac 周四 15:00 以后的还没同步上来", warning: true)]
+          deviceNotes(bob, officeImac) == [CostNote(text: "office-imac 周四 15:00 之后的数据还没同步过来", warning: true)]
           && deviceNotes(bob, aliceMini).isEmpty
           && deviceNotes(bob, "SHA256:" + String(repeating: "e", count: 43)).isEmpty && deviceNotes(bob, "SHA256:x").isEmpty && deviceNotes(grace, aliceMini).isEmpty,
           "\(deviceNotes(bob, aliceMini))")
@@ -457,62 +457,62 @@ func costUnitTests() {
     let syncFailed = decodeCost(#"{"weeks":[],"days":[],"devices":[{"id":"m","name":"m","me":true},{"id":"o","name":"o"}],"#
                                 + #""sync":{"state":"error","message":"x","missing":[{"name":"z"}]}}"#)
     check("同步没成功、还有设备没算进来：看所有设备时说，只看本机时不说",
-          syncFailed.map { notes($0) } == [CostNote(text: "上次同步没成功：x", warning: true),
-                                          CostNote(text: "还有 1 台设备没有算进来（z，可能 cca 太旧）", warning: true)]
+          syncFailed.map { notes($0) } == [CostNote(text: "上次同步失败：x", warning: true),
+                                          CostNote(text: "还有 1 台设备未统计在内（z，可能 cca 版本太旧）", warning: true)]
           && syncFailed.map { meNotes($0) }?.isEmpty == true, "\(String(describing: syncFailed.map { notes($0) }))")
-    check("没登录这个账号", notes(carol) == [CostNote(text: "这台设备没登录这个账号，显示的是上次同步来的")], "\(notes(carol))")
-    check("上次同步没成功（橙色，带原因）", notes(grace) == [CostNote(text: "上次同步没成功：连不上设备统计的服务器（https://192.0.2.10:18443）", warning: true)])
-    let localOnly = [CostNote(text: "只算了这台设备：这个账号不是哪个 Team 给的，或者这台设备用不了那个 Team 的服务器")]
+    check("没登录这个账号", notes(carol) == [CostNote(text: "这台设备未登录这个账号，显示的是上次同步的数据")], "\(notes(carol))")
+    check("上次同步失败（橙色，带原因）", notes(grace) == [CostNote(text: "上次同步失败：连不上设备统计的服务器（https://192.0.2.10:18443）", warning: true)])
+    let localOnly = [CostNote(text: "只统计了这台设备：这个账号不是 Team 分配的，或这台设备无法使用那个 Team 的服务器")]
     check("只有这台设备（灰字：所有设备和本机一样）", notes(erin) == localOnly && notes(frank) == localOnly, "\(notes(erin))")
     let oldServer = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"old_server","message":"维护者的设备统计服务器还不支持同步折合金额","hub":"maintainer","missing":[]}}"#)
     check("3.6.0 以前的 cca 给的 old_server（维护者的服务器还不支持）：当没同步成，照 cca 给的原因说；维护者的服务器不认识",
           oldServer?.syncState == .error && oldServer?.sync?.hub == nil
-          && oldServer.map({ notes($0) }) == [CostNote(text: "上次同步没成功：维护者的设备统计服务器还不支持同步折合金额", warning: true)],
+          && oldServer.map({ notes($0) }) == [CostNote(text: "上次同步失败：维护者的设备统计服务器还不支持同步折合金额", warning: true)],
           "\(String(describing: oldServer.map { notes($0) }))")
     let pending = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"pending","missing":[]}}"#)
     let weird = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"later","missing":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":""}]}}"#)
     let off = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"off","missing":[]}}"#)
-    check("还没和别的设备同步过", pending.map { notes($0) } == [CostNote(text: "还没和别的设备同步过")])
+    check("尚未与其他设备同步", pending.map { notes($0) } == [CostNote(text: "尚未与其他设备同步")])
     check("不认识的同步状态当没同步成；没名字的设备不算；超过三台写「等」", weird?.syncState == .error && weird?.sync?.state.rawValue == "later"
-          && weird.map({ notes($0) }) == [CostNote(text: "上次同步没成功", warning: true),
-                                  CostNote(text: "还有 4 台设备没有算进来（a、b、c 等，可能 cca 太旧）", warning: true)],
+          && weird.map({ notes($0) }) == [CostNote(text: "上次同步失败", warning: true),
+                                  CostNote(text: "还有 4 台设备未统计在内（a、b、c 等，可能 cca 版本太旧）", warning: true)],
           "\(String(describing: weird.map { notes($0) }))")
     check("关掉了设备统计：说只算了这台设备；cca 没给 sync：当作只有这台设备，但不知道为什么，不说",
-          off.map({ notes($0) }) == [CostNote(text: "只算了这台设备：这台设备关掉了设备统计")]
+          off.map({ notes($0) }) == [CostNote(text: "只统计了这台设备：这台设备关闭了设备统计")]
           && AccountCost().syncState == .localOnly && notes(AccountCost()).isEmpty)
-    check("还没有记录", Texts.costEmpty(.claude) == "还没有记录：用 Claude Code 干过活以后会显示在这里。"
-          && Texts.costEmpty(.codex) == "还没有记录：用 Codex 干过活以后会显示在这里。")
+    check("还没有记录", Texts.costEmpty(.claude) == "还没有记录：用 Claude Code 工作后会显示在这里。"
+          && Texts.costEmpty(.codex) == "还没有记录：用 Codex 工作后会显示在这里。")
     check("从什么时候开始有记录", Texts.costSince(bob.sinceEpoch!, tool: .claude, now: now, calendar: sh)
           == "从 9 月 10 日开始有记录。"
-          && Texts.costSince(bob.sinceEpoch!, tool: .codex, now: now, calendar: sh).hasSuffix("Codex 0.157 起的会话才带着账号信息，更早的算不进来。"))
-    check("没有公开价格的模型", Texts.costUnpriced(["claude-research-preview"], requests: 4) == "这些模型没有公开价格，只计了请求数：claude-research-preview（近 12 周 4 次请求）"
-          && Texts.costUnpriced(["a", "b"], requests: 0) == "这些模型没有公开价格，只计了请求数：a、b" && Texts.costUnpriced([], requests: 3) == nil)
-    check("上次和别的设备同步", Texts.costSynced(1794041700, now: now, calendar: sh) == "上次和别的设备同步：16:55")
+          && Texts.costSince(bob.sinceEpoch!, tool: .codex, now: now, calendar: sh).hasSuffix("Codex 0.157 及以后的会话才带有账号信息，更早的无法统计。"))
+    check("没有公开价格的模型", Texts.costUnpriced(["claude-research-preview"], requests: 4) == "这些模型没有公开价格，只统计了请求数：claude-research-preview（近 12 周 4 次请求）"
+          && Texts.costUnpriced(["a", "b"], requests: 0) == "这些模型没有公开价格，只统计了请求数：a、b" && Texts.costUnpriced([], requests: 3) == nil)
+    check("上次和别的设备同步", Texts.costSynced(1794041700, now: now, calendar: sh) == "上次与其他设备同步：16:55")
     check("设备的叫法", bob.devices.map(Texts.costDeviceName) == ["studio-mac（这台）", "alice-mini", "office-imac", "old-mini（已撤销）"])
     check("多久以前统计的", Texts.costFreshness(CostScan(state: .ready, updatedEpoch: now - 120), now: now) == "2 分钟前统计"
           && Texts.costFreshness(CostScan(state: .ready, updatedEpoch: now - 20), now: now) == "刚刚统计"
           && Texts.costFreshness(CostScan(state: .scanning, updatedEpoch: now - 120), now: now) == "正在统计…"
-          && Texts.costFreshness(CostScan(state: .never), now: now) == "还没统计"
+          && Texts.costFreshness(CostScan(state: .never), now: now) == "尚未统计"
           && Texts.costFreshness(CostScan(state: .ready), now: now) == nil && Texts.costFreshness(nil, now: now) == nil)
     let u = s.costTotal?.unattributed, lab = "f0f0f0f0f0f0f0f0"
     check("认不出是哪个账号的（3.6.8 起有所有设备的）：说没算进合计、列在最下面，不说原因；本机、另一台设备时说那一台的，没有的设备不说",
           Texts.costUnattributed(u, scope: .all, total: s.costTotal, currency: "USD")
-          == "认不出是哪个账号的用量没算进合计，单独列在最下面。"
-          && Texts.costUnattributed(u, currency: "USD") == "这台设备认不出是哪个账号的用量没算进合计，单独列在最下面。"
+          == "无法识别账号的用量不计入合计，单独列在最下面。"
+          && Texts.costUnattributed(u, currency: "USD") == "这台设备无法识别账号的用量不计入合计，单独列在最下面。"
           && Texts.costUnattributed(u, scope: .device(aliceMini), total: s.costTotal, currency: "USD")
-          == "alice-mini 认不出是哪个账号的用量没算进合计，单独列在最下面。"
+          == "alice-mini 无法识别账号的用量不计入合计，单独列在最下面。"
           && Texts.costUnattributed(u, scope: .device(lab), total: s.costTotal, currency: "USD")
-          == "lab-studio 认不出是哪个账号的用量没算进合计，单独列在最下面。"
+          == "lab-studio 无法识别账号的用量不计入合计，单独列在最下面。"
           && Texts.costUnattributed(u, scope: .device(officeImac), total: s.costTotal, currency: "USD") == nil
           && Texts.costUnattributed(nil, currency: "USD") == nil,
           "\(String(describing: Texts.costUnattributed(u, scope: .all, total: s.costTotal, currency: "USD")))")
     let oldU = try? JSONDecoder().decode(CostUnattributed.self, from: Data(#"{"days_usd":12.3,"requests":40,"why":[],"claude_code":"2.1.330"}"#.utf8))
     check("旧版 cca（只有这台设备近 30 天的）：照旧说金额，看另一台设备时不说", oldU?.cost == nil && oldU?.unsynced == []
-          && Texts.costUnattributed(oldU, currency: "USD") == "近 30 天另有 $12.30 认不出是哪个账号的，没算进来。"
+          && Texts.costUnattributed(oldU, currency: "USD") == "近 30 天另有 $12.30 无法识别属于哪个账号，未计入。"
           && Texts.costUnattributed(oldU, scope: .all, currency: "USD") == Texts.costUnattributed(oldU, currency: "USD")
           && Texts.costUnattributed(oldU, scope: .device(aliceMini), currency: "USD") == nil)
-    check("还没传认不出的用量的设备", Texts.costUnsynced(u, scope: .all) == "还有 2 台设备没传认不出账号的用量（office-imac、old-mini），可能 cca 太旧。"
-          && Texts.costUnsynced(u, scope: .me) == nil && Texts.costUnsynced(u, scope: .device(officeImac)) == "office-imac 还没传认不出账号的用量，可能 cca 太旧。"
+    check("还没传认不出的用量的设备", Texts.costUnsynced(u, scope: .all) == "还有 2 台设备没有上传无法识别账号的用量（office-imac、old-mini），可能 cca 版本太旧。"
+          && Texts.costUnsynced(u, scope: .me) == nil && Texts.costUnsynced(u, scope: .device(officeImac)) == "office-imac 还没有上传无法识别账号的用量，可能 cca 版本太旧。"
           && Texts.costUnsynced(u, scope: .device(aliceMini)) == nil && Texts.costUnsynced(oldU, scope: .all) == nil,
           "\(String(describing: Texts.costUnsynced(u, scope: .all)))")
     check("「认不出账号」那一行的名字", Texts.costOrphanRowName(.all, total: s.costTotal) == "所有设备" && Texts.costOrphanRowName(.me, total: s.costTotal) == "这台设备"
@@ -521,7 +521,7 @@ func costUnitTests() {
     check("认不出账号那一组里设备的诊断照样解码（App 不显示原因）",
           u?.cost?.device(lab)?.diag?.why.map(\.code) == [.claudeApp] && u?.cost?.me?.diag?.why.isEmpty != false)
     check("按模型的小标题、叫法", Texts.costModelsTitle(.week) == "按模型 · 近 12 周" && Texts.costModelsTitle(.day) == "按模型 · 近 30 天"
-          && Texts.costModelName(CostModelRow(model: nil)) == "没按模型记下的" && Texts.costModelName(CostModelRow(model: "")) == "没写模型名"
+          && Texts.costModelName(CostModelRow(model: nil)) == "未按模型记录的" && Texts.costModelName(CostModelRow(model: "")) == "未记录模型名"
           && Texts.costModelName(CostModelRow(model: "claude-opus-5-5")) == "claude-opus-5-5")
     let opus = CostModelRow(model: "claude-opus-5-5", weeks: CostModelRange(usd: 790.1, requests: 8804))
     let unpricedRow = CostModelRow(model: "claude-research-preview", weeks: CostModelRange(requests: 4, unpricedRequests: 4))
@@ -531,9 +531,9 @@ func costUnitTests() {
           && Texts.costModelMoney(unpricedRow.weeks, currency: "USD") == "没有公开价格"
           && Texts.costModelValue(opus, granularity: .week, currency: "USD") == "$790，8,804 次请求"
           && Texts.costModelValue(unpricedRow, granularity: .week, currency: "USD") == "没有公开价格，4 次请求"
-          && Texts.costModelValue(restRow, granularity: .week, currency: "USD") == "$22.30，316 次请求，其中 4 次没有公开价格、没算钱"
+          && Texts.costModelValue(restRow, granularity: .week, currency: "USD") == "$22.30，316 次请求，其中 4 次没有公开价格、未计入金额"
           && Texts.costModelHelp(restRow, granularity: .week, currency: "USD")
-          == "$22.30，316 次请求，其中 4 次没有公开价格、没算钱\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开"
+          == "$22.30，316 次请求，其中 4 次没有公开价格、未计入金额\n旧版本统计的、或旧版 cca 设备上传的数据只有合计，没有按模型区分"
           && Texts.costModelHelp(opus, granularity: .week, currency: "USD") == Texts.costModelValue(opus, granularity: .week, currency: "USD"),
           "\(Texts.costModelValue(restRow, granularity: .week, currency: "USD")) / \(Texts.costModelRequests(opus.weeks))")
     let hitRow = CostModelRow(model: "claude-opus-5-5", weeks: CostModelRange(usd: 790.1, requests: 8804, cacheHit: 0.9731))
@@ -559,10 +559,10 @@ func costUnitTests() {
           Texts.costModelMoney(newer.weeks, currency: "USD", estimated: true) == "≈ $12.50"
           && Texts.costModelMoney(unpricedRow.weeks, currency: "USD", estimated: true) == "没有公开价格"
           && Texts.costModelValue(newer, granularity: .week, currency: "USD") == "≈ $12.50，30 次请求，按 claude-opus-5-5 的价格估算"
-          && Texts.costModelHelp(newer, granularity: .week, currency: "USD").hasSuffix("cca 收录了它的价格以后自动重算")
-          && Texts.costEstimated([opus, newer], granularity: .week) == "检测到新模型 claude-opus-5-6：cca 的价格表里还没有它，按 claude-opus-5-5 的价格估算（≈）"
-          && Texts.costEstimated([opus, newer, newer2], granularity: .week) == "检测到新模型 claude-opus-5-6、gpt-6.3-sol：cca 的价格表里还没有，按同系列的价格估算（≈）"
-          && Texts.costEstimated([opus, newer, newer2], granularity: .day) == "检测到新模型 gpt-6.3-sol：cca 的价格表里还没有它，按 gpt-6.2-sol 的价格估算（≈）"
+          && Texts.costModelHelp(newer, granularity: .week, currency: "USD").hasSuffix("收录价格后会自动重算")
+          && Texts.costEstimated([opus, newer], granularity: .week) == "检测到新模型 claude-opus-5-6：cca 的价格表中还没有它，暂按 claude-opus-5-5 的价格估算（≈）"
+          && Texts.costEstimated([opus, newer, newer2], granularity: .week) == "检测到新模型 claude-opus-5-6、gpt-6.3-sol：cca 的价格表中还没有，暂按同系列的价格估算（≈）"
+          && Texts.costEstimated([opus, newer, newer2], granularity: .day) == "检测到新模型 gpt-6.3-sol：cca 的价格表中还没有它，暂按 gpt-6.2-sol 的价格估算（≈）"
           && Texts.costEstimated([opus, restRow], granularity: .week) == nil,
           Texts.costModelValue(newer, granularity: .week, currency: "USD"))
     let pricedRows = try? JSONDecoder().decode([CostModelRow].self, from: Data(#"""
@@ -595,7 +595,7 @@ func costUnitTests() {
           && Texts.costNotes(AccountCost(devices: [withWhy]), scope: .device("x"), now: 1, calendar: sh).isEmpty)
     let onlyRequests = try? JSONDecoder().decode(CostUnattributed.self, from: Data(#"{"days_usd":0,"requests":5}"#.utf8))
     let nothing = try? JSONDecoder().decode(CostUnattributed.self, from: Data(#"{"days_usd":0,"requests":0}"#.utf8))
-    check("认不出的只有请求数时说请求数，都没有时不说", Texts.costUnattributed(onlyRequests, currency: "USD")?.hasPrefix("近 30 天另有 5 次请求认不出") == true
+    check("认不出的只有请求数时说请求数，都没有时不说", Texts.costUnattributed(onlyRequests, currency: "USD")?.hasPrefix("近 30 天另有 5 次请求无法识别") == true
           && Texts.costUnattributed(nothing, currency: "USD") == nil)
 
     section("折合金额 · 解码")
@@ -857,7 +857,7 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
         held.mode = .ok
         held.gate.signal()
         check("统计完重读 state", await waitUntil { !m.costSyncing && states(t) >= 2 })
-        check("cca 还说 never、App 也没在跑：不算正在统计（显示“还没统计”，不一直转圈）", !m.costScanning)
+        check("cca 还说 never、App 也没在跑：不算正在统计（显示“尚未统计”，不一直转圈）", !m.costScanning)
         m.refreshUsageIfNeeded()
         try? await Task.sleep(nanoseconds: 80_000_000)
         check("刚统计过：不再马上统计（cca 还说 never 也按间隔）", syncs(t).count == 1, "\(syncs(t).count)")

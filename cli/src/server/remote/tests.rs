@@ -1249,7 +1249,7 @@ fn push_jobs() {
     assert!(!t.file().contains(r#""push""#), "{}", t.file());
 }
 
-/// push_set 带 sids（手机上「关掉的会话也推送」关着）：只推这几个会话，回的里面多一项 sids；记进 remote.json；空的是一个都不推；
+/// push_set 带 sids（手机上「已关闭的会话也推送」关着）：只推这几个会话，回的里面多一项 sids；记进 remote.json；空的是一个都不推；
 /// 样子不对的不要；再登记不带 sids 是又都推。remote.json 里的 sids 样子不对：当成一个都不推
 #[test]
 fn push_only_some_sessions() {

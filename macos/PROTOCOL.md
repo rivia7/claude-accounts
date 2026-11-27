@@ -85,7 +85,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `forms`：配置路由器、配置本机 Clash、账号表能在 App 里填表（4.6）。没有这个字段时这三条走终端交接。
 - `dock`：有 `cca _dock-tidy`（6）：终端交接退出系统终端以后，交给 cca 去掉程序坞「最近使用的 App」里它留下的图标。没有这个字段时交接脚本不调它（旧版 cca 会把不认识的 `_dock-tidy` 当成启动账号）。
 - `install_cli`：有 `cca [codex|agy] install-cli`（辅助安装：用 claude / codex / agy 的官方安装脚本装命令，先直连，不通时问过再经内置代理的一个节点装）。
-  App 在账号的 `can_why.cli` 是 `tool_missing` 的地方（账号页“没装 X 命令”旁边）给「安装 X 命令…」，`fail` 的 `tool_missing` 也补救成它，都交给终端（6）。
+  App 在账号的 `can_why.cli` 是 `tool_missing` 的地方（账号页“未安装 X 命令”旁边）给「安装 X 命令…」，`fail` 的 `tool_missing` 也补救成它，都交给终端（6）。
   没有这个字段（旧版 cca）时都不给。
 - `cost`：有折合金额（`_gui state` 的 `cost`、`cost_total`，`cca cost sync --json`，见 2.2、3.5）。没有这个字段（旧版 cca）时
   App 不显示折合金额、不调 `cost sync`。
@@ -523,7 +523,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   按 30 天的金额从多到少排（一样多按名字、再按 id）。（3.6.5 及以前：撤销了的 key 只在一个账号里并进同名的那一台，别的账号里只有撤销了的那份时，它在这里单独一项。）
   各台设备加起来就是顶层的。旧版 cca 没有这一项（App 的菜单里只有所有设备、本机）。
   3.6.8 起，只有认不出是哪个账号的用量的设备（`unattributed.cost.devices[]` 里有、哪个账号都没用过）也列在最后，按它认不出的那 30 天的
-  金额从多到少排：账号的几项都是 0、`models` 是 `[]`，App 看它时只有「认不出账号」那一部分有数字。
+  金额从多到少排：账号的几项都是 0、`models` 是 `[]`，App 看它时只有「无法识别账号」那一部分有数字。
 - `scan.state`：`ready`（统计过，`updated_epoch` 是最后一次）| `scanning`（正在统计：第一次要把会话记录全读一遍，可能要一会儿）|
   `never`（还没统计过：App 显示“正在统计”并运行一次 `cost sync`）。
 - `unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息），只给“另有多少没算进来”
@@ -537,7 +537,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     `unpriced_models`、`since_epoch` 的意思都一样，各台设备带着自己的 `diag`；`devices[]` 只列有这种用量的设备（这台设备没有时也不列），
     同一台机器经几个 Team 传的并成一项。`sync`：最近同步过它的那台服务器的（`missing` 总是 `[]`；不在 Team 里是 `local_only`、
     关了设备统计是 `off`：只有这台设备的）。哪台设备都没有这种用量时为 null。顶层、`me`、`devices[]` 的几项都不含它：
-    App 把它单独列一行「认不出账号」，看所有设备时用 `summary`、`days[]`，看某一台时用 `devices[]` 里 `id` 一样的那一项（没有就是 0）。
+    App 把它单独列一行「无法识别账号」，看所有设备时用 `summary`、`days[]`，看某一台时用 `devices[]` 里 `id` 一样的那一项（没有就是 0）。
     旧版 cca 没有这一项：App 只照 `days_usd`、`requests` 说这台设备的。
   - `unsynced`（3.6.8 起）：设备菜单（`devices[]`）里还没传过认不出的用量的别的设备（cca 太旧，或者还没同步过）：`[{"id", "name"}]`，
     App 说明这几台的没有算进来；没有为 `[]`，旧版 cca 没有这一项，当作 `[]`。传过、没有这种用量的设备不在这里，也不在 `cost.devices[]` 里。
@@ -1072,20 +1072,20 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `mail trust-forwarder <账号>` | 「邮箱」一节的「信任转发中转（不安全）」开关 | 提问会话（`mail.forwarder` + `consent.mail_trust_forwarder`，4.11）；关闭是 `cca mail trust-forwarder <账号> off` |
 | `_gui mail-list`、`mail open --msg`、`mail forget` | 「邮箱」一节的列表 / 刷新、每封的「在浏览器打开」、「移除」 | 无交互命令（4.11、2.4；`mail open` 进 `launch:` 闸门） |
 | `remote list --json` | 「远程会话」页（看得见时每 15 秒一次、「刷新」；要 `hello.remote`，9.1） | 无交互命令 |
-| `remote pair`、`remote join` | 「远程会话」页「配对过的机器」的「显示配对码…」「输入配对码…」 | 提问会话（`consent.remote_pair` + `remote.pair` / `remote.code`，9.2） |
-| `remote pair --web` | 「远程会话」页「配对过的机器」的「和手机配对…」（要 `hello.remote_web`） | 提问会话（`consent.remote_pair` 范围 `web` + `remote.pair_web`，9.2） |
+| `remote pair`、`remote join` | 「远程会话」页「已配对的机器」的「显示配对码…」「输入配对码…」 | 提问会话（`consent.remote_pair` + `remote.pair` / `remote.code`，9.2） |
+| `remote pair --web` | 「远程会话」页「已配对的机器」的「和手机配对…」（要 `hello.remote_web`） | 提问会话（`consent.remote_pair` 范围 `web` + `remote.pair_web`，9.2） |
 | `remote on\|off`、`remote allow`、`remote unpair` | 「远程会话」页的开关、每台机器那一行的菜单和「取消配对」 | 无交互命令（9.2） |
 | `remote attach [-r] <会话的 id>` | 「远程会话」页每个会话的「接入」「只看」 | 界面里的终端（App 开的伪终端，9.3） |
 | `remote end <会话的 id>` | 「远程会话」页这台 Mac 上的会话那一行的「结束…」（要 `hello.remote_end`） | 无交互命令，先 `consent.remote_end`（4.2、9.2） |
 | `remote template list --json` | 「远程会话」页的「远程启动」一节（这一页打开时、「刷新」、改过东西以后；要 `hello.remote_launch`，9.4） | 无交互命令 |
 | `remote template add … [--replace <编号>] -- 参数…`、`remote template rm <编号>` | 「远程启动」一节的「新建模板…」、每个模板的「修改…」「删除…」（要 `hello.remote_launch`） | 无交互命令（参数都给全，cca 不问；9.4） |
-| `remote allow <配对的 id> launch on\|off` | 「配对过的机器」里手机那一行的「允许远程启动」（要 `hello.remote_launch`；有 `hello.remote_launch_machines` 时电脑那一行也有） | 无交互命令，打开时先 `consent.remote_launch`（4.2、9.4） |
+| `remote allow <配对的 id> launch on\|off` | 「已配对的机器」里手机那一行的「允许远程启动」（要 `hello.remote_launch`；有 `hello.remote_launch_machines` 时电脑那一行也有） | 无交互命令，打开时先 `consent.remote_launch`（4.2、9.4） |
 | `remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行> [--line <开场白>] --json` | 「可以接入的会话」里允许这台 Mac 远程启动的那台机器那一组的「新建会话…」（要 `hello.remote_launch_machines`，9.5） | 无交互命令；起好了 App 接着 `remote attach`（9.3） |
 | `remote`（`status`、`peers`、不带 `--json` 的 `list`、不带 `--json` 的 `template`、`launcher`、不带 `--json` 的 `launch`） | 没有入口 | 终端里自己运行 |
 | `cost hook on` | 没有入口（3.7.5 起；3.7.4 及以前是折合金额页「认不出账号」那一句旁边的「记下账号…」） | 无交互命令，先 `consent.cost_hook`（4.2）；`on`、`off` 和不带参数的 `cost hook`（看开没开）都在终端里自己运行 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
-| `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
+| `[codex\|agy] install-cli` | 账号页“未安装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
 | `local udp on`、`pick`、`off`、`uninstall` | 节点分流页的「本机 UDP」一行（内置代理时才有）、账号页 WebRTC 泄露旁边的按钮 | 提问会话（`local.udp`；装、删系统服务时系统自己弹授权框，不经 App，7.1） |
 | `router uninstall`、`local off`、`local udp`（查看） | 没有入口 | 终端里自己运行 |
 | `mail`（`setup`、`open`、`forget`） | 账号页的「邮箱」一节（4.11；要 `hello.mail`，旧版 cca 没有入口） | 提问会话（`setup`）/ 无交互命令 |
@@ -1539,7 +1539,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 `hello.remote_launch_machines` 的 cca 配对过的电脑也行（`cca remote launch`，Mac 上的 cca App，9.5）。模板写好用哪个工具、哪个账号、
 在哪个文件夹、带哪些参数，那边改不了，只能带一句开场白。等它们来的是这台 Mac 上的一个后台进程（启动器：有允许远程启动的设备时 cca 装上、起来，
 macOS 上是 LaunchAgent；一台都没有了卸掉），经 Team 的服务器中转，和那边之间照样端到端加密（细节、线上的格式见 docs/dev/launch.md、
-server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」页「远程启动」一节列出模板，能新建、修改、删除；「配对过的机器」里手机（cca 够新时
+server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」页「远程启动」一节列出模板，能新建、修改、删除；「已配对的机器」里手机（cca 够新时
 电脑也有）那一行有「允许远程启动」。
 
 `cca remote template list --json`（只读，不联网）：
@@ -1587,7 +1587,7 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
   文件夹（打开面板选）；参数是一行字（修改时填 `args_line`），存的时候原样交给 cca（`--args-line`），App 不自己拆。cca 说不行（拆不开、
   校验不过）时原因写在弹层里，接着改。
 - 「允许远程启动」：有 `hello.remote_launch_machines` 时手机、电脑那一行都有，没有时只给手机（`peers[].web`）；`incoming` 不是 `control` 时开关停用、
-  旁边说先改成「看和操作」（cca 也这么查）。
+  旁边说先改成「查看和操作」（cca 也这么查）。
 - 终端里给人看的：`cca remote template`（不带 `--json` 的 `list`）、`cca remote launcher [status|log]`；App 不用。
 
 ### 9.5 用配对过的另一台机器上的模板新建会话：`cca remote launch … --json`

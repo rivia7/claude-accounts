@@ -220,7 +220,7 @@ func sessionScriptTests() async {
     check("半自动：不写交接文件、不等它运行", pasteLog.opened.isEmpty && !fm.fileExists(atPath: tmpRoot.appendingPathComponent("handoff-paste").path) && p.sheet == nil)
     pasteLog.openSucceeds = false
     p.launchInTerminal(.session(prefix: [], key: "k", name: "n", directory: "/tmp"), ccaPath: "/x/cca")
-    check("打不开也说清楚，命令还在剪贴板里", pasteLog.copied.last == "cd /tmp && /x/cca @k" && (p.toast?.text ?? "").contains("打不开 Termius"))
+    check("打不开也说清楚，命令还在剪贴板里", pasteLog.copied.last == "cd /tmp && /x/cca @k" && (p.toast?.text ?? "").contains("无法打开 Termius"))
     p.shutdown()
     m.shutdown()
 }

@@ -321,7 +321,7 @@ enum CcaError: Error, CustomStringConvertible, Equatable {
         case .cancelled: return "已取消"
         case .exit(let c, let tail): return tail.isEmpty ? "cca 出错了（退出码 \(c)）" : "cca 出错了（退出码 \(c)）：\(tail)"
         case .badOutput(let s, _): return s
-        case .codexDisabled: return "还没启用这种账号"
+        case .codexDisabled: return "未启用这种账号"
         }
     }
 }
@@ -506,7 +506,7 @@ actor CcaClient {
     private func gated<T: Sendable>(_ command: CcaCommand, prompter: Prompter?, decode: @escaping @Sendable (CcaResponse) -> T?,
                                     onEvent: (@Sendable (CcaEvent) -> Void)?) async -> (T?, ExecResult) {
         if let tool = command.tool, !enabledTools.contains(tool) {
-            let f = Failure(reason: .codexDisabled, code: nil, message: "还没启用 \(Texts.product(tool)) 账号", stderrTail: "",
+            let f = Failure(reason: .codexDisabled, code: nil, message: "未启用 \(Texts.product(tool)) 账号", stderrTail: "",
                             exitCode: nil, tool: tool, key: command.key)
             return (nil, ExecResult(status: .failed(f), last: nil, runs: 0, grants: []))
         }
@@ -542,7 +542,7 @@ actor CcaClient {
             do {
                 resp = try await transport.send(req, onEvent: onEvent)
             } catch {
-                return fail(.launch, "没能运行 cca：\(error)", nil)
+                return fail(.launch, "无法运行 cca：\(error)", nil)
             }
             let doc = decode(resp)
             if resp.cancelled { return fail(.cancelled, "已取消", resp, doc) }

@@ -155,7 +155,7 @@ struct MenuBarContent: View {
                 Text("正在连接 cca…").foregroundStyle(.secondary)
             }
         default:
-            Text("cca 还没准备好：打开主窗口看看。").foregroundStyle(.secondary).font(.callout)
+            Text("cca 尚未就绪：请打开主窗口查看。").foregroundStyle(.secondary).font(.callout)
         }
     }
 }
@@ -212,7 +212,7 @@ struct MenuRow: View {
     /// 出错点：没登录、登错号、查用量出错。
     private func problem(_ a: Account, _ u: UsageEntry?) -> String? {
         switch a.login {
-        case .loggedOut: return "还没登录"
+        case .loggedOut: return "未登录"
         case .emailMismatch: return Texts.login(a.login, loginEmail: a.loginEmail)
         default: break
         }

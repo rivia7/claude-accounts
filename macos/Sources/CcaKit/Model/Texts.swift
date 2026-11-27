@@ -153,14 +153,14 @@ enum Texts {
         case .offline:
             return "离线" + used
         default:
-            return "没在用" + used
+            return "未使用" + used
         }
     }
 
     /// 离线那一行的说明（悬停、读屏）：最后一次回报时还开着会话，现在不知道
     static func deviceOfflineHelp(_ d: DeviceRow, now: Double) -> String {
         let seen = d.seenEpoch.map { agoPhrase(now - $0) } ?? "很久以前"
-        return "\(seen)最后一次回报，当时还开着会话：可能休眠、断网，或者被强行结束了，不知道现在还用不用"
+        return "\(seen)最后一次上报时还开着会话：可能已休眠、断网或被强行结束，无法确定现在是否在用"
     }
 
     /// 「设备」标题右边的一句：“1 台在用 · 1 台闲置”；都没在用时“现在没有设备在用”
@@ -169,7 +169,7 @@ enum Texts {
         var parts: [String] = []
         if inUse > 0 { parts.append("\(inUse) 台在用") }
         if idle > 0 { parts.append("\(idle) 台闲置") }
-        return parts.isEmpty ? "现在没有设备在用" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "暂无设备在用" : parts.joined(separator: " · ")
     }
 
     // MARK: API key（PROTOCOL 2.2 的 api_key）
@@ -178,19 +178,19 @@ enum Texts {
     /// 从别的设备同步来的说哪台、什么时候记下的；这台 Mac 记下的说别的设备也能看到；没同步成的照 cca 给的原因说。
     static func apiKeyShare(_ k: APIKeyInfo, now: Double, calendar: Calendar = .current) -> String? {
         guard k.shared else { return nil }
-        if let err = k.syncError { return "没能和其他设备同步：\(err)" }
-        guard k.saved else { return "记下后，登录了这个账号的其他设备也能看到（加密同步，Team 的服务器看不到 key）。" }
+        if let err = k.syncError { return "与其他设备同步失败：\(err)" }
+        guard k.saved else { return "记录后，登录了这个账号的其他设备也能看到（加密同步，Team 的服务器看不到 key）。" }
         let when = k.savedEpoch.map { " " + pastTime($0, now: now, calendar: calendar) } ?? ""
-        if let from = k.fromDevice { return "\(from)\(when) 记下，已加密同步到这台 Mac。" }
-        return "这台 Mac\(when) 记下，登录了这个账号的其他设备也能看到（加密同步）。"
+        if let from = k.fromDevice { return "\(from)\(when) 记录，已加密同步到这台 Mac。" }
+        return "这台 Mac\(when) 记录，登录了这个账号的其他设备也能看到（加密同步）。"
     }
 
     /// 「记录…」「输入…」的说明（悬停）
     static func apiKeyRecordHelp(isAPI: Bool, shared: Bool) -> String {
         if isAPI { return "输入这个账号的 key，存进这台 Mac 的钥匙串" }
         return shared
-            ? "记一把 API key 备查（比如在控制台里建的）：存进这台 Mac 的钥匙串，并加密同步给登录了这个账号的其他设备；cca 不会拿它登录或启动这个账号"
-            : "记一把 API key 备查（比如在控制台里建的）：只存进这台 Mac 的钥匙串，cca 不会拿它登录或启动这个账号"
+            ? "记录一个 API key 备查（例如在控制台创建的）：存进这台 Mac 的钥匙串，并加密同步给登录了这个账号的其他设备；cca 不会用它登录或启动这个账号"
+            : "记录一个 API key 备查（例如在控制台创建的）：只存进这台 Mac 的钥匙串，cca 不会用它登录或启动这个账号"
     }
 
     /// 分模型的每周额度（Fable）下面那句话：它和本周总额度的关系（份额是 cca 认出来给的，PROTOCOL 3.1）。Fable 用的是本周总额度的一部分，
@@ -205,11 +205,11 @@ enum Texts {
     }
 
     static func modelShare(_ name: String, allowance: Double?, used: Double?, full: Bool = false, weeklyLeft: Double? = nil) -> String {
-        guard let allowance else { return "\(name) 的额度单独计" }
+        guard let allowance else { return "\(name) 单独计算额度" }
         if full {
-            return "\(name) 的份额用完了" + (weeklyLeft.flatMap { $0 > 0 ? "，别的模型还能用本周剩下的 \(percent($0))" : nil } ?? "")
+            return "\(name) 的额度已用完" + (weeklyLeft.flatMap { $0 > 0 ? "，其他模型还能用本周剩余的 \(percent($0))" : nil } ?? "")
         }
-        return "\(name) 最多占本周额度的 \(percent(allowance))" + (used.map { "，已占 \(percent($0))" } ?? "")
+        return "\(name) 最多可用本周额度的 \(percent(allowance))" + (used.map { "，已用 \(percent($0))" } ?? "")
     }
 
     /// 什么时候过期（重置机会）：“11 月 20 日过期”（今年以内不写年份），一天以内写还有多久（“5 小时 3 分后过期”）。
@@ -235,14 +235,14 @@ enum Texts {
     /// Claude Code 登录时记下的套餐过时了（cca 给的 `outdated_login_plan`）：「Claude Code 里记的套餐还是 Pro，账号现在是 Max」，
     /// 不知道账号现在的套餐时只说前半句。账号页那句话、用量下面那一行都用它。
     static func outdatedLoginPlan(_ old: String, current: String?) -> String {
-        "Claude Code 里记的套餐还是 \(old)" + (nonEmpty(current).map { "，账号现在是 \($0)" } ?? "")
+        "Claude Code 记录的套餐仍是 \(old)" + (nonEmpty(current).map { "，账号现在是 \($0)" } ?? "")
     }
 
     // MARK: Team（PROTOCOL 4.14）
 
     /// 侧栏「共享与同步」下面那句（短写，免得截断）：在 Team 里时一个说名字、几个说几个，不在时说还没加入
     static func sharingSubtitle(teams: [String]) -> String {
-        if teams.isEmpty { return "还没加入 Team" }
+        if teams.isEmpty { return "未加入 Team" }
         if teams.count == 1 { return "在「\(nonEmpty(teams[0]) ?? "Team")」里" }
         return "在 \(teams.count) 个 Team 里"
     }
@@ -260,25 +260,25 @@ enum Texts {
     static func teamState(_ t: TeamEntry) -> String {
         switch t.state {
         case .ok: return t.seq > 0 ? "配置已同步" : "已同步"
-        case .pending: return "还没同步过配置"
-        case .local: return "还没接上同步服务器"
-        case .removed: return nonEmpty(t.error) ?? "这台设备被管理员移除了"
-        case .lost: return nonEmpty(t.error) ?? "服务器的记录没了：等管理员把这台设备登记回去"
-        default: return nonEmpty(t.error).map { "配置没同步成：\($0)" } ?? "配置没同步成"
+        case .pending: return "配置未同步"
+        case .local: return "未连接同步服务器"
+        case .removed: return nonEmpty(t.error) ?? "这台设备已被管理员移除"
+        case .lost: return nonEmpty(t.error) ?? "服务器上没有这台设备的记录：请等管理员重新登记"
+        default: return nonEmpty(t.error).map { "配置同步失败：\($0)" } ?? "配置同步失败"
         }
     }
 
     /// Team 的服务器要更新：少了什么（cca 给的），谁来更新
     static func teamServerUpdate(_ t: TeamEntry, _ u: TeamServerUpdate) -> String {
         let why = nonEmpty(u.why).map { "：\($0)" } ?? ""
-        return t.isOwner ? "服务器要更新\(why)。数据不变，更新时服务器停几秒" : "服务器要更新\(why)。请建这个 Team 的管理员更新服务器"
+        return t.isOwner ? "服务器需要更新\(why)。数据不变，更新时服务器会暂停几秒" : "服务器需要更新\(why)。请联系创建这个 Team 的管理员更新服务器"
     }
 
     /// Team 的第二行：这台设备在里面叫什么、给了它几个账号、服务器
     static func teamSummary(_ t: TeamEntry) -> String {
         var parts: [String] = []
-        if let d = nonEmpty(t.device) { parts.append("这台设备叫 \(d)") }
-        parts.append(t.accounts > 0 ? "给了这台设备 \(t.accounts) 个账号" : "没有给这台设备账号")
+        if let d = nonEmpty(t.device) { parts.append("设备名 \(d)") }
+        parts.append(t.accounts > 0 ? "已分配 \(t.accounts) 个账号" : "未分配账号")
         if let h = nonEmpty(t.host) { parts.append(h) }
         return parts.joined(separator: " · ")
     }
@@ -288,15 +288,15 @@ enum Texts {
         var parts: [String] = []
         switch d.state {
         case .joined, .local:
-            if let age = d.seenAge { parts.append(agoPhrase(age) + "来过") } else { parts.append(d.state == .local ? "还没接上服务器" : "加入了") }
+            if let age = d.seenAge { parts.append(agoPhrase(age) + "在线") } else { parts.append(d.state == .local ? "未连接服务器" : "已加入") }
         case .invited:
-            parts.append(d.expiresEpoch.map { $0 > now ? "邀请还没用（" + untilPhrase($0 - now) + "后过期）" : "邀请过期了" } ?? "邀请还没用")
-        case .expired: parts.append("邀请过期了，没用上")
+            parts.append(d.expiresEpoch.map { $0 > now ? "邀请未使用（" + untilPhrase($0 - now) + "后过期）" : "邀请已过期" } ?? "邀请未使用")
+        case .expired: parts.append("邀请已过期，未使用")
         default: parts.append(d.state.rawValue) // 退出了的、移除了的界面上不列（TeamDeviceState.removed），不会到这里
         }
         if d.state.active {
             parts.append(d.grantsAll ? "全部账号" : "\(d.grantCount(of: total)) 个账号")
-            if let have = d.have, d.seq > 0 { parts.append(have >= d.seq ? "配置是最新的" : "还没同步到最新的配置") }
+            if let have = d.have, d.seq > 0 { parts.append(have >= d.seq ? "配置已是最新" : "配置还不是最新") }
         }
         return parts.joined(separator: " · ")
     }
@@ -351,9 +351,9 @@ enum Texts {
     static func remoteDetail(_ s: RemoteSession, now: Double) -> String {
         var parts: [String] = []
         if let d = nonEmpty(s.cwd) { parts.append(d) }
-        if let t = s.sinceEpoch { parts.append("开了 " + span(now - t)) }
-        if let open = s.localTerminal { parts.append(open ? "启动它的终端还开着" : "启动它的终端已经关了") }
-        if s.viewers > 0 { parts.append("另有 \(s.viewers) 处接着") }
+        if let t = s.sinceEpoch { parts.append("已运行 " + span(now - t)) }
+        if let open = s.localTerminal { parts.append(open ? "启动它的终端仍开着" : "启动它的终端已关闭") }
+        if s.viewers > 0 { parts.append("另有 \(s.viewers) 处接入") }
         return parts.joined(separator: " · ")
     }
 
@@ -361,17 +361,17 @@ enum Texts {
     static func remoteStateNote(_ s: RemoteSession) -> String? {
         switch s.state {
         case .ok: return nil
-        case .busy: return "没有回应"
-        case .offline: return "那台机器不在线"
-        default: return "暂时接不上"
+        case .busy: return "无响应"
+        case .offline: return "那台机器离线"
+        default: return "暂时无法连接"
         }
     }
 
     static func remoteAccess(_ a: RemoteAccess) -> String {
         switch a {
-        case .control: return "看和操作"
+        case .control: return "查看和操作"
         case .view: return "只看"
-        case .none: return "不让接入"
+        case .none: return "禁止接入"
         default: return a.rawValue
         }
     }
@@ -386,35 +386,35 @@ enum Texts {
 
     /// 界面里的终端结束以后的那句话（`cca remote attach` 的退出码，PROTOCOL 9.3）。listed：会话还在最近一次查到的列表里
     static func remoteEnded(code: Int32, closedByUser: Bool, listed: Bool) -> String {
-        if closedByUser { return "已断开，会话在那边照常运行" }
+        if closedByUser { return "已断开，会话仍在运行" }
         switch code {
-        case 65: return "没有这个会话了（可能已经结束）"
-        case 66: return "没能经服务器接上那台机器"
-        case 68: return "连接断了，没有再接上（原因在终端的最后一行）"
-        case 64, 69: return "没接上（退出码 \(code)）"
-        default: return listed ? "已断开，会话在那边照常运行" : (code == 0 ? "会话已经结束" : "会话已经结束（退出码 \(code)）")
+        case 65: return "找不到这个会话（可能已结束）"
+        case 66: return "无法经服务器连接那台机器"
+        case 68: return "连接已断开，重新连接失败（原因见终端的最后一行）"
+        case 64, 69: return "接入失败（退出码 \(code)）"
+        default: return listed ? "已断开，会话仍在运行" : (code == 0 ? "会话已结束" : "会话已结束（退出码 \(code)）")
         }
     }
 
     /// 远程启动的模板用不了的原因（PROTOCOL 9.4 的 `problem`）：标在那一行的名字后面
     static func remoteTemplateProblem(_ p: RemoteTemplateProblem) -> String {
         switch p {
-        case .noAccount: return "账号没了"
-        case .noDir: return "文件夹没了"
-        case .badArgs: return "参数用不了"
+        case .noAccount: return "账号不存在"
+        case .noDir: return "文件夹不存在"
+        case .badArgs: return "参数不可用"
         case .noRelay: return "不经中转"
-        default: return "现在用不了"
+        default: return "暂不可用"
         }
     }
 
     /// 同上，长一点（鼠标停在上面时）：怎么了、怎么办
     static func remoteTemplateProblemHelp(_ p: RemoteTemplateProblem) -> String {
         switch p {
-        case .noAccount: return "账号表里没有这个账号了：改一下模板，换一个账号"
-        case .noDir: return "文件夹不在了：改一下模板，换一个文件夹"
-        case .badArgs: return "参数用不了（打印模式这类跑完就退出的，或者启动前的检查过不了）：改一下参数"
-        case .noRelay: return "这个账号的会话不经中转（这台 Mac 还不在哪个 Team 里）：手机上看不到这个模板"
-        default: return "这个模板现在用不了"
+        case .noAccount: return "账号表里已没有这个账号：请修改模板，换一个账号"
+        case .noDir: return "文件夹不存在：请修改模板，换一个文件夹"
+        case .badArgs: return "参数不可用（例如打印模式这类运行完就退出的，或未通过启动前的检查）：请修改参数"
+        case .noRelay: return "这个账号的会话不经中转（这台 Mac 未加入 Team）：手机上看不到这个模板"
+        default: return "这个模板暂不可用"
         }
     }
 
@@ -440,7 +440,7 @@ enum Texts {
     static func login(_ s: LoginState, loginEmail: String?) -> String {
         switch s {
         case .loggedIn: return "已登录"
-        case .loggedOut: return "还没登录"
+        case .loggedOut: return "未登录"
         case .emailMismatch:
             if let e = nonEmpty(loginEmail) { return "登录的是 \(e)" }
             return "登录的不是这个账号"
@@ -452,26 +452,26 @@ enum Texts {
     static func canWhy(_ w: CanWhy, appLabel: String, tool: ToolID) -> String {
         switch w {
         case .apiAccount: return "第三方 API 账号没有桌面 App、网页版和订阅用量"
-        case .appMissing: return "没装 \(appLabel)"
-        case .noChrome: return "没装 Google Chrome：网页版要经账号的出口打开"
-        case .notLoggedIn: return "还没登录，查不了用量"
-        case .toolMissing: return "没装 \(cliCommand(tool)) 命令"
+        case .appMissing: return "未安装 \(appLabel)"
+        case .noChrome: return "未安装 Google Chrome：网页版需要经账号的出口打开"
+        case .notLoggedIn: return "未登录，无法查询用量"
+        case .toolMissing: return "未安装 \(cliCommand(tool)) 命令"
         case .unsupported: return tool == .agy ? "Antigravity 账号没有桌面 App" : "这种账号没有这个功能"
-        default: return "现在不可用"
+        default: return "暂不可用"
         }
     }
 
     static func usageError(_ c: UsageErrorCode) -> String {
         switch c {
-        case .login: return "没登录"
+        case .login: return "未登录"
         case .mismatch: return "登录的不是这个账号"
         case .route: return "没有可用的出口"
-        case .port: return "端口连不上"
-        case .region: return "出口在不可用地区"
-        case .trace: return "查不到出口"
-        case .unsupported: return "这个版本不支持查用量"
+        case .port: return "端口无法连接"
+        case .region: return "出口位于不支持的地区"
+        case .trace: return "无法检测出口"
+        case .unsupported: return "当前版本不支持查询用量"
         case .timeout: return "查询超时"
-        case .nolimits: return "没有拿到用量数据"
+        case .nolimits: return "未获取到用量数据"
         case .auth: return "登录已失效"
         default: return "查询失败"
         }
@@ -481,12 +481,12 @@ enum Texts {
         switch r {
         case .ok: return "出口正常"
         case .lowPurity: return "纯净度偏低"
-        case .restricted: return nonEmpty(region).map { "出口在不可用地区（\($0)）" } ?? "出口在不可用地区"
-        case .noExit: return "拿不到出口 IP"
-        case .noScore: return "检测网站没给评分"
-        case .portClosed: return "端口连不上"
-        case .apiOk: return "接口连得上"
-        case .apiUnreachable: return "接口连不上"
+        case .restricted: return nonEmpty(region).map { "出口位于不支持的地区（\($0)）" } ?? "出口位于不支持的地区"
+        case .noExit: return "无法获取出口 IP"
+        case .noScore: return "检测网站未给出评分"
+        case .portClosed: return "端口无法连接"
+        case .apiOk: return "接口连接正常"
+        case .apiUnreachable: return "接口无法连接"
         default: return "检测结果未知"
         }
     }
@@ -496,8 +496,8 @@ enum Texts {
         case .some(.ok): return "\(what) 正常"
         case .some(.leak): return "\(what) 有泄露风险"
         case .some(.note): return "\(what) 有提示"
-        case .some(.failed): return "\(what) 没测成"
-        case .none: return "\(what) 没测"
+        case .some(.failed): return "\(what) 检测失败"
+        case .none: return "\(what) 未检测"
         default: return "\(what) 未知"
         }
     }
@@ -506,15 +506,15 @@ enum Texts {
     static func localUDP(_ u: LocalUDP) -> String {
         let node = nonEmpty(u.node) ?? "—"
         switch u.state {
-        case .off: return "本机 UDP：直连（浏览器的 WebRTC、QUIC 这些不经节点）"
+        case .off: return "本机 UDP：直连（浏览器的 WebRTC、QUIC 等不经节点）"
         case .ok:
-            if let other = nonEmpty(u.otherVPN) { return "本机 UDP：让给了另一个 VPN（\(other)），它关掉后自动经 \(node) 出去" }
-            if u.running { return "本机 UDP：经 \(node) 出去（TCP 照旧直连）" }
-            return u.paused ? "本机 UDP：在家时路由器管着，先停着（出门在外自动经 \(node) 出去）" : "本机 UDP：设了经 \(node)，系统服务没在运行"
-        case .stale: return "本机 UDP：经 \(node)，装着的配置旧了，要重新装一次"
-        case .missing: return "本机 UDP：设了经 \(node)，系统服务却不在了，要重新装"
-        case .undefined: return "本机 UDP：内置代理里已经没有 \(node) 转发 UDP 的定义"
-        default: return "本机 UDP：状态认不出（在终端里运行 cca local udp 看看）"
+            if let other = nonEmpty(u.otherVPN) { return "本机 UDP：交给了另一个 VPN（\(other)），它关闭后自动经 \(node) 出去" }
+            if u.running { return "本机 UDP：经 \(node) 出去（TCP 仍然直连）" }
+            return u.paused ? "本机 UDP：在家时由路由器处理，暂时停用（在外时自动经 \(node) 出去）" : "本机 UDP：已设为经 \(node)，但系统服务没有运行"
+        case .stale: return "本机 UDP：经 \(node)，已安装的配置过旧，需要重新安装"
+        case .missing: return "本机 UDP：已设为经 \(node)，但系统服务不见了，需要重新安装"
+        case .undefined: return "本机 UDP：内置代理中已没有 \(node) 转发 UDP 的定义"
+        default: return "本机 UDP：无法识别状态（可在终端运行 cca local udp 查看）"
         }
     }
 
@@ -522,7 +522,7 @@ enum Texts {
         switch s {
         case .ok: return "正常"
         case .drift: return "选错节点"
-        case .closed: return "连不上"
+        case .closed: return "无法连接"
         case .unknown: return "未知"
         case .empty: return "空闲"
         default: return s.rawValue.isEmpty ? "未知" : s.rawValue
@@ -551,7 +551,7 @@ enum Texts {
 
     static func routePref(_ r: RoutePref?) -> String {
         switch r {
-        case .some(.auto): return "自动（连得上路由器走路由器，连不上走本机 Clash）"
+        case .some(.auto): return "自动（能连接路由器时走路由器，否则走本机 Clash）"
         case .some(.router): return "只走路由器"
         case .some(.local): return "只走本机 Clash"
         default: return "未知"
@@ -587,10 +587,10 @@ enum Texts {
     static func liveError(_ e: LiveIssue) -> String {
         if let m = nonEmpty(e.message) { return m }
         switch e.code {
-        case .unreachable: return "连不上"
-        case .statusFailed: return "读不到状态"
-        case .notConfigured: return "没配置"
-        case .notRunning: return "没在运行"
+        case .unreachable: return "无法连接"
+        case .statusFailed: return "无法读取状态"
+        case .notConfigured: return "未配置"
+        case .notRunning: return "未运行"
         default: return "出错了"
         }
     }
@@ -610,9 +610,9 @@ enum Texts {
     static func stateError(_ e: StateIssue) -> String {
         if let m = nonEmpty(e.message) { return m }
         switch e.code {
-        case .configUnreadable: return "读不了 cca 的设置"
-        case .tableUnreadable: return "读不了账号表"
-        case .accountUnreadable: return "读不了账号的登录状态（这个账号当作没登录）"
+        case .configUnreadable: return "无法读取 cca 的设置"
+        case .tableUnreadable: return "无法读取账号表"
+        case .accountUnreadable: return "无法读取账号的登录状态（按未登录处理）"
         case .tableInvalid: return "账号表有错误"
         default: return "cca 报告了一个问题"
         }
@@ -643,23 +643,12 @@ enum Texts {
 
     /// App 里不显示用量的工具（`features.usage` 是 false：3.6.10 及以前的 cca 给 Antigravity 的），用量那一节说去哪里看
     static func noUsage(_ tool: ToolID) -> String {
-        tool == .agy ? "这个版本的 cca 还不能在 App 里显示 Antigravity 的额度：更新 cca，或者在终端里用 cca agy usage 看。" : "这种账号没有能查的用量接口。"
+        tool == .agy ? "当前版本的 cca 还不能在 App 中显示 Antigravity 的额度：请更新 cca，或在终端运行 cca agy usage 查看。" : "这种账号没有可查询的用量接口。"
     }
 
-    /// 套餐档位的叫法（读屏用；界面上靠徽章的样子区分）。不知道的档位为 nil。
-    static func planTier(_ t: PlanTier) -> String? {
-        switch t {
-        case .entry: return "入门"
-        case .standard: return "标准"
-        case .advanced: return "进阶"
-        case .premium: return "尊贵"
-        default: return nil
-        }
-    }
-
-    /// 读屏念的套餐：“Ultra，尊贵套餐”；不知道档位时只念名字。
-    static func planName(_ plan: String, tier: PlanTier) -> String {
-        planTier(tier).map { "\(plan)，\($0)套餐" } ?? plan
+    /// 读屏念的套餐：“Ultra 套餐”。套餐照 cca 给的原名（Pro、Max、Plus……），档位不起中文的叫法：界面上靠徽章前面小徽记的样子区分。
+    static func planName(_ plan: String) -> String {
+        "\(plan) 套餐"
     }
 
     /// 额度用完的员工几点回来（显示器上写的）：今天的“16:00”，明天的“明天 09:00”，再远“周二 16:00”。
@@ -701,7 +690,7 @@ enum Texts {
     /// 一周都还没过完时是 nil。
     static func weeksSummary(_ s: UsageWeeksSummary) -> String? {
         guard let avg = weeksAverage(s) else { return nil }
-        return ([s.weeks == 1 ? "记下的 1 周用到 \(avg)" : "记下的 \(s.weeks) 周平均用到 \(avg)"] + weeksNotes(s)).joined(separator: " · ")
+        return ([s.weeks == 1 ? "1 周用了 \(avg)" : "\(s.weeks) 周平均用了 \(avg)"] + weeksNotes(s)).joined(separator: " · ")
     }
 
     /// 平均每周用到多少：「63%」；一周都还没过完时是 nil
@@ -712,19 +701,19 @@ enum Texts {
 
     /// 几周用完、几周没用到一半（用量统计页平均数下面那一行）；都没有时是空的
     static func weeksNotes(_ s: UsageWeeksSummary) -> [String] {
-        (s.maxed > 0 ? ["\(s.maxed) 周用完"] : []) + (s.underHalf > 0 ? ["\(s.underHalf) 周没用到一半"] : [])
+        (s.maxed > 0 ? ["\(s.maxed) 周用完"] : []) + (s.underHalf > 0 ? ["\(s.underHalf) 周不到一半"] : [])
     }
 
     /// 一周的细节（鼠标指着柱子时、读屏）：「11 月 6 日–13 日：用到 87%，中间重置过 1 次」；
     /// 还没过完的这一周：「本周到现在用了 20%，周四 10:00 重置」
     static func weekDetail(_ w: UsageWeek, now: Double, calendar: Calendar = .current) -> String {
-        let resets = w.resets > 0 ? "中间重置过 \(w.resets) 次" : nil
+        let resets = w.resets > 0 ? "期间重置过 \(w.resets) 次" : nil
         if w.current {
-            return "本周到现在用了 \(percent(w.usedPercent))" + (resets.map { "（\($0)）" } ?? "") + "，"
+            return "本周已用 \(percent(w.usedPercent))" + (resets.map { "（\($0)）" } ?? "") + "，"
                 + resetText(epoch: w.endEpoch, now: now, calendar: calendar)
         }
-        return weekRange(w, now: now, calendar: calendar) + "：用到 \(percent(w.usedPercent))" + (resets.map { "，" + $0 } ?? "")
-            + (w.partial ? "；结束前一天没查到，实际可能更多" : "")
+        return weekRange(w, now: now, calendar: calendar) + "：用了 \(percent(w.usedPercent))" + (resets.map { "，" + $0 } ?? "")
+            + (w.partial ? "；最后一天没有数据，实际可能更多" : "")
     }
 
     /// 「11 月 6 日–13 日」、「10 月 30 日–11 月 6 日」（不是今年的带年份）
@@ -745,7 +734,7 @@ enum Texts {
 
     /// 从什么时候开始记的：「从 11 月 11 日开始记」
     static func weeksSince(_ epoch: Double, now: Double, calendar: Calendar = .current) -> String {
-        "从 " + dayText(epoch, now: now, calendar: calendar) + "开始记"
+        "从 " + dayText(epoch, now: now, calendar: calendar) + "开始记录"
     }
 
     /// 侧栏「客户端更新」右边的标签：有几个客户端有新版本。
@@ -780,7 +769,7 @@ enum Texts {
 
     static func ailment(_ a: Employee.Ailment) -> String {
         switch a {
-        case .portClosed: return "端口连不上"
+        case .portClosed: return "端口无法连接"
         case .wrongNode: return "节点选错了"
         case .exit(let r, let region): return healthResult(r, region: region)
         }
@@ -815,11 +804,11 @@ enum Texts {
     /// 有问题时的那一句；在用、空闲是 nil
     private static func problem(_ m: Employee.Mood, now: Double, brief: Bool) -> String? {
         switch m {
-        case .absent: return "还没登录"
+        case .absent: return "未登录"
         case .wrongPerson(let email): return email.map { "登录的是 \($0)" } ?? "登录的不是这个账号"
-        case .expired: return brief ? "登录已失效" : "登录已失效，要重新登录"
+        case .expired: return brief ? "登录已失效" : "登录已失效，请重新登录"
         case .unwell(let a): return ailment(a)
-        case .resting(let until): return "额度用完了" + (until.map { "，" + backAt(epoch: $0, now: now) } ?? "")
+        case .resting(let until): return "额度已用完" + (until.map { "，" + backAt(epoch: $0, now: now) } ?? "")
         case .working, .idle: return nil
         }
     }
@@ -828,11 +817,11 @@ enum Texts {
     static func flags(_ fs: [Employee.Flag], appLabel: String) -> [String] {
         fs.map { f in
             switch f {
-            case .nearLimit: return "额度快用完了"
-            case .noApp: return "没装 \(appLabel)"
+            case .nearLimit: return "额度即将用完"
+            case .noApp: return "未安装 \(appLabel)"
             case .lowPurity: return "出口 IP 的纯净度偏低"
             case .leak: return "DNS 或 WebRTC 可能泄露"
-            case .neverChecked: return "还没检测过出口"
+            case .neverChecked: return "尚未检测出口"
             }
         }
     }
@@ -841,7 +830,7 @@ enum Texts {
     static func officeSummary(_ c: OfficeCensus, brief: Bool = false) -> String {
         if c.total == 0 { return "还没有账号" }
         let rest: [(Int, String)] = brief ? [(c.working, "在用")]
-            : [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "没登录"), (c.wrongPerson, "登错号"), (c.expired, "登录失效"), (c.unwell, "有问题")]
+            : [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "未登录"), (c.wrongPerson, "账号不符"), (c.expired, "登录失效"), (c.unwell, "有问题")]
         return (["\(c.total) 个账号"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 个\($0.1)" }).joined(separator: " · ")
     }
 
@@ -849,7 +838,7 @@ enum Texts {
     static func deskLabel(_ e: Employee, appLabel: String, now: Double, resets: ResetCredits? = nil) -> String {
         let a = e.account
         var parts = [a.displayName, department(e.department)]
-        if let p = nonEmpty(a.plan) { parts.append(planName(p, tier: e.tier)) }
+        if let p = nonEmpty(a.plan) { parts.append(planName(p)) }
         parts.append(mood(e, appLabel: appLabel, now: now))
         parts += flags(e.flags, appLabel: appLabel)
         if let f = e.useFirst { parts.append(useFirst(f, now: now)) }

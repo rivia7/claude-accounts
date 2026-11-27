@@ -173,5 +173,5 @@ func hubFixtureTests() {
     check("侧栏那一行：在一个 Team 里说名字，几个说几个，没名字的说 Team",
           Texts.sharingSubtitle(teams: ["书房组"]) == "在「书房组」里" && Texts.sharingSubtitle(teams: ["书房组", "设计组"]) == "在 2 个 Team 里"
           && Texts.sharingSubtitle(teams: [""]) == "在「Team」里")
-    check("侧栏那一行：不在 Team 里时说还没加入", Texts.sharingSubtitle(teams: []) == "还没加入 Team")
+    check("侧栏那一行：不在 Team 里时说未加入", Texts.sharingSubtitle(teams: []) == "未加入 Team")
 }

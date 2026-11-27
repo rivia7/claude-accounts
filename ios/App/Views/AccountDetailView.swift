@@ -27,10 +27,10 @@ struct AccountDetailView: View {
                     .pageColumn()
                 }
                 .navigationTitle(Texts.nonEmpty(found.account.name) ?? "账号")            } else if let p = model.peers.first(where: { $0.pid == ref.pid }), model.listing(p) == nil {
-                ProgressView("正在查…")
+                ProgressView("正在查询…")
             } else {
-                ContentUnavailableView("没有这个账号了", systemImage: "person.crop.circle.badge.questionmark",
-                                       description: Text("那台电脑上没有这个账号了，或者取消了和这台手机的配对。"))
+                ContentUnavailableView("找不到这个账号", systemImage: "person.crop.circle.badge.questionmark",
+                                       description: Text("电脑上已没有这个账号，或已取消与这台手机的配对。"))
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -91,8 +91,8 @@ private struct AccountHeader: View {
     /// 要人动手的：在哪做（手机上做不了）
     static func hint(_ m: AccountMood, _ a: AccountStatus) -> String {
         switch m.trouble {
-        case .loggedOut?, .expired?: return "。要在那台电脑上登录（比如运行 \(Texts.launchCommand(a))）"
-        case .wrongAccount?: return "。要在那台电脑上退出、换成这个账号重新登录"
+        case .loggedOut?, .expired?: return "。请在电脑上登录（例如运行 \(Texts.launchCommand(a))）"
+        case .wrongAccount?: return "。请在电脑上退出，再用这个账号重新登录"
         default: return ""
         }
     }
@@ -110,7 +110,7 @@ private struct AccountSessions: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("会话").font(.headline)
             if sessions.isEmpty {
-                Text("那台电脑上现在没有这个账号可以接入的会话。在那台电脑的终端里运行 \(Texts.launchCommand(account)) 开一个，它就会出现在这里。")
+                Text("电脑上暂无这个账号可接入的会话。在电脑的终端里运行 \(Texts.launchCommand(account)) 启动一个，就会显示在这里。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

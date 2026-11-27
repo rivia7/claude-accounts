@@ -22,15 +22,15 @@ struct LaunchSheet: View {
             List {
                 if launcher?.online == false {
                     Section {
-                        Label("那台电脑这会儿收不到启动的请求（睡着了、没联网，或者远程启动的后台进程没在运行），现在起不了。", systemImage: "moon.zzz")
+                        Label("电脑暂时收不到启动请求（可能已休眠、断网，或远程启动的后台进程没有运行），现在无法启动。", systemImage: "moon.zzz")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
                 Section {
                     if launcher == nil {
-                        Text("那台电脑现在不让这台手机远程启动会话。").font(.callout).foregroundStyle(.secondary)
+                        Text("电脑不允许这台手机远程启动会话。").font(.callout).foregroundStyle(.secondary)
                     } else if templates.isEmpty {
-                        Text("那台电脑上还没有模板。在 Mac 上打开 cca App 的「远程会话」，在「远程启动」里点「新建模板…」（终端里是 cca remote template add），它就会列在这里。")
+                        Text("电脑上还没有模板。请在 Mac 上打开 cca App 的「远程会话」，在「远程启动」中点「新建模板…」（或在终端运行 cca remote template add），模板就会显示在这里。")
                             .font(.callout).foregroundStyle(.secondary)
                     } else {
                         ForEach(templates) { t in
@@ -49,16 +49,16 @@ struct LaunchSheet: View {
                     }
                 } footer: {
                     if let more = launcher?.info.more, more > 0 {
-                        Text("还有 \(more) 个模板这里放不下")
+                        Text("另有 \(more) 个模板未显示")
                     }
                 }
                 if let t = template, t.line {
                     Section {
-                        TextField("会话起来以后先说的一句话", text: $line, axis: .vertical)
+                        TextField("会话启动后发送的第一句话", text: $line, axis: .vertical)
                             .lineLimit(1...5)
                             .disabled(working != nil)
                     } header: {
-                        Text("开场白（可以不写）")
+                        Text("开场白（选填）")
                     } footer: {
                         Text(lineNote(t))
                     }
@@ -104,7 +104,7 @@ struct LaunchSheet: View {
             .glassButton(prominent: true)
             .controlSize(.large)
             .disabled(!ready)
-            Text(working == nil ? "在「\(peer.name)」上起一个新的会话，起来了就打开它的终端" : "等「\(peer.name)」回话，最多 20 秒")
+            Text(working == nil ? "在「\(peer.name)」上启动新会话，启动后会打开它的终端" : "等待「\(peer.name)」响应，最多 20 秒")
                 .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .padding(.horizontal, 20)
@@ -121,8 +121,8 @@ struct LaunchSheet: View {
 
     private func lineNote(_ t: LaunchTemplate) -> String {
         let n = Self.opening(line)?.unicodeScalars.count ?? 0
-        if n > LaunchAsk.lineMax { return "太长了：\(n) 个字，最多 \(LaunchAsk.lineMax) 个" }
-        return "会话起来以后当作头一句话发给 \(Texts.cliProduct(t.tool) ?? "它")。最多 \(LaunchAsk.lineMax) 个字，换行会换成空格"
+        if n > LaunchAsk.lineMax { return "太长了：\(n) 个字（最多 \(LaunchAsk.lineMax) 个）" }
+        return "会话启动后作为第一句话发给 \(Texts.cliProduct(t.tool) ?? "它")。最多 \(LaunchAsk.lineMax) 个字，换行会替换为空格"
     }
 
     private func start() {

@@ -56,10 +56,10 @@ private struct ChooseView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Surface.hairline))
                         .accessibilityLabel("相机：对准电脑上的二维码")
-                    Text("对准电脑上「和手机配对」的二维码，扫到就开始配对。")
+                    Text("对准电脑上「和手机配对」显示的二维码，识别后会自动开始配对。")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 } else {
-                    Card("扫不了码", systemImage: "camera") {
+                    Card("无法扫码", systemImage: "camera") {
                         Text(Scanner.why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -69,11 +69,11 @@ private struct ChooseView: View {
                     }
                     .labelStyle(.titleAndIcon)
                     .buttonBorderShape(.capsule)
-                    Text("没法扫码时：在电脑上复制配对链接（终端里 cca remote pair --web 打出来的那一行），在这里粘贴。")
+                    Text("无法扫码时，可以在电脑上复制配对链接（终端运行 cca remote pair --web 输出的那一行），粘贴到这里。")
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("配对以后，这台手机能接入那台电脑上用 cca 启动的会话（那台电脑上可以随时改成只看或者不让接入）。内容端到端加密，中转的服务器看不到。")
+                Text("配对后，这台手机可以接入电脑上用 cca 启动的会话（电脑上可以随时改为只看或禁止接入）。内容端到端加密，中转服务器无法查看。")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -95,7 +95,7 @@ private struct ConfirmView: View {
             VStack(spacing: 8) {
                 Text("和「\(Texts.nonEmpty(invite.machine) ?? "这台电脑")」配对？").font(.title3.weight(.semibold)).multilineTextAlignment(.center)
                 Text(serverLine).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Text("只和自己电脑上显示的二维码配对。配对以后这台手机能看和操作那台电脑上的会话。")
+                Text("请只扫描你自己电脑上显示的二维码。配对后，这台手机可以查看和操作那台电脑上的会话。")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -135,9 +135,9 @@ private struct WorkingView: View {
 
     private var text: String {
         switch step {
-        case .deriving: return "正在算配对的密钥…"
-        case .asking: return "正在问服务器…"
-        case .confirming: return "等电脑确认…"
+        case .deriving: return "正在生成配对密钥…"
+        case .asking: return "正在连接服务器…"
+        case .confirming: return "等待电脑确认…"
         }
     }
 }
@@ -150,13 +150,13 @@ private struct DoneView: View {
         VStack(spacing: 18) {
             Spacer()
             Image(systemName: "checkmark.circle.fill").font(.system(size: 52)).foregroundStyle(.green)
-            Text("和「\(peer.name)」配好了").font(.title3.weight(.semibold)).multilineTextAlignment(.center)
-            Text("它上面用 cca 启动的会话会列在「远程会话」里。电脑上的配对窗口可以关了。")
+            Text("已与「\(peer.name)」配对").font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+            Text("电脑上用 cca 启动的会话会显示在「远程会话」中。现在可以关闭电脑上的配对窗口了。")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button {
                 model.cancelPairing()
             } label: {
-                Text("看会话").frame(maxWidth: .infinity)
+                Text("查看会话").frame(maxWidth: .infinity)
             }
             .glassButton(prominent: true)
             .controlSize(.large)
@@ -176,7 +176,7 @@ private struct FailedView: View {
         VStack(spacing: 18) {
             Spacer()
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 44)).foregroundStyle(.orange)
-            Text("没配对成功").font(.title3.weight(.semibold))
+            Text("配对失败").font(.title3.weight(.semibold))
             Text(message).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
@@ -202,8 +202,8 @@ struct Scanner: UIViewControllerRepresentable {
     }
 
     static var why: String {
-        if !DataScannerViewController.isSupported { return "这台设备不能用相机扫码。用下面的「粘贴」。" }
-        return "相机用不了：在「设置」→ cca 里打开「相机」，或者用下面的「粘贴」。"
+        if !DataScannerViewController.isSupported { return "这台设备无法使用相机扫码，请使用下方的「粘贴」。" }
+        return "无法使用相机：请在「设置」→ cca 中打开「相机」，或使用下方的「粘贴」。"
     }
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
