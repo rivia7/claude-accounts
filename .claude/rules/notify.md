@@ -9,6 +9,7 @@ paths:
   - "tests/tool/fake/codex.rs"
   - "tests/tool/fake/agy.rs"
   - "tests/tool/fake_client.rs"
+  - "ios/CcaRemoteKit/Sources/CcaRemoteKit/Push.swift"
 ---
 
 # Codex、Antigravity 通知的成对修改
@@ -19,5 +20,5 @@ paths:
 - Codex 在等你：`CODEX_NOTIFY_TUI`（tui.* 那三项）↔ `vt.rs` 的 `osc_note_text`（认哪种序列）↔ `hook.rs` 的 `codex_osc_note`（认哪几句英文，Codex 换了写法跟着换）↔ `codex_probe` 探测时带的（`CODEX_NOTIFY_PROBE` + `CODEX_NOTIFY_TUI`：和启动时加的要是同一套，不然探测说认、启动时报错退出）↔ 假客户端的 `osc`、假 codex 的 `codex_osc` / `codex_nocfg`；`probe.json` 的 `notify`：探测的做法变了要让旧的缓存失效（读缓存时要求有这一项）
 - Codex 交互不交互（`codex_interactive`）：`CODEX_BATCH` ↔ `settings.rs` 的 `CODEX_VALUES`（带值的选项）↔ 新版 codex 的子命令（`codex --help`）
 - agy 的状态栏命令：`agy_launch_args` 写的 `<cca> _agy-statusline 账号目录名 会话标记 [--then 命令]` ↔ bash 开头那一行（找到辅助程序就交给 `agy-statusline`）↔ `cmd_agy_statusline`（也认没有会话标记的旧写法）↔ 假 agy 的 `statusline`（`agy_states`、`agy_title`）；`AGY_BUSY`、`turn_step` 用到的状态栏 JSON 的字段（`agent_state` 的取值、`tool_confirmation_pending`、`conversation_title`、`cwd`）↔ agy 的文档
-- 通知的字：`codex_done`、`codex_osc_note`、`agy_note` 的标题照 Claude Code 的那几种写（`done_text`、`ask_text`）；`popup.rs` 的声音按标题结尾的「做完了」认 ↔ 这几处的标题
+- 通知的字：`codex_done`、`codex_osc_note`、`agy_note` 的标题照 Claude Code 的那几种写（`done_text`、`ask_text`）；按标题结尾的「做完了」挑声音：`popup.rs` 的 `sound`、iOS 的 `NoteSound`（CcaRemoteKit 的 `Push.swift`，额度的通知照 `event` 挑）↔ 这几处的标题
 - 这台 Mac 上弹：config.json 的 `popup`（`popup::on`）↔ `cca help` 的配置说明（只在 macOS 上的那一段）↔ README（两份）↔ docs/dev/remote.md。测试里弹的都要到假的 osascript：回归沙箱的（`tests/setup.sh`）、suite 设备的（`kit::fleet` 的 `OSASCRIPT`）；新的测试夹具里起 cca 的 Codex / agy 会话、`remote-hook --codex`、宿主的 codex 会话时，PATH 上也放一个

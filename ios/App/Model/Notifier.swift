@@ -10,7 +10,7 @@ import UserNotifications
 /// 同一条两条路都来了（App 开着、接着那个会话时）：照宿主给的编号（Note.id）只弹一次，先到的那一份算数。
 /// 字的规矩和 Mac App 的 RemoteNotifier（PROTOCOL 9.3）一样（CcaRemoteKit 的 NoteCard）：字是别的机器写的，标题、正文清理过、限长度；
 /// 来自哪台机器写在副标题的开头（App 自己写的，对方改不了）；一个终端几秒钟最多一条（CcaRemoteKit 已经限过一次流：这里再守一道）。
-/// 通知里没有终端的其它内容。
+/// 通知里没有终端的其它内容。响的是 App 里带着的那两声（NoteCard 的 sound：做完了一声、在等你一声，推来的通知扩展也换上同样的）
 ///
 /// 和 Mac 不一样的一处：App 在前台、正开着这个终端时也弹（横幅、声音）。手机放在一边等它做完时正要它响
 @MainActor
@@ -58,7 +58,7 @@ enum Notifier {
         let what = Texts.nonEmpty(Texts.plainLine(n.subtitle, max: NoteCard.titleMax)) ?? Texts.sessionTitle(t.session)
         guard let card = NoteCard(title: n.title, body: n.body, machine: machine, what: what), allow(t.id), firstTime(n.id) else { return }
         let c = Card(id: n.id, title: card.title, subtitle: card.subtitle, body: card.body, peer: t.peer.pid, sid: t.session.sid,
-                     readOnly: t.readOnly)
+                     sound: card.sound.file, readOnly: t.readOnly)
         #if DEBUG
         if let spy {
             spy(c.title, c.subtitle, c.body)
@@ -82,7 +82,7 @@ enum Notifier {
 
     /// 一条要弹的通知（只有字：在通知中心的回调里再做成 UNNotificationRequest）
     private struct Card: Sendable {
-        let id, title, subtitle, body, peer, sid: String
+        let id, title, subtitle, body, peer, sid, sound: String
         let readOnly: Bool
     }
 
@@ -91,7 +91,7 @@ enum Notifier {
         content.title = c.title
         content.subtitle = c.subtitle
         content.body = c.body
-        content.sound = .default
+        content.sound = UNNotificationSound(named: UNNotificationSoundName(rawValue: c.sound))
         content.threadIdentifier = c.sid   // 同一个会话的叠在一起（推来的也是这样）
         content.userInfo = ["peer": c.peer, "sid": c.sid, "view": c.readOnly, "note": c.id]
         // 标识用宿主给的编号：推送服务照同一个编号合并（apns-collapse-id），万一两份都进了通知中心也只留一条

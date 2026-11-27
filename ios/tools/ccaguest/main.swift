@@ -14,7 +14,7 @@
 //   push-set 令牌 环境 [--only 会话编号,…] [--usage]   在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉；--only：只推这几个
 //                           会话，空的是一个都不推；--usage：也推额度的通知）；stdout 一台一行：push 服务器 ok|fail 原因（带了 --only 时
 //                           ok 后面是 only：服务器认了，all：旧的服务器不认、照旧都推；带了 --usage 时再跟 usage：服务器认了，no-usage：不认）
-//   push-open 文件           文件里是推来的内容（推送服务收到的那份 JSON）：像通知扩展那样拿每个配对的通知密钥试着解开；
+//   push-open 文件           文件里是推来的内容（推送服务收到的那份 JSON）：像通知扩展那样拿每个配对的通知密钥试着解开（连响哪一声）；
 //                           stdout：解开的通知和弹出来的字（一行 JSON），解不开是 fail（退出码 1）
 // 密钥存在目录里的文件里（只给测试用；App 里存钥匙串）
 import Foundation
@@ -200,7 +200,7 @@ case "push-open":
         finish(1)
     }
     var j: [String: Any] = ["pid": n.pid, "machine": n.machine, "id": n.id, "sid": n.sid, "at": n.at, "title": n.title,
-                            "subtitle": n.subtitle, "body": n.body, "card": [card.title, card.subtitle, card.body]]
+                            "subtitle": n.subtitle, "body": n.body, "card": [card.title, card.subtitle, card.body], "sound": card.sound.rawValue]
     if let u = n.usage {
         j["usage"] = ["event": u.event.rawValue, "account": u.account, "aid": u.aid, "tool": u.tool, "name": u.name, "window": u.slot.rawValue,
                       "resets_epoch": u.resetsEpoch ?? NSNull()] as [String: Any]

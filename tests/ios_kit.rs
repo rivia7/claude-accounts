@@ -950,6 +950,7 @@ fn pushes_reach_the_phone(t: &mut Ctx) {
         list![&pid_b, "mini", "做完了", "alice", "第一行回复"]
     );
     assert_eq!(n["card"], list!["做完了", "来自「mini」 · alice", "第一行回复"]);
+    assert_eq!(n["sound"].str(), "done", "标题以「做完了」结尾：响做完了的那一声");
     assert_eq!(n["id"].str(), seen.header("apns-collapse-id"), "推送服务照通知的编号合并");
     assert_eq!(n["sid"], rows[0]["sid"], "点开通知接入的就是说话的这个会话");
     assert!(!String::from_utf8_lossy(&seen.body).contains("第一行回复"), "推送服务看得到通知里的字");
@@ -1052,12 +1053,14 @@ fn accounts_reach_the_phone(t: &mut Ctx) {
     assert_eq!(u["resets_epoch"].f64(), resets);
     let body = format!("5 小时的额度用完了，{} 恢复", utc_back_time(resets, now));
     assert_eq!(n["card"], list!["额度用完了", "来自「box」 · alice · Claude Code", body]);
+    assert_eq!(n["sound"].str(), "ask", "额度用完了：响在等你的那一声");
     // 恢复的那一条：服务器到点推（box 这期间什么都不用做）
     let back = gw.sandbox.wait_seen(2, secs(60)).remove(1);
     assert!(fleet::now() >= resets, "到了重置的时候才推");
     let n2 = opened(&g, &fx, &back.body);
     assert_eq!(relay::cols(&n2["usage"], &["event", "window", "account"]), list!["back", "five_hour", acct["id"].str()]);
     assert_eq!(n2["card"], list!["额度恢复了", "来自「box」 · alice · Claude Code", "5 小时的额度恢复了，可以接着用了"]);
+    assert_eq!(n2["sound"].str(), "done", "额度恢复了：响做完了的那一声");
     // 登记时不带 usage：下一轮用完了不推；再带上又推
     assert_eq!(g.ok(&["push-set", &token, "sandbox"]).trim(), format!("push {} ok", fx.url()));
     relay::signed_in(&a, 100, fleet::now().floor() + 4.0 * 3600.0);

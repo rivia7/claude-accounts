@@ -89,7 +89,7 @@ public func plainLine(_ s: String, max: Int) -> String {
 }
 
 /// 弹出来的那一条通知上的字（App 的 Notifier、通知扩展用同一份，和 Mac App 的 RemoteNotifier 一样的规矩）：标题、副标题、正文是别的
-/// 机器写的，过 `plainLine`、限长度；来自哪台机器写在副标题的开头（这台手机自己写的，对方在通知里改不了）
+/// 机器写的，过 `plainLine`、限长度；来自哪台机器写在副标题的开头（这台手机自己写的，对方在通知里改不了）；响哪一声（`NoteSound`）
 public struct NoteCard: Sendable, Equatable {
     public static let titleMax = 80
     public static let bodyMax = 240
@@ -98,16 +98,18 @@ public struct NoteCard: Sendable, Equatable {
     public let title: String
     public let subtitle: String
     public let body: String
+    public let sound: NoteSound
 
     /// machine：哪台机器（配对表里的名字、会话的说明里的机器名）；what：副标题里机器名后面的那一段（会话说的副标题，App 里没有时是
-    /// 会话的名字）。标题、正文都是空的是 nil
-    public init?(title: String, body: String, machine: String, what: String) {
+    /// 会话的名字）；sound：没给时照标题挑（`NoteSound(title:)`）。标题、正文都是空的是 nil
+    public init?(title: String, body: String, machine: String, what: String, sound: NoteSound? = nil) {
         let t = plainLine(title, max: Self.titleMax), b = plainLine(body, max: Self.bodyMax)
         guard !t.isEmpty || !b.isEmpty else { return nil }
         let m = plainLine(machine, max: Self.machineMax), w = plainLine(what, max: Self.titleMax)
         self.title = t.isEmpty ? "远程会话" : t
         subtitle = (m.isEmpty ? "来自另一台电脑" : "来自「\(m)」") + (w.isEmpty ? "" : " · \(w)")
         self.body = b
+        self.sound = sound ?? NoteSound(title: t)
     }
 
     /// 推来的那一条。额度的通知照它说的账号、窗口、重置时间在这里写字（时间照这台手机的时区，说法和 App 里一样：UsageText），
@@ -115,10 +117,26 @@ public struct NoteCard: Sendable, Equatable {
     public init?(_ n: PushedNote, now: Double = Date().timeIntervalSince1970, calendar: Calendar = .current) {
         if let u = n.usage {
             let t = UsageText.note(u, now: now, calendar: calendar)
-            self.init(title: t.title, body: t.body, machine: n.machine, what: UsageText.who(u))
+            self.init(title: t.title, body: t.body, machine: n.machine, what: UsageText.who(u), sound: u.event == .back ? .done : .ask)
         } else {
             self.init(title: n.title, body: n.body, machine: n.machine, what: n.subtitle)
         }
+    }
+}
+
+/// 通知响哪一声：App、通知扩展里带着的两个声音文件（ios/Sounds/，ios/tools/make-sounds 合成的；系统默认的那一声又短又轻，
+/// 手机放在一边时常常听不见）。一轮做完了的（标题以「做完了」结尾：cca 自己带的钩子、Codex、Antigravity 都这么写）、额度恢复了的响
+/// done，别的（在等你、要你确认、在问你、额度用完了、会话里的程序自己写的）响 ask：和 Mac 上弹的（popup.rs 的 sound：做完了是 Glass，
+/// 别的是 Ping）同一个分法
+public enum NoteSound: String, Sendable {
+    case done
+    case ask
+
+    /// 声音文件的名字（UNNotificationSound(named:) 用它）
+    public var file: String { rawValue + ".caf" }
+
+    public init(title: String) {
+        self = title.hasSuffix("做完了") ? .done : .ask
     }
 }
 

@@ -190,6 +190,11 @@ if let nt = v["note"] as? [String: Any] {
 check(NoteCard(title: "", body: "", machine: "m", what: "w") == nil, "弹出来的字：标题、正文都是空的不弹")
 check(NoteCard(title: "", body: "改好了", machine: "", what: "")?.title == "远程会话"
       && NoteCard(title: "", body: "改好了", machine: "", what: "")?.subtitle == "来自另一台电脑", "弹出来的字：没写标题、不知道哪台机器")
+check(NoteCard(title: "Claude Code 做完了", body: "", machine: "", what: "")?.sound == .done
+      && NoteCard(title: "Codex 在等你", body: "改好了", machine: "", what: "")?.sound == .ask
+      && NoteCard(title: "", body: "改好了", machine: "", what: "")?.sound == .ask
+      && NoteCard(title: "做完了", body: "", machine: "", what: "", sound: .ask)?.sound == .ask && NoteSound.done.file == "done.caf",
+      "提示音：标题以「做完了」结尾的响 done，别的响 ask")
 check(plainLine("a\u{1b}b\u{2028}c\u{202e}d  ", max: 4) == "ab c", "plainLine：控制字符、看不见的排版字符去掉，截短")
 
 // 账号的状态：kit::spec 封的（和辅助程序的 status_seal 一样），这边解开、读成模型；额度用完的规则和辅助程序 status.rs 的 exhausted 一样
@@ -274,6 +279,7 @@ if let un = v["usage"] as? [String: Any] {
         let card = n.flatMap { NoteCard($0, now: now, calendar: utc) }
         check(n?.sid == "" && n?.usage != nil && card.map { [$0.title, $0.subtitle, $0.body] } == want[k] as? [String],
               "额度的通知 \(k)：\(String(describing: card))")
+        check(card?.sound == (k == "back" ? NoteSound.done : NoteSound.ask), "额度的通知 \(k) 的提示音：\(String(describing: card?.sound))")
     }
     let u = openPushed(["n": un["used"] ?? NSNull()], keys: [key])?.usage
     check(u?.event == .usedUp && u?.account == un["account"] as? String && u?.aid == un["aid"] as? String && u?.slot == .fiveHour

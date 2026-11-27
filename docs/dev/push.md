@@ -23,7 +23,8 @@ docs/dev/ios.md「推送」。
    正式、开发两种环境各一条连接），推送里只有固定的一句（标题 `cca`、正文「远程会话里有新的通知」）、`mutable-content: 1` 和密文 `n`；
    `apns-collapse-id` 是通知的编号
 5. 手机：通知扩展（`ios/Notify`）拿钥匙串里的通知密钥解开、换上真的字（标题、「来自「机器名」 · 副标题」、正文：和 App 自己弹的一样，
-   CcaRemoteKit 的 `NoteCard`）；解不开（不是配给这台手机的、取消了配对）照固定的那一句显示
+   CcaRemoteKit 的 `NoteCard`）和提示音（App 带着的两声，`NoteSound`：docs/dev/ios.md「App」的 `ios/Sounds/`）；解不开（不是配给这台手机的、
+   取消了配对）照固定的那一句显示，响推送里写的 `default`（系统默认的那一声）
 
 谁知道什么：
 - 宿主：明文（本来就是它的）
@@ -162,4 +163,5 @@ services:
   （CcaRemoteKit 的 `openPushed`、`NoteCard`、`NoteKeychain.read`），可扩展的进程读不读得到共用分组的钥匙串、时限内做没做完，要真的推送
   到真机（TestFlight 的构建）上才看得到：第三个构建（1.0，20261126.54245）真机上解开了（上一条）
 - 额度的通知：真机、真的推送服务还没试过（3.7.5 发布了、两个 Team 的服务器部署成了 3.7.5、第五个 TestFlight 构建（1.0，20261126.101645）传了：等真机上看）
+- 提示音（2026-11-27）：扩展换上的那一声（`UNNotificationSound(named:)`，文件在 App 和扩展的套装里各一份）真机上响不响、响的是不是它，要传了 TestFlight 听
 - 环境：TestFlight / App Store 装的照描述文件的 `aps-environment` 认成 production，Xcode 装的是 sandbox；传给 TestFlight 的那一份里是 production（testflight.sh 查过），真机上登记的也是 production（上面那一条）

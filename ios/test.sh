@@ -3,7 +3,7 @@
 #   bash ios/test.sh               编（模拟器、调试版）、查 SwiftTerm 编进去的是去掉了图形协议的那一份、在模拟器里跑 SwiftTerm 的自检、
 #                                  演示模式各页浅色 / 深色截图（ios/build/shots/）
 #   bash ios/test.sh --build       只编（模拟器的调试版 + 真机的正式版，不签名），不开模拟器
-#   bash ios/test.sh --check 派生数据目录 cca.app   不编，只查编好的正式版（SwiftTerm、TestDriver、ATS、通知扩展那四项）：testflight.sh 拿它查归档
+#   bash ios/test.sh --check 派生数据目录 cca.app   不编，只查编好的正式版（SwiftTerm、TestDriver、ATS、通知扩展、提示音那五项）：testflight.sh 拿它查归档
 # 端到端（真的服务器、真的 cca、模拟器里的 App 配对、接入、敲键）在 tests/ios_kit.rs 的 in_the_simulator：它先跑这里的编译那一步
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -15,7 +15,7 @@ BUNDLE=com.cca.remote
 fail() { echo "✗ $*" >&2; exit 1; }
 ok() { echo "✓ $*"; }
 
-# 查正式版的四项，testflight.sh 拿它们（--check）再查一遍归档：
+# 查正式版的五项，testflight.sh 拿它们（--check）再查一遍归档：
 # SwiftTerm 编进去的是 swiftterm-parser.sh 换过那两行的那一份，不是上游原样的（macos/Vendor/SwiftTerm/README.md「不要的功能」）
 swiftterm_patched() {   # 派生数据目录
 	local lists list
@@ -49,7 +49,15 @@ notify_embedded() {   # cca.app
 	done
 	case "$v" in *com.cca.remote.shared) ;; *) fail "CcaKeychainGroup 不是 …com.cca.remote.shared：${v}" ;; esac
 }
-if [ "${1:-}" = --check ]; then swiftterm_patched "$2"; no_test_driver "$3"; ats_lets_us_pin "$3"; notify_embedded "$3"; exit 0; fi
+# 通知的两声提示音（ios/Sounds/，docs/dev/ios.md「App」的 Sounds/）：App 和通知扩展里各带着一份，和仓库里的一样
+sounds_embedded() {   # cca.app
+	local s
+	for s in done.caf ask.caf; do
+		cmp -s "$HERE/Sounds/$s" "$1/$s" || fail "App 里没有提示音 ${s}，或者和 ios/Sounds/ 里的不一样（${1}）"
+		cmp -s "$HERE/Sounds/$s" "$1/PlugIns/notify.appex/$s" || fail "通知扩展里没有提示音 ${s}，或者和 ios/Sounds/ 里的不一样（${1}）"
+	done
+}
+if [ "${1:-}" = --check ]; then swiftterm_patched "$2"; no_test_driver "$3"; ats_lets_us_pin "$3"; notify_embedded "$3"; sounds_embedded "$3"; exit 0; fi
 
 command -v xcodebuild >/dev/null && xcodebuild -version >/dev/null 2>&1 || fail "要 Xcode（只有命令行工具编不了 iOS App）"
 mkdir -p "$OUT"
@@ -80,6 +88,13 @@ ok "两个版本的 Info.plist 都关了 ATS（钉住自签证书要它）"
 notify_embedded "$DD/Build/Products/Debug-iphonesimulator/cca.app"
 notify_embedded "$DD/Build/Products/Release-iphoneos/cca.app"
 ok "两个版本里都有通知扩展，版本号、钥匙串分组和 App 的一样"
+# 提示音就是 ios/tools/make-sounds 合成的那两声（改了声音忘了重新生成、手改了文件都查得出来）
+xcrun swiftc -O "$HERE/tools/make-sounds/main.swift" -o "$OUT/make-sounds" >"$OUT/make-sounds.log" 2>&1 ||
+	{ cat "$OUT/make-sounds.log" >&2; fail "make-sounds 没编过"; }
+"$OUT/make-sounds" --check "$HERE/Sounds" >/dev/null || fail "ios/Sounds/ 里的提示音和 ios/tools/make-sounds 合成的不一样：改了声音以后用它重新生成"
+sounds_embedded "$DD/Build/Products/Debug-iphonesimulator/cca.app"
+sounds_embedded "$DD/Build/Products/Release-iphoneos/cca.app"
+ok "提示音是 make-sounds 合成的那两声，两个版本的 App、通知扩展里都带着"
 [ "${1:-}" = "--build" ] && exit 0
 
 # ---- 模拟器 ----

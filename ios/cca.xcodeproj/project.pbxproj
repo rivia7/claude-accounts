@@ -90,6 +90,7 @@
 		CA0000000000000000000402 /* SwiftTerm */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (CA0000000000000000000B02 /* Exceptions for "SwiftTerm" folder in "SwiftTerm" target */, ); name = SwiftTerm; path = ../macos/Vendor/SwiftTerm/Sources/SwiftTerm; sourceTree = SOURCE_ROOT; };
 		CA0000000000000000000403 /* SwiftTerm-iOS */ = {isa = PBXFileSystemSynchronizedRootGroup; name = "SwiftTerm-iOS"; path = "Vendor/SwiftTerm-iOS/iOS"; sourceTree = SOURCE_ROOT; };
 		CA0000000000000000000404 /* Notify */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (CA0000000000000000000B03 /* Exceptions for "Notify" folder in "notify" target */, ); path = Notify; sourceTree = "<group>"; };
+		CA0000000000000000000405 /* Sounds */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sounds; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -125,6 +126,7 @@
 			children = (
 				CA0000000000000000000401 /* App */,
 				CA0000000000000000000404 /* Notify */,
+				CA0000000000000000000405 /* Sounds */,
 				CA0000000000000000000701 /* Shared */,
 				CA0000000000000000000702 /* Vendor */,
 				CA0000000000000000000703 /* Products */,
@@ -180,6 +182,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				CA0000000000000000000401 /* App */,
+				CA0000000000000000000405 /* Sounds */,
 			);
 			name = cca;
 			packageProductDependencies = (
@@ -224,6 +227,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				CA0000000000000000000404 /* Notify */,
+				CA0000000000000000000405 /* Sounds */,
 			);
 			name = notify;
 			packageProductDependencies = (
