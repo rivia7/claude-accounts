@@ -59,6 +59,7 @@ pub const MODULE: Module = Module {
         case!(keyshare_force_waits),
         case!(cost_many_accounts),
         case!(cost_sync),
+        case!(agy_plan_sync),
     ],
 };
 
@@ -2020,6 +2021,73 @@ fn cost_sync(t: &mut Ctx) {
     for f in ["remote.json", "sync.json"] {
         assert!(!a.cca.join("cost").join(f).exists(), "没有别的服务器的那一份（不带前缀的）");
     }
+}
+
+/// agy 的套餐（agy 1.5 的登录信息里没有，只有开过交互会话的设备的状态栏记得下：账号目录的 agy-plan.json）跟着折合金额的同步走：
+/// 记下了的设备没有用量也传自己的那一份（明文的 pl），别的设备取最新的一份记下来（标着 from，拿来的不再传）；比自己记的旧的不换；
+/// 这台设备上没有这个账号的目录不建；只为套餐传的那一份没有用量，App 里这个账号不多出一台设备
+fn agy_plan_sync(t: &mut Ctx) {
+    let cl = client(t);
+    let a = &cl.dev;
+    let b = cl.device("bob-mini", None);
+    let c = cl.device("carol-air", None);
+    cl.machines(&[a, &b, &c]);
+    let doc = cl.doc(&obj! {
+        "accounts" => obj! { "claude" => obj! { "alice@example.com" => "US-A" }, "agy" => obj! { "alice@example.com" => "US-A" } },
+    });
+    let dir = |d: &Device| d.cca.join("agy").join("accounts").join(Device::acct_ident());
+    let plan = |d: &Device| dir(d).join("agy-plan.json");
+    for d in [a, &b, &c] {
+        d.set_doc(cl.team(), &doc); // Team 给三台设备 alice 的 agy 账号
+        fsx::write_json(d.cca.join("agy.json"), &obj! { Device::KEY => "US-A" });
+    }
+    // 这两台上用过这个账号（有账号目录），carol-air 上没有
+    for d in [a, &b] {
+        std::fs::create_dir_all(dir(d)).unwrap_or_else(|e| panic!("建 {}：{e}", dir(d).display()));
+    }
+    // alice-mbp 上 cca 启动的会话：状态栏的命令记下套餐
+    let line = r#"{"plan_tier": "Google AI Ultra", "email": "Alice@example.com", "agent_state": "idle"}"#;
+    a.ok_with(&["agy-statusline", &Device::acct_ident()], line, &[]);
+    let seen = fsx::read_json(plan(a))["at"].f64();
+    let aid = spec::aid_of(cl.salt(), "agy", "alice@example.com");
+    assert_eq!(a.cost_sync(true)["state"].str(), "ok");
+    assert_eq!(key_list(&cl.slots(&aid)), [a.fp()], "alice-mbp 上没有 agy 的用量也传自己的那一份：带着套餐");
+    assert!(!fsx::read_text(cl.d().join("cost-slots.json")).contains("Google AI"), "服务器上看不到套餐");
+    let keys = spec::team_keys(cl.salt(), spec::COST);
+    let sent = spec::cost_open(&keys, &aid, a.fp(), &cl.slots(&aid)[a.fp()]["blob"], spec::COST).expect("照文档解得开");
+    assert_eq!((sent["pl"]["n"].str(), sent["pl"]["at"].f64(), sent["h"].obj().len()), ("Google AI Ultra", seen, 0), "{sent}");
+    // bob-mini：记下 alice-mbp 记的（标着它），自己不传
+    assert_eq!(b.cost_sync(true)["state"].str(), "ok");
+    let got = fsx::read_json(plan(&b));
+    assert_eq!(
+        (got["email"].str(), got["plan_tier"].str(), got["at"].f64(), got["from"].str()),
+        ("alice@example.com", "Google AI Ultra", seen, "alice-mbp")
+    );
+    assert_eq!(fsx::mode(plan(&b)), 0o600);
+    assert_eq!(key_list(&cl.slots(&aid)), [a.fp()], "拿来的不传");
+    assert_eq!(c.cost_sync(true)["state"].str(), "ok");
+    assert!(!dir(&c).exists(), "carol-air 上没有这个账号的目录：不建");
+    let asked = list![list!["agy", Device::KEY, Value::Null, cl.tid()]];
+    let v = b.cost_view(&Value::from(cl.tid()), &asked, &list![]);
+    assert!(only(&v["accounts"]).is_null(), "这个账号还没有用量：App 里没有只为套餐传的那一台：{v}");
+    // bob-mini 自己的会话后来看到套餐换了：alice-mbp 记的比它旧，不换掉它；传上去，alice-mbp 记下它（新的、不一样的）
+    let later = seen + 300.0;
+    fsx::write_json(plan(&b), &obj! { "email" => "alice@example.com", "plan_tier" => "Google AI Pro", "at" => later });
+    assert_eq!(b.cost_sync(true)["state"].str(), "ok");
+    assert_eq!(fsx::read_json(plan(&b))["plan_tier"].str(), "Google AI Pro", "alice-mbp 记的旧：不换掉自己的");
+    let mut both = vec![a.fp(), b.fp()];
+    both.sort_unstable();
+    assert_eq!(sorted_keys(&cl.slots(&aid)), both);
+    assert_eq!(a.cost_sync(true)["state"].str(), "ok");
+    let got = fsx::read_json(plan(a));
+    assert_eq!((got["plan_tier"].str(), got["at"].f64(), got["from"].str()), ("Google AI Pro", later, "bob-mini"));
+    // alice-mbp 的会话又看到了（套餐一样）：换成它自己记的，带着它传
+    a.ok_with(&["agy-statusline", &Device::acct_ident()], &line.replace("Ultra", "Pro"), &[]);
+    let got = fsx::read_json(plan(a));
+    assert_eq!((got["plan_tier"].str(), got.get("from").is_none()), ("Google AI Pro", true), "{got}");
+    assert_eq!(a.cost_sync(true)["state"].str(), "ok");
+    let sent = spec::cost_open(&keys, &aid, a.fp(), &cl.slots(&aid)[a.fp()]["blob"], spec::COST).expect("照文档解得开");
+    assert_eq!((sent["pl"]["n"].str(), sent["pl"]["at"].f64()), ("Google AI Pro", got["at"].f64()));
 }
 
 // 服务器自己的验签和 ssh-keygen 对：cli/src/server/sshsig.rs 的 real_ssh_keygen_signatures、s_plus_the_group_order_is_refused

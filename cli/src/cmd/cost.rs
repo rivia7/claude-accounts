@@ -13,10 +13,12 @@
 //! Team 给的官方账号、开着设备统计时，各台设备算的经那个 Team 的同步服务器交换（op ledger，见 server/README.md）：一台设备
 //! 一份、只写自己的那一份，服务器只存密文。密钥整个 Team 共用（3.6.6 起只由 Team 的盐派生，不用登录：Team 给了这个账号的设备
 //! 都看得到各台设备的；服务器没有盐，解不开）；3.6.5 及以前的还带着登录身份（和共享 API key 一样），这台设备登录着时照样解得开。
-//! 从 Team 里移除了的设备传的，服务器删掉（以前的服务器还回来、标着 revoked 的不要）。
+//! 从 Team 里移除了的设备传的，服务器删掉（以前的服务器还回来、标着 revoked 的不要）。agy 账号的那一份还带着这台设备的状态栏
+//! 记下的套餐（pl；agy 1.5 的登录信息里没有套餐），别的设备拿去显示（plan_take）。
 //! 统计在后台进程里做（cca _cost-sync：会话结束、cca usage、cca devices、上报进程里，最多 COST_EVERY 一次；App 定时跑
 //! cca cost sync --json），_gui state 只读统计好的（cost/local.json、remote.json、sync.json）。config.json 的 "cost": false 关掉
 
+use super::agy::{agy_plan_adopt, agy_plan_own};
 use super::codex::codex_claims;
 use super::hub::{host_name, hubs, Hub, HubKind, TeamTag};
 use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, share_ident, team_keys, Keys};
@@ -2238,8 +2240,9 @@ fn cost_seal(keys: &Keys, aid: &str, fp: &str, doc: &Dict) -> R<Dict> {
 }
 
 /// 别的设备传来的明文：{"v": 1, "at": 时间, "h": {小时: [7 个计数]}, "um": [没有标价的模型…], "dg": 诊断（cost_dg；以前的版本没有）,
-/// "dv": 那台机器的 device_id（以前的版本、没有 device_id 的设备没有）, "hm": 按模型分的 {小时: {模型: [7 个计数]}}（3.6.7 及以前没有）}；
-/// 格式不对是 None（dg、dv、hm 不对只是不要它）
+/// "dv": 那台机器的 device_id（以前的版本、没有 device_id 的设备没有）, "hm": 按模型分的 {小时: {模型: [7 个计数]}}（3.6.7 及以前没有）,
+/// "pl": 那台设备的状态栏记下的 agy 套餐 {"n": 叫法, "at": 记下的时间}（只有 agy 账号的有，3.7.7 及以前没有）}；
+/// 格式不对是 None（dg、dv、hm、pl 不对只是不要它）
 fn cost_doc(d: &V, now: f64) -> Option<Dict> {
     let d = d.as_dict()?;
     let at = d.get("at").filter(is_num)?.as_num()?;
@@ -2268,7 +2271,19 @@ fn cost_doc(d: &V, now: f64) -> Option<Dict> {
     if let Some(hm) = hm {
         out.set("hm", hm);
     }
+    if let Some((n, at)) = cost_plan_ok(d.get("pl"), now) {
+        out.set("pl", dict! { "n" => n, "at" => at });
+    }
     Some(out)
+}
+
+/// 明文里的 pl（agy 账号的套餐：{"n": 叫法, "at": 那台设备的状态栏记下它的时间}）→ (叫法, 时间)；叫法是空的、超过 64 个字、
+/// 有看不见的字，时间不对（不是数、比现在晚一天以上）是 None
+fn cost_plan_ok(v: Option<V>, now: f64) -> Option<(String, f64)> {
+    let pl = v?.as_dict()?;
+    let (n, at) = (pl.str("n")?, pl.get("at").filter(is_num)?.as_num()?);
+    let ok = !text::strip(&n).is_empty() && text::len(&n) <= 64 && text::isprintable(&n) && 0.0 < at && at <= now + 86400.0;
+    ok.then(|| (n.to_string(), at))
 }
 
 /// 机器的标识（config.json 的 device_id，router.rs 的 device_id 生成的：16 位小写十六进制）
@@ -2367,8 +2382,8 @@ fn orphan_content(local: &Dict) -> (Dict, Dict, Vec<String>) {
 }
 
 /// 要同步的账号：(工具, 邮箱小写, slot（工具名:邮箱，sync.json、remote.json 里的键）, 账号摘要, 密钥（Team 共用的），
-/// 3.6.5 及以前的密钥（这台设备登录着这个账号时才有：还没升级的设备传的靠它解；有它也说明登录着）)。
-/// 认不出是哪个账号的那一份（cost_orphan_item）也是一项：工具是 None，邮箱是空的，slot 是 COST_ORPHAN_SLOT
+/// 3.6.5 及以前的密钥（这台设备登录着这个账号时才有：还没升级的设备传的靠它解；有它也说明登录着）, 账号目录（agy 的套餐记在里面）)。
+/// 认不出是哪个账号的那一份（cost_orphan_item）也是一项：工具是 None，邮箱、账号目录是空的，slot 是 COST_ORPHAN_SLOT
 struct Item {
     tool: Option<&'static Tool>,
     email: String,
@@ -2376,6 +2391,7 @@ struct Item {
     aid: String,
     keys: Keys,
     keys_v1: Option<Keys>,
+    dir: String,
 }
 
 impl Item {
@@ -2397,7 +2413,7 @@ fn cost_items(hub: &Hub) -> R<Option<Vec<Item>>> {
     let Some(targets) = presence_targets(hub.kind) else { return Ok(None) };
     let salt = hub.salt();
     let mut out = Vec::new();
-    for (tool, key, _) in targets {
+    for (tool, key, dir) in targets {
         let email = parse_key(&key).1.to_lowercase();
         if !tool.has_cost || email.is_empty() {
             continue;
@@ -2413,6 +2429,7 @@ fn cost_items(hub: &Hub) -> R<Option<Vec<Item>>> {
             keys: team_keys(&salt, COST_LABEL)?,
             keys_v1: ident.map(|i| keyshare_keys(&salt, tool.name, &email, &i, COST_LABEL_V1)).transpose()?,
             email,
+            dir,
         });
     }
     Ok(Some(out))
@@ -2428,6 +2445,7 @@ fn cost_orphan_item(hub: &Hub) -> R<Item> {
         aid: presence_aid(&salt, COST_ORPHAN, "")?,
         keys: team_keys(&salt, COST_LABEL)?,
         keys_v1: None,
+        dir: String::new(),
     })
 }
 
@@ -2551,6 +2569,10 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
             Some(other) => panic!("AttributeError: remote.json 里 {} 那一项是 {}", x.slot, other.py_repr()),
         };
         let (new, mine) = cost_take(cfg, cost.get(&x.aid), x, &last, now)?;
+        let agy_item = x.tool.is_some_and(|t| matches!(t.kind, Kind::Agy));
+        if agy_item {
+            plan_take(x, &new, now);
+        }
         if new.is_empty() {
             racc.pop(&x.slot);
         } else {
@@ -2561,10 +2583,12 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
             Some(tool) => cost_content(local, tool, &x.email),
             None => orphan_content(local),
         };
-        if x.tool.is_some() && h.is_empty() && x.keys_v1.is_none() {
-            // 自己的那一份只传用过（有记录）或者登录着的账号：没用过的传上去是空的，别的设备的账号页里会多出一台金额是 0 的
-            // （带着这台设备的诊断）；服务器给每台设备存的账号也有上限（COST_SLOTS）。认不出是谁的那一份空的也传：
-            // 别的设备据此分得清这台设备没有认不出的用量，还是 cca 太旧、不传
+        // agy 账号：这台设备自己的状态栏记下的套餐跟着这一份传（明文的 pl），Team 里别的设备拿去显示
+        let pl = if agy_item { agy_plan_own(&x.dir, &x.email) } else { None };
+        if x.tool.is_some() && h.is_empty() && x.keys_v1.is_none() && pl.is_none() {
+            // 自己的那一份只传用过（有记录）、登录着的账号，和记下了套餐的 agy 账号：没用过的传上去是空的，3.7.4 及以前的设备的
+            // 账号页里会多出一台金额是 0 的（带着这台设备的诊断）；服务器给每台设备存的账号也有上限（COST_SLOTS）。认不出是谁的
+            // 那一份空的也传：别的设备据此分得清这台设备没有认不出的用量，还是 cca 太旧、不传
             continue;
         }
         let recent = |rows: &Dict| -> Dict {
@@ -2582,6 +2606,9 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
         };
         if let Some(dv) = &dv {
             doc.set("dv", dv.as_str()); // 这台机器（别的设备据此把它在两台服务器上的认成一台）
+        }
+        if let Some((n, at)) = &pl {
+            doc.set("pl", dict! { "n" => n.as_str(), "at" => *at });
         }
         // 内容的摘要（没变就不重传）带着标签：换了密钥以后（3.6.6 起是 Team 共用的）重传一次，没登录的设备也解得开了
         let body = json::dumps(&V::Dict(doc.clone()), json::Fmt::new().compact().sort_keys());
@@ -2684,6 +2711,22 @@ fn cost_take(cfg: &Dict, rows: Option<V>, x: &Item, last: &Dict, now: f64) -> R<
         new.set(fp, e);
     }
     Ok((new, mine))
+}
+
+/// agy 账号：Team 里别的设备传来的套餐（各台的 pl）里最新的那一份交给 agy_plan_adopt（比这台设备记着的新、套餐不一样才记下来，
+/// 标着那台设备的名字）。new 是 cost_take 给的这个账号各台设备的（这一轮解开的和上次的）
+fn plan_take(x: &Item, new: &Dict, now: f64) {
+    let mut best: Option<(String, f64, String)> = None;
+    for (_, e) in new.items() {
+        let Some(e) = e.as_dict() else { continue };
+        let Some((n, at)) = cost_plan_ok(e.get("pl"), now) else { continue };
+        if best.as_ref().is_none_or(|b| at > b.1) {
+            best = Some((n, at, e.str("name").map_or_else(|| "?".to_string(), |s| s.to_string())));
+        }
+    }
+    if let Some((n, at, from)) = best {
+        agy_plan_adopt(&x.dir, &x.email, &n, at, &from);
+    }
 }
 
 /// 服务器说 30 天内用过这个账号、却没传过折合金额的设备 → [{name, used_epoch}]（最多 32 台）
@@ -4154,6 +4197,43 @@ mod tests {
         let (h, _, um) = cost_content(&local, codex(), "alice@example.com");
         assert!(h.is_empty() && um.is_empty(), "工具分开");
         assert_eq!(cost_content(&local, codex(), "carol@example.com").0.len(), 1);
+    }
+
+    #[test]
+    fn plan_rides_along_checked() {
+        let now = 1_800_000_000.0;
+        let doc = |pl: V| V::Dict(dict! { "v" => 1, "at" => now, "h" => Dict::new(), "um" => List::new(), "pl" => pl });
+        let kept = |pl: V| {
+            let d = cost_doc(&doc(pl), now).expect("pl 不对也照样认别的");
+            d.dict("pl").map(|p| (p.at("n").py_str(), p.at("at").as_num()))
+        };
+        let pl = |n: V, at: V| V::Dict(dict! { "n" => n, "at" => at });
+        assert_eq!(
+            kept(pl(V::from("Google AI Ultra"), V::from(1_799_999_000i64))),
+            Some(("Google AI Ultra".to_string(), Some(1_799_999_000.0)))
+        );
+        assert_eq!(
+            kept(pl(V::from("Google AI Pro"), V::from(now + 3600.0))).map(|p| p.0).as_deref(),
+            Some("Google AI Pro"),
+            "时钟快一点的也认"
+        );
+        assert_eq!(kept(pl(V::from("x".repeat(64)), V::from(1i64))).map(|p| p.0.len()), Some(64));
+        for bad in [
+            V::from("Google AI Ultra"),
+            V::Dict(Dict::new()),
+            pl(V::from(""), V::from(1i64)),
+            pl(V::from("  "), V::from(1i64)),
+            pl(V::from("x".repeat(65)), V::from(1i64)),
+            pl(V::from("a\nb"), V::from(1i64)),
+            pl(V::from(1i64), V::from(1i64)),
+            pl(V::from("Pro"), V::from("1")),
+            pl(V::from("Pro"), V::from(true)),
+            pl(V::from("Pro"), V::from(0i64)),
+            pl(V::from("Pro"), V::from(now + 2.0 * 86400.0)),
+        ] {
+            let shown = bad.py_repr();
+            assert_eq!(kept(bad), None, "{shown}");
+        }
     }
 
     #[test]

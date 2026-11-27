@@ -1797,6 +1797,8 @@ run CCA_TTY="$(ans)" cca agy @alice --settings '{"x": 1}' >/dev/null 2>&1; agy_a
 ok "agy 的套餐：打印模式、子命令、自己带了 --settings 的启动不加 cca 的状态栏命令（用户的 --settings 原样生效）" '[ "$agy_a1" = "ARGS: --gemini_dir=$AG -p hi" ] && [ "$agy_a2" = "ARGS: --gemini_dir=$AG mcp list" ] && [ "$agy_a3" = "ARGS: --gemini_dir=$AG --settings {\"x\": 1}" ]'
 printf '{"email": "bob@example.com", "plan_tier": "Pro", "at": 1}' > "$AGD/agy-plan.json"; out2=$(gj state)
 ok "agy 的套餐：状态栏记下时的邮箱和现在登录的不一样（换了账号登录）时不算" 'printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"\""'
+printf '{"email": "alice@example.com", "plan_tier": "Ultra", "at": 1, "from": "bob-mini"}' > "$AGD/agy-plan.json"; out2=$(gj state)
+ok "agy 的套餐：Team 里别的设备记下、经折合金额的同步拿来的（标着 from）照样显示（经服务器同步的那一步在 tests/presence.rs 的 agy_plan_sync）" 'printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Ultra\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"premium\""'
 mkdir -p "$H/.cca/agy/x"
 agy_o1=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-statusline ../x --then 'printf ok; exit 4' 2>&1); agy_r1=$?
 agy_o2=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-statusline nobody 2>&1); agy_r2=$?

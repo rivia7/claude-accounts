@@ -7,8 +7,10 @@
 //!
 //! 套餐也在这里：agy 1.5 的登录 token 里没有档位了，只有交互会话的状态栏 JSON 里有（plan_tier）。cca 启动交互的会话时经
 //! `--settings` 带上自己的状态栏命令（`agy_launch_args`），它（agy-statusline）把套餐记进账号目录（`agy_plan_seen` 读），
-//! 用户自己的状态栏命令接在后面照样运行。状态栏每次状态变了 agy 都起一次这个命令：它顺带看出这一轮做完了、在等你确认，
-//! 推一条通知（`agy_turn`，和 Claude Code、Codex 的一样：在会话宿主里时推给接着它的各处，这台 Mac 上弹一个）。
+//! 用户自己的状态栏命令接在后面照样运行。Team 给的账号的套餐还跟着折合金额的同步传给 Team 里别的设备（`agy_plan_own`、
+//! `agy_plan_adopt`，cost.rs 的 cost_round）：没在那台设备上开过会话也看得到。状态栏每次状态变了 agy 都起一次这个命令：
+//! 它顺带看出这一轮做完了、在等你确认，推一条通知（`agy_turn`，和 Claude Code、Codex 的一样：在会话宿主里时推给接着它的各处，
+//! 这台 Mac 上弹一个）。
 
 use super::login::sys::{interrupted, trap};
 use super::remote::{agy_note, notify_deliver, AgyEvent};
@@ -568,8 +570,11 @@ pub fn agy_cell(rl: &Dict, at: f64, now: f64) -> R<String> {
 
 // --- 套餐：cca 启动的交互会话里状态栏的命令 -----------------------------------------------------------------------
 
-/// 状态栏记下的套餐（账号目录里：`plan_note` 写、`agy_plan_seen` 读）：`{email, plan_tier, at}`
+/// 状态栏记下的套餐（账号目录里：`plan_note` 写、`agy_plan_seen` 读）：`{email, plan_tier, at}`。Team 里别的设备记下、经折合金额的
+/// 同步拿来的（`agy_plan_adopt`）多一项 from（那台设备的名字）：只有这台设备自己记下的才传给别的设备（`agy_plan_own`）
 const AGY_PLAN_FILE: &str = "agy-plan.json";
+/// 套餐和记着的一样时隔这么久才重写一次：at 是最近一次看到它的时间（差不到这么久），几台设备记的不一样时按它认谁新
+const AGY_PLAN_REFRESH: f64 = 3600.0;
 /// 有了它就不是交互的会话（不画状态栏）的选项：打印模式、版本、帮助
 const AGY_ONE_SHOT: &[&str] = &["p", "print", "prompt", "version", "help", "h"];
 /// agy 1.5.18 的子命令（agy --help）：选项后面第一个不是选项的参数是它们之一时，不开会话
@@ -589,13 +594,43 @@ const AGY_SUBCOMMANDS: &[&str] = &[
     "update",
 ];
 
-/// 状态栏上次记下的套餐的叫法（`plan_note`）：记下时的邮箱和现在登录的一样（大小写不论）才算；换了账号登录、没记过是空的
+/// 状态栏上次记下的套餐的叫法（`plan_note`；或者 Team 里别的设备记下的，`agy_plan_adopt`）：记下时的邮箱和现在登录的一样
+/// （大小写不论）才算；换了账号登录、没记过是空的
 pub fn agy_plan_seen(key: &str, email: &str) -> String {
     let Some(d) = load_quiet(&path::join(&adir(key), AGY_PLAN_FILE)).and_then(|v| v.as_dict()) else { return String::new() };
     match (d.str("email"), d.str("plan_tier")) {
         (Some(e), Some(p)) if !email.is_empty() && e.to_lowercase() == email.to_lowercase() => p.to_string(),
         _ => String::new(),
     }
+}
+
+/// 这台设备自己的状态栏记下的这个账号的套餐（不是从别的设备那里拿来的；记下时的邮箱是这个账号的，大小写不论）：(叫法, 记下的
+/// 时间)。dir 是账号目录。折合金额的同步把它放进这台设备传的那一份（cost.rs 的 cost_round：明文的 pl），Team 里别的设备拿去显示
+pub fn agy_plan_own(dir: &str, email: &str) -> Option<(String, f64)> {
+    let d = load_quiet(&path::join(dir, AGY_PLAN_FILE))?.as_dict()?;
+    let (plan, at) = (d.str("plan_tier")?, d.get("at")?.as_num().filter(|a| a.is_finite() && *a > 0.0)?);
+    let mine = !d.has("from") && d.str("email").is_some_and(|e| e.to_lowercase() == email.to_lowercase());
+    (mine && !text::strip(&plan).is_empty() && plan.chars().count() <= 64).then(|| (plan.to_string(), at))
+}
+
+/// Team 里别的设备记下的这个账号的套餐（折合金额的同步解开的、最新的那一份：叫法、那台设备记下它的时间、那台设备的名字）：
+/// 这台设备没记过、记的不是这个邮箱的，或者记的套餐不一样、又比它旧时记下来（标着 from，邮箱是这个账号的），App 照它显示（agy 1.5
+/// 的登录信息里没有套餐，只有开过交互会话的设备记得下）。套餐一样时不动（这台设备自己记的照旧传）；账号目录不在（这台设备上没用过
+/// 这个账号）不建。返回写了没有
+pub fn agy_plan_adopt(dir: &str, email: &str, plan: &str, at: f64, from: &str) -> bool {
+    if !path::isdir(dir) {
+        return false;
+    }
+    let file = path::join(dir, AGY_PLAN_FILE);
+    if let Some(old) = load_quiet(&file).and_then(|v| v.as_dict()) {
+        let ours = old.str("email").is_some_and(|e| e.to_lowercase() == email.to_lowercase());
+        let old_at = old.get("at").and_then(|a| a.as_num()).filter(|a| a.is_finite()).unwrap_or(0.0);
+        if ours && (old.str("plan_tier").as_deref() == Some(plan) || old_at >= at) {
+            return false;
+        }
+    }
+    let rec = dict! { "email" => email.to_lowercase(), "plan_tier" => plan, "at" => at, "from" => from };
+    save_json(&file, &V::Dict(rec), Some(0o600), false).is_ok()
 }
 
 /// 这次启动是不是 agy 的交互会话（只有它画状态栏）。agy 照 Go 的 flag 认参数：`-x` 和 `--x` 一样，选项认到第一个不是选项的
@@ -719,20 +754,26 @@ fn statusline_input(id: &str, raw: &[u8]) -> Option<(String, Dict)> {
 }
 
 /// 记下状态栏 JSON 里的套餐：plan_tier 是不空的字符串（最多 64 个字），email 像个邮箱（读的时候拿它和登录的邮箱比）。和记着的
-/// 一样就不写（agy 最多 300 毫秒起一次）；写不了也不说（状态栏的命令不出声）
+/// 一样、是这台设备自己记的、记下不到 AGY_PLAN_REFRESH 就不写（agy 最多 300 毫秒起一次）；从别的设备那里拿来的（from）换成这台
+/// 设备自己看到的。写不了也不说（状态栏的命令不出声）
 fn plan_note(dir: &str, d: &Dict) {
     let plan = d.str("plan_tier").map(|p| text::strip(&p).to_string()).unwrap_or_default();
     let email = d.str("email").map(|e| e.to_string()).unwrap_or_default();
     if plan.is_empty() || plan.chars().count() > 64 || !EMAIL_RE.matches(&email) {
         return;
     }
-    let file = path::join(dir, AGY_PLAN_FILE);
+    let (file, now) = (path::join(dir, AGY_PLAN_FILE), time());
     if let Some(old) = load_quiet(&file).and_then(|v| v.as_dict()) {
-        if old.str("plan_tier").as_deref() == Some(plan.as_str()) && old.str("email").as_deref() == Some(email.as_str()) {
+        let age = now - old.get("at").and_then(|a| a.as_num()).unwrap_or(f64::NAN);
+        if old.str("plan_tier").as_deref() == Some(plan.as_str())
+            && old.str("email").as_deref() == Some(email.as_str())
+            && !old.has("from")
+            && (0.0..AGY_PLAN_REFRESH).contains(&age)
+        {
             return;
         }
     }
-    let _ = save_json(&file, &V::Dict(dict! { "email" => email, "plan_tier" => plan, "at" => time() }), Some(0o600), false);
+    let _ = save_json(&file, &V::Dict(dict! { "email" => email, "plan_tier" => plan, "at" => now }), Some(0o600), false);
 }
 
 /// 每个会话（会话标记）上一次的状态记在账号目录的这个目录下（`agy_turn`）
@@ -1085,6 +1126,58 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(&turns).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+
+    #[test]
+    fn plan_noted_refreshed_and_adopted() {
+        let tmp = TemporaryDirectory::new("cca-agy-plan.", &crate::py::fs::gettempdir()).unwrap();
+        let dir = tmp.name.clone();
+        let file = path::join(&dir, AGY_PLAN_FILE);
+        let rec = || load_quiet(&file).and_then(|v| v.as_dict()).expect("记下了");
+        let at_of = |d: &Dict| d.get("at").and_then(|a| a.as_num()).expect("有 at");
+        let put = |j: String| std::fs::write(&file, j).unwrap();
+        let line = |j: &str| json::loads(j).unwrap().as_dict().unwrap();
+        let ultra = line(r#"{"plan_tier": " Google AI Ultra ", "email": "Alice@example.com"}"#);
+        plan_note(&dir, &ultra);
+        let first = rec();
+        assert_eq!((first.str("plan_tier").as_deref(), first.has("from")), (Some("Google AI Ultra"), false));
+        assert_eq!(agy_plan_own(&dir, "alice@example.com"), Some(("Google AI Ultra".to_string(), at_of(&first))), "邮箱大小写不论");
+        assert_eq!(agy_plan_own(&dir, "bob@example.com"), None, "别的账号的不传");
+        // 一样的、刚记下的不重写；记下一小时以上的重写：at 是最近一次看到它的时间
+        let now = time() as i64;
+        put(format!(r#"{{"email": "Alice@example.com", "plan_tier": "Google AI Ultra", "at": {}}}"#, now - 60));
+        plan_note(&dir, &ultra);
+        assert_eq!(at_of(&rec()), (now - 60) as f64, "刚记下的");
+        put(format!(r#"{{"email": "Alice@example.com", "plan_tier": "Google AI Ultra", "at": {}}}"#, now - 7200));
+        plan_note(&dir, &ultra);
+        let own_at = at_of(&rec());
+        assert!(own_at >= now as f64, "记下两小时了：重写");
+        // 别的设备的：比这台设备记的旧的、套餐一样的不要；新的、不一样的记下来，标着那台设备，不再当这台设备自己的传
+        assert!(!agy_plan_adopt(&dir, "alice@example.com", "Google AI Pro", own_at - 1.0, "bob-mini"), "旧的");
+        assert!(!agy_plan_adopt(&dir, "alice@example.com", "Google AI Ultra", own_at + 100.0, "bob-mini"), "套餐一样");
+        assert!(agy_plan_adopt(&dir, "Alice@example.com", "Google AI Pro", own_at + 100.0, "bob-mini"));
+        let got = rec();
+        assert_eq!(
+            (got.str("plan_tier").as_deref(), got.str("from").as_deref(), got.str("email").as_deref(), at_of(&got)),
+            (Some("Google AI Pro"), Some("bob-mini"), Some("alice@example.com"), own_at + 100.0)
+        );
+        assert_eq!(agy_plan_own(&dir, "alice@example.com"), None, "拿来的不再传给别的设备");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        // 这台设备自己又看到了：换成自己的（套餐一样也换）
+        plan_note(&dir, &line(r#"{"plan_tier": "Google AI Pro", "email": "alice@example.com"}"#));
+        assert_eq!(
+            (rec().has("from"), agy_plan_own(&dir, "alice@example.com").map(|p| p.0)),
+            (false, Some("Google AI Pro".into()))
+        );
+        // 记的是别的邮箱的（换过账号登录）：不管新旧都换成这个账号的
+        put(r#"{"email": "bob@example.com", "plan_tier": "Google AI Ultra", "at": 9999999999}"#.to_string());
+        assert!(agy_plan_adopt(&dir, "alice@example.com", "Google AI Pro", 1.0, "bob-mini"));
+        assert_eq!(rec().str("email").as_deref(), Some("alice@example.com"));
+        // 账号目录不在（这台设备上没用过这个账号）：不建
+        let gone = path::join(&dir, "gone");
+        assert!(!agy_plan_adopt(&gone, "alice@example.com", "Google AI Pro", 1.0, "bob-mini"));
+        assert!(!path::exists(&gone));
     }
 
     #[test]
