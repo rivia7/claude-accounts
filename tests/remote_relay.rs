@@ -45,7 +45,7 @@ pub const MODULE: Module = Module {
         case!(codex_notes_reach_the_other_machine),
         case!(what_the_other_side_may_do),
         case!(the_other_implementation_and_what_the_host_enforces),
-        case!(a_phone_sets_the_size_only_when_it_types),
+        case!(a_phone_takes_the_size_when_it_attaches),
         case!(the_link_process_is_killed),
         case!(the_server_restarts_and_the_session_ends_meanwhile),
         case!(local_sessions_never_touch_the_network),
@@ -1010,10 +1010,10 @@ fn the_other_implementation_and_what_the_host_enforces(t: &mut Ctx) {
     assert_eq!(r.kinds, BTreeSet::from([OUTPUT, EXIT]));
 }
 
-/// 能缩放的接入方（HELLO 的标志 4：iOS 上的 App，会话比它的屏幕大时缩小了画）：接上、看着不改会话的大小，会话多大宿主告诉它
-/// （SIZE，在回放前面）。它打了字会话照它排，这边的终端打了字又照这边排；它改窗口大小、滚着看、切进来不算打字；它打过字以后
-/// 走了，回到这边的终端的大小
-fn a_phone_sets_the_size_only_when_it_types(t: &mut Ctx) {
+/// 能缩放的接入方（HELLO 的标志 4：iOS 上的 App，会话比它的屏幕大时缩小了画）：一接上就照它排（和它打了字一样），会话多大宿主告诉它
+/// （SIZE，在回放前面）。这边的终端打了字又照这边排；它改窗口大小、滚着看、切进来不算打字，它又打了字再照它排；只看的接上不改
+/// 会话的大小；它走了，回到这边的终端的大小
+fn a_phone_takes_the_size_when_it_attaches(t: &mut Ctx) {
     let (fx, a, b, _asked) = client_fx(t);
     let other = fx.device("other");
     fx.machines(&[&a, &b, &other]);
@@ -1031,23 +1031,16 @@ fn a_phone_sets_the_size_only_when_it_types(t: &mut Ctx) {
         re.captures_iter(&h.out()[mark..]).map(|c| String::from_utf8_lossy(&c[1]).into_owned()).collect()
     };
 
-    // 接上、看着：会话照旧是这边的终端的大小（只有接入时让客户端重画的那一下：23 行再回到 24 行）
+    // 接上：会话马上照它的窗口排（40 列 20 行），它先知道会话多大、再收回放
     let mark = h.mark();
     let (sock, ch) = peer.attach(sid);
     let mut r = Reader::new(sock, ch.expect("握手：宿主的证明对得上"));
     r.send(&frame(HELLO, &[1, 4, 0, 40, 0, 20])); // 能缩放，窗口 40 列 20 行
     let first = r.until(|out| has(out, "<ready 24 80")).to_vec();
-    assert!(first.starts_with(b"<SIZE 80 24>"), "{:?}", String::from_utf8_lossy(&first[..first.len().min(60)]));
-    h.send("say host-sync\n");
-    r.until(|out| has(out, "<host-sync>"));
-    h.expect_since("<host-sync>", mark);
-    assert!(sizes(&h, mark).iter().all(|s| s == "23 80" || s == "24 80"), "{:?}", sizes(&h, mark));
-
-    // 它打了字：照它的窗口排，也告诉它；这边打了字：又照这边的终端排
-    let (mark, seen) = (h.mark(), r.out.len());
-    r.send(&frame(INPUT, b"say from-the-phone\n"));
+    assert!(first.starts_with(b"<SIZE 40 20>"), "{:?}", String::from_utf8_lossy(&first[..first.len().min(60)]));
     h.expect_since("<size 20 40>", mark);
-    r.until(|out| has(&out[seen..], "<SIZE 40 20>"));
+
+    // 这边打了字：照这边的终端排，也告诉它
     let (mark, seen) = (h.mark(), r.out.len());
     h.send("say from-the-host\n");
     h.expect_since("<size 24 80>", mark);
@@ -1062,10 +1055,26 @@ fn a_phone_sets_the_size_only_when_it_types(t: &mut Ctx) {
     h.expect_since("<after-the-wheel>", mark);
     assert_eq!(sizes(&h, mark), no_rows());
 
-    // 它又打了字（照它现在的窗口：比这边的终端高，行数取这边的），然后走了：回到这边的终端的大小
-    let mark = h.mark();
-    r.send(&frame(INPUT, b"say phone-again\n"));
+    // 它又打了字（照它现在的窗口：比这边的终端高，行数取这边的）
+    let (mark, seen) = (h.mark(), r.out.len());
+    r.send(&frame(INPUT, b"say from-the-phone\n"));
     h.expect_since("<size 24 50>", mark);
+    r.until(|out| has(&out[seen..], "<SIZE 50 24>"));
+
+    // 只看的也接上（能缩放，窗口更小）：不改会话的大小（只有让客户端重画的那一下），宿主告诉它会话多大
+    let mark = h.mark();
+    let (sock, ch) = peer.attach(sid);
+    let mut v = Reader::new(sock, ch.expect("握手：宿主的证明对得上"));
+    v.send(&frame(HELLO, &[1, 5, 0, 30, 0, 10])); // 只看、能缩放，窗口 30 列 10 行
+    let first = v.until(|out| has(out, "<ready 24 80")).to_vec();
+    assert!(first.starts_with(b"<SIZE 50 24>"), "{:?}", String::from_utf8_lossy(&first[..first.len().min(60)]));
+    r.send(&frame(INPUT, b"say view-synced\n"));
+    h.expect_since("<view-synced>", mark);
+    assert!(sizes(&h, mark).iter().all(|s| s == "23 50" || s == "24 50"), "{:?}", sizes(&h, mark));
+    v.send(&frame(DETACH, b""));
+    drop(v);
+
+    // 它走了：回到这边的终端的大小
     let mark = h.mark();
     r.send(&frame(DETACH, b""));
     h.expect_since("<size 24 80>", mark);

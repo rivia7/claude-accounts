@@ -89,7 +89,7 @@
   `TerminalSession.hostSize`），终端定成正好那么多列、行（一格多大照 `getOptimalFrameSize` 算，多给半个点免得 SwiftTerm 取整差一；排完马上
   `layoutIfNeeded`，之后到的输出照新的大小画）。比这块地方宽时缩小到正好放得下宽度（放不下时看最下面那一截），双指捏着放大（最大到平常的字号）、
   双指拖着看；一个手指的照旧是终端的（上下拖滚动、长按选字、点一下弹键盘）。缩小了画时终端的 `contentScaleFactor` 跟着降（一层最多 800 万个像素）。
-  报给会话的窗口大小是这块地方照平常的字号放得下几列几行（`natural`）：手机上打了字会话就照它排（remote.md「几个终端接着同一个会话」），
+  报给会话的窗口大小是这块地方照平常的字号放得下几列几行（`natural`）：一接上、手机上打了字时会话就照它排（remote.md「几个终端接着同一个会话」），
   正好放得下、不缩放。旧的宿主不说 `SIZE`：照这块地方排，和以前一样。不用 SwiftTerm 的 `resize(cols:rows:)`：它会软重置终端
 - `Model/Notifier.swift`：会话推来的通知（`TerminalSession` 收到 CcaRemoteKit 解好的 `NOTIFY`，或者 OSC 777 / 9）弹成本地通知，点它回到
   那个会话的终端（关了的重新接上：`AppModel.reopen`）。和 Mac App 的 `RemoteNotifier`（PROTOCOL 9.3）同一套规矩：标题、正文过 `Texts.plainLine`、
@@ -209,15 +209,14 @@ SwiftTerm，`simctl spawn`），演示模式各页浅色 / 深色截图到 `ios/
 - `against_the_spec`：`tests/kit/spec.rs`（照文档独立写的那一份）出数据，`ios/Tests/KitTests` 逐项核对；Swift 封的配对消息、发的记录、签名再拿回 `kit::spec` 核对（签名用 `ssh-keygen -Y verify`）。证书指纹对 EC、RSA、Ed25519 三种证书和 openssl 算的比；通知的 JSON 怎么清理（和 `attach.rs` 的测试同一条）、限流；
   账号的状态（`kit::spec` 封的：解开、读成模型、哪些账号算用完了、快用完了，配对编号不对的、样子不对的不认）、额度的通知（字、恢复的那一条、不认的样子）
 - `pair_list_attach_type`、`wrong_pin_and_used_code`、`session_ends`：真的服务器、真的辅助程序（`remote-host` 里的会话、`remote-pair-show --web`），手机那一头是 `ios/tools/ccaguest`：扫链接配对、列会话、接入、敲键、会话里的钩子推通知（`remote-notify`）、只看、会话结束、取消配对；指纹不对一个请求都不发成，配对码只能用一次。
-  接入时说自己能缩放（ccaguest 的 `--size 40x20`）：接上不改会话的大小、宿主说会话多大（`size 80 24`），手机打了字才照它排（`size 40 20`）
+  接入时说自己能缩放（ccaguest 的 `--size 40x20`）：一接上会话就照它排（`size 40 20`），box 上打了字照 box 排（`size 80 24`），手机再打字又照它排
 - `accounts_reach_the_phone`：「账号」页和额度的通知那一条路（remote.md「手机上的账号」）：box 上 alice 的 5 小时额度用完了，ccaguest 列会话时带回
   box 上的账号（名字、用量、`exhausted`）；登记推送时带 `--usage`，用完的那一条 box 马上推、恢复的那一条服务器到点推，像通知扩展那样解开、
   字照手机的时区写（测试里是 UTC）；登记不带 `--usage` 就不推，再带上又推
 - `in_the_simulator`（`CCA_IOS_SIM=1`，先跑过 `bash ios/test.sh`：模拟器开着、App 编好了）：模拟器里真的 App（调试版），
   照 `cca remote pair --web` 给的链接配对、接入 box 上真的会话、敲键，box 上收到；会话里推一条通知，App 要弹的标题、副标题、正文对；
   会话开了鼠标上报（假客户端的 `mouse`）以后往下拖三行，box 的终端回显出三格往上的滚轮；截一张 `ios/build/shots/e2e-terminal.png`。
-  大小（`-test-sizes`）：接上时终端照 box 上的 80×24 排（缩小了画），手机上打了字会话照手机排、App 跟着排，box 上打了字又变回 80×24，
-  拖着滚动不改大小。推送带 `-test-push-only`：登记回的是 `ok only`，开了会话以后服务器上的登记只推这个会话，通知照样推到。
+  大小（`-test-sizes`）：一接上会话就照手机排、App 跟着排，box 上打了字又变回 80×24（App 缩小了画），拖着滚动不改大小。推送带 `-test-push-only`：登记回的是 `ok only`，开了会话以后服务器上的登记只推这个会话，通知照样推到。
   拖动的手势本身（`WheelGate`、惯性）没有自动的测试：模拟器里注入不了触摸，要真机上手指试
   box 在 127.0.0.1 上，ATS 不管本机地址：ATS 拦不拦这里看不出来（见「App」的 `Info.plist`）
 - 改了 CcaRemoteKit 故意弄错一处（比如帧的类型）跑一遍，看测试挂不挂

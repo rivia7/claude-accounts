@@ -734,19 +734,25 @@ fn pair_list_attach_type(t: &mut Ctx) {
     let mark = h.mark();
     let mut p = g.attach(&pid, &sid, &["--size", "40x20"]);
     p.wait_open();
-    // App 说自己能缩放：接上、看着不改会话的大小（只有让客户端重画的那一下），宿主告诉它会话多大；它打了字才照它的窗口排
-    wait_for("手机知道会话多大", secs(20), || has(&p.err(), "size 80 24"));
+    // App 说自己能缩放：一接上会话就照它的窗口排，宿主告诉它会话多大（ccaguest 说的 size 是列、行，最后说的那一次是现在的）
+    let last_size = |p: &Attached| -> Option<String> {
+        let err = String::from_utf8_lossy(&p.err()).into_owned();
+        err.lines().filter_map(|l| l.strip_prefix("size ")).last().map(str::to_string)
+    };
+    h.expect_since("<size 20 40>", mark);
+    wait_for("手机知道会话照它排了", secs(20), || (last_size(&p).as_deref() == Some("40 20")).then_some(()));
+    // 这边打了字：又照这边的终端排（手机缩小了画）；手机上打了字再照它排
+    let mark = h.mark();
     h.send(b"say sync\r");
     h.expect_since("<sync>", mark);
-    let re = regex::bytes::Regex::new(r"(?-u)<size (\d+ \d+)>").expect("正则");
-    let sizes: Vec<String> = re.captures_iter(&h.out()[mark..]).map(|c| String::from_utf8_lossy(&c[1]).into_owned()).collect();
-    assert!(sizes.iter().all(|s| s == "23 80" || s == "24 80"), "{sizes:?}");
+    h.expect_since("<size 24 80>", mark);
+    wait_for("手机知道会话照这边排了", secs(20), || (last_size(&p).as_deref() == Some("80 24")).then_some(()));
     let mark = h.mark();
     p.type_in(b"say hello-from-the-phone\r");
     h.expect("<hello-from-the-phone>"); // 会话程序收到了（宿主那边的终端里看得到它的回答）
     h.expect_since("<size 20 40>", mark);
     wait_for("手机收到会话的输出", secs(20), || has(&p.out(), "<hello-from-the-phone>"));
-    wait_for("手机知道会话照它排了", secs(20), || has(&p.err(), "size 40 20"));
+    wait_for("手机知道会话又照它排了", secs(20), || (last_size(&p).as_deref() == Some("40 20")).then_some(()));
     // 会话里的钩子推一条通知（cca remote notify）：手机收到 CcaRemoteKit 解好的
     h.send(format!("run {} remote-notify --title 做完了 --subtitle alice 第一行回复\n", relay::helper(&a).display()));
     // 新版的宿主给每一条一个编号（经推送也来了一份时照它只弹一次）
@@ -1141,17 +1147,14 @@ fn in_the_simulator(t: &mut Ctx) {
     wait_for("登记里只推开着的会话", secs(30), || {
         remote(&fx.d)["guests"].obj().values().any(|g| g.get("push").and_then(|p| p.get("sids")) == Some(&list![&sid]))
     });
-    // App 说自己能缩放：接上不改会话的大小，终端照 box 上的终端排（比手机的屏幕宽：缩小了画）
-    said("shown 80 24");
-    said("typed");
-    h.expect("<from-the-iphone>"); // box 上的会话收到了手机上敲的
-
-    // 手机上打了字：会话照手机排（列数是手机的；行数是两边都画得下的），App 的终端也照它排
+    // App 说自己能缩放：一接上会话就照手机排（列数是手机的；行数是两边都画得下的），App 的终端也照它排
     let re = regex::Regex::new(r"<size (\d+) (\d+)>").expect("正则");
     let end = h.expect_since(r"<size \d+ (\d|[0-7]\d)>", mark);
     let got = String::from_utf8_lossy(&h.out()[mark..end]).into_owned();
     let last = re.captures_iter(&got).last().expect("会话改了大小");
     said(&format!("shown {} {}", &last[2], &last[1]));
+    said("typed");
+    h.expect("<from-the-iphone>"); // box 上的会话收到了手机上敲的
     let mark = h.mark();
 
     // 会话里的钩子推一条通知：App 弹出来（调试版交给 TestDriver 说出来，不真的弹）；来自哪台机器是 App 自己写在副标题开头的

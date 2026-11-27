@@ -72,7 +72,7 @@ final class TerminalSurface {
     }
 
     /// 这块地方的大小定了：告诉 TerminalSession 照平常的字号放得下几列几行（头一次就是接入）。键盘弹出、收起、转屏时一路在变，
-    /// 等停一下再说。新的宿主不拿它定会话的大小，等这台手机上打了字才照它排；会话多大它另外说（TerminalBox.hostSized）
+    /// 等停一下再说。新的宿主接上时、这台手机上打了字时照它排（电脑上打了字就照电脑排）；会话多大它另外说（TerminalBox.hostSized）
     private func measure() {
         guard box.window != nil, box.natural() != nil else { return }
         sizing?.cancel()
