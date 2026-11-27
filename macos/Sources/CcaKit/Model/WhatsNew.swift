@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.12", title: "手机上能结束远程新建的会话，模板要选归属的 Team", points: [
+            .init(symbol: "stop.circle",
+                  text: "照模板远程新建的会话，能在 iPhone 上的 cca App 里结束了：终端页右上角的「结束会话」（这台 Mac 给手机设的是「查看和操作」才有）。在终端里开的会话还是只能在这台 Mac 上结束。"),
+            .init(symbol: "person.3",
+                  text: "新建远程会话的模板时要选归属的 Team，只有在这个 Team 里配对的设备看得到、用得了它。以前存的模板照旧所有 Team 都看得到，改一次就有了归属。"),
+            .init(symbol: "bell.badge",
+                  text: "Antigravity 一轮做完才通知一次，不再每一步都通知：停下 30 秒没接着干才算做完，后台还有任务时也不算。"),
+            .init(symbol: "arrow.down.circle",
+                  text: "放模板的 Mac 和 iPhone 上的 App 都要更新；Team 的服务器不用更新。"),
+        ]),
         ReleaseNote(version: "3.7.11", title: "Team 账号的默认别名带上 Team 名，转发中转由 Team 设置", points: [
             .init(symbol: "person.text.rectangle",
                   text: "Team 给的账号没起过别名时，默认叫「Team 名-1」「Team 名-2」……（以前是 team-1、team-2），号不变；Team 改了名字，这些别名跟着换。管理员起的别名不变。"),
