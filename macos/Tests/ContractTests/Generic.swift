@@ -1114,13 +1114,26 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
             check("\(name) \(p.short) 记在某个 Team 的服务器上", p.team?.count == 32)
         }
         if let l = r["launch"] {
-            // 远程启动（9.4）：只有手机、能看和操作的才开得了
-            check("\(name) \(p.short) 的 launch 是布尔，开着的是手机、能看和操作", isBool(l) && (!p.launch || (p.web && p.incoming == .control)))
+            // 远程启动（9.4）：能看和操作的才开得了（3.7.6 只给手机，之后配对过的电脑也行）
+            check("\(name) \(p.short) 的 launch 是布尔，开着的能看和操作", isBool(l) && (!p.launch || p.incoming == .control))
         }
     }
     if let l = raw["launcher"] as? [String: Any] {
-        check("\(name) launcher：running 是布尔，模板个数是数字，能远程启动的手机就是 launch 开着的那几台",
+        check("\(name) launcher：running 是布尔，模板个数是数字，能远程启动的就是 launch 开着的那几台",
               isBool(l["running"]) && wholeCount(l["templates"]) && doc.launcher?.peers == doc.peers.filter(\.launch).count)
+    }
+    if let rl = raw["peer_launchers"] {
+        // 别的机器上允许这台 Mac 远程启动的（9.1、9.5）：一个配对一个，不算会话；模板的编号 8 个、摘要 16 个十六进制字符
+        let hex = { (s: String, n: Int) in s.count == n && s.allSatisfy { $0.isHexDigit && !$0.isUppercase } }
+        let ls = doc.peerLaunchers
+        check("\(name) peer_launchers 都解码了：编号 32 个十六进制字符，是配对过的机器（一台一个），不是会话", (rl as? [Any])?.count == ls.count
+              && ls.allSatisfy { l in hex(l.id, 32) && doc.peers.contains { $0.id == l.peer } && nonEmpty(l.machine) != nil }
+              && Set(ls.map(\.peer)).count == ls.count && ls.allSatisfy { l in !doc.sessions.contains { $0.id == l.id } })
+        for l in ls {
+            check("\(name) peer_launchers[\(l.machine)]：state 是 ok 或 offline，more 不是负的，模板的编号、摘要对、编号不重复，有名字",
+                  (l.state == .ok || l.state == .offline) && l.more >= 0 && l.templates.allSatisfy { hex($0.id, 8) && hex($0.digest, 16) && !$0.name.isEmpty }
+                  && Set(l.templates.map(\.id)).count == l.templates.count)
+        }
     }
     check("\(name) 用不了中转时不列别的机器上的会话", doc.relayAvailable || doc.sessions.allSatisfy(\.isLocal))
     knownEnums(name, auditRemote(doc))
@@ -1666,6 +1679,10 @@ func auditRemote(_ doc: RemoteDoc) -> [String] {
         a.add("peers[\(p.short)].state", p.state)
     }
     for (i, e) in doc.errors.enumerated() { a.add("errors[\(i)].code", e.code) }
+    for l in doc.peerLaunchers {
+        a.add("peer_launchers[\(l.machine)].state", l.state)
+        for t in l.templates { a.add("peer_launchers[\(l.machine)].templates[\(t.id)].tool", t.tool) }
+    }
     return a.unknown
 }
 

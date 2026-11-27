@@ -254,22 +254,16 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
     }
     let all = peers::load();
     let errors = List::new();
+    let launchers = List::new();
     let mut seen = None;
     if distant && !all.is_empty() {
         // 配对记在哪台服务器上就问哪台；哪一台没问到，只是它上面的那几个配对这次不知道
         let got = far::fetch_all(&all, 8)?;
         for f in &got.sessions {
-            // 别的机器上的会话是经哪个配对看到的，就是哪个 Team 的服务器上的
-            let team = all.iter().find(|p| p.pid == f.pid).map_or(V::None, |p| V::from(p.hub.team()));
-            sessions.push(dict! {
-                "id" => f.sid.as_str(), "short" => &f.sid[..8], "where" => "peer", "peer" => f.pid.as_str(),
-                "machine" => f.peer.as_str(), "tool" => f.tool.as_str(), "name" => f.name.as_str(), "host_name" => f.host_name.as_str(),
-                "cwd" => f.cwd.as_str(),
-                "since_epoch" => if f.since > 0.0 { V::from(f.since) } else { V::None }, "viewers" => f.viewers,
-                "local_terminal" => V::None,
-                "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" },
-                "team" => team
-            });
+            sessions.push(far_entry(f, &all));
+        }
+        for l in &got.launchers {
+            launchers.push(launcher_entry(l, &all));
         }
         for (_, why, asked) in &got.errors {
             errors.push(dict! { "code" => asked.as_ref().map_or("relay_off", relay_code), "message" => why.as_str() });
@@ -305,8 +299,40 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
     };
     Ok(dict! {
         "version" => 1, "kind" => "remote", "generated_epoch" => time(), "enabled" => remote_on(&cfg_load()?), "relay" => relay,
-        "sessions" => sessions, "peers" => paired, "errors" => errors, "launcher" => launch::summary()
+        "sessions" => sessions, "peers" => paired, "errors" => errors, "launcher" => launch::summary(), "peer_launchers" => launchers
     })
+}
+
+/// 别的机器上的一个会话在给界面 App 的文档里的样子（PROTOCOL 9.1 的 `sessions[]`；`remote launch --json` 的 `session` 也是它）
+pub(super) fn far_entry(f: &far::Far, all: &[peers::Peer]) -> Dict {
+    // 别的机器上的会话是经哪个配对看到的，就是哪个 Team 的服务器上的
+    let team = all.iter().find(|p| p.pid == f.pid).map_or(V::None, |p| V::from(p.hub.team()));
+    dict! {
+        "id" => f.sid.as_str(), "short" => &f.sid[..8], "where" => "peer", "peer" => f.pid.as_str(),
+        "machine" => f.peer.as_str(), "tool" => f.tool.as_str(), "name" => f.name.as_str(), "host_name" => f.host_name.as_str(),
+        "cwd" => f.cwd.as_str(),
+        "since_epoch" => if f.since > 0.0 { V::from(f.since) } else { V::None }, "viewers" => f.viewers,
+        "local_terminal" => V::None,
+        "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" },
+        "team" => team
+    }
+}
+
+/// 别的机器上允许这台机器远程启动的启动器（PROTOCOL 9.1 的 `peer_launchers[]`）：它的模板，`cca remote launch` 用
+fn launcher_entry(l: &far::FarLauncher, all: &[peers::Peer]) -> Dict {
+    let team = all.iter().find(|p| p.pid == l.pid).map_or(V::None, |p| V::from(p.hub.team()));
+    let templates = List::new();
+    for t in &l.templates {
+        templates.push(dict! {
+            "id" => t.id.as_str(), "digest" => t.digest.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(),
+            "account" => t.account.as_str(), "host_account" => t.host_account.as_str(), "dir" => t.dir.as_str(),
+            "args" => t.args.as_str(), "line" => t.line
+        });
+    }
+    dict! {
+        "id" => l.sid.as_str(), "peer" => l.pid.as_str(), "machine" => l.peer.as_str(),
+        "state" => if l.online { "ok" } else { "offline" }, "team" => team, "more" => l.more, "templates" => templates
+    }
 }
 
 /// `remote-list [--local|--far] [--json]`：一行一个会话；一个都没有时什么都不打印。先是这台机器上的（顺手清掉宿主已经不在了的
@@ -342,6 +368,11 @@ pub fn cmd_remote_list(args: &[String]) -> R<()> {
     }
     for (_, why, asked) in &seen.errors {
         crate::err!("别的机器上的会话{}：{why}", if asked.is_some() { "没查到" } else { "没查" });
+    }
+    // 别的机器允许这台机器远程启动的：说一句（一行一个会话的 stdout 不动）
+    if !seen.launchers.is_empty() {
+        let names: Vec<String> = seen.launchers.iter().map(|l| format!("「{}」", l.peer)).collect();
+        crate::err!("{}上能用模板新建会话：cca remote launch 看有哪些模板", names.join("、"));
     }
     Ok(())
 }

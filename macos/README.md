@@ -74,11 +74,11 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 ```
 
 只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、cost / cost-wide / cost-day / cost-me / cost-device / cost-orphan-device（折合金额页：所有设备按周、宽窗口 1680×1000、按日、本机、另一台设备按日、只有认不出账号的用量的那台设备）、account-cost / account-cost-day / account-cost-me / account-cost-device / account-cost-empty / account-cost-codex（账号页的「折合金额」：按周、按日、本机、很久没同步上来的另一台设备、还没有记录、ChatGPT 账号）、remote / remote-terminal / remote-terminal-view / remote-tabs-list / remote-off（远程会话页：列表、接入一个、再接入一个只看的、两个接着时回到列表）、sharing（共享与同步页）、pinned（有置顶账号的总览和侧栏），
-再加上提问会话每一页的 flow-*、菜单栏面板 menubar、显示细节时的 details（账号页、分流页、折合金额）、直接改别名的 rename、卡片教程每一步的 tutorial、每个版本“更新了什么”的 whatsnew、
+再加上提问会话每一页的 flow-*、菜单栏面板 menubar、显示细节时的 details（账号页、分流页、折合金额）、直接改别名的 rename、在配对过的另一台机器上新建会话的弹层 remote-launch、卡片教程每一步的 tutorial、每个版本“更新了什么”的 whatsnew、
 检查更新找到新版本时顶上的提示条 update、插画画廊 gallery：每种状态 × 几种档位，不依赖演示数据，调插画用；office 是总览页），每个截浅色、深色两张 PNG 后退出。截图时窗口不在前台，插画是静止的那一帧。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
 不要“屏幕录制”权限；窗口放在别的窗口后面、不抢焦点，所以截出来是窗口不在前台时的样子（主按钮是灰的）。菜单栏面板是近似的
-（真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。弹层（flow-*、tutorial、whatsnew）截的是弹层
+（真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。弹层（flow-*、remote-launch、tutorial、whatsnew）截的是弹层
 四周各多 24 点的那一块（连着后面变暗的主窗口），和主窗口一样是屏幕原样的分辨率。`CCA_GUI_SNAPSHOT_TIPS=0` 把页面上的提示卡片都关掉（像点过“知道了”）。
 
 README 的图（`docs/images/`）：带上 `CCA_GUI_SNAPSHOT_TIPS=0`；夹具拷一份，`hello.json` 的 `cca_version` 改成和 App 一样（不然顶上有
@@ -250,8 +250,10 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   上面说一句怎么了，可以「重新接入」「关闭」。看得见时 15 秒查一次列表。做法和坑在 docs/dev/remote.md「界面 App」。
   cca 有 `hello.remote_launch` 时还有「远程启动」（PROTOCOL 9.4）：最下面一节列出这台 Mac 上的模板（名字、工具、账号、文件夹、参数，用不了的标出原因），
   「新建模板…」「修改…」是一个弹层（`RemoteTemplateSheet`：名字、工具、账号、文件夹面板、一行参数，原样交给 cca 拆：`--args-line`），「删除…」先问一句；
-  「配对过的机器」里手机那一行多一个「允许远程启动」开关（只让看、不让接入的停用、说原因；打开时 cca 先发同意事件），有允许的手机时那一节说一句
-  启动器在不在跑。模板不定时查：这一页打开时、「刷新」、改过以后，列表里说的个数对不上时再查。
+  「配对过的机器」里手机那一行多一个「允许远程启动」开关（cca 有 `hello.remote_launch_machines` 时电脑那一行也有；只让看、不让接入的停用、说原因；
+  打开时 cca 先发同意事件），有允许的设备时那一节说一句启动器在不在跑。模板不定时查：这一页打开时、「刷新」、改过以后，列表里说的个数对不上时再查。
+  反过来，配对过的另一台机器允许这台 Mac 远程启动时（cca 有 `hello.remote_launch_machines`，PROTOCOL 9.5），「可以接入的会话」里那台机器自成一组
+  （没有会话也有），标题旁边「新建会话…」：弹层（`RemoteLaunchSheet`）里挑那台机器上的模板、写一句开场白，起好了马上在这一页接入；没成的原因写在弹层里。
 - **共享与同步**（`SharingPage`，PROTOCOL 4.14；hello 有 App 认识的 `team` 时侧栏才有这一页，`AppModel.teamAvailable`）：只有「Team」（`TeamsCard`）：
   这台设备在的各个 Team（状态、给了它几个账号）、「粘贴邀请链接…」「同步配置」「新建 Team…」；管理员的 Team 还没接上服务器时「部署到我的服务器…」，
   接上了展开「设备和账号」（设备、「复制邀请链接」——经剪贴板的机密标记、60 秒后清掉——、每台设备能用哪些账号、各个账号走哪个节点、移除设备），

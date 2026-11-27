@@ -481,7 +481,7 @@ const ALLOW_USAGE: &str = "用法：remote-allow 名字 control|view|none | remo
 
 /// `remote-allow 名字 control|view|none`：对方能对这台机器的会话做什么。开着的会话几秒钟内照新的来
 /// （不让了的、改成只看的，正接着的那一处会被断开；不再是看和操作都让的，远程启动也一起关上）。stdout 一行：对方的名字。
-/// `remote-allow 名字 launch on|off`：能不能用这台机器上的模板新建会话（launch.rs）：只给手机、看和操作都让的（同意 bash 问过）。
+/// `remote-allow 名字 launch on|off`：能不能用这台机器上的模板新建会话（launch.rs）：只给看和操作都让的，手机、配对过的电脑都行（同意 bash 问过）。
 /// `remote-allow --show 名字`：只是找出是哪一个（bash 照它问同意）：一行 `配对编号<TAB>名字<TAB>手机 1|0<TAB>control|view|none<TAB>远程启动 1|0`
 pub fn cmd_remote_allow(args: &[String]) -> R<()> {
     arity("cmd_remote_allow", args, 2, 3)?;
@@ -501,9 +501,6 @@ pub fn cmd_remote_allow(args: &[String]) -> R<()> {
     match (args[1].as_str(), args.get(2).map(String::as_str)) {
         ("launch", Some(word @ ("on" | "off"))) => {
             let on = word == "on";
-            if on && !p.web {
-                return die("只有手机能远程启动会话（iPhone 上的 cca App）：和别的机器的配对不能开");
-            }
             if on && p.incoming != Incoming::Control {
                 return die(format!("「{}」现在{}：先让它能看和操作（cca remote allow 名字 control）", p.name, p.incoming.text()));
             }

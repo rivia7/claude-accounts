@@ -51,6 +51,8 @@ enum Sheet: Identifiable, Equatable {
     case flow(FlowModel)
     /// 新建、修改一个远程启动的模板（PROTOCOL 9.4）。
     case remoteTemplate(RemoteTemplateDraft)
+    /// 用配对过的另一台机器上的模板在那台机器上新建会话（PROTOCOL 9.5）。
+    case remoteLaunch(RemoteLaunchDraft)
 
     var id: String {
         switch self {
@@ -58,6 +60,7 @@ enum Sheet: Identifiable, Equatable {
         case .failure(let f): return "failure:" + f.id.uuidString
         case .flow(let f): return "flow:" + f.id.uuidString
         case .remoteTemplate(let d): return "remote-template:" + d.id.uuidString
+        case .remoteLaunch(let d): return "remote-launch:" + d.id.uuidString
         }
     }
 }
@@ -2044,18 +2047,24 @@ final class AppModel {
         return l.running
     }
 
-    /// 这台手机现在为什么不能打开「允许远程启动」（cca 也这么查：只给手机、要它能看和操作这台 Mac 的会话）；能开、已经开着时是 nil
+    /// 这台配对的设备现在为什么不能打开「允许远程启动」（cca 也这么查：要它能看和操作这台 Mac 的会话；cca 没有
+    /// `hello.remote_launch_machines` 时只给手机）；能开、已经开着时是 nil
     func remoteLaunchBlocked(_ peer: RemotePeer) -> String? {
         if peer.launch { return nil }
-        if !peer.web { return "只有手机能远程启动会话" }
+        if !peer.web, !remoteLaunchMachinesAvailable { return "只有手机能远程启动会话" }
         if peer.incoming != .control { return "先把「它接入这台 Mac 时」改成「看和操作」" }
         return nil
     }
 
-    /// 这台手机能不能用这台 Mac 上的模板新建会话（`cca remote allow <配对的 id> launch on|off`）。打开时 cca 先要同意
+    /// 这台配对的设备有没有「允许远程启动」这一项：手机都有；配对过的电脑要 cca 有 `hello.remote_launch_machines`
+    func remoteLaunchOffered(_ peer: RemotePeer) -> Bool {
+        remoteLaunchAvailable && (peer.web || remoteLaunchMachinesAvailable)
+    }
+
+    /// 这台配对的设备能不能用这台 Mac 上的模板新建会话（`cca remote allow <配对的 id> launch on|off`）。打开时 cca 先要同意
     /// （`consent.remote_launch`，对话框里说的都是 cca 给的），同意了重跑；做完再查一次列表和模板
     func setRemoteLaunch(_ peer: RemotePeer, _ on: Bool) {
-        guard remoteLaunchAvailable, peer.web, peer.launch != on, !on || remoteLaunchBlocked(peer) == nil else { return }
+        guard remoteLaunchOffered(peer), peer.launch != on, !on || remoteLaunchBlocked(peer) == nil else { return }
         runRemote(.remoteLaunch(peer: peer.id, on: on), failureTitle: on ? "没能让「\(peer.name)」远程启动" : "没能关掉「\(peer.name)」的远程启动")
     }
 
@@ -2138,6 +2147,56 @@ final class AppModel {
         runRemote(.remoteTemplateRemove(id: t.id), failureTitle: "没能删掉模板「\(t.name)」")
     }
 
+    // MARK: 用别的机器上的模板新建会话（PROTOCOL 9.5）
+
+    /// cca 能用配对过的另一台机器上的模板在那台机器上新建会话（`cca remote launch --json`），配对过的电脑也能打开「允许远程启动」
+    /// （`hello.remote_launch_machines`）。旧版 cca 没有：只有手机能远程启动，这里不给「新建会话…」
+    var remoteLaunchMachinesAvailable: Bool { remoteLaunchAvailable && hello?.remoteLaunchMachines == 1 }
+
+    /// 配对过的机器上允许这台 Mac 远程启动的启动器（列表里的 `peer_launchers`，跟着列表定时查）
+    var remotePeerLaunchers: [RemotePeerLauncher] { remoteLaunchMachinesAvailable ? remote.doc?.peerLaunchers ?? [] : [] }
+
+    /// 在别的机器上起的会话一开始多大：上次在这里开的终端的大小（接进去以后会话跟着这里的终端调），还没开过是 120 列 36 行
+    @ObservationIgnored private(set) var remoteLaunchSize = (cols: 120, rows: 36)
+
+    /// 打开「新建会话」的弹层：挑那台机器上的一个模板（只有一个时先选上）。那台机器暂时连不上服务器时不开
+    func newRemoteSession(on launcher: RemotePeerLauncher) {
+        guard phase == .ready, remoteLaunchMachinesAvailable, launcher.online, !launcher.templates.isEmpty else { return }
+        let only = launcher.templates.count == 1 ? launcher.templates[0].id : nil
+        present(.remoteLaunch(RemoteLaunchDraft(launcher: launcher, template: only)))
+    }
+
+    /// 照弹层里选的在那台机器上起会话（`cca remote launch … --json`）：起好了关掉弹层、再查一次列表、接入新会话（在这一页里开一个终端）。
+    /// 那台机器不起（模板改过了、会话太多……）、经服务器没成：cca 说的原因写在弹层里，列表也再查一次（模板可能变了）。
+    /// 正在起的时候关掉了弹层：照样起完、接入；没起成就弹一条提示说原因（弹层没了）
+    func startRemoteLaunch(_ d: RemoteLaunchDraft) {
+        guard phase == .ready, remoteLaunchMachinesAvailable, let client, let t = d.chosen, d.canStart else { return }
+        d.error = nil
+        d.starting = true
+        let size = remoteLaunchSize
+        let command = CcaCommand.remoteStart(peer: d.launcher.peer, template: t.id, digest: t.digest, cols: size.cols, rows: size.rows, line: d.sentLine)
+        track { [weak self] in
+            let (doc, r) = await client.document(command, as: RemoteLaunchStartDoc.self, prompter: nil)
+            guard let self else { return }
+            d.starting = false
+            guard let doc else {
+                if r.failure?.reason == .cancelled { return }
+                let why = nonEmpty(r.failure?.message) ?? "没能在「\(d.launcher.machine)」上新建会话"
+                d.error = why
+                if self.sheet != .remoteLaunch(d) { self.showToast(why, .warning) }
+                self.refreshRemote(manual: true)
+                return
+            }
+            if self.sheet == .remoteLaunch(d) { self.sheet = nil }
+            self.refreshRemote(manual: true)
+            if let s = doc.session, s.attachable {
+                self.attachRemote(s, readOnly: false)
+            } else {
+                self.showToast("在「\(d.launcher.machine)」上起好了会话，它还没在服务器上登记好：过一会儿在列表里接入", .info)
+            }
+        }
+    }
+
     /// 这个会话在这里开着的终端（没有就是 nil；断开了、结束了但还没关掉的也算）
     func remoteTerminal(for session: RemoteSession) -> RemoteTerminal? {
         remoteTerminals.first { $0.session.id == session.id }
@@ -2158,8 +2217,9 @@ final class AppModel {
             showToast("最多同时开 \(AppModel.remoteTerminalLimit) 个终端：先关掉一个再接入", .warning)
             return
         }
-        let t = RemoteTerminal(session: session, readOnly: viewing) { arguments, cols, rows, onEvent in
-            try client.startTerminal(arguments, cols: cols, rows: rows, onEvent: onEvent)
+        let t = RemoteTerminal(session: session, readOnly: viewing) { [weak self] arguments, cols, rows, onEvent in
+            self?.remoteLaunchSize = (cols, rows)   // 在别的机器上新起的会话照这个大小起
+            return try client.startTerminal(arguments, cols: cols, rows: rows, onEvent: onEvent)
         }
         t.onEnd = { [weak self] _ in self?.refreshRemote(manual: true) }
         if let old, let i = remoteTerminals.firstIndex(where: { $0 === old }) {

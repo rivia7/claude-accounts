@@ -262,6 +262,28 @@ enum Snapshot {
             model.cancelRename()
             try? await Task.sleep(nanoseconds: 600_000_000)
         }
+        // 在配对过的另一台机器上新建会话（PROTOCOL 9.5）：那台机器那一组的「新建会话…」打开的弹层（选上第一个模板、写了一句开场白）
+        if only.isEmpty || only.contains("remote-launch") {
+            model.selection = .remoteSessions
+            if model.remote.doc == nil { model.refreshRemote(manual: true) }
+            for _ in 0..<30 where model.remote.doc == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            if let l = model.remotePeerLaunchers.first(where: \.online) {
+                model.newRemoteSession(on: l)
+                if case .remoteLaunch(let d)? = model.sheet {
+                    d.template = d.template ?? l.templates.first(where: \.line)?.id
+                    d.line = "先跑一遍测试"
+                }
+                for (label, appearance) in appearances {
+                    NSApp.appearance = NSAppearance(named: appearance)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if let sheet = window.attachedSheet {
+                        await capture(sheet, to: dir.appendingPathComponent("remote-launch-\(label).png"))
+                    }
+                }
+                model.dismissSheet()
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+        }
         // 卡片教程：每一步截一张弹层（浅色、深色）
         if only.isEmpty || only.contains("tutorial") {
             for step in 0..<TutorialCard.all.count {

@@ -139,5 +139,60 @@
     "running": true,
     "templates": 3,
     "peers": 1
-  }
+  },
+  "peer_launchers": [
+    {
+      "id": "6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a",
+      "peer": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "machine": "office-linux",
+      "state": "ok",
+      "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
+      "more": 0,
+      "templates": [
+        {
+          "id": "2b2b2b2b",
+          "digest": "0a1b2c3d4e5f6a7b",
+          "name": "API：修 bug",
+          "tool": "claude",
+          "account": "工作",
+          "host_account": "主力",
+          "dir": "~/srv/api",
+          "args": "--model opus",
+          "line": true
+        },
+        {
+          "id": "4d4d4d4d",
+          "digest": "1122334455667788",
+          "name": "任务队列：查失败",
+          "tool": "codex",
+          "account": "dave",
+          "host_account": "dave",
+          "dir": "~/srv/jobs",
+          "args": "'看看昨晚失败的任务'",
+          "line": false
+        }
+      ]
+    },
+    {
+      "id": "8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c",
+      "peer": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+      "machine": "home-mini",
+      "state": "offline",
+      "team": "0123456789abcdef0123456789abcdef",
+      "more": 2,
+      "templates": [
+        {
+          "id": "6f6f6f6f",
+          "digest": "99aabbccddeeff00",
+          "name": "笔记",
+          "tool": "claude",
+          "account": "个人",
+          "host_account": "个人",
+          "dir": "~/notes",
+          "args": "",
+          "line": true
+        }
+      ]
+    }
+  ]
 }

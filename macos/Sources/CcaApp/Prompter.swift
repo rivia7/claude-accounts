@@ -38,6 +38,7 @@ struct SheetView: View {
         case .failure(let f): FailureSheet(info: f)
         case .flow(let f): FlowSheet(flow: f)
         case .remoteTemplate(let d): RemoteTemplateSheet(draft: d)
+        case .remoteLaunch(let d): RemoteLaunchSheet(draft: d)
         }
     }
 }

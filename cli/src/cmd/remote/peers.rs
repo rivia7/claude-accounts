@@ -24,9 +24,10 @@ pub enum Incoming {
 }
 
 impl Peer {
-    /// 能不能让它远程启动（launch.rs）：只有手机、看和操作都让的
+    /// 能不能让它远程启动（launch.rs）：看和操作都让的。手机、配对过的电脑都行（3.7.6 只给手机；2026-11-27 用户定的：Mac 上的
+    /// cca App、`cca remote launch` 也要能远程启动）
     pub fn can_launch(&self) -> bool {
-        self.web && self.incoming == Incoming::Control
+        self.incoming == Incoming::Control
     }
 }
 
@@ -73,7 +74,7 @@ pub struct Peer {
     pub web: bool,
     /// 这个配对是在哪台服务器上做的（记在它上面）：经它只看得到走这台服务器的会话——某个 Team 的同步服务器
     pub hub: HubKind,
-    /// 对方能用这台机器上的模板新建会话（远程启动，launch.rs；`cca remote allow 名字 launch on`）。只有手机、看和操作都让的
+    /// 对方能用这台机器上的模板新建会话（远程启动，launch.rs；`cca remote allow 名字 launch on`）。看和操作都让的
     /// 才算（读的时候不是这样的当它没开）；配对表里只在开着时写这一项
     pub launch: bool,
 }
@@ -259,12 +260,12 @@ mod tests {
         assert!(row_of(&pid, &full).unwrap().web);
         full.set("web", "yes");
         assert!(!row_of(&pid, &full).unwrap().web, "不是 true 的都不算");
-        // 远程启动：只有手机、看和操作都让的才算开着
+        // 远程启动：看和操作都让的才算开着，手机、别的电脑都行（3.7.6 只给手机）
         full.set("launch", true);
-        assert!(!row_of(&pid, &full).unwrap().launch, "不是手机");
-        full.set("web", true);
         assert!(!row_of(&pid, &full).unwrap().launch, "只让看");
         full.set("incoming", "control");
+        assert!(row_of(&pid, &full).unwrap().launch, "不是手机也行");
+        full.set("web", true);
         assert!(row_of(&pid, &full).unwrap().launch);
         full.set("launch", 1);
         assert!(!row_of(&pid, &full).unwrap().launch, "不是 true 的都不算");

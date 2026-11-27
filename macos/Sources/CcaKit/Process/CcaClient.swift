@@ -92,6 +92,10 @@ enum CcaCommand: Sendable, Hashable {
     /// 这台手机能不能用这台 Mac 上的模板新建会话（`cca remote allow <配对的 id> launch on|off`）：打开时 cca 先发 `consent.remote_launch`
     /// （范围是配对的 id），同意了重跑。
     case remoteLaunch(peer: String, on: Bool)
+    /// 用配对过的另一台机器上的模板在那台机器上新建会话（`cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行>
+    /// [--line <开场白>] --json`，PROTOCOL 9.5）：cca 进那台机器的启动器、等它起好、等新会话在服务器上登记好，stdout 是
+    /// `RemoteLaunchStartDoc`；那台机器不起时 `fail` 说原因。要 `hello.remote_launch_machines`。
+    case remoteStart(peer: String, template: String, digest: String, cols: Int, rows: Int, line: String?)
     /// 一个 Team 的设备和配置（`cca team devices <Team> --json`，PROTOCOL 4.14；只有管理员的设备问得到）：和服务器对一遍，可能发布。
     /// auto：这一页看得见时自己查的（低优先级）
     case teamDevices(team: String, auto: Bool)
@@ -129,7 +133,7 @@ enum CcaCommand: Sendable, Hashable {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .devices(let t, _, _), .devicesAll(let t), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
              .costSync, .costHook, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch,
+             .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch, .remoteStart,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamAdmin, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock,
              .teamExport, .teamImport: return nil
         }
@@ -142,7 +146,7 @@ enum CcaCommand: Sendable, Hashable {
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .devicesAll, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
              .clientAutoInstall, .clientInstall, .costSync, .costHook, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch,
+             .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch, .remoteStart,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamAdmin, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock,
              .teamExport, .teamImport: return nil
         }
@@ -210,6 +214,8 @@ enum CcaCommand: Sendable, Hashable {
                 + (replace.map { ["--replace", $0] } ?? []) + ["--args-line", argsLine]
         case .remoteTemplateRemove(let id): return ["remote", "template", "rm", id]
         case .remoteLaunch(let peer, let on): return ["remote", "allow", peer, "launch", on ? "on" : "off"]
+        case .remoteStart(let peer, let template, let digest, let cols, let rows, let line):
+            return ["remote", "launch", peer, template, "--digest", digest, "--size", "\(cols)x\(rows)"] + (line.map { ["--line", $0] } ?? []) + ["--json"]
         case .teamDevices(let team, _): return ["team", "devices", team, "--json"]
         case .teamSync: return ["team", "sync"]
         case .teamLeave(let team): return ["team", "leave", team]
@@ -249,6 +255,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteEnd: return 40   // 里面的程序不理会时 cca 等宿主强行结束它（5 秒），再等它收场
         case .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove: return 30   // 只读写这台 Mac 上的文件
         case .remoteLaunch: return 40   // 改配对表，再照它装上 / 卸掉启动器（launchctl）
+        case .remoteStart: return 100   // 问服务器、进启动器、等它回话（最多 25 秒），再等新会话登记好（最多 45 秒）
         case .teamDevices, .teamInvite, .teamRevoke, .teamAdmin, .teamRename: return 60   // 问 Team 的服务器，发布配置（设备多时分几次存）
         case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock: return 180   // 改完账号表马上照它对一遍，可能同步路由器
         case .teamExport: return 30   // 只读管理员这边的配置、写一个文件
@@ -265,7 +272,7 @@ enum CcaCommand: Sendable, Hashable {
         case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .reorder, .update, .updateCheck, .clientMode,
              .clientAutoInstall, .devices, .devicesAll, .keyShow, .keyForget, .costSync, .costHook, .mailForget, .mailTrustForwarderOff,
              .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch,
-             .teamDevices, .teamInvite, .teamRevoke, .teamAdmin, .teamRename, .teamExport: return false
+             .remoteStart, .teamDevices, .teamInvite, .teamRevoke, .teamAdmin, .teamRename, .teamExport: return false
         case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock, .teamImport: return true   // 改账号表、同步路由器：半路杀掉会留下一半
         }
     }
@@ -288,6 +295,7 @@ enum CcaCommand: Sendable, Hashable {
         case .costSync: return "cost-sync"   // 定时的和手动的一个接一个
         case .costHook: return "cost-hook"
         case .remoteList, .remoteTemplates: return nil   // AppModel 保证一次一个
+        case .remoteStart: return "remote-start"   // 在别的机器上起会话：一个接一个（那台机器的启动器 3 秒内只认同一台的一次），不和改配对表的排队
         case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .remoteLaunch, .remoteTemplateSave, .remoteTemplateRemove:
             return "remote"   // 改配对表、开关、模板、结束会话：一个接一个
         case .teamDevices: return nil   // AppModel 保证一次一个

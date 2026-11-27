@@ -180,16 +180,21 @@ fn pick(prefix: Option<&str>, all: &[Peer]) -> R<Result<(Target, Option<Server>)
 }
 
 /// 没接上别的机器上的会话：退出码和原因
-struct Miss {
-    code: i32,
-    why: String,
+pub(super) struct Miss {
+    pub(super) code: i32,
+    pub(super) why: String,
     /// 服务器给了票据，是后面连数据端口、握手没成
-    dialed: bool,
+    pub(super) dialed: bool,
 }
 
 /// 经服务器接到另一台机器上的会话：换票据、连数据端口、握手。什么都不往终端上说（重连时终端在原始模式里）
 fn dial_far(f: &Far, peer: &Peer, secret: &[u8], srv: &Server) -> R<Result<Tunnel, Miss>> {
-    let t = match srv.ticket("relay_attach", &dict! { "sid" => f.sid.as_str(), "pid" => f.pid.as_str() })? {
+    dial(&f.sid, peer, secret, srv)
+}
+
+/// 同 [`dial_far`]：sid 是那台机器上的哪个“会话”（远程启动时是它的启动器，start.rs），peer 是它所在的那个配对
+pub(super) fn dial(sid: &str, peer: &Peer, secret: &[u8], srv: &Server) -> R<Result<Tunnel, Miss>> {
+    let t = match srv.ticket("relay_attach", &dict! { "sid" => sid, "pid" => peer.pid.as_str() })? {
         Ok(t) => t,
         Err(e) => {
             let code = if e.error == "no_session" { EXIT_NOT_FOUND } else { EXIT_RELAY };
@@ -199,7 +204,7 @@ fn dial_far(f: &Far, peer: &Peer, secret: &[u8], srv: &Server) -> R<Result<Tunne
     // 服务器要等那台机器另连一条上来才回话
     let made = srv
         .dial(t.port, "view", &t.tid, &t.key, 16.0)
-        .and_then(|mut s| Ok((relay::handshake_viewer(&mut s, peer, secret, &f.sid, &srv.fp)?, s)))
+        .and_then(|mut s| Ok((relay::handshake_viewer(&mut s, peer, secret, sid, &srv.fp)?, s)))
         .and_then(|(chan, s)| Tunnel::new(s, chan));
     Ok(made.map_err(|e| {
         let why = if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) {
@@ -515,7 +520,6 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
             }
         }
     }
-    let asked_ro = read_only; // 用户要的只看（下面那边只让看时也会改成只看：那一种重连以后照那边现在的来）
     let all = peers::load();
     let (target, srv) = match pick(prefix, &all)? {
         Ok(t) => t,
@@ -525,6 +529,18 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
         crate::err!("cca remote attach 要在终端里运行");
         return exit(EXIT_NO_TTY);
     }
+    run(target, srv, read_only, &all)
+}
+
+/// 远程启动起好的会话接进来（start.rs：它已经查过是在终端里、等到了服务器上有这个会话）
+pub(super) fn attach_launched(f: Far, srv: Server) -> R<()> {
+    let all = peers::load();
+    run(Target::Far(f), Some(srv), false, &all)
+}
+
+/// 接进去、一直到断开或者会话结束：这台机器上的连宿主的 socket，别的机器上的经服务器（srv）。退出码见开头
+fn run(target: Target, srv: Option<Server>, mut read_only: bool, all: &[Peer]) -> R<()> {
+    let asked_ro = read_only; // 用户要的只看（下面那边只让看时也会改成只看：那一种重连以后照那边现在的来）
     let (sid, is_far) = match &target {
         Target::Near(s) => (s.meta.sid.clone(), false),
         Target::Far(f) => (f.sid.clone(), true),

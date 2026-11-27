@@ -25,12 +25,16 @@ struct RemoteDoc: CcaDocument, Equatable {
     var sessions: [RemoteSession]
     var peers: [RemotePeer]
     var errors: [RemoteProblem]
-    /// 远程启动（PROTOCOL 9.4）：等手机来起会话的后台进程在不在跑、有几个模板、几台手机能用。旧版 cca 没有这一项（nil）
+    /// 远程启动（PROTOCOL 9.4）：等配对的设备来起会话的后台进程在不在跑、有几个模板、几台能用。旧版 cca 没有这一项（nil）
     var launcher: RemoteLauncher?
+    /// 配对过的机器上允许这台 Mac 远程启动的（PROTOCOL 9.1、9.5，要 `hello.remote_launch_machines`）：那台机器上的启动器和它的模板。
+    /// 旧版 cca 没有这一项（空的）
+    var peerLaunchers: [RemotePeerLauncher]
 
     enum CodingKeys: String, CodingKey {
         case version, kind, enabled, relay, sessions, peers, errors, launcher
         case generatedEpoch = "generated_epoch"
+        case peerLaunchers = "peer_launchers"
     }
 
     private struct Relay: Decodable {
@@ -60,9 +64,12 @@ struct RemoteDoc: CcaDocument, Equatable {
         peers = c.lossyArray(RemotePeer.self, .peers) ?? []
         errors = c.lossyArray(RemoteProblem.self, .errors) ?? []
         launcher = c.lossy(RemoteLauncher.self, .launcher)
+        peerLaunchers = c.lossyArray(RemotePeerLauncher.self, .peerLaunchers) ?? []
     }
 
     func session(_ id: String) -> RemoteSession? { sessions.first { $0.id == id } }
+    /// 这个配对（`peers[].id`）那一头的启动器
+    func peerLauncher(_ peer: String) -> RemotePeerLauncher? { peerLaunchers.first { $0.peer == peer } }
 }
 
 /// 一个可以接入的会话。
@@ -176,8 +183,8 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     /// 这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）。旧版 cca 没有这个字段、3.6.0 以前经维护者的
     /// 服务器配的（3.6.0 的 cca 不再列出）是 nil：照样列出来，不标是哪个 Team 的
     var team: String?
-    /// 它能用这台 Mac 上的模板新建会话（远程启动，`cca remote allow <配对的 id> launch on`，PROTOCOL 9.4）。只有手机、能看和操作的
-    /// 才会是 true（改成只看、不让时 cca 一起关掉）；旧版 cca 没有这个字段，当成 false
+    /// 它能用这台 Mac 上的模板新建会话（远程启动，`cca remote allow <配对的 id> launch on`，PROTOCOL 9.4）。能看和操作的才会是 true
+    /// （改成只看、不让时 cca 一起关掉）；3.7.6 只给手机，有 `hello.remote_launch_machines` 的 cca 配对过的电脑也行。旧版 cca 没有这个字段，当成 false
     var launch: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -279,13 +286,13 @@ struct RemoteSnapshot: Equatable, Sendable {
 
 // MARK: 远程启动（PROTOCOL 9.4）
 
-/// 远程启动的后台进程（启动器：等允许远程启动的手机来起会话）的样子：`remote list --json`、`remote template list --json` 的 `launcher`。
+/// 远程启动的后台进程（启动器：等允许远程启动的手机、电脑来起会话）的样子：`remote list --json`、`remote template list --json` 的 `launcher`。
 struct RemoteLauncher: Decodable, Sendable, Equatable {
-    /// 在跑：允许远程启动的手机现在就能起会话
+    /// 在跑：允许远程启动的配对的设备现在就能起会话
     var running: Bool
     /// 有几个模板（列表里的这个数和手里的模板对不上时 App 再查一次模板）；没给是 nil
     var templates: Int?
-    /// 有几台手机能远程启动
+    /// 有几台配对的设备（手机、电脑）能远程启动
     var peers: Int
 
     enum CodingKeys: String, CodingKey { case running, templates, peers }
@@ -394,4 +401,111 @@ struct RemoteTemplatesSnapshot: Equatable, Sendable {
     var doc: RemoteTemplatesDoc?
     /// 最近一次没查成的原因；查成了是 nil（上次查到的照样显示）
     var error: String?
+}
+
+// MARK: 用别的机器上的模板新建会话（PROTOCOL 9.5）
+
+/// 配对过的另一台机器上的启动器（`remote list --json` 的 `peer_launchers[]`）：那台机器允许这台 Mac 用它的模板在它上面新建会话
+/// （那台机器上 `cca remote allow 这台 Mac launch on`）。启动器不是会话（不在 `sessions` 里）。
+struct RemotePeerLauncher: Decodable, Sendable, Equatable, Identifiable {
+    /// 启动器在服务器上的编号（32 个十六进制字符）
+    var id: String
+    /// 是哪个配对的（`peers[].id`）：`cca remote launch` 的第一个参数
+    var peer: String
+    /// 那台机器的名字
+    var machine: String
+    /// `ok` 那台机器连着服务器（起得了）；`offline` 暂时连不上
+    var state: RemoteSessionState
+    /// 经哪个 Team 的服务器上的配对看到的；没有是 nil
+    var team: String?
+    /// 说明里放不下、没列出来的模板有几个
+    var more: Int
+    var templates: [RemotePeerTemplate]
+
+    enum CodingKeys: String, CodingKey { case id, peer, machine, state, team, more, templates }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = nonEmpty(c.string(.id)), let peer = nonEmpty(c.string(.peer)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "peer launcher without id or peer"))
+        }
+        self.id = id
+        self.peer = peer
+        machine = c.string(.machine) ?? ""
+        state = c.lossy(RemoteSessionState.self, .state) ?? RemoteSessionState(rawValue: "")
+        team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
+        more = max(c.int(.more) ?? 0, 0)
+        templates = c.lossyArray(RemotePeerTemplate.self, .templates) ?? []
+    }
+
+    /// 现在起得了：那台机器连着服务器
+    var online: Bool { state == .ok }
+    func template(_ id: String) -> RemotePeerTemplate? { templates.first { $0.id == id } }
+}
+
+/// 另一台机器上的一个模板（那台机器写好的：用哪个工具、哪个账号、在哪个文件夹、带哪些参数）。这台 Mac 只能挑一个起，能带开场白的可以带一句。
+struct RemotePeerTemplate: Decodable, Sendable, Equatable, Identifiable {
+    /// 模板的编号（8 个十六进制字符）：`cca remote launch` 的第二个参数
+    var id: String
+    /// 模板的摘要（16 个十六进制字符）：起的时候带上（`--digest`），那台机器上改过了就不起
+    var digest: String
+    var name: String
+    var tool: ToolID?
+    /// 账号：这台 Mac 上也有这个账号时是这台 Mac 上的名字，不然是那台机器说的
+    var account: String
+    /// 那台机器说的名字（它那里的别名）
+    var hostAccount: String?
+    /// 文件夹（那台机器上的路径，主目录写成 ~）
+    var dir: String
+    /// 参数拼成的一行（照 shell 的写法；只是给人看）
+    var args: String
+    /// 能带一句开场白
+    var line: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, digest, name, tool, account, dir, args, line
+        case hostAccount = "host_account"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = nonEmpty(c.string(.id)), let digest = nonEmpty(c.string(.digest)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "peer template without id or digest"))
+        }
+        self.id = id
+        self.digest = digest
+        name = c.string(.name) ?? ""
+        tool = c.lossy(ToolID.self, .tool)
+        account = c.string(.account) ?? ""
+        hostAccount = nonEmpty(c.string(.hostAccount))
+        dir = c.string(.dir) ?? ""
+        args = c.string(.args) ?? ""
+        line = c.bool(.line) ?? false
+    }
+}
+
+/// `cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行> [--line <开场白>] --json`（PROTOCOL 9.5）：
+/// 那台机器起好了会话。cca 等它在服务器上登记好（最多 45 秒）才返回；没等到时 `session` 是 nil（会话起来了，过一会儿列表里有）。
+struct RemoteLaunchStartDoc: CcaDocument, Equatable {
+    static let expectedKind: String? = "remote_launch"
+
+    var version: Int?
+    var kind: String?
+    /// 新会话的编号
+    var id: String
+    /// 新会话：`remote list --json` 的 `sessions[]` 里它那一项
+    var session: RemoteSession?
+
+    enum CodingKeys: String, CodingKey { case version, kind, id, session }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = c.int(.version)
+        kind = c.string(.kind)
+        guard let id = nonEmpty(c.string(.id)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "remote launch without id"))
+        }
+        self.id = id
+        session = c.lossy(RemoteSession.self, .session)
+    }
 }

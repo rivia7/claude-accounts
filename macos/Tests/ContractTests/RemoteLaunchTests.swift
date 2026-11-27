@@ -1,6 +1,7 @@
 import Foundation
 
-// 远程启动（PROTOCOL 9.4）：模板的命令和文档、App 里查模板、新建 / 修改 / 删掉模板（参数那一行原样交给 cca）、「允许远程启动」的开关。
+// 远程启动（PROTOCOL 9.4）：模板的命令和文档、App 里查模板、新建 / 修改 / 删掉模板（参数那一行原样交给 cca）、「允许远程启动」的开关；
+// 用配对过的另一台机器上的模板在那台机器上新建会话（PROTOCOL 9.5）：`peer_launchers`、`cca remote launch … --json`、弹层、起好了接入。
 
 /// 测试里 cca 那一头：模板列表（可以换）、查模板查不成、存模板时 cca 说的不行（线程安全）
 private final class LaunchScript: @unchecked Sendable {
@@ -57,6 +58,18 @@ func remoteLaunchProtocolTests() {
     check("改模板、改远程启动和改配对表的几条一个接一个；都不是哪个账号的",
           changes.allSatisfy { $0.gate != nil && $0.gate == CcaCommand.remoteUnpair(peer: pid).gate && !$0.runsToCompletion && $0.tool == nil && $0.key == nil })
     check("同意项认识", ConsentItem.remoteLaunch.isKnown && ConsentItem.remoteLaunch.rawValue == "remote_launch")
+    let start = CcaCommand.remoteStart(peer: pid, template: "2b2b2b2b", digest: "0a1b2c3d4e5f6a7b", cols: 132, rows: 40, line: "先跑一遍测试")
+    check("在别的机器上新建会话：cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size 列x行 --line 开场白 --json",
+          start.arguments == ["remote", "launch", pid, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "132x40", "--line", "先跑一遍测试", "--json"],
+          "\(start.arguments)")
+    let bare = CcaCommand.remoteStart(peer: pid, template: "2b2b2b2b", digest: "0a1b2c3d4e5f6a7b", cols: 120, rows: 36, line: nil)
+    check("没有开场白：不带 --line；一个接一个，不和改配对表的排队，不是哪个账号的；要等那台机器起好、登记好（超时比问一次服务器长得多）",
+          bare.arguments == ["remote", "launch", pid, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "120x36", "--json"]
+          && bare.gate != nil && bare.gate != CcaCommand.remoteUnpair(peer: pid).gate && !bare.runsToCompletion && bare.tool == nil && bare.key == nil
+          && bare.timeout >= 90 && !bare.isBackground, "\(bare.arguments)")
+    check("hello 的 remote_launch_machines；3.7.6 的 cca 没有",
+          (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1,"remote_launch":1,"remote_launch_machines":1}"#.utf8)))?.remoteLaunchMachines == 1
+          && (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1,"remote_launch":1}"#.utf8)))?.remoteLaunchMachines == nil)
     check("hello 的 remote_launch；旧版 cca 没有",
           (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1,"remote_launch":1}"#.utf8)))?.remoteLaunch == 1
           && (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1}"#.utf8)))?.remoteLaunch == nil)
@@ -98,7 +111,38 @@ func remoteLaunchProtocolTests() {
     }
     check("列表：哪台手机能远程启动、启动器", rl.peers.map(\.launch) == [false, false, true, false] && rl.launcher == RemoteLauncher(running: true, templates: 3, peers: 1))
     let old = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(#"{"version":1,"kind":"remote","sessions":[],"peers":[{"id":"aa","web":true,"incoming":"control"}]}"#.utf8))
-    check("旧版 cca 没有这两项：不算能远程启动，没有启动器", old?.peers.first?.launch == false && old?.launcher == nil)
+    check("旧版 cca 没有这两项：不算能远程启动，没有启动器", old?.peers.first?.launch == false && old?.launcher == nil && old?.peerLaunchers.isEmpty == true)
+
+    // 别的机器上允许这台 Mac 远程启动的（9.5）
+    let pl = rl.peerLaunchers
+    check("peer_launchers：哪个配对、机器的名字、连没连着、模板（编号、摘要、名字、工具、账号、那台机器上的名字、文件夹、参数、能不能带开场白）",
+          pl.map(\.machine) == ["office-linux", "home-mini"] && pl.map(\.online) == [true, false] && pl[0].peer == "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+          && pl[0].templates.map(\.id) == ["2b2b2b2b", "4d4d4d4d"] && pl[0].templates.map(\.line) == [true, false] && pl[0].templates.map(\.tool) == [.claude, .codex]
+          && pl[0].templates[0].digest == "0a1b2c3d4e5f6a7b" && pl[0].templates[0].account == "工作" && pl[0].templates[0].hostAccount == "主力"
+          && pl[0].templates[0].dir == "~/srv/api" && pl[0].templates[0].args == "--model opus" && pl[1].more == 2 && pl[0].more == 0
+          && rl.peerLauncher("c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2")?.machine == "home-mini" && rl.peerLauncher("zz") == nil)
+    let oddL = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(#"""
+        {"version":1,"kind":"remote","sessions":[],"peers":[],"peer_launchers":[{"peer":"b1"},{"id":"aa","peer":"b1","state":"zz_new","more":-3,
+         "templates":[{"id":"0a0b0c0d","name":"没有摘要"},{"id":"1a1b1c1d","digest":"0011223344556677","tool":"zz_new"}]}]}
+        """#.utf8))
+    check("没有编号、配对的启动器丢掉；没有摘要的模板丢掉；不认识的状态、工具留着（不算连着）；more 不是负的",
+          oddL?.peerLaunchers.count == 1 && oddL?.peerLaunchers.first?.online == false && oddL?.peerLaunchers.first?.more == 0
+          && oddL?.peerLaunchers.first?.templates.map(\.id) == ["1a1b1c1d"] && oddL?.peerLaunchers.first?.templates.first?.tool?.isKnown == false
+          && oddL?.peerLaunchers.first?.templates.first?.line == false)
+    let sid = String(repeating: "f7", count: 16)
+    let started = try? DocumentDecoder.decode(RemoteLaunchStartDoc.self, from: Data(#"""
+        {"version":1,"kind":"remote_launch","id":"\#(sid)","session":{"id":"\#(sid)","short":"f7f7f7f7","where":"peer","peer":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+         "machine":"office-linux","tool":"claude","name":"工作","host_name":"主力","cwd":"~/srv/api","since_epoch":1794042000,"viewers":0,
+         "local_terminal":null,"state":"ok","access":"control","team":"5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"}}
+        """#.utf8))
+    check("remote launch --json：新会话的编号、它在列表里的那一项（接得上）", started?.id == sid && started?.session?.id == sid
+          && started?.session?.place == .peer && started?.session?.attachable == true && started?.session?.machine == "office-linux")
+    let unlisted = try? DocumentDecoder.decode(RemoteLaunchStartDoc.self, from: Data(#"{"version":1,"kind":"remote_launch","id":"\#(sid)","session":null}"#.utf8))
+    check("还没登记好：session 是 null；没有编号的不算", unlisted?.id == sid && unlisted?.session == nil
+          && (try? DocumentDecoder.decode(RemoteLaunchStartDoc.self, from: Data(#"{"version":1,"kind":"remote_launch","session":null}"#.utf8))) == nil
+          && (try? DocumentDecoder.decode(RemoteLaunchStartDoc.self, from: Data(#"{"version":1,"kind":"remote","id":"\#(sid)"}"#.utf8))) == nil)
+    check("另一台机器上的模板的第二行：账号、文件夹、参数", Texts.remotePeerTemplateDetail(pl[0].templates[0]) == "工作 · ~/srv/api · --model opus"
+          && Texts.remotePeerTemplateDetail(pl[1].templates[0]) == "个人 · ~/notes")
 
     // 文字
     check("模板的第二行：账号（现在叫什么，没了是存着的邮箱）、文件夹、参数（照 shell 的写法）",
@@ -142,6 +186,33 @@ func remoteLaunchProtocolTests() {
         check("旧版 cca（hello 没有 remote_launch）：不查模板、不弹模板、不调远程启动的命令、不说启动器",
               got && old != hello && m.remoteAvailable && !m.remoteLaunchAvailable && m.remoteTemplates.doc == nil && m.sheet == nil
               && m.remoteLauncherRunning == nil && !t.requests.contains { $0.arguments.prefix(2) == ["remote", "template"] || $0.arguments.contains("launch") })
+        m.shutdown()
+    }
+
+    // 3.7.6 的 cca（hello 有 remote_launch、没有 remote_launch_machines）：只有手机能远程启动，没有「新建会话…」
+    do {
+        let older = hello.replacingOccurrences(of: #""remote_launch_machines": 1,"#, with: "")
+        let t = ScriptedTransport { request, _ in
+            let a = request.arguments
+            if a == ["_gui", "hello"] { return response(0, stdout: older) }
+            if a == ["_gui", "state"] { return response(0, stdout: state) }
+            if a.prefix(2) == ["remote", "list"] { return response(0, stdout: list) }
+            if a == ["remote", "template", "list", "--json"] { return response(0, stdout: templates) }
+            return response(0, stdout: SampleDocs.clientUpdates)
+        }
+        let m = makeModel(t)
+        await m.start()
+        m.setMainVisible(true)
+        m.selection = .remoteSessions
+        let got = await waitUntil { m.remote.doc != nil && !m.remoteLoading }
+        let mini = m.remote.doc?.peers.first { !$0.web && $0.incoming == .control }
+        if let mini { m.setRemoteLaunch(mini, true) }
+        if let l = m.remote.doc?.peerLaunchers.first { m.newRemoteSession(on: l) }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        check("3.7.6 的 cca（hello 没有 remote_launch_machines）：配对过的电脑不能开「允许远程启动」，不给「新建会话…」，不调这两种命令",
+              got && older != hello && m.remoteLaunchAvailable && !m.remoteLaunchMachinesAvailable && m.remotePeerLaunchers.isEmpty
+              && mini.map { m.remoteLaunchBlocked($0) == "只有手机能远程启动会话" && !m.remoteLaunchOffered($0) } == true && m.sheet == nil
+              && !t.requests.contains { $0.arguments.contains("launch") })
         m.shutdown()
     }
 
@@ -214,14 +285,13 @@ func remoteLaunchProtocolTests() {
         check("夹具里有手机、别的机器", false)
         return
     }
-    check("开关：开着的、能开的不拦；不是手机的、只让看的说原因（cca 也这么查）",
+    check("开关：开着的、能开的不拦；只让看的说原因（cca 也这么查）；cca 有 remote_launch_machines：配对过的电脑也能开",
           phone.launch && m.remoteLaunchBlocked(phone) == nil && m.remoteLaunchBlocked(spare) == nil
-          && m.remoteLaunchBlocked(mini) == "只有手机能远程启动会话" && m.remoteLaunchBlocked(viewer)?.contains("看和操作") == true)
+          && m.remoteLaunchBlocked(mini) == nil && m.remoteLaunchOffered(mini) && m.remoteLaunchBlocked(viewer)?.contains("看和操作") == true)
     var n = asked().count
     m.setRemoteLaunch(phone, true)
     m.setRemoteLaunch(viewer, true)
-    m.setRemoteLaunch(mini, true)
-    check("没变的、拦着的、不是手机的：不调命令", asked().count == n && !m.remoteBusy)
+    check("没变的、拦着的：不调命令", asked().count == n && !m.remoteBusy)
     m.setRemoteLaunch(phone, false)
     check("关掉：cca remote allow <配对的 id> launch off，不用同意；做完再查一次列表和模板",
           await waitUntil { settled() && asked().count >= n + 3 } && asked()[n] == ["remote", "allow", phone.id, "launch", "off"] && prompter.asked.isEmpty
@@ -317,5 +387,117 @@ func remoteLaunchProtocolTests() {
     check("删模板：cca remote template rm <编号>，做完说一句、再查一次",
           await waitUntil { settled() && asked().count >= n + 3 } && asked()[n] == ["remote", "template", "rm", "9c0d1e2f"]
           && asked()[(n + 1)...].contains(["remote", "template", "list", "--json"]) && m.toast?.text == "已删掉模板「旧笔记」", "\(asked().suffix(3))")
+    m.shutdown()
+}
+
+/// 测试里 cca 那一头的 `remote launch`：起不成时说的话、起好了给不给新会话（线程安全）
+private final class StartScript: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _fail: String?
+    private var _unlisted = false
+    var fail: String? {
+        get { lock.withLock { _fail } }
+        set { lock.withLock { _fail = newValue } }
+    }
+    var unlisted: Bool {
+        get { lock.withLock { _unlisted } }
+        set { lock.withLock { _unlisted = newValue } }
+    }
+}
+
+@MainActor func remoteLaunchGuestTests() async {
+    section("在配对过的另一台机器上新建会话（9.5）")
+    guard let helloData = fixture("hello.json"), let state = fixture("state.json").map({ String(decoding: $0, as: UTF8.self) }),
+          let list = fixture("remote_list.json").map({ String(decoding: $0, as: UTF8.self) }),
+          let templates = fixture("remote_templates.json").map({ String(decoding: $0, as: UTF8.self) }) else {
+        check("夹具", false)
+        return
+    }
+    let hello = String(decoding: helloData, as: UTF8.self)
+    let sid = String(repeating: "f7", count: 16)
+    let session = #"{"id":"\#(sid)","short":"f7f7f7f7","where":"peer","peer":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1","machine":"office-linux","tool":"claude","name":"工作","host_name":"主力","cwd":"~/srv/api","since_epoch":1794042000,"viewers":0,"local_terminal":null,"state":"ok","access":"control","team":"5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"}"#
+    let box = StartScript()
+    let t = ScriptedTransport { request, _ in
+        let a = request.arguments
+        if a == ["_gui", "hello"] { return response(0, stdout: hello) }
+        if a == ["_gui", "state"] { return response(0, stdout: state) }
+        if a.prefix(2) == ["remote", "list"] { return response(0, stdout: list) }
+        if a == ["remote", "template", "list", "--json"] { return response(0, stdout: templates) }
+        if a.prefix(2) == ["remote", "launch"] {
+            if let e = box.fail { return response(67, [.fail(FailEvent(code: .error, message: e))], stderr: e + "\n") }
+            return response(0, stdout: #"{"version":1,"kind":"remote_launch","id":"\#(sid)","session":"# + (box.unlisted ? "null" : session) + "}")
+        }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let scheduler = Scheduler()
+    scheduler.remoteInterval = 3600
+    let m = makeModel(t, scheduler: scheduler)
+    await m.start()
+    func launches() -> [[String]] { t.requests.map(\.arguments).filter { $0.prefix(2) == ["remote", "launch"] } }
+    func lists() -> Int { t.requests.filter { $0.arguments.prefix(2) == ["remote", "list"] }.count }
+    m.setMainVisible(true)
+    m.selection = .remoteSessions
+    check("列表里有别的机器上允许这台 Mac 远程启动的（cca 有 remote_launch_machines）",
+          await waitUntil { m.remote.doc != nil && !m.remoteLoading } && m.remoteLaunchMachinesAvailable
+          && m.remotePeerLaunchers.map(\.machine) == ["office-linux", "home-mini"])
+    guard let office = m.remotePeerLaunchers.first, let home = m.remotePeerLaunchers.last else {
+        check("启动器", false)
+        return
+    }
+    m.newRemoteSession(on: home)
+    check("那台机器暂时没连着服务器：不开弹层", m.sheet == nil)
+    m.newRemoteSession(on: office)
+    guard case .remoteLaunch(let d)? = m.sheet else {
+        check("新建会话：弹层", false)
+        return
+    }
+    check("弹层：那台机器的模板；有两个时不先选，选了才能起", d.launcher == office && d.template == nil && !d.canStart)
+    d.template = "4d4d4d4d"
+    d.line = "顺便看看日志"
+    check("选了不能带开场白的模板：写了也不带", d.canStart && d.sentLine == nil)
+    d.template = "2b2b2b2b"
+    d.line = "  先跑一遍测试 "
+    check("能带开场白的：去掉两头的空白", d.sentLine == "先跑一遍测试")
+    box.fail = "没起成：模板在那台机器上改过了：刷新一下再起"
+    let before = lists()
+    m.startRemoteLaunch(d)
+    let want = ["remote", "launch", office.peer, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "120x36", "--line", "先跑一遍测试", "--json"]
+    check("起：带着列表里的摘要、终端的大小（还没开过终端：120x36）、开场白；起不成：cca 说的原因写在弹层里，列表再查一次，不开终端",
+          await waitUntil { !d.starting && d.error != nil && lists() > before && !m.remoteLoading } && launches() == [want]
+          && d.error == "没起成：模板在那台机器上改过了：刷新一下再起" && m.sheet == .remoteLaunch(d) && m.remoteTerminals.isEmpty,
+          "\(launches()) \(d.error ?? "nil")")
+    box.fail = nil
+    m.startRemoteLaunch(d)
+    check("起好了：弹层关上，在这一页里开一个终端接入新会话（能操作）",
+          await waitUntil { m.sheet == nil && !d.starting && m.remoteTerminals.count == 1 } && d.error == nil
+          && m.remoteTerminal?.session.id == sid && m.remoteTerminal?.readOnly == false && m.selection == .remoteSessions && launches().count == 2,
+          "\(launches())")
+    // 起好了，45 秒里服务器上一直没有它（cca 给的 session 是 null）：说一句，不接
+    box.unlisted = true
+    m.newRemoteSession(on: office)
+    if case .remoteLaunch(let d2)? = m.sheet {
+        d2.template = "4d4d4d4d"
+        m.startRemoteLaunch(d2)
+        check("起好了但还没在服务器上登记好：弹层关上、说一句，不开终端",
+              await waitUntil { m.sheet == nil && !d2.starting } && m.remoteTerminals.count == 1 && m.toast?.text.contains("还没在服务器上登记好") == true
+              && launches().last == ["remote", "launch", office.peer, "4d4d4d4d", "--digest", "1122334455667788", "--size", "120x36", "--json"],
+              "\(launches().last ?? []) \(String(describing: m.toast))")
+    } else {
+        check("再开一次弹层", false)
+    }
+    // 正在起的时候关掉了弹层：照样起完；没起成就弹一条提示说原因（弹层没了）
+    box.fail = "没起成：那台机器上开着的会话太多了：先结束几个"
+    m.newRemoteSession(on: office)
+    if case .remoteLaunch(let d3)? = m.sheet {
+        d3.template = "2b2b2b2b"
+        m.startRemoteLaunch(d3)
+        m.dismissSheet()
+        check("正在起的时候关掉了弹层：没起成弹一条提示，说 cca 给的原因",
+              await waitUntil { !d3.starting } && m.sheet == nil && m.toast?.text == "没起成：那台机器上开着的会话太多了：先结束几个"
+              && m.toast?.style == .warning && m.remoteTerminals.count == 1 && launches().count == 4,
+              "\(String(describing: m.toast)) \(launches().count)")
+    } else {
+        check("再开一次弹层（中途关掉的）", false)
+    }
     m.shutdown()
 }

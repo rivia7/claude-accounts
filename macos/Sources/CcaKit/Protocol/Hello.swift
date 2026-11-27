@@ -34,6 +34,10 @@ struct HelloDoc: CcaDocument, Equatable {
     /// 有远程启动（手机用这台 Mac 上的模板新建会话：`cca remote template`、`cca remote allow <配对的 id> launch on|off`，PROTOCOL 9.4）；
     /// 旧版 cca 没有这个字段，App 不显示模板、不给「允许远程启动」
     var remoteLaunch: Int?
+    /// 远程启动不只给手机（2026-11-27 起）：配对过的电脑也能打开「允许远程启动」，这台 Mac 也能用配对过的另一台机器上的模板在那台机器上
+    /// 新建会话（`remote list --json` 的 `peer_launchers`、`cca remote launch … --json`，PROTOCOL 9.5）。旧版 cca 没有这个字段：
+    /// 只有手机能打开，App 不给「新建会话…」
+    var remoteLaunchMachines: Int?
     /// 有 Team（`cca team …`，PROTOCOL 4.14；state 的 `config.teams`、账号的 `team`）；旧版 cca 没有这个字段，App 不显示 Team 的那一块、
     /// 不按 Team 筛选、不调 `cca team`（版本不是 TeamAPI.version 时也一样）
     var team: Int?
@@ -55,6 +59,7 @@ struct HelloDoc: CcaDocument, Equatable {
         case remoteEnd = "remote_end"
         case remoteWeb = "remote_web"
         case remoteLaunch = "remote_launch"
+        case remoteLaunchMachines = "remote_launch_machines"
         case teamConfig = "team_config"
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
@@ -79,6 +84,7 @@ struct HelloDoc: CcaDocument, Equatable {
         remoteEnd = c.int(.remoteEnd)
         remoteWeb = c.int(.remoteWeb)
         remoteLaunch = c.int(.remoteLaunch)
+        remoteLaunchMachines = c.int(.remoteLaunchMachines)
         team = c.int(.team)
         teamConfig = c.int(.teamConfig)
         ccaVersion = c.string(.ccaVersion)

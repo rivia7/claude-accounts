@@ -423,6 +423,11 @@ enum Texts {
         [nonEmpty(t.accountName) ?? nonEmpty(t.account), nonEmpty(dir), nonEmpty(t.argsLine)].compactMap { $0 }.joined(separator: " · ")
     }
 
+    /// 另一台机器上的模板的第二行（PROTOCOL 9.5）：账号（这台 Mac 上的名字）、那台机器上的文件夹、参数
+    static func remotePeerTemplateDetail(_ t: RemotePeerTemplate) -> String {
+        [nonEmpty(t.account) ?? t.hostAccount, nonEmpty(t.dir), nonEmpty(t.args)].compactMap { $0 }.joined(separator: " · ")
+    }
+
     static func product(_ tool: ToolID) -> String {
         switch tool {
         case .claude: return "Claude"

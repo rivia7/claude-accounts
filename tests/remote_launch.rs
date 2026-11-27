@@ -1,4 +1,5 @@
-//! 远程启动（docs/dev/launch.md）：配对过的手机照这台机器上的模板新建会话、接进去。
+//! 远程启动（docs/dev/launch.md）：配对过的手机照这台机器上的模板新建会话、接进去；配对过的电脑也行（`remote-launch`，Mac 上的
+//! cca App 用它的 `--json`：a_machine_launches_a_session）。
 //!
 //! 真的服务器（一个 Team 的同步服务器，开着中转）、真的辅助程序：这台机器（box）上跑 `remote-launcher serve`（LaunchAgent、
 //! crontab 起的就是它），手机那一头是 kit::spec 照文档独立实现的那一份（SpecPeer）。手机配对本身（网页端、App 的访客）在
@@ -19,7 +20,12 @@ pub const MODULE: Module = Module {
     name: "remote_launch",
     src: include_str!("remote_launch.rs"),
     default: true,
-    tests: &[case!(a_phone_launches_a_session), case!(what_the_launcher_refuses), case!(what_changed_on_the_host)],
+    tests: &[
+        case!(a_phone_launches_a_session),
+        case!(what_the_launcher_refuses),
+        case!(what_changed_on_the_host),
+        case!(a_machine_launches_a_session),
+    ],
 };
 
 /// 同一台手机两次接入启动器之间至少隔这么久（launch.rs 的 JOIN_GAP 是 3 秒：太勤的不理）
@@ -96,7 +102,7 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
     // 还没有哪台手机能远程启动：启动器什么都不做就退出（退出码 0：launchd 不再起它）
     assert_eq!(a.run(&["remote-launcher", "wanted"]).code, 1);
     assert_eq!(launcher(&a).wait(secs(15)), 0);
-    // 打开：只有手机、只有能操作的
+    // 打开：只有能操作的（手机、电脑都行：电脑的见 a_machine_launches_a_session）
     a.ok(&["remote-allow", &pid, "view"]);
     let r = a.run(&["remote-allow", &pid, "launch", "on"]);
     assert!(r.code != 0 && r.err.contains("先让它能看和操作"), "{r:?}");
@@ -339,4 +345,131 @@ fn what_changed_on_the_host(t: &mut Ctx) {
     assert!(!log_of(&a).contains("起了会话"), "一个会话都没起：{}", log_of(&a));
     l.signal(libc::SIGTERM);
     assert_eq!(l.wait(secs(15)), 0);
+}
+
+/// a 显示配对码、b（真的辅助程序，另一台电脑）输入：a 的配对表里 b 能看和操作（显示配对码的这一头默认这样）。返回配对编号
+fn machine(a: &Device, b: &Device) -> String {
+    let mut p = Popen::spawn(&mut relay::helper_cmd(a, &["remote-pair-show"]));
+    let line = p.out_line();
+    let code = line.split_whitespace().nth(1).expect("配对码").to_lowercase().replace('-', " ");
+    let r = b.run_with(&["remote-pair-join"], &format!("{code}\n"), &[]);
+    assert_eq!((r.code, r.out.trim_end()), (0, a.name.as_str()), "{}", r.err);
+    let (rc, out, said) = p.communicate(secs(60));
+    assert_eq!((rc, out), (0, format!("peer {}\n", b.name)), "{said}");
+    let show = a.ok(&["remote-allow", "--show", &b.name]);
+    show.split('\t').next().expect("配对编号").to_string()
+}
+
+/// b 上问一次配对过的机器上的会话和启动器（remote-list --json）；服务器按设备限流（每 2 秒 1 次、最多攒 30 次）：等的时候隔 1 秒问一次
+fn far_doc(b: &Device, ready: impl Fn(&Value) -> bool) -> Option<Value> {
+    let doc = parsed(&b.ok(&["remote-list", "--json"]));
+    if ready(&doc) {
+        return Some(doc);
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    None
+}
+
+/// 配对过的电脑（cca remote launch；Mac 上的 cca App 用 --json）照这台机器上的模板新建会话：2026-11-27 起不只手机（3.7.6 只给手机）。
+/// 列出能用的模板、不在终端里不起、给 App 的 --json（起好了等它登记上，说是哪个会话；窗口大小、开场白照它说的）、终端里起好接进去、
+/// 那台机器不起时说原因（另记一条 fail 事件）、关掉以后起不了
+fn a_machine_launches_a_session(t: &mut Ctx) {
+    let fx = Base::new(t);
+    let (a, b) = (fx.device("box"), fx.device("mac"));
+    fx.machines(&[&a, &b]);
+    let pid = machine(&a, &b);
+    let work = relay::work(&a);
+    let (id, digest) = template(&a, "修 bug", work.to_str().expect("UTF-8"), &["--model", "opus"]);
+    // 不是手机也能打开（要能看和操作：显示配对码的这一头默认就是）
+    assert_eq!(a.ok(&["remote-allow", &pid, "launch", "on"]), "mac\n");
+    assert_eq!(a.ok(&["remote-allow", "--show", "mac"]), format!("{pid}\tmac\t0\tcontrol\t1\n"));
+    let mut l = launcher(&a);
+
+    // mac 上列出来的：box 的启动器（不算会话）和它的模板；账号是 mac 上的名字
+    let doc = wait_for("mac 看得到 box 的启动器", secs(30), || {
+        far_doc(&b, |d| d["peer_launchers"].list().iter().any(|l| !l["templates"].list().is_empty()))
+    });
+    let ls = doc["peer_launchers"].list();
+    assert_eq!(ls.len(), 1, "{doc}");
+    assert_eq!(cols(&ls[0], &["peer", "machine", "state", "more"]), list![pid.as_str(), "box", "ok", 0]);
+    assert_eq!(ls[0]["id"].str().len(), 32, "{doc}");
+    let row = &ls[0]["templates"].list()[0];
+    assert_eq!(
+        cols(row, &["id", "digest", "name", "tool", "account", "host_account", "dir", "args", "line"]),
+        list![id.as_str(), digest.as_str(), "修 bug", "claude", "alice", "alice", "~/work", "--model opus", true]
+    );
+    assert!(doc["sessions"].list().is_empty(), "启动器不算会话：{doc}");
+    let r = b.run(&["remote-launch"]);
+    assert_eq!(
+        (r.code, r.out.as_str()),
+        (0, format!("box  {id}  修 bug  claude  alice  ~/work  --model opus\n").as_str()),
+        "{}",
+        r.err
+    );
+
+    // 起之前先查的：不在终端里（起了接不进去）、开场白不对、没有这台机器、没有这个模板：什么都不起
+    let r = b.run(&["remote-launch", "box", "修 bug"]);
+    assert!(r.code == 69 && r.err.contains("要在终端里运行"), "{r:?}");
+    let r = b.run(&["remote-launch", "box", "修 bug", "--json", "--line", "a\nb"]);
+    assert!(r.code == 64 && r.err.contains("控制字符"), "{r:?}");
+    let r = b.run(&["remote-launch", "nobox", "修 bug", "--json"]);
+    assert!(r.code == 65 && r.err.contains("没有叫「nobox」的配对"), "{r:?}");
+    let r = b.run(&["remote-launch", "没有这个", "--json"]);
+    assert!(r.code == 65 && r.err.contains("没有叫「没有这个」的模板"), "{r:?}");
+    assert_eq!(log_of(&a), "", "一个都没起");
+
+    // 界面 App 的：--json，窗口大小、开场白、看到的摘要照它说的；起好了等它登记上，stdout 是新会话（remote list --json 里它那一项）
+    let events = b.home.join("ev.jsonl");
+    let ev = events.to_str().expect("UTF-8");
+    let argv = ["remote-launch", "box", &id, "--json", "--size", "200x30", "--line", "你好 world", "--digest", &digest];
+    let r = b.run_with(&argv, "", &[("CCA_EVENTS", ev)]);
+    assert_eq!(r.code, 0, "{r:?}");
+    let got = parsed(&r.out);
+    assert_eq!(cols(&got, &["version", "kind"]), list![1, "remote_launch"]);
+    let sid = got["id"].str().to_string();
+    assert!(sid.len() == 32 && sid.bytes().all(|c| c.is_ascii_hexdigit()), "{got}");
+    assert_eq!(
+        cols(&got["session"], &["id", "where", "peer", "machine", "tool", "name", "cwd", "state", "access"]),
+        list![sid.as_str(), "peer", pid.as_str(), "box", "claude", "alice", "~/work", "ok", "control"]
+    );
+    assert_eq!(fsx::try_read_text(&events).unwrap_or_default(), "", "成了不记 fail 事件");
+    let log = log_of(&a);
+    assert!(log.contains("mac") && log.contains("修 bug") && log.contains(&format!("起了会话 {}", &sid[..8])), "{log}");
+    assert!(!log.contains("你好"), "{log}");
+    // 接进去看：客户端拿到的参数里有开场白，窗口是 App 说的大小
+    let mut v = relay::term_sized(&b, &["remote-attach", &sid[..8]], 30, 200);
+    let want =
+        format!("200 leader=True ctty=True tty=True args=['@{}', '--', '--model', 'opus', '--', '你好 world']>", Device::KEY);
+    v.expect(&regex::escape(&want));
+    v.send("exit 5\n");
+    assert_eq!(v.wait(), 5);
+
+    // 终端里：起好了接进去（大小是这个终端的），会话结束时退出码是它的
+    std::thread::sleep(GAP); // 同一台接进启动器要隔 3 秒
+    let mut v = relay::term(&b, &["remote-launch", "box", "修 bug"]);
+    v.expect("正在「box」上用模板「修 bug」新建会话");
+    v.expect("<ready 24 80 ");
+    v.send("say from-the-mac\n");
+    v.expect("<from-the-mac>");
+    v.send("exit 4\n");
+    assert_eq!(v.wait(), 4);
+    v.expect("会话已经结束（退出码 4）");
+
+    // 那台机器不起（App 看到的模板后来改过了）：退出码 67，说原因；App 的另记一条 fail 事件
+    std::thread::sleep(GAP);
+    let r = b.run_with(&["remote-launch", "box", &id, "--json", "--digest", "0000000000000000"], "", &[("CCA_EVENTS", ev)]);
+    assert!(r.code == 67 && r.err.contains("没起成：模板在那台机器上改过了"), "{r:?}");
+    assert_eq!(r.out, "");
+    let evs = fsx::read_text(&events);
+    let fail = parsed(evs.lines().last().expect("记了一条"));
+    assert_eq!(cols(&fail, &["v", "ev", "code"]), list![1, "fail", "error"], "{evs}");
+    assert!(fail["message"].str().contains("模板在那台机器上改过了"), "{fail}");
+    assert!(log_of(&a).contains("没起（changed）"), "{}", log_of(&a));
+
+    // 关掉：启动器自己退出（没有允许的了），mac 上列不出来、起不了
+    assert_eq!(a.ok(&["remote-allow", &pid, "launch", "off"]), "mac\n");
+    assert_eq!(l.wait(secs(20)), 0);
+    wait_for("mac 上没有 box 的启动器了", secs(30), || far_doc(&b, |d| d["peer_launchers"].list().is_empty()));
+    let r = b.run(&["remote-launch", "box", "修 bug", "--json"]);
+    assert!(r.code == 65 && r.err.contains("「box」现在没让这台机器远程启动会话"), "{r:?}");
 }

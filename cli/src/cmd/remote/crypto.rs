@@ -140,7 +140,7 @@ pub fn launch_seal(p: &[u8], pid: &str, sid: &str, doc: &Dict) -> R<Dict> {
     Ok(blob_seal(&launch_keys(p), &blob_ad(&["cca-remote-launch", pid, sid])?, &padded(doc)))
 }
 
-#[cfg(test)]
+/// 打开别的机器的启动器的说明（far.rs；另一头封的是 `launch_seal`）
 pub fn launch_open(p: &[u8], pid: &str, sid: &str, blob: &V) -> Option<Dict> {
     parse(&blob_open(&launch_keys(p), &blob_ad(&["cca-remote-launch", pid, sid]).ok()?, blob)?)
 }

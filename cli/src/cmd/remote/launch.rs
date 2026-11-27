@@ -1,5 +1,6 @@
-//! 远程启动（docs/dev/launch.md）：允许远程启动的手机（配对表里的 `launch`）挑一个模板（template.rs），这台机器起一个新的会话
-//! （无头的宿主：host.rs 的 `--headless`），手机接着接进去，和接入别的会话一样。
+//! 远程启动（docs/dev/launch.md）：允许远程启动的配对（配对表里的 `launch`：iPhone 上的 cca App，配对过的另一台电脑——那边是
+//! start.rs 的 `cca remote launch`、Mac 上的 cca App）挑一个模板（template.rs），这台机器起一个新的会话（无头的宿主：host.rs 的
+//! `--headless`），它接着接进去，和接入别的会话一样。下面说的“手机”都是这样的一台（3.7.6 只有手机）。
 //!
 //! - 后台进程（`remote-launcher serve`：macOS 上 LaunchAgent、Linux 上 crontab 起的；`launcher.lock` 保证只有一个）：有允许远程
 //!   启动的手机时，给它们配对的每台 Team 服务器起一个转接进程；一个都没有了就退出。cca 换了版本（`CCA_SELF` 变了）就重新执行自己
@@ -98,7 +99,7 @@ fn file(name: &str) -> String {
     path::join(&local::dir(), name)
 }
 
-/// 允许远程启动的手机（只有手机、看和操作都让的才开得了：peers.rs 读的时候核对过，这里再守一道）；hub：只要在这台服务器上配的
+/// 允许远程启动的手机、电脑（看和操作都让的才开得了：peers.rs 读的时候核对过，这里再守一道）；hub：只要在这台服务器上配的
 pub fn launch_peers(hub: Option<HubKind>) -> Vec<Peer> {
     peers::load().into_iter().filter(|p| p.launch && p.can_launch() && hub.is_none_or(|h| p.hub == h)).collect()
 }
@@ -369,10 +370,10 @@ fn plist_text(cca: &str) -> R<String> {
 fn status() -> R<()> {
     let phones = launch_peers(None);
     if phones.is_empty() {
-        crate::out!("远程启动没开：没有允许远程启动的手机（cca remote allow 手机的名字 launch on）");
+        crate::out!("远程启动没开：没有允许远程启动的配对（cca remote allow 名字 launch on：手机、配对过的电脑都行）");
     } else {
         let names: Vec<String> = phones.iter().map(|p| clean(&p.name, 40)).collect();
-        crate::out!("远程启动开着：{} 台手机能用模板新建会话（{}）", phones.len(), names.join("、"));
+        crate::out!("远程启动开着：{} 台配对的设备能用模板新建会话（{}）", phones.len(), names.join("、"));
     }
     if running() {
         let pid = state_int(&state(), "pid");
@@ -398,7 +399,7 @@ fn print_log() -> R<()> {
         }
     }
     if !any {
-        crate::out!("还没有手机远程启动过会话");
+        crate::out!("还没有配对的设备远程启动过会话");
     }
     Ok(())
 }
@@ -473,7 +474,7 @@ pub fn cmd_launcher_link(args: &[String]) -> R<()> {
         if link.refresh(now, || allowed_now(hub)) {
             // 读不出配对密钥的手机（link.rs 隔一阵再读）：它上面没有「新建会话」，在 launch.log 里说一句（cca remote launcher 看得到）
             for p in link.missing.iter().filter(|p| !unread.contains(&p.pid)) {
-                log_line(&p.name, "读不出这台手机配对的密钥（钥匙串），过一会儿再试：读出来以前它上面没有「新建会话」");
+                log_line(&p.name, "读不出这个配对的密钥（钥匙串），过一会儿再试：读出来以前它上面没有「新建会话」");
             }
             unread = link.missing.iter().map(|p| p.pid.clone()).collect();
             // 模板变了（隔一阵也重新算一遍）：说明不一样了就在原来的控制连接上再说一遍（服务器整份换掉）
@@ -678,10 +679,10 @@ fn spawn_session(t: &Template, key: &str, name: &str, ask: &Ask) -> Option<Strin
     None
 }
 
-/// 给手机看的原因（LAUNCHED 的 text）
+/// 给手机、电脑看的原因（LAUNCHED 的 text；新的 cca、App 照 code 自己说，这句给不认识这个 code 的）
 fn fail_text(code: &str) -> &'static str {
     match code {
-        "denied" => "这台手机现在不能远程启动会话（在那台机器上运行 cca remote allow 手机的名字 launch on）",
+        "denied" => "这台设备现在不能远程启动会话（在那台机器上运行 cca remote allow 它的名字 launch on）",
         "no_template" => "那台机器上没有这个模板了：刷新一下",
         "changed" => "模板在那台机器上改过了：刷新一下再选",
         "no_account" => "模板的账号在那台机器的账号表里没有了",

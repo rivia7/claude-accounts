@@ -35,7 +35,7 @@ paths:
 
 # 远程会话的成对修改
 
-从根目录 CLAUDE.md「要一起改的」分出来的，只跟远程会话有关：经服务器中转、端到端加密、宿主和接入、网页端、iOS 的 App、SwiftTerm、和手机配对、每个 Team 各用各的中转服务器。读到上面 `paths` 里的文件时自动加载；只改 `cca` 里 bash 那一侧（`remote_*` 这些函数、`run_account` 的 `HOSTCMD`）时，自己先来读这一份。远程会话怎么实现、怎么测见 `docs/dev/remote.md`，iOS 的见 `docs/dev/ios.md`；远程启动（手机照模板新建会话）的成对修改在 `launch.md`。
+从根目录 CLAUDE.md「要一起改的」分出来的，只跟远程会话有关：经服务器中转、端到端加密、宿主和接入、网页端、iOS 的 App、SwiftTerm、和手机配对、每个 Team 各用各的中转服务器。读到上面 `paths` 里的文件时自动加载；只改 `cca` 里 bash 那一侧（`remote_*` 这些函数、`run_account` 的 `HOSTCMD`）时，自己先来读这一份。远程会话怎么实现、怎么测见 `docs/dev/remote.md`，iOS 的见 `docs/dev/ios.md`；远程启动（配对的手机、电脑照模板新建会话）的成对修改在 `launch.md`。
 
 - 远程会话的中转（线上的格式）：`server/README.md`「远程会话的中转」↔ 服务端（`cli/src/server/remote.rs`、`relay.rs`）↔ `cli/src/cmd/remote/crypto.rs`、`relay.rs` ↔ `tests/kit/spec.rs`（照文档独立实现的；`crypto.rs` 测试里的向量和它自己的对照数据 `tests/vectors/spec_wire.json` 都是固定的，没有重新生成它们的命令：改了格式两边的代码和数据一起换）；同意项 `remote_pair`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`
 - 远程会话：`run_account` 的 `HOSTCMD`（`remote_prepare`）↔ 辅助程序 `remote-host` 的参数；`local.rs` 新加的接入方 → 宿主的帧 ↔ `link.rs` 的 `bridge` 放不放行（只该这台机器上做的事不放行，像 `END`）↔ `tests/remote_relay.rs` 里发这一种帧的那一句；宿主 → 接入方新加的帧（`SIZE`）、HELLO 的标志 ↔ `bridge` ↔ CcaRemoteKit 的 `Frame` ↔ `kit/relay.rs` 的 `Reader`；同意项 `remote_end`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`；客户端新加的终端查询序列 ↔ `cli/src/cmd/remote/vt.rs` 的 `csi_class` / `osc_class` / `str_class`（漏了的话几个终端同时接着时回答会变成按键）；`cca remote attach` 的退出码、断开的按键 ↔ docs/dev/remote.md ↔ PROTOCOL 9.3 ↔ App 的 `Texts.remoteEnded`；`remote-list --json`（`manage.rs` 的 `list_doc`）↔ PROTOCOL 9.1 ↔ Swift 的 `Protocol/Remote.swift` ↔ `macos/Tests/Fixtures/remote_list.json`
