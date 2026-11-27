@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.8", title: "其他设备也能看到 Antigravity 的套餐，App 的说法更简短", points: [
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "在一台设备上用 cca 打开过 Antigravity 会话后，Team 里登录了同一账号的其他设备也会显示它的套餐。两台设备都需要更新到这一版，Team 的服务器不用更新。"),
+            .init(symbol: "textformat",
+                  text: "App 里的说法改得更简短统一：状态用「未登录」「无法连接」「额度已用完」这类短词，出错写「…失败」；套餐只用原名（Pro、Max、Ultra……），不加中文的档位叫法。"),
+        ]),
         ReleaseNote(version: "3.7.7", title: "电脑上也能远程新建会话，额度改回由 cca 查", points: [
             .init(symbol: "laptopcomputer.and.iphone",
                   text: "配对的电脑也能远程启动：在「远程会话」页给它打开「允许远程启动」，那台 Mac 上的 cca App 在「可以接入的会话」里点「新建会话…」，照这台的模板新建会话（终端里是 cca remote launch）。两台都要更新到这一版。"),
