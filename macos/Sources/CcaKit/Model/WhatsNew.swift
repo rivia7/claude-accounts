@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.7", title: "电脑上也能远程新建会话，额度改回由 cca 查", points: [
+            .init(symbol: "laptopcomputer.and.iphone",
+                  text: "配对的电脑也能远程启动：在「远程会话」页给它打开「允许远程启动」，那台 Mac 上的 cca App 在「可以接入的会话」里点「新建会话…」，照这台的模板新建会话（终端里是 cca remote launch）。两台都要更新到这一版。"),
+            .init(symbol: "iphone",
+                  text: "iPhone 上的 cca App 一接上远程会话就照手机的大小排，不用先在手机上打字；回到电脑上打一个键又照电脑排。要这一版以后开的会话。"),
+            .init(symbol: "gauge.with.dots.needle.33percent",
+                  text: "Claude、Antigravity 的额度改回由 cca 去查，又能点「刷新用量」；Claude Code 输入框下面那一行不再由 cca 写。经 cca 运行 claude -p 这类打印模式也不再拦着。"),
+        ]),
         ReleaseNote(version: "3.7.6", title: "手机上新建会话，Codex、Antigravity 也会通知你", points: [
             .init(symbol: "plus.rectangle.on.rectangle",
                   text: "在「远程会话」页存好模板（账号、文件夹、参数），给配对的手机打开「允许远程启动」，iPhone 上的 cca App 就能照模板新建会话（App 要更新）。"),
