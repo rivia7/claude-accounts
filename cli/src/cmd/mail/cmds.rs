@@ -17,8 +17,8 @@ use crate::core::base::{secret_re_match, CFG};
 use crate::core::ctx::cfg_save;
 use crate::core::model::{acct_id, cfg_load, name_of, parse_key, table_load};
 use crate::core::policy::policy_sources;
-use crate::core::team::grants;
-use crate::core::tool::t;
+use crate::core::team::{grants, unreadable_grants};
+use crate::core::tool::{t, Kind};
 use crate::py::fs;
 use crate::py::io::{read_stdin, read_stdin_line};
 use crate::py::json;
@@ -296,6 +296,7 @@ pub fn cmd_mail_status(args: &[String]) -> R<()> {
         ));
     }
     // 信任的转发中转（不安全）是谁定的：Team 给的 Claude 账号照 Team 的名单（一个 Team 一行），这台设备给它们登记的不算数；别的照这台设备登记的
+    // （有 Team 的配置读不出来时也先不算：mail_forwarders）
     let mut fwd_rows: Vec<(String, String)> = Vec::new();
     for g in grants().iter() {
         let list = doc_forwarders(&g.doc);
@@ -307,6 +308,7 @@ pub fn cmd_mail_status(args: &[String]) -> R<()> {
         }
     }
     if !accts.is_empty() {
+        let unreadable = if t().kind == Kind::Claude { unreadable_grants() } else { Vec::new() };
         let mut names: HashMap<String, (String, String)> = HashMap::new();
         for k in table_load(t())?.keys() {
             names.insert(acct_id(&k, t()), (name_of(&k), parse_key(&k).1));
@@ -320,9 +322,15 @@ pub fn cmd_mail_status(args: &[String]) -> R<()> {
                 rows.push((format!("账号 {name}"), stored(&one.at("user").py_str())));
             }
             let Some(d) = accts.dict(&aid).and_then(|a| a.str("forwarder")).map(|d| d.to_lowercase()) else { continue };
-            let said = match team_fwd_of(&email) {
-                Some(f) => format!("{name}：这台设备登记的 {d} 不算数（照「{}」的配置）", f.team),
-                None => format!("{name}：{d}（不安全；这台设备登记的）"),
+            let said = match (team_fwd_of(&email), unreadable.first()) {
+                (Some(f), _) => format!("{name}：这台设备登记的 {d} 不算数（照「{}」的配置）", f.team),
+                (None, Some(u)) => {
+                    format!(
+                        "{name}：这台设备登记的 {d} 先不算数（「{}」的配置读不出来，说不准它给不给这个账号：一个都不信）",
+                        u.name
+                    )
+                }
+                (None, None) => format!("{name}：{d}（不安全；这台设备登记的）"),
             };
             fwd_rows.push(("信任中转".into(), said));
         }

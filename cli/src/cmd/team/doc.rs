@@ -4,6 +4,7 @@
 
 use crate::cmd::hub::{hex32, link_sum};
 use crate::cmd::keyshare::{blob_ad, blob_open, blob_seal, Keys};
+use crate::cmd::mail::{FWD_LEN, FWD_MAX};
 use crate::cmd::presence::{url_ok, PRESENCE_PIN_RE, PRESENCE_SALT_RE};
 use crate::core::policy::{alias_ok, fill_problems};
 use crate::core::tool::tools;
@@ -479,10 +480,11 @@ pub fn doc_problems(doc: &Dict) -> Vec<String> {
     if doc.get("install_node").is_some_and(|n| !n.is_str()) {
         out.push("install_node 不对".into());
     }
-    // 信任的转发中转：只查样子（最多 64 个字符串）。内容设备上读的时候一项项过（mail::doc_forwarders：公共邮箱的域名这些跳过）：以后
-    // 那份名单变长了，也不会让整份配置作废
-    let fwd_ok =
-        |l: &V| l.as_list().is_some_and(|l| l.len() <= 64 && l.items().iter().all(|x| x.as_str().is_some_and(|s| s.len() <= 253)));
+    // 信任的转发中转：只查样子（最多 FWD_MAX 个、每个不超过 FWD_LEN 字节的字符串）。内容设备上读的时候一项项过（mail::doc_forwarders：
+    // 公共邮箱的域名这些跳过）：以后那份名单变长了，也不会让整份配置作废
+    let fwd_ok = |l: &V| {
+        l.as_list().is_some_and(|l| l.len() <= FWD_MAX && l.items().iter().all(|x| x.as_str().is_some_and(|s| s.len() <= FWD_LEN)))
+    };
     if doc.get("mail_forwarders").is_some_and(|l| !fwd_ok(&l)) {
         out.push("mail_forwarders 不对".into());
     }

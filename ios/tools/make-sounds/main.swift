@@ -1,5 +1,5 @@
 // 通知的两种提示音：ios/Sounds/ 下的 done.caf、ask.caf（App 和通知扩展里各带一份；响哪一声由 CcaRemoteKit 的 NoteSound 挑，
-// docs/dev/ios.md「提示音」）。系统默认的那一声又短又轻，手机放在一边时常常听不见：这两声长一点、亮一点。
+// docs/dev/ios.md「App」的 ios/Sounds/）。系统默认的那一声又短又轻，手机放在一边时常常听不见：这两声长一点、亮一点。
 //   xcrun swiftc -O ios/tools/make-sounds/main.swift -o make-sounds
 //   ./make-sounds 目录           写出 done.caf、ask.caf（改了这里的声音，用它换掉 ios/Sounds/ 里的那两个）
 //   ./make-sounds --check 目录   照这里重新合成，和目录里的比：格式、长度一样，每个采样最多差 1（sin、exp 在别的机器上最后一位可能不一样）。

@@ -1453,6 +1453,13 @@ fn mail_forwarders(t: &mut Ctx) {
     for bad in ["gmail.com", "mail.qq.com", "co.uk", "relay.example.com:25", "off,relay.example.com"] {
         assert_eq!(code(&admin, &["team-forwarder", tid, "check", bad]), "domain", "{bad}");
     }
+    // 最多 64 个、每一项最长 253 个字符：超了当场不收（不然存进去以后，发布时 doc_problems 不收，这些设备什么改动都收不到）
+    let many: Vec<String> = (1..=65).map(|i| format!("r{i}.example.com")).collect();
+    let mut argv = vec!["team-forwarder", tid, "check"];
+    argv.extend(many.iter().map(String::as_str));
+    assert_eq!(code(&admin, &argv), "domain", "65 个");
+    let l60 = "a".repeat(60);
+    assert_eq!(code(&admin, &["team-forwarder", tid, "check", &format!("{l60}.{l60}.{l60}.{l60}.example.com")]), "domain", "太长");
     assert_eq!(code(&admin, &["team-forwarder", tid, "check"]), "usage");
     assert_eq!(code(&m, &["team-forwarder", tid]), "not_admin");
     let ck = lines(&admin, &["team-forwarder", tid, "check", "Relay.Example.com,b.example.net", "a.relay.example.com"]);
@@ -1470,6 +1477,14 @@ fn mail_forwarders(t: &mut Ctx) {
     c.ok(&["team-sync"]);
     assert_eq!(doc(&m, tid).1["mail_forwarders"], list!["b.example.net", "relay.example.com"]);
     assert_eq!(doc(&c, tid).0, c_seq, "没拿到 Claude 账号的设备：配置不变");
+    if mac {
+        // App 起的命令（CCA_GUI：stderr 交给 App，只在出错时给人看）、只读的都不说，也不记成说过了：留给终端里的下一条
+        for env in [("CCA_GUI", "1"), ("CCA_RO", "1")] {
+            let r = m.run_with(&["team-apply"], "", &[env]);
+            assert_eq!(r.code, 0, "{env:?}: {}", r.err);
+            assert_not_in("转发中转", &r.err);
+        }
+    }
     let said = team_apply(&m);
     if mac {
         assert_in("按「测试组」的配置，它给的 Claude 账号信任转发中转 b.example.net、relay.example.com（不安全", &said);
@@ -1523,6 +1538,23 @@ fn mail_forwarders(t: &mut Ctx) {
     }
     let r = m.run(&["mail-trust-forwarder", &key, "--check"]);
     assert_eq!((r.code, r.out.as_str()), (3, format!("{tid}\t测试组\t\n").as_str()));
+    // Team 的配置文件坏了（说不准它给不给哪个账号、信不信）：这台设备给 Claude 账号登记的转发中转也先不算、一个都不信，
+    // mail status 说是哪个 Team；读得出来了照旧
+    if mac {
+        assert_eq!(m.run(&["mail-trust-forwarder", "zed@example.com", "relay.example.com"]).code, 0);
+        let status = || {
+            let r = m.run(&["mail-status"]);
+            assert_eq!(r.code, 0, "{}", r.err);
+            r.out
+        };
+        assert_in("relay.example.com（不安全；这台设备登记的）", &status());
+        let f = tdir(&m, tid).join("doc.json");
+        let keep = std::fs::read(&f).expect("有配置");
+        std::fs::write(&f, "{").expect("写得进去");
+        assert_in("这台设备登记的 relay.example.com 先不算数（「测试组」的配置读不出来", &status());
+        std::fs::write(&f, keep).expect("写得进去");
+        assert_in("relay.example.com（不安全；这台设备登记的）", &status());
+    }
 }
 
 /// Team 的节点（cca team node）：列出来不带密钥；加、复制（整份复制，密钥不出这台设备）、去掉；还有账号、别的节点、安装客户端

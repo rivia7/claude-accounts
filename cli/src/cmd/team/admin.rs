@@ -29,7 +29,7 @@ use crate::cmd::hub::deploy::{team_install, team_uninstall, url_parts};
 use crate::cmd::hub::hosted::team_files;
 use crate::cmd::hub::own_account;
 use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, with_https_port, NAME_BAD};
-use crate::cmd::mail::{doc_forwarders, fwd_norm, fwd_widens, team_fwd_check};
+use crate::cmd::mail::{doc_forwarders, fwd_norm, fwd_widens, team_fwd_check, FWD_MAX};
 use crate::cmd::presence::{key_at, presence_post, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
@@ -405,7 +405,9 @@ fn default_aliases(a: &Dict, team: &str) {
 /// 第几号的账号改了名字以后还是它占着。只改 tool_aliases（没存盘）：之后要 default_aliases
 fn rename_defaults(a: &Dict, old: &str, new: &str) {
     let config = a.dict("config").unwrap_or_default();
-    let by_tool = config.dict("tool_aliases").unwrap_or_default();
+    // 很早的 Team（3.5.3-beta.5 及以前）只有按邮箱的 aliases：不补出空的 tool_aliases（alias_plan 见到它就不看 aliases 了，管理员起的
+    // 别名全要重编），之后的 default_aliases 照新名字换
+    let Some(by_tool) = config.dict("tool_aliases") else { return };
     for (tool, names) in by_tool.items() {
         let Some(names) = names.as_dict() else { continue };
         for (e, x) in names.items() {
@@ -2094,7 +2096,11 @@ fn fwd_args(words: &[String]) -> Result<Vec<String>, String> {
     if got.is_empty() {
         return Err("要写中转的域名（像 relay.example.com），不信任写 off".into());
     }
-    Ok(fwd_norm(got))
+    let list = fwd_norm(got);
+    if list.len() > FWD_MAX {
+        return Err(format!("最多 {FWD_MAX} 个中转（写了 {} 个）", list.len()));
+    }
+    Ok(list)
 }
 
 /// 问同意时的范围：新名单的摘要（App 里同意的是这一份；改的时候在锁里照它核对）
@@ -2310,4 +2316,28 @@ pub fn cmd_team_admin(args: &[String]) -> R<()> {
     let stored = settle(&t, &a, None)?;
     out!("{stored}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 很早的 Team（3.5.3-beta.5 及以前，只有按邮箱的 aliases）改名：不补出空的 tool_aliases，管理员起的别名留着、没起的照新名字编
+    #[test]
+    fn rename_keeps_flat_aliases() {
+        let a = crate::py::json::loads(
+            r#"{"config": {"accounts": {"claude": {"alice@example.com": "US-A", "bob@example.com": "US-B"}},
+                "aliases": {"alice@example.com": "alice"}}}"#,
+        )
+        .unwrap()
+        .as_dict()
+        .unwrap();
+        rename_defaults(&a, "Old", "New");
+        assert!(!a.dict("config").unwrap().has("tool_aliases"));
+        let claude = alias_plan(&a, "New").by_tool.dict("claude").unwrap();
+        assert_eq!(
+            (claude.str("alice@example.com").as_deref(), claude.str("bob@example.com").as_deref()),
+            (Some("alice"), Some("New-1"))
+        );
+    }
 }

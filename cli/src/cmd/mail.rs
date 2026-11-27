@@ -32,7 +32,7 @@ use crate::core::base::CCA_HOME;
 use crate::core::ctx::cfg_save;
 use crate::core::model::{acct_id, cfg_load, parse_key};
 use crate::core::policy::policy_sources;
-use crate::core::team::grants;
+use crate::core::team::{grants, unreadable_grants};
 use crate::core::tool::{claude, t, Kind};
 use crate::dict;
 use crate::py::fs::{self, load_json};
@@ -465,11 +465,19 @@ pub fn mail_view(c: &Dict, key: &str, team: Option<&str>) -> Dict {
     d
 }
 
-/// Team 的名单里的一项：去掉空白、转小写以后是一个能信任的中转域名；不是的话说为什么（不是域名、公共邮箱的域名、像 co.uk 这样的公共后缀）
+/// Team 的转发中转名单最多几项、每一项最长几个字节（域名的上限）：管理员写的、导入的超了当场不收（不然存进去以后，给拿到 Claude 账号的
+/// 设备发布时 doc_problems 都不收，这些设备什么改动都收不到）；设备拿到的配置 doc_problems 照它查样子
+pub const FWD_MAX: usize = 64;
+pub const FWD_LEN: usize = 253;
+
+/// Team 的名单里的一项：去掉空白、转小写以后是一个能信任的中转域名；不是的话说为什么（不是域名、太长、公共邮箱的域名、像 co.uk 这样的公共后缀）
 pub fn team_fwd_check(raw: &str) -> Result<String, String> {
     let d = text::strip(raw).to_lowercase();
     if !MAIL_DOMAIN_RE.matches(&d) {
         return Err(format!("「{}」不是域名：写成 relay.example.com 这样（不带 @、http://、端口和空格）", text::strip(raw)));
+    }
+    if d.len() > FWD_LEN || d.split('.').any(|l| l.len() > 63) {
+        return Err(format!("「{d}」太长了：域名最长 {FWD_LEN} 个字符，每一段最多 63 个"));
     }
     if MAIL_PUBLIC.iter().any(|p| judge::mail_fwd_ok(p, &d) || judge::mail_fwd_ok(&d, p)) {
         return Err(format!("「{d}」是公共邮箱的域名：谁都能在那里开一个邮箱，信任它就等于谁发的登录邮件都认"));
@@ -524,14 +532,20 @@ pub fn team_fwd_of(email: &str) -> Option<TeamFwd> {
     team_fwd(&policy_sources(claude()).str(&email.to_lowercase())?)
 }
 
-/// 这个账号信任的转发中转（判定登录邮件时用）：Team 给的 Claude 账号照 Team 的名单（这台设备登记的不算），别的照这台设备登记的（0 或 1 个）
+/// 这个账号信任的转发中转（判定登录邮件时用）：Team 给的 Claude 账号照 Team 的名单（这台设备登记的不算），别的照这台设备登记的（0 或 1 个）。
+/// 有 Team 的配置读不出来时（unreadable_grants：说不准这个账号是不是它给的、它信不信），Claude 账号这台设备登记的也先不算：一个都不信
 pub fn mail_forwarders(c: &Dict, key: &str) -> Vec<String> {
-    if t().kind == Kind::Claude {
+    let is_claude = t().kind == Kind::Claude;
+    if is_claude {
         if let Some(f) = team_fwd_of(&parse_key(key).1) {
             return f.domains;
         }
     }
-    mail_cfg(c, Some(key)).and_then(|m| m.str("forwarder")).map(|f| vec![f.to_string()]).unwrap_or_default()
+    let Some(f) = mail_cfg(c, Some(key)).and_then(|m| m.str("forwarder")) else { return Vec::new() };
+    if is_claude && !unreadable_grants().is_empty() {
+        return Vec::new();
+    }
+    vec![f.to_string()]
 }
 
 pub fn mail_pw_problem(rc: i32) -> String {
@@ -836,6 +850,10 @@ mod tests {
             assert!(team_fwd_check(bad).is_err(), "{bad}");
         }
         assert!(team_fwd_check("relay.example.co.uk").is_ok(), "公共后缀下面的域名可以");
+        let (l63, l60) = ("a".repeat(63), "a".repeat(60));
+        assert!(team_fwd_check(&format!("{l63}.example.com")).is_ok());
+        assert!(team_fwd_check(&format!("a{l63}.example.com")).is_err(), "一段最多 63 个字符");
+        assert!(team_fwd_check(&format!("{l60}.{l60}.{l60}.{l60}.example.com")).is_err(), "最长 253 个字符");
         let v = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
             fwd_norm(v(&["relay.example.com", "b.example.net", "example.com", "b.example.net"])),

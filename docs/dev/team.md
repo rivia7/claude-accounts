@@ -186,7 +186,7 @@
 不一样），设备有它时照它；`aliases` 是照它算的按邮箱的那一份（每个邮箱用它最前面那个工具里的），给 3.5.3-beta.5 及以前的 cca。
 `alias_lock` 是 true 或者 false（`doc_problems` 查；管理员只在锁定时写 true），旧版本的 cca 不认得它：照没锁定的用。
 `install_node` 是直连拿不到安装脚本时经内置代理装客户端用的节点（管理员用 `cca team node Team install 节点` 指定，没指定是空的）。
-`mail_forwarders` 见「转发中转」：`doc_problems` 只查样子（最多 64 项、每项不超过 253 字节的字符串），是不是域名、是不是公共邮箱设备上用的时候再查，
+`mail_forwarders` 见「转发中转」：`doc_problems` 只查样子（最多 64 项、每项不超过 253 字节的字符串：`FWD_MAX`、`FWD_LEN`，管理员写的、导入的超了当场不收），是不是域名、是不是公共邮箱设备上用的时候再查，
 不合格的那一项不算；以前的版本不认它（一个都不信）。
 
 ## 账号表照配置改（M3 的第一步）
@@ -867,10 +867,11 @@ Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` �
   都能改）。不写域名是看现在的（stdout：编号、名字、名单）；`check` 规整、查过以后给编号、名字、原来的、新的（逗号连起来）、变没变宽（1 / 0）、
   新名单的摘要（`fwd_token`：排好序、一行一个、最后不带换行的 SHA-256 前 16 位）；`set` 存进 admin.json 的 `config.mail_forwarders`（空的去掉这一项）、
   接上了服务器的发布（stdout：名字、存上了几台）。每一项照 `team_fwd_check`（`cmd/mail.rs`）查：去掉首尾空白、小写以后要是域名（`MAIL_DOMAIN_RE`：
-  不带 @、协议、端口）；和公共邮箱的域名（`MAIL_PUBLIC`：gmail.com、outlook.com、qq.com……）一样、是它的子域名或者盖住它的都不行（`mail_fwd_ok`
+  不带 @、协议、端口；不超过 253 个字符、每一段不超过 63 个：`FWD_LEN`）；和公共邮箱的域名（`MAIL_PUBLIC`：gmail.com、outlook.com、qq.com……）一样、是它的子域名或者盖住它的都不行（`mail_fwd_ok`
   两个方向都查）；不能是公共的后缀（两段、头一段是 co、com、net、org、gov、edu、ac、ne、or、go、第二段两个字母：co.uk 这类；不是完整的公共后缀表，
   拦的是常见的写错）。不合格是 `domain`（bash 报 `team_domain`），`off` 不能和域名一起写。`fwd_norm`：去重、排序、被别的盖住的子域名去掉
-  （有 relay.example.com 就不要 a.relay.example.com）。
+  （有 relay.example.com 就不要 a.relay.example.com）。规整以后最多 64 项（`FWD_MAX`，导入的文件也照它）：超了是 `domain`——不然存进 admin.json
+  以后，给拿到 Claude 账号的设备发布时 `doc_problems` 都不收，这些设备什么改动都收不到。
 - 变宽（`fwd_widens`：新名单里有原来的哪一项都盖不住的）要同意：bash 的 `team_forwarder_consent`，`consent team_forwarders <编号>:<摘要>`，默认「不」，
   终端里先把不安全说清楚（`TEAM_FWD_WHY`）；`set … --ok <摘要>` 在锁里再比一次（`admin_of` 拿着锁、取过共享的那一份）：还是变宽、摘要对不上是 `consent`
   （`team_consent`）。窄了、去掉不问。改完 bash 马上 `py team-sync "$tid"`（建 Team 的这台也拿到这些账号的话照新的名单，不用等一小时），再 `team_settle`。
@@ -882,9 +883,13 @@ Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` �
   拿到的都是列表，哪一个对上就走 `mail_judge_fwd`（`via` 是 `"forwarder"`）。建 Team 的设备自己也拿到这些账号时一样照它（`grant` 了才算）。
   `cca mail trust-forwarder 账号 域名`：辅助程序先 `--check`，Team 给的账号退出码 3、stdout 是「编号\t名字\t名单」，bash 报 `mail_team`、说是哪个 Team、
   谁能改；`off` 照样能清掉这台设备以前登记的（不算数的那一项）。`cca mail status` 的「信任中转」几行说是 Team 定的、这台设备登记的哪个不算数。
+  有 Team 的配置文件在、却读不出来时（`unreadable_grants`，`core/team.rs`：文件坏了，说不准这个账号是不是它给的、它信不信），Claude 账号这台设备
+  登记的也先不算、一个都不信（`mail status` 那一行说是哪个 Team 的配置读不出来）；还没同步到过配置的 Team 不算（它还没给过账号）。Team 不再给
+  这个账号以后（管理员不再给、退出了、被移除了：Team 加进来的收起来，这台设备原来就有的留在账号表里），以前登记的照旧算数。
 - 说一声：`team_forwarders_say`（`core/policy.rs`，`reconcile` 里，只在 macOS 上）：给了这台设备 Claude 账号、这台设备又不是建它的那台的 Team，
   名单和 config.json 的 `team_forwarders_said`（{编号: 名单}，只记非空的）不一样时在 stderr 上说一句（第一次拿到、换了、不再信任），记下来。
   stderr 接的是 /dev/null 时不说也不记（`stderr_is_null`：后台的 `_team-sync`、`sync-state quiet`——不然后台同步到的新名单刚记下就没人看得到了），
+  App 起的命令（`CCA_GUI`：stderr 交给 App，只在出错时给人看；App 开着时它定时跑的命令总在终端的前头）也一样，
   留给下一条在前台对一遍账号表的命令；只读（`_gui state`）也不说，`notices` 里没有它（那是「下次运行时会做的改动」）。记过的 Team 这一轮没看到时，
   说得准退出了、被移除了（`grant_settled`）才删记录。
 - 界面：`_gui state` 的 `mail.team_forwarders`（`mail_view`：`{team, team_name, domains, local}`，这时 `forwarder` 是 null），`team devices --json` 的
@@ -956,8 +961,9 @@ Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` �
   （`detail` 逐行）和带着 `CCA_GRANT` 重跑、终端里先列出来、去掉账号时直接回车是不换、内核认不出的节点（`$T/core/reject_text`）不问不换、
   `cca team edit`（假的编辑器：先写坏再改好、没改、提问会话里交给终端），测完换回导出的那一份（下面的用例照原来的别名号）。
 - 转发中转（3.7.9 起）：`tests/team.rs` 的 `mail_forwarders`（不合格的写法、规整、变宽要同意、同意的不是这一份不改、只发给拿到 Claude 账号的设备、
-  设备上说一次、登记不了（退出码 3）、窄了不问、一样的不发布、建 Team 的那台照它但不说、导出导入、去掉以后说「不再信任」）、`config_file`（`check` 多了两行）；
-  `cargo test`：`team_forwarder_lists`（`cmd/mail.rs`：查、规整、变宽、配置里读）、`doc_shape`（样子）、`mail_forwarders_in_the_file`（`config.rs`）、
+  设备上说一次（App 起的、只读的不说也不记）、登记不了（退出码 3）、窄了不问、一样的不发布、建 Team 的那台照它但不说、导出导入、去掉以后说「不再信任」、
+  超了上限是 `domain`、配置文件读不出来时本机登记的也不算（`mail-status`））、`config_file`（`check` 多了两行）；
+  `cargo test`：`team_forwarder_lists`（`cmd/mail.rs`：查、规整、太长、变宽、配置里读）、`doc_shape`（样子）、`mail_forwarders_in_the_file`（`config.rs`，最多 64 个）、
   `judge.rs` 里几个中转中哪一个对上；regress 3b3（`tm_fake` 写一个给了 alice 的 Team：没写名单时登记过的也不算数、`_gui state` 的 `team_forwarders`、
   登记不了是 `mail_team`、写了名单照它认、`mail status`、只说一次、`off` 清掉以前登记的、去掉以后说「不再信任」）、11b3d（`cca team forwarder`：没设、
   公共邮箱是 `team_domain`、同意事件的范围和默认、带着同意存上、只发布给 dan-air、一样的不改、导入时先 `team_config` 再 `team_forwarders`、`off`）。
@@ -972,6 +978,8 @@ Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` �
   默认编的不撞（各带各的名字），Team 给的别名和成员设备上的撞了时叫「Team 的名字-别名」；3.7.8 及以前的 `team-N` 管理页上已经是换好的样子、
   发布时存下来（换成的那个被占着的留着 `team-N`）、再发布不变、成员设备上没有记录的 `team-N` 跟着换，`team-alias` 不收 `team-数字`；`team-alias` 的原因码（不合规、重名、没有这个账号、不是管理员）；改了以后成员设备上照 Team 给的用着的
   （连同撞了以后换成的）跟着改、自己改过的不跟；管理员这台设备上只有邮箱的不补、以前加进来的不跟；以前的 Team 发布时补上编号。
+  单元测试：`core/policy.rs` 的 `team_default_names`（带前导 0 的 `team-007`、`team-0` 不算以前默认编的）、`admin.rs` 的 `rename_keeps_flat_aliases`
+  （3.5.3-beta.5 及以前只有按邮箱的 `aliases` 的 Team 先改名：不补出空的 `tool_aliases`，管理员起的别名留着）。
   `core/policy.rs` 的单元测试 `alias_fallback_names`、`team_default_names`：「Team 的名字-N」怎么拼、截短、拼不出来的时候，反过来怎么认；
   `cmd/team/admin/config.rs` 的 `default_aliases_migrate_and_follow_the_name`：换过来、再算不变、改名字。
 - 同步经 Team 的服务器（`tests/team.rs` 的 `pipelines`）：Team 给的账号记下 API key、同步折合金额、看设备，请求都是这台设备在 Team 里的

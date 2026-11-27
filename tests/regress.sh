@@ -434,7 +434,7 @@ mfn() { run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | "$TE
 MFT=$(mfteam ""); has6t=$(mfn); stm=$(gj state)
 ok "Team 给的账号、Team 的配置里没写 mail_forwarders：一个中转都不信，这台设备登记过的也不算数（_gui state 的 mail.forwarder 是 null，team_forwarders 说是哪个 Team 定的、带着不算数的那一项）；别的账号照旧" '[ "$has6t" = 0 ] && printf "%s" "$stm" | jok "(lambda m: m[\"forwarder\"] is None and m[\"team_forwarders\"] == {\"team\": \"$MFT\", \"team_name\": \"邮箱组\", \"domains\": [], \"local\": \"relay.example.com\"})(acct(0, \"${akey}\")[\"mail\"]) and all(a[\"mail\"][\"team_forwarders\"] is None for a in d[\"tools\"][0][\"accounts\"] if a[\"key\"] != \"${akey}\" and a.get(\"mail\"))"'
 out=$(runev cca mail trust-forwarder alice relay.example.com 2>&1); rc=$?
-ok "mail trust-forwarder：Team 给的账号在这台设备上登记不了（fail 事件 mail_team）：说是哪个 Team 定的、现在是什么、谁能改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"mail_team\"" && printf "%s" "$out" | grep -q "是「邮箱组」给的账号：信任哪些转发中转照 Team 的配置（现在一个都不信任），这台设备上改不了" && printf "%s" "$out" | grep -q "cca team forwarder 邮箱组 域名"'
+ok "mail trust-forwarder：Team 给的账号在这台设备上登记不了（fail 事件 mail_team）：说是哪个 Team 定的、现在是什么、谁能改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"mail_team\"" && printf "%s" "$out" | grep -q "是「邮箱组」给的账号：信任哪些转发中转照 Team 的配置（现在一个都不信任），这台设备上改不了" && printf "%s" "$out" | grep -q "cca team forwarder ${MFT:0:8} 域名"'
 mfteam ', "mail_forwarders": ["relay.example.com"]' >/dev/null
 out=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null)
 f1ok=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'r=[x for x in d["rows"] if x["msg"] and x["msg"]["uid"]==6];1 if (r and r[0]["openable"] and r[0]["via"]=="forwarder" and r[0]["verdict"]["ok"]) else 0' 2>/dev/null)

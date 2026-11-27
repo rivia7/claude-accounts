@@ -3077,7 +3077,7 @@ mail_trust_forwarder_cmd() {   # cca mail trust-forwarder <账号> [<中转域�
 			okay "已清掉这台设备给 ${ACC_NAME} 登记的转发中转（这个账号照「${tname}」的配置：${tdoms:-不信任转发中转}）"
 			return
 		fi
-		FAIL_CODE=mail_team die "${ACC_NAME} 是「${tname}」给的账号：信任哪些转发中转照 Team 的配置（${tdoms:+现在是 }${tdoms:-现在一个都不信任}），这台设备上改不了；要改请 Team 的管理员运行 cca team forwarder ${tname} 域名…"
+		FAIL_CODE=mail_team die "${ACC_NAME} 是「${tname}」给的账号：信任哪些转发中转照 Team 的配置（${tdoms:+现在是 }${tdoms:-现在一个都不信任}），这台设备上改不了；要改请 Team 的管理员运行 cca team forwarder ${ttid:0:8} 域名…"
 	fi
 	[ $rc -eq 0 ] || exit 1
 	if [ "$dom" = off ]; then

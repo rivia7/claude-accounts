@@ -196,6 +196,16 @@ pub fn grant_settled(tid: &str) -> bool {
     !path::isdir(&team_dir(tid)) || removed(tid) || grants().iter().any(|g| g.id == tid)
 }
 
+/// 配置文件在、却读不出来的 Team（文件坏了、一时读不了；被移除了的、还没同步到过配置的不算）：说不准它给这台设备哪些账号。
+/// 邮箱助手这时不信这台设备给 Claude 账号登记的转发中转（mail::mail_forwarders：说不准是不是它给的、它信不信）
+pub fn unreadable_grants() -> Vec<Team> {
+    let gs = grants();
+    teams()
+        .into_iter()
+        .filter(|t| !gs.iter().any(|g| g.id == t.id) && !removed(&t.id) && path::exists(&team_path(&t.id, "doc.json")))
+        .collect()
+}
+
 /// 这个 Team 叫什么（给人看的；不在了、还没同步到配置时是 None）
 pub fn grant_name(tid: &str) -> Option<String> {
     grants().iter().find(|g| g.id == tid).map(|g| g.name.clone())

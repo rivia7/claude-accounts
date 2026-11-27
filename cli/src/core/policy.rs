@@ -153,7 +153,7 @@ pub fn alias_locks(tool: &Tool) -> HashMap<String, String> {
 /// Team 的名字里别名不能有的字符（空格、引号、括号、反斜杠、@）去掉，太长了从后面截短（别名最多 24 格宽）；去掉以后什么都不剩、拼不出
 /// 合规的别名是 None
 pub fn alias_fallback(alias: &str, team: &str) -> Option<String> {
-    let tail = re!(r"^team-([0-9]+)$").fullmatch(alias).map_or(alias, |m| m.g(1)).to_string();
+    let tail = legacy_n(alias).map_or_else(|| alias.to_string(), |n| n.to_string());
     let room = 24usize.checked_sub(uni::width(&tail) + 1)?;
     let mut base = String::new();
     for c in team.chars().filter(|c| !ALIAS_BAD.found(c.encode_utf8(&mut [0; 4]))) {
@@ -166,9 +166,13 @@ pub fn alias_fallback(alias: &str, team: &str) -> Option<String> {
     (!base.trim_end_matches('-').is_empty() && alias_ok(&V::from(cand.as_str()))).then_some(cand)
 }
 
-/// 以前（3.7.8 及以前）Team 给没起过别名的账号默认编的 team-N 的 N；别的样子是 None
+/// 以前（3.7.8 及以前）Team 给没起过别名的账号默认编的 team-N 的 N（以前只编过从 1 起、不带前导 0 的：team-007 这样的是管理员自己起的）；
+/// 别的样子是 None
 pub fn legacy_n(alias: &str) -> Option<i64> {
-    alias.strip_prefix("team-").filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
+    alias
+        .strip_prefix("team-")
+        .filter(|n| !n.is_empty() && !n.starts_with('0') && n.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|n| n.parse().ok())
 }
 
 /// Team 给没起过别名的账号默认编的第 n 个别名：「Team 的名字-n」（书房组-1；名字照 alias_fallback 去掉别名不能有的字符、太长了截短）。
@@ -468,9 +472,10 @@ pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<
 }
 
 /// Team 给的 Claude 账号信任的转发中转变了（第一次拿到、换了名单、不再信任）：在 stderr 上说一声（notice 的 team_forwarders）。说过的记在 st 的
-/// team_forwarders_said（{Team 的编号: 名单}，只记非空的），不再说。stderr 接的是 /dev/null 时（后台同步配置、sync-state quiet）说了也没人
-/// 看得到：这一轮不说、记录照旧，留给下一条在前台的命令说。只看给了这台设备 Claude 账号、这台设备又不是建它的那台的 Team（建 Team 的
-/// 那台自己定的）；记过的 Team 这一轮没看到时，说得准（grant_settled：退出了、被移除了）就删掉记录，说不准的留着
+/// team_forwarders_said（{Team 的编号: 名单}，只记非空的），不再说。stderr 接的是 /dev/null 时（后台同步配置、sync-state quiet）、App 起的命令
+/// （CCA_GUI：stderr 交给 App，只在出错时给人看）说了也没人看得到：这一轮不说、记录照旧，留给下一条在终端里的命令说。只看给了这台设备
+/// Claude 账号、这台设备又不是建它的那台的 Team（建 Team 的那台自己定的）；记过的 Team 这一轮没看到时，说得准（grant_settled：退出了、
+/// 被移除了）就删掉记录，说不准的留着
 pub fn team_forwarders_say(st: &Dict, tool: &Tool) {
     use crate::cmd::mail::doc_forwarders;
     use crate::py::obj::str_list;
@@ -481,7 +486,7 @@ pub fn team_forwarders_say(st: &Dict, tool: &Tool) {
     }
     let given: HashSet<String> = policy_sources(tool).values().iter().map(|v| v.py_str()).collect();
     // 只读（_gui state）也不说：notices 是「下次运行 cca 时会做的改动」，这一句不是；App 照 mail.team_forwarders 在「邮箱」一节里显示
-    let unheard = *RO || crate::py::io::stderr_is_null();
+    let unheard = *RO || crate::py::io::stderr_is_null() || crate::py::proc::getenv("CCA_GUI").is_some_and(|v| !v.is_empty());
     let now = Dict::new();
     for g in gs.iter().filter(|g| !g.admin && given.contains(&g.id)) {
         let list = doc_forwarders(&g.doc);
@@ -722,6 +727,7 @@ mod tests {
         assert_eq!(alias_fallback("team-12", "设计 组").as_deref(), Some("设计组-12"), "空格去掉");
         assert_eq!(alias_fallback("alice", "书房(组)").as_deref(), Some("书房组-alice"), "括号去掉");
         assert_eq!(alias_fallback("team-x", "A").as_deref(), Some("A-team-x"), "不是 team-数字 的照原样接");
+        assert_eq!(alias_fallback("team-007", "Lab").as_deref(), Some("Lab-team-007"), "带前导 0 的不是以前默认编的：照原样接");
         // 太长了截短 Team 的名字（别名最多 24 格宽）；截到末尾是连字符的去掉
         let long = alias_fallback("team-3", "一二三四五六七八九十一二三").expect("截短了拼得出来");
         assert_eq!(long, "一二三四五六七八九十一-3");
@@ -748,6 +754,7 @@ mod tests {
             ("team-3", "Lab", Some(3)),
             ("team-1", "(  )", Some(1)),
             ("team-3", "team", Some(3)),
+            ("team-007", "Lab", None),
             ("Lab-03", "Lab", None),
             ("Lab-0", "Lab", None),
             ("Lab-x", "Lab", None),
@@ -758,6 +765,8 @@ mod tests {
             assert_eq!(team_default_n(alias, team), n, "{alias}（{team}）");
         }
         assert_eq!((legacy_n("team-7"), legacy_n("team-"), legacy_n("team-x"), legacy_n("Lab-7")), (Some(7), None, None, None));
+        // 以前只编过从 1 起、不带前导 0 的：team-007、team-0 是管理员自己起的
+        assert_eq!((legacy_n("team-007"), legacy_n("team-0"), legacy_n("team-12")), (None, None, Some(12)));
     }
 
     #[test]

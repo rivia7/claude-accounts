@@ -259,7 +259,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `team_forwarders`（3.7.9 起；以前的 cca 没有，当作 null）：这个账号是 Team 给的时候是 `{"team": Team 的编号, "team_name": 名字, "domains": [域名…], "local": 域名 | null}`——
   信任哪些转发中转由这个 Team 的配置定（`domains`；`[]` 是一个都不信；每一项也认它的子域名），这台设备上改不了；`local` 是这台设备以前给它登记过、
   现在不算数的那一个（没有是 null）。不是 Team 给的是 null。
-  旧版 cca 没有这个字段，当作 null（不显示「邮箱」一节）。应用专用密码存不存在、能不能连上，要调 `cca _gui mail-list`（2.4）才知道。
+  旧版 cca 没有 `mail` 这一项：当作 null（不显示「邮箱」一节）。应用专用密码存不存在、能不能连上，要调 `cca _gui mail-list`（2.4）才知道。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `usage_weeks`：每周用量（账号页的「每周用量」、侧栏的「用量统计」）：最近 12 周每周用到这一周额度的百分之几，和这几周的统计。
   Claude、OpenAI 都不给以前的用量，这是 cca 每次查到用量时（`cca usage`、重置额度）记在账号目录里的，从开始记的那一周起一周一周长出来；
@@ -617,7 +617,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `link_shape`：登录链接的“样子”（协议、主机、路径，`#` / `?` 后面只说有多长，**不含链接内容**）；只有 `verdict.ok` 时才有，否则 null。
 - `openable`：能不能在这个账号的浏览器里打开（`verdict.ok` 且认出了账号）。`msg` 是打开时要回传的不透明句柄（`{folder, uid, uidvalidity}`，
   只有 `openable` 时才有）：交给 `cca mail open KEY --msg 文件夹:uid:uidvalidity`（4.11）。App 只用它当句柄，不解析。打开按钮另外要这个工具的 `chrome` 为真（2.2）。
-- `via`：这封是怎么通过核对的。`null`（或没有这个字段）= Anthropic 直签（安全）；`"forwarder"` = 经这个账号登记的「信任转发中转」认的（不安全，4.11）——
+- `via`：这封是怎么通过核对的。`null`（或没有这个字段）= Anthropic 直签（安全）；`"forwarder"` = 经这个账号信任的转发中转认的（这台设备给它登记的；Team 给的账号是 Team 的配置里的，见 2.2 的 `mail.team_forwarders`；不安全，4.11）——
   App 在这类行上标明「经可信中转（不安全）」。`why == "subject"` 的「非登录邮件」App 默认折叠隐藏、给个开关展开。
 
 ## 3. 用量、出口检测

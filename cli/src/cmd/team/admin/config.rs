@@ -12,7 +12,7 @@
 //! Team 自己的：导到别的 Team 里没有意义），导入时照旧。写错了的、不认得的项都不导（说出是哪几处），免得改动悄悄丢了
 
 use super::{admin_of, admin_save, alias_plan, default_aliases, fail, fwd_token, settle};
-use crate::cmd::mail::{doc_forwarders, fwd_norm, fwd_widens, team_fwd_check};
+use crate::cmd::mail::{doc_forwarders, fwd_norm, fwd_widens, team_fwd_check, FWD_MAX};
 use crate::core::model::cfg_load;
 use crate::core::policy::{alias_ok, fill_problems, in_nodes};
 use crate::core::team::{team_path, Team};
@@ -389,6 +389,9 @@ fn parse(doc: &V) -> Result<Parsed, Vec<String>> {
         }
     }
     let mail_forwarders = fwd_norm(fw);
+    if mail_forwarders.len() > FWD_MAX {
+        errs.push(format!("mail_forwarders 最多 {FWD_MAX} 个（写了 {} 个）", mail_forwarders.len()));
+    }
     if errs.is_empty() {
         Ok(Parsed { accounts, aliases, alias_lock, install_node, mail_forwarders, nodes })
     } else {
@@ -779,6 +782,12 @@ mod tests {
         assert_eq!(e[1], "mail_forwarders 里的 1 不是域名");
         let e = errs(r#"{"kind": "cca-team-config", "version": 1, "accounts": {}, "mail_forwarders": "relay.example.com"}"#);
         assert_eq!(e.len(), 1, "{e:?}");
+        let many: Vec<String> = (1..=65).map(|i| format!(r#""r{i}.example.com""#)).collect();
+        let e = errs(&format!(
+            r#"{{"kind": "cca-team-config", "version": 1, "accounts": {{}}, "mail_forwarders": [{}]}}"#,
+            many.join(", ")
+        ));
+        assert_eq!(e, ["mail_forwarders 最多 64 个（写了 65 个）"], "最多 64 个");
         // 换上：candidate 照文件；changes 说一行、算一项
         let a = d(r#"{"config": {"accounts": {}, "nodes": null}}"#).as_dict().expect("对象");
         let b = candidate(&a, &p, "Lab");

@@ -2,6 +2,7 @@
 paths:
   - "cli/src/cmd/team.rs"
   - "cli/src/cmd/team/**"
+  - "cli/src/cmd/mail.rs"
   - "cli/src/cmd/hub.rs"
   - "cli/src/cmd/hub/**"
   - "cli/src/server/**"
@@ -40,3 +41,4 @@ paths:
 - 证书助手（`cca-core team-acme`，`cli/src/server/acme/`）↔ `tests/kit/acmefake.rs`（照 RFC 8555 / 8738 和证书种类的草案核对它的请求；改了流程两边一起看）；它写的文件名（`fullchain.pem`、`privkey.pem`）↔ 服务端的 `--web-cert` / `--web-key`；Let's Encrypt 的规矩（短期证书那一种的名字 `shortlived`、续的时机、限额）变了要改 `acme/mod.rs` 开头的说明和 `RETRY`、`args.rs` 的 `fraction`
 - Team 的服务器转推送（docs/dev/push.md「Team 的服务器」）：服务端的 `--push`、`--push-pin`（`cli.rs`，环境变量 `CCA_PUSH_URL`、`CCA_PUSH_PIN`，`push.rs` 的 `Gateway::parse`）↔ `hub-install.sh` 的 `pick_push`（格式照 `Gateway::parse` 查）、`.env`、`compose_yaml` 里带 `@PUSH@` 的那两行、`report_managed` 的 `push` ↔ `tests/kit/hubbox.rs` 的 `compose_up` ↔ `deploy.rs` 的 `opts`、`team_install`、`report` ↔ `admin.rs` 的 `push` ↔ bash `team_deploy`（`TEAM_DEPLOY_USAGE`、说的那一句）
 - 服务端的级别（docs/dev/team.md「服务器要更新」）：`cli/src/server/mod.rs` 的 `LEVEL` ↔ `cli/src/cmd/team.rs` 的 `SERVER_NEED`、`SERVER_WHY`（服务端加了 cca 要靠的东西时两边一起加一、改这句话）↔ regress「服务器要更新」那一条（级别、原因的字）↔ `macos/Tests/ContractTests/TeamTests.swift`、`macos/Tests/Fixtures/state.json` 的 `server_update`
+- Team 定的转发中转（`mail_forwarders`，docs/dev/team.md「转发中转」）：变宽时同意的范围 `fwd_token`（`cli/src/cmd/team/admin.rs`：排好序、一行一个的 SHA-256 前 16 位）↔ bash 的 `consent team_forwarders 编号:摘要`（`team_forwarder_consent`、导入的 `team_config_apply`）↔ PROTOCOL 4.2 ↔ regress 11b3d 用 `shasum` 算的那一个；名单的上限 `FWD_MAX` / `FWD_LEN` 和每一项的规矩 `team_fwd_check`（`cli/src/cmd/mail.rs`）↔ 管理员写的（`fwd_args`）、导入的（`config.rs` 的 `parse`）↔ 设备上 `doc_problems` 查的样子、`doc_forwarders` 逐项过

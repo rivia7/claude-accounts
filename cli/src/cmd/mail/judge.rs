@@ -222,7 +222,8 @@ pub fn mail_judge(
     Ok(Some("from"))
 }
 
-/// 信任的中转 forwarder 转发的登录邮件（账号显式开了「信任转发中转」，不安全、默认关）：中转没有 Anthropic 的直签了，所以靠
+/// 信任的中转 forwarder 转发的登录邮件（这台设备给账号登记了「信任转发中转」，或者给它这个账号的 Team 的配置信任它；不安全、
+/// 默认不信）：中转没有 Anthropic 的直签了，所以靠
 /// 「中转的 DKIM 覆盖 From/To/Subject/Reply-To（中转之后改不了这几项）+ From 显示名是这个账号的别名（路由）+ Reply-To 是单个
 /// Anthropic 地址（中转标注原件来自 Anthropic）」。安全边界只到「信任这个中转 + 别名不泄露」：别名泄露，知道的人可经中转注入登录链接。
 /// 返回 None 放行，否则原因（MAIL_WHY 的键）
