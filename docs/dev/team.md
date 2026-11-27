@@ -175,6 +175,7 @@
  "aliases": {邮箱: 别名（3.5.3-beta.5 起每个账号都有：没起过的是默认编的「Team 的名字-N」，3.7.8 及以前是 team-N）},
  "tool_aliases": {"claude": {邮箱: 别名}, "codex": {…}, "agy": {…}}（3.5.3-beta.6 起）,
  "alias_lock": true（3.5.3-beta.7 起，管理员锁定了别名；没锁定时没有这一项）, "install_node": 节点,
+ "mail_forwarders": [域名…]（3.7.9 起：Team 给的 Claude 账号信任的转发中转；设了、这台设备又拿到了 Claude 账号才有这一项）,
  "nodes": {"group": 组名, "proxies": [节点定义…]} | null}
 ```
 
@@ -185,6 +186,8 @@
 不一样），设备有它时照它；`aliases` 是照它算的按邮箱的那一份（每个邮箱用它最前面那个工具里的），给 3.5.3-beta.5 及以前的 cca。
 `alias_lock` 是 true 或者 false（`doc_problems` 查；管理员只在锁定时写 true），旧版本的 cca 不认得它：照没锁定的用。
 `install_node` 是直连拿不到安装脚本时经内置代理装客户端用的节点（管理员用 `cca team node Team install 节点` 指定，没指定是空的）。
+`mail_forwarders` 见「转发中转」：`doc_problems` 只查样子（最多 64 项、每项不超过 253 字节的字符串），是不是域名、是不是公共邮箱设备上用的时候再查，
+不合格的那一项不算；以前的版本不认它（一个都不信）。
 
 ## 账号表照配置改（M3 的第一步）
 
@@ -766,7 +769,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   不然以后按名字就分不清。不发布：配置里没有设备的名字。**远程会话里已经配好的对不跟着改名**：配对表（各自的 `remote/peers.json`）记的是配对那一刻服务器的设备清单里
   对方的名字（没有时是它自己报的主机名，docs/dev/remote.md），只是给人看的、认设备靠指纹；改名以后再配对一次才换成新名字。
 - `cca team devices Team [--json]`：对一遍以后列出来（`seq` 发布到第几版、`have` 它手里第几版、`problem` 对这一遍时发现的要告诉管理员的；
-  `--json` 另有 `alias_lock`，给 bash 的那一份第一行是 1 / 0）。序号只用来比新旧：给人看的地方（`cca team`、`team sync`、`team devices`、App）
+  `--json` 另有 `alias_lock`、`mail_forwarders`（3.7.9 起），给 bash 的那一份第一行是 1 / 0）。序号只用来比新旧：给人看的地方（`cca team`、`team sync`、`team devices`、App）
   只说「配置已同步」「配置是最新的」「还没同步到最新的配置」，不说第几版。
 - 给 bash 的一行一项、制表符分开的输出里，没有的栏写 `-`（`team-list`、`team-devices`）：bash 按制表符读，空的栏会被并掉、后面的往前挪。
   `team-leave plan` 是例外（空的栏照样空着：没接上的地址、没写的 SSH 端口）：bash 先把制表符换成 \037 再按它读（`IFS=$'\037'`，不是空白，不并）。
@@ -822,7 +825,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 管理员把一个 Team 的配置整份写成 JSON 文件、照这样一个文件整份换掉（备份、搬到另一个 Team、一次改很多项）。辅助程序在 `cmd/team/admin/config.rs`
 （`py team-config`），bash 是 `team_export`、`team_import`、`team_edit`、`team_config_apply`：
 
-- 文件：`{"kind": "cca-team-config", "version": 1, "team": 名字, "accounts": {工具: {邮箱: {"node", "alias"}}}, "alias_lock", "install_node", "nodes": {"group", "proxies"} | null}`。
+- 文件：`{"kind": "cca-team-config", "version": 1, "team": 名字, "accounts": {工具: {邮箱: {"node", "alias"}}}, "alias_lock", "install_node", "mail_forwarders"（3.7.9 起，没设不写）, "nodes": {"group", "proxies"} | null}`。
   `team` 只给人看（导入时不管：名字用 `cca team name` 改）；设备、每台设备能用哪些账号不在里面（它们是这个 Team 自己的），导入时照旧。
   导出时各工具都列出来（没有账号的是 `{}`），每个账号带着现在的别名（没起过的是默认编的「Team 的名字-N」，`alias_plan`）。账号的值也可以只写节点；
   没写别名的：原来就在的照原来的（和文件里写了的撞了就不留），新加的照 `default_aliases` 编（用过的号不再用）。账号的先后照原来的，新加的接在后面
@@ -836,19 +839,57 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   「等 N 个」。`! ` 开头的是提醒、不算改动：新加或者换了节点的账号走的节点这份配置里没有定义、这台设备（config.json 的 `nodes`）上也没有
   （这台设备没有可选节点时不说：说不准）；新定义的节点和这台设备上已有的节点同名（有同名节点的设备照它自己的那个走，`policy_fill` 同名的不换）；
   `--base`（`cca team edit` 打开时 `export` 给的配置摘要）对不上：这中间配置在别处改过，照这份换掉那些改动就没了。stdout 开头几行是 Team 的编号、
-  名字、改了几项、去掉几个账号、文件的 SHA-256、新加和改了的节点定义有几个。
+  名字、改了几项、去掉几个账号、文件的 SHA-256、新加和改了的节点定义有几个、信任的转发中转变宽时新名单的摘要（`fwd_token`，没变宽是 `-`）、
+  新名单（逗号连起来），后面才是一行一项的说法。
 - 新加、改了的节点定义不是 0 个时，bash 先拿内核校验（`team_config_validate`：`py team-config testconfig` 把文件里全部的节点定义拼成一份最小配置，
   `dialer-proxy` 连着的一起，`mktemp -d` 里 `core_bin -t`，和 `cca team node add` 一样：内核认不出的节点发出去，各台设备的路由器、内置代理整份配置都
   载不进去），过不了是 `team_file`、不问。
 - 一样的不问、不换（`team_imported`）。不一样的：终端里先列出来（提醒用 `warn`），`consent team_config <编号>:<文件的 SHA-256 前 16 位>`（`detail` 是同样的几项，一项一句，提醒放在最后的「注意：」后面——事件里的换行会变成空格，
   不能一行一项；要去掉账号时默认答「不」；范围带着文件的摘要：App 里同意以后、重跑之前文件又改过，范围对不上，照新的内容再问），同意以后 `apply … --sha <check 时的 SHA-256>`：问过同意的不是这一份了（中间又改过）不换。换掉 `config` 和 `alias_n`、存盘，接上了服务器的
-  发布（和 `map` 一样只给配置变了的设备发新的一版），再 `team_settle`。
+  发布（和 `map` 一样只给配置变了的设备发新的一版），再 `team_settle`。信任的转发中转比现在宽时，同意了这一份以后另外问一次
+  `team_forwarders`（见「转发中转」），`apply` 带上 `--fwd <新名单的摘要>`、在锁里核对：没带、对不上是 `consent`。
 - `cca team edit Team`：`export --edit` 写到 Team 的目录里的 `edit.json`（`teams/**` 在 `CCA_DIR_PRIVATE` 里，`cca restore` 的备份不带它），
   `${EDITOR:-vi}` 打开（和 `cca edit` 一样），内容没变说「没有改动」；查不过说哪里不对、问要不要重新编辑；过了照上面的换。换在子 shell 里做：中途
   `die` 了照样删掉那一份。提问会话里不编辑：`terminal` 事件（`team_edit`），App 交给终端。
 - App（要 `hello.team_config`）：管理员的「更多」里「导出配置…」（`NSSavePanel`，`cca team export … --force`）、「导入配置…」（`NSOpenPanel`，
   `cca team import` 照 4.3 问同意、重跑）、「在终端里修改配置…」（`Handoff.teamEdit`）。
 - 以前的 `cca team import Team policy.json`（维护者的映射，3.6.0 去掉了，那时说用法）现在照这个流程查：不是导出的配置，说清楚、不导。`--mine` 照旧。
+
+## 转发中转（`cca team forwarder`，3.7.9 起）
+
+Team 给的 Claude 账号信任哪些转发中转（mail.md「信任转发中转」：隐私别名、转发服务去掉 Anthropic 的 DKIM、用自己的域名重签的那种）由 Team 的配置定，
+Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` 认，这台设备上登记的（`mail.accounts[acct_id].forwarder`）不算数、也登记不了；
+配置里没有这一项、是空的，这些账号一个中转都不信。不是 Team 给的账号照旧各台设备自己登记。
+
+- 管理员：`cca team forwarder Team [域名… | off]`（`py team-forwarder Team [check|set 域名… [--ok 摘要]]`，`admin.rs` 的 `cmd_team_forwarder`；几位管理员
+  都能改）。不写域名是看现在的（stdout：编号、名字、名单）；`check` 规整、查过以后给编号、名字、原来的、新的（逗号连起来）、变没变宽（1 / 0）、
+  新名单的摘要（`fwd_token`：排好序、一行一个、最后不带换行的 SHA-256 前 16 位）；`set` 存进 admin.json 的 `config.mail_forwarders`（空的去掉这一项）、
+  接上了服务器的发布（stdout：名字、存上了几台）。每一项照 `team_fwd_check`（`cmd/mail.rs`）查：去掉首尾空白、小写以后要是域名（`MAIL_DOMAIN_RE`：
+  不带 @、协议、端口）；和公共邮箱的域名（`MAIL_PUBLIC`：gmail.com、outlook.com、qq.com……）一样、是它的子域名或者盖住它的都不行（`mail_fwd_ok`
+  两个方向都查）；不能是公共的后缀（两段、头一段是 co、com、net、org、gov、edu、ac、ne、or、go、第二段两个字母：co.uk 这类；不是完整的公共后缀表，
+  拦的是常见的写错）。不合格是 `domain`（bash 报 `team_domain`），`off` 不能和域名一起写。`fwd_norm`：去重、排序、被别的盖住的子域名去掉
+  （有 relay.example.com 就不要 a.relay.example.com）。
+- 变宽（`fwd_widens`：新名单里有原来的哪一项都盖不住的）要同意：bash 的 `team_forwarder_consent`，`consent team_forwarders <编号>:<摘要>`，默认「不」，
+  终端里先把不安全说清楚（`TEAM_FWD_WHY`）；`set … --ok <摘要>` 在锁里再比一次（`admin_of` 拿着锁、取过共享的那一份）：还是变宽、摘要对不上是 `consent`
+  （`team_consent`）。窄了、去掉不问。改完 bash 马上 `py team-sync "$tid"`（建 Team 的这台也拿到这些账号的话照新的名单，不用等一小时），再 `team_settle`。
+- 配置：`build_doc` 只在名单不是空的、这台设备拿到了 Claude 账号时写 `mail_forwarders`：没拿到 Claude 账号的设备的配置不变，不白白发布新的一版。
+  设备上 `doc_forwarders`（`cmd/mail.rs`）照同一个 `team_fwd_check` 再查一遍、`fwd_norm`，不合格的那一项不算（管理员那边查过，这里防的是旧的、
+  手写的配置）。
+- 设备上照它：核对的入口是 `mail_forwarders(c, key)`（`cmd/mail.rs`）——Claude 的账号是 Team 给的（`team_fwd_of`：`policy_sources` 照邮箱认，
+  几个 Team 都给了的照最先加入的那个）就是那个 Team 的名单，不然是本机登记的那一个（0 个或 1 个）；`mail_judge`、`mail_verdict`、`whose`
+  拿到的都是列表，哪一个对上就走 `mail_judge_fwd`（`via` 是 `"forwarder"`）。建 Team 的设备自己也拿到这些账号时一样照它（`grant` 了才算）。
+  `cca mail trust-forwarder 账号 域名`：辅助程序先 `--check`，Team 给的账号退出码 3、stdout 是「编号\t名字\t名单」，bash 报 `mail_team`、说是哪个 Team、
+  谁能改；`off` 照样能清掉这台设备以前登记的（不算数的那一项）。`cca mail status` 的「信任中转」几行说是 Team 定的、这台设备登记的哪个不算数。
+- 说一声：`team_forwarders_say`（`core/policy.rs`，`reconcile` 里，只在 macOS 上）：给了这台设备 Claude 账号、这台设备又不是建它的那台的 Team，
+  名单和 config.json 的 `team_forwarders_said`（{编号: 名单}，只记非空的）不一样时在 stderr 上说一句（第一次拿到、换了、不再信任），记下来。
+  stderr 接的是 /dev/null 时不说也不记（`stderr_is_null`：后台的 `_team-sync`、`sync-state quiet`——不然后台同步到的新名单刚记下就没人看得到了），
+  留给下一条在前台对一遍账号表的命令；只读（`_gui state`）也不说，`notices` 里没有它（那是「下次运行时会做的改动」）。记过的 Team 这一轮没看到时，
+  说得准退出了、被移除了（`grant_settled`）才删记录。
+- 界面：`_gui state` 的 `mail.team_forwarders`（`mail_view`：`{team, team_name, domains, local}`，这时 `forwarder` 是 null），`team devices --json` 的
+  `mail_forwarders`（PROTOCOL 2.2、4.11、4.14）。
+- 旧版本：以前的 cca 不认得 `mail_forwarders`：Team 给的账号照它自己登记的（没登记就不信）；以前的 cca 当管理员发布配置时会丢掉这一项（它的
+  `config` 里没有）：各台设备上就一个都不信了——都是往不信的那边错。更新到这一版以后，Team 给的账号以前在设备上登记的中转不算数了：WhatsNew 要说。
+- 导出的文件里是 `mail_forwarders`（没设不写），导入时同样规整、查（`mail_forwarders：…` 说哪一项不对）；变宽时的同意见「导出、导入、修改配置」。
 
 ## 测试
 
@@ -910,6 +951,12 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `changes` 的每一种说法和提醒、和自己比没有改动。regress 11b3d：导出（600、提醒、事件）、不覆盖 / `--force`、一样的不问、App 里的同意事件
   （`detail` 逐行）和带着 `CCA_GRANT` 重跑、终端里先列出来、去掉账号时直接回车是不换、内核认不出的节点（`$T/core/reject_text`）不问不换、
   `cca team edit`（假的编辑器：先写坏再改好、没改、提问会话里交给终端），测完换回导出的那一份（下面的用例照原来的别名号）。
+- 转发中转（3.7.9 起）：`tests/team.rs` 的 `mail_forwarders`（不合格的写法、规整、变宽要同意、同意的不是这一份不改、只发给拿到 Claude 账号的设备、
+  设备上说一次、登记不了（退出码 3）、窄了不问、一样的不发布、建 Team 的那台照它但不说、导出导入、去掉以后说「不再信任」）、`config_file`（`check` 多了两行）；
+  `cargo test`：`team_forwarder_lists`（`cmd/mail.rs`：查、规整、变宽、配置里读）、`doc_shape`（样子）、`mail_forwarders_in_the_file`（`config.rs`）、
+  `judge.rs` 里几个中转中哪一个对上；regress 3b3（`tm_fake` 写一个给了 alice 的 Team：没写名单时登记过的也不算数、`_gui state` 的 `team_forwarders`、
+  登记不了是 `mail_team`、写了名单照它认、`mail status`、只说一次、`off` 清掉以前登记的、去掉以后说「不再信任」）、11b3d（`cca team forwarder`：没设、
+  公共邮箱是 `team_domain`、同意事件的范围和默认、带着同意存上、只发布给 dan-air、一样的不改、导入时先 `team_config` 再 `team_forwarders`、`off`）。
 - 账号表照配置改（`tests/team.rs` 的 `accounts_follow`）：加入以后 alice 的节点照 Team 的（说「按「测试组」的配置固定」）、补上别名，本来就有的
   账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了收起来（`parked`），再给回来照原来的键；不再给本来就有的
   那个，账号留着；被移除以后 Team 加的收起来。

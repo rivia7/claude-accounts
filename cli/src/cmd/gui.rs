@@ -526,7 +526,7 @@ fn gui_account(
         "badge" => badge,
         "app" => dict! { "running" => pid.is_some(), "pid" => pid }, "cli" => cli,
         "can" => can, "can_why" => why,
-        "mail" => if with_mail { V::Dict(super::mail::mail_view(c, k)) } else { V::None },
+        "mail" => if with_mail { V::Dict(super::mail::mail_view(c, k, src.str(&lower).as_deref())) } else { V::None },
         "api_key" => gui_api_key(c, k, v, share, &share_err)?,
         "usage" => usage, "usage_weeks" => weeks,
         "cost" => cost,

@@ -5,19 +5,21 @@
 //! {"kind": "cca-team-config", "version": 1, "team": 导出时 Team 的名字（只给人看：导入时不管，名字照 cca team name 改）,
 //!  "accounts": {工具: {邮箱: {"node": 节点, "alias": 别名}}}（值也可以只写节点；没写别名的：原来就在的照原来的，新加的编成「Team 的名字-N」）,
 //!  "alias_lock": true | false, "install_node": 节点（没指定是 ""）,
+//!  "mail_forwarders": [域名…]（Team 给的 Claude 账号信任的转发中转，不安全：没设时没有这一项；导入时没写就是不信任）,
 //!  "nodes": {"group": 策略组, "proxies": [节点定义…]} | null}
 //! ```
 //! 节点的定义带着密钥（密码、uuid）：文件只给自己读写（600），和根密钥一样当密码保管。设备、每台设备能用哪些账号不在里面（它们是这个
 //! Team 自己的：导到别的 Team 里没有意义），导入时照旧。写错了的、不认得的项都不导（说出是哪几处），免得改动悄悄丢了
 
-use super::{admin_of, admin_save, alias_plan, default_aliases, fail, settle};
+use super::{admin_of, admin_save, alias_plan, default_aliases, fail, fwd_token, settle};
+use crate::cmd::mail::{doc_forwarders, fwd_norm, fwd_widens, team_fwd_check};
 use crate::core::model::cfg_load;
 use crate::core::policy::{alias_ok, fill_problems, in_nodes};
 use crate::core::team::{team_path, Team};
 use crate::core::tool::tools;
 use crate::py::fs::{read_text, save_json};
 use crate::py::hash::sha256_hex;
-use crate::py::obj::{Dict, List, V};
+use crate::py::obj::{str_list, Dict, List, V};
 use crate::py::{json, path, R};
 use crate::{dict, out};
 use std::rc::Rc;
@@ -32,7 +34,7 @@ const LIST_MAX: usize = 6;
 const PROBLEMS_MAX: usize = 8;
 const ALIAS_RULE: &str = "别名不能是空的，不能有空格、引号、括号、反斜杠或 @，最多 12 个汉字或 24 个字母";
 const USAGE: &str =
-    "用法: py team-config export Team 文件 [--force] | export Team --edit | check Team 文件 [--base 摘要] | testconfig 文件 | apply Team 文件 [--sha 校验和]";
+    "用法: py team-config export Team 文件 [--force] | export Team --edit | check Team 文件 [--base 摘要] | testconfig 文件 | apply Team 文件 [--sha 校验和] [--fwd 摘要]";
 
 /// 文件里的配置（查过、规整过）
 struct Parsed {
@@ -42,13 +44,15 @@ struct Parsed {
     aliases: Dict,
     alias_lock: bool,
     install_node: String,
+    /// 信任的转发中转（规整过的；没写是空的）
+    mail_forwarders: Vec<String>,
     /// {"group", "proxies"} | null
     nodes: V,
 }
 
-/// py team-config export Team 文件 [--force] | export Team --edit | check Team 文件 [--base 摘要] | testconfig 文件 | apply Team 文件 [--sha 校验和]。
-/// 原因码：no_team、not_admin、usage、file（写不了、读不了、内容不对：原因里一一说出来；apply 时文件和确认时的不一样了）、server、publish（apply
-/// 发布没成：配置已经换了，照 cca team publish 再发）
+/// py team-config export Team 文件 [--force] | export Team --edit | check Team 文件 [--base 摘要] | testconfig 文件 | apply Team 文件 [--sha 校验和] [--fwd 摘要]。
+/// 原因码：no_team、not_admin、usage、file（写不了、读不了、内容不对：原因里一一说出来；apply 时文件和确认时的不一样了）、consent（apply 时信任的转发中转
+/// 比现在宽了，--fwd 却对不上）、server、publish（apply 发布没成：配置已经换了，照 cca team publish 再发）
 pub fn cmd_team_config(args: &[String]) -> R<()> {
     match args.first().map(|s| s.as_str()) {
         Some("export") => export(&args[1..]),
@@ -97,7 +101,8 @@ fn export(args: &[String]) -> R<()> {
 }
 
 /// check：照文件换掉的话会改什么（不改）。stdout 一行一项：Team 的编号、名字、改了几项（0 是一样）、去掉几个账号、文件的 SHA-256（apply 的
-/// --sha）、新加和改了的节点定义有几个（不是 0 时 bash 先拿内核校验 testconfig 给的配置），再往下是给人看的说明，一行一种改动；「! 」开头的是
+/// --sha）、新加和改了的节点定义有几个（不是 0 时 bash 先拿内核校验 testconfig 给的配置）、信任的转发中转比现在宽了时新名单的摘要（apply 的
+/// --fwd：bash 先问 team_forwarders 的同意；没宽是 -）和新名单（逗号连起来），再往下是给人看的说明，一行一种改动；「! 」开头的是
 /// 提醒（不算改动）。--base：export 时的摘要，这中间配置在别处改过的话提醒一句（cca team edit 用）
 fn check(args: &[String]) -> R<()> {
     let (sel, file, base) = match args {
@@ -113,7 +118,9 @@ fn check(args: &[String]) -> R<()> {
     if base.is_some_and(|d| d != config_digest(&a)) {
         ch.lines.push(format!("! 打开以后「{}」的配置在别处改过（App 里、别的命令）：照这份换掉的话，那些改动就没了", t.name));
     }
-    out!("{}\n{}\n{}\n{}\n{sha}\n{}", t.id, t.name, ch.count, ch.removed, ch.defs);
+    let (old_fw, new_fw) = (doc_forwarders(&a.dict("config").unwrap_or_default()), p.mail_forwarders.clone());
+    let fwd = if fwd_widens(&old_fw, &new_fw) { fwd_token(&new_fw) } else { "-".to_string() };
+    out!("{}\n{}\n{}\n{}\n{sha}\n{}\n{fwd}\n{}", t.id, t.name, ch.count, ch.removed, ch.defs, new_fw.join(","));
     for l in &ch.lines {
         out!("{l}");
     }
@@ -142,17 +149,25 @@ fn testconfig(args: &[String]) -> R<()> {
 }
 
 /// apply：照文件整份换掉这个 Team 的配置，再发布（接上了服务器才发）。--sha：check 时文件的 SHA-256（问过同意的是那一份：中间改过了不换）。
-/// stdout：存上了几台的配置
+/// --fwd：信任的转发中转比现在宽了时，同意过的新名单的摘要（在锁里照现在的名单再算一遍：宽了而对不上就不换）。stdout：存上了几台的配置
 fn apply(args: &[String]) -> R<()> {
-    let (sel, file, want) = match args {
-        [s, f] => (s, f, None),
-        [s, f, flag, h] if flag == "--sha" => (s, f, Some(h.as_str())),
-        _ => return fail("usage", "用法: cca team import Team 文件"),
-    };
+    let [sel, file, flags @ ..] = args else { return fail("usage", "用法: cca team import Team 文件") };
+    let (mut want, mut fwd_ok) = (None, None);
+    for pair in flags.chunks(2) {
+        match pair {
+            [k, v] if k == "--sha" => want = Some(v.as_str()),
+            [k, v] if k == "--fwd" => fwd_ok = Some(v.as_str()),
+            _ => return fail("usage", "用法: cca team import Team 文件"),
+        }
+    }
     let (t, a, _lk) = admin_of(sel)?;
     let (p, sha) = read_parsed(file)?;
     if want.is_some_and(|h| h != sha) {
         return fail("file", &format!("「{}」在确认以后又改过了：没有换，重新导入一次", path::abspath(&path::expanduser(file))));
+    }
+    let old_fw = doc_forwarders(&a.dict("config").unwrap_or_default());
+    if fwd_widens(&old_fw, &p.mail_forwarders) && fwd_ok != Some(fwd_token(&p.mail_forwarders).as_str()) {
+        return fail("consent", "这份配置让信任的转发中转比现在宽了，要先同意（也可能刚在别处改过）：重新导入一次，会先问你");
     }
     let b = candidate(&a, &p, &t.name);
     a.set("config", b.at("config"));
@@ -185,12 +200,18 @@ fn export_doc(t: &Team, a: &Dict) -> Dict {
         }
         accounts.set(tool.name, rows);
     }
-    dict! {
+    let doc = dict! {
         "kind" => KIND, "version" => 1, "team" => t.name.as_str(), "accounts" => accounts,
         "alias_lock" => matches!(config.get("alias_lock"), Some(V::Bool(true))),
         "install_node" => config.str("install_node").map_or(String::new(), |n| n.to_string()),
-        "nodes" => config.get("nodes").filter(|n| n.as_dict().is_some()).unwrap_or(V::None),
+    };
+    // 设了才写：没设的 Team 导出的文件，旧版本的 cca 照样能导入
+    let fw = doc_forwarders(&config);
+    if !fw.is_empty() {
+        doc.set("mail_forwarders", str_list(&fw));
     }
+    doc.set("nodes", config.get("nodes").filter(|n| n.as_dict().is_some()).unwrap_or(V::None));
+    doc
 }
 
 /// 读文件、查一遍；不对时 fail("file")，原因里一处处说（最多 PROBLEMS_MAX 处）。连同文件的 SHA-256
@@ -233,8 +254,8 @@ fn parse(doc: &V) -> Result<Parsed, Vec<String>> {
     }
     let mut errs: Vec<String> = Vec::new();
     for k in d.keys() {
-        if !["kind", "version", "team", "accounts", "alias_lock", "install_node", "nodes"].contains(&&*k) {
-            errs.push(format!("不认得「{k}」（能写的是 accounts、alias_lock、install_node、nodes）"));
+        if !["kind", "version", "team", "accounts", "alias_lock", "install_node", "mail_forwarders", "nodes"].contains(&&*k) {
+            errs.push(format!("不认得「{k}」（能写的是 accounts、alias_lock、install_node、mail_forwarders、nodes）"));
         }
     }
     let (accounts, aliases) = (Dict::new(), Dict::new());
@@ -351,8 +372,25 @@ fn parse(doc: &V) -> Result<Parsed, Vec<String>> {
     if !install_node.is_empty() && !proxy_defs(&nodes).iter().any(|(n, _)| *n == install_node) {
         errs.push(format!("install_node「{install_node}」不是 nodes 里定义的节点（安装客户端用的只能是 Team 的节点）"));
     }
+    let mut fw = Vec::new();
+    match d.get("mail_forwarders") {
+        None | Some(V::None) => {}
+        Some(V::List(l)) => {
+            for x in l.items() {
+                match x.as_str().map(team_fwd_check) {
+                    Some(Ok(dom)) => fw.push(dom),
+                    Some(Err(why)) => errs.push(format!("mail_forwarders：{why}")),
+                    None => errs.push(format!("mail_forwarders 里的 {} 不是域名", x.py_repr())),
+                }
+            }
+        }
+        Some(_) => {
+            errs.push("mail_forwarders 应该是域名的列表（像 [\"relay.example.com\"]；不信任转发中转就不写，或者写 []）".into())
+        }
+    }
+    let mail_forwarders = fwd_norm(fw);
     if errs.is_empty() {
-        Ok(Parsed { accounts, aliases, alias_lock, install_node, nodes })
+        Ok(Parsed { accounts, aliases, alias_lock, install_node, mail_forwarders, nodes })
     } else {
         Err(errs)
     }
@@ -397,6 +435,11 @@ fn candidate(a: &Dict, p: &Parsed, team: &str) -> Dict {
     }
     if !p.install_node.is_empty() || config.has("install_node") {
         config.set("install_node", p.install_node.as_str());
+    }
+    if p.mail_forwarders.is_empty() {
+        config.pop("mail_forwarders");
+    } else {
+        config.set("mail_forwarders", str_list(&p.mail_forwarders));
     }
     config.set("nodes", p.nodes.clone());
     b.set("config", config);
@@ -511,11 +554,18 @@ fn changes(a: &Dict, b: &Dict, here: &Option<List>, team: &str) -> Changes {
         let say = |n: String| if n.is_empty() { "不指定".to_string() } else { n };
         lines.push(format!("安装客户端用的节点：{} → {}", say(install(&oc)), say(install(&nc))));
     }
+    let (of, nf) = (doc_forwarders(&oc), doc_forwarders(&nc));
+    let refwd = of != nf;
+    if refwd {
+        let say = |v: &[String]| if v.is_empty() { "不信任".to_string() } else { format!("{}（不安全）", v.join("、")) };
+        lines.push(format!("Team 给的 Claude 账号信任的转发中转：{} → {}", say(&of), say(&nf)));
+    }
     let count =
         [added.len(), removed.len(), moved.len(), renamed.len(), n_add.len(), n_mod.len(), n_rm.len()].iter().sum::<usize>()
             + usize::from(regroup)
             + usize::from(relock)
-            + usize::from(reinstall);
+            + usize::from(reinstall)
+            + usize::from(refwd);
     if here.is_some() {
         let mut said: Vec<&str> = Vec::new();
         for n in &wanted {
@@ -582,7 +632,7 @@ mod tests {
         assert_eq!(
             e,
             [
-                "不认得「nodez」（能写的是 accounts、alias_lock、install_node、nodes）",
+                "不认得「nodez」（能写的是 accounts、alias_lock、install_node、mail_forwarders、nodes）",
                 "accounts 里的「gemini」不是工具（能写的是 claude、codex、agy）",
                 "Claude 的 nope：不是邮箱",
                 "Claude 的 a@x.com：不认得「alais」（能写的是 node、alias）",
@@ -712,5 +762,37 @@ mod tests {
         acc.set("e@x.com", "JP-A");
         default_aliases(&a, "设计 组");
         assert!(names(&a).contains(r#""e@x.com": "设计组-4""#), "{}", names(&a));
+    }
+
+    #[test]
+    fn mail_forwarders_in_the_file() {
+        let p = parsed(
+            r#"{"kind": "cca-team-config", "version": 1, "accounts": {},
+            "mail_forwarders": [" Relay.Example.com ", "a.relay.example.com", "b.example.net"]}"#,
+        );
+        assert_eq!(p.mail_forwarders, ["b.example.net", "relay.example.com"], "规整：小写、去掉被盖住的、排好序");
+        let e = errs(
+            r#"{"kind": "cca-team-config", "version": 1, "accounts": {}, "mail_forwarders": ["gmail.com", 1, "relay.example.com:25"]}"#,
+        );
+        assert_eq!(e.len(), 3, "{e:?}");
+        assert!(e[0].starts_with("mail_forwarders：「gmail.com」是公共邮箱的域名"), "{e:?}");
+        assert_eq!(e[1], "mail_forwarders 里的 1 不是域名");
+        let e = errs(r#"{"kind": "cca-team-config", "version": 1, "accounts": {}, "mail_forwarders": "relay.example.com"}"#);
+        assert_eq!(e.len(), 1, "{e:?}");
+        // 换上：candidate 照文件；changes 说一行、算一项
+        let a = d(r#"{"config": {"accounts": {}, "nodes": null}}"#).as_dict().expect("对象");
+        let b = candidate(&a, &p, "Lab");
+        assert_eq!(js(&b.dict("config").expect("有").at("mail_forwarders")), r#"["b.example.net", "relay.example.com"]"#);
+        let ch = changes(&a, &b, &None, "Lab");
+        assert_eq!(ch.lines, ["Team 给的 Claude 账号信任的转发中转：不信任 → b.example.net、relay.example.com（不安全）"]);
+        assert_eq!(ch.count, 1);
+        // 没写就是去掉
+        let b0 = candidate(&b, &parsed(r#"{"kind": "cca-team-config", "version": 1, "accounts": {}}"#), "Lab");
+        assert!(!b0.dict("config").expect("有").has("mail_forwarders"));
+        assert_eq!(
+            changes(&b, &b0, &None, "Lab").lines,
+            ["Team 给的 Claude 账号信任的转发中转：b.example.net、relay.example.com（不安全） → 不信任"]
+        );
+        assert_eq!(changes(&b, &candidate(&b, &p, "Lab"), &None, "Lab").count, 0, "一样的名单：不算改动");
     }
 }

@@ -30,11 +30,13 @@ use super::secrets::{keystore_name, ks_del, ks_read};
 use super::Cmd;
 use crate::core::base::CCA_HOME;
 use crate::core::ctx::cfg_save;
-use crate::core::model::{acct_id, cfg_load};
-use crate::core::tool::{claude, t};
+use crate::core::model::{acct_id, cfg_load, parse_key};
+use crate::core::policy::policy_sources;
+use crate::core::team::grants;
+use crate::core::tool::{claude, t, Kind};
 use crate::dict;
 use crate::py::fs::{self, load_json};
-use crate::py::obj::{Dict, V};
+use crate::py::obj::{str_list, Dict, V};
 use crate::py::path;
 use crate::py::proc::getenv;
 use crate::py::re::Re;
@@ -79,6 +81,15 @@ pub const MAIL_BURST: u64 = 50;
 /// 登录时最多盯这么久（秒）
 pub const MAIL_WATCH_MAX: f64 = 900.0;
 pub static MAIL_DOMAIN_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$"));
+/// 公共邮箱的域名：Team 的「信任的转发中转」不收它们（也不收它们上面、下面的域名）——谁都能在那里开一个邮箱，信任它就等于谁发的登录邮件都认。
+/// 只管 Team 的名单（管理员写的时候拒，设备上读的时候跳过）；这台设备自己登记的（cca mail trust-forwarder）照旧
+#[rustfmt::skip]
+pub const MAIL_PUBLIC: &[&str] = &[
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "ymail.com", "icloud.com", "me.com",
+    "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.net", "mail.com", "yandex.com", "yandex.ru", "zoho.com",
+    "fastmail.com", "tutanota.com", "hey.com", "qq.com", "foxmail.com", "163.com", "126.com", "yeah.net", "sina.com", "sohu.com",
+    "aliyun.com", "139.com",
+];
 /// Gmail 地址（小写；也是钥匙串的账户名，交给 security -i）
 pub static MAIL_ADDR_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$"));
 /// 先只取这些头来核对（Reply-To 给信任中转的判定：中转标注原件来自 Anthropic）
@@ -428,16 +439,99 @@ pub fn mail_cfg(c: &Dict, key: Option<&str>) -> Option<Dict> {
     Some(one)
 }
 
-/// 账号页的邮箱助手状态（_gui state；只读 config.json，不碰钥匙串）：{configured, user, source, auto, forwarder}。
+/// 账号页的邮箱助手状态（_gui state；只读 config.json，不碰钥匙串）：{configured, user, source, auto, forwarder, team_forwarders}。
 /// source：account（这个账号单独配的 Gmail）| default（用默认那个）| None（没配置）。
-/// forwarder：这个账号登记的「信任转发中转」域名（不安全开关，默认 null）
-pub fn mail_view(c: &Dict, key: &str) -> Dict {
-    match mail_cfg(c, Some(key)) {
+/// forwarder：这个账号登记的「信任转发中转」域名（不安全开关，默认 null）。team：这个账号是哪个 Team 给的（gui 已经算好的编号）：
+/// 它信任哪些转发中转照那个 Team 的（team_forwarders：{team, team_name, domains, local}，local 是这台设备登记过的、现在不算数的那个），
+/// forwarder 是 null；不是 Team 给的账号 team_forwarders 是 null
+pub fn mail_view(c: &Dict, key: &str, team: Option<&str>) -> Dict {
+    let d = match mail_cfg(c, Some(key)) {
         Some(m) => {
             dict! { "configured" => true, "user" => m.at("user"), "source" => m.at("source"), "auto" => m.at("auto"), "forwarder" => m.at("forwarder") }
         }
         None => dict! { "configured" => false, "user" => V::None, "source" => V::None, "auto" => true, "forwarder" => V::None },
+    };
+    match team.and_then(team_fwd) {
+        Some(f) => {
+            let local = d.at("forwarder");
+            d.set("forwarder", V::None);
+            d.set(
+                "team_forwarders",
+                dict! { "team" => f.tid.as_str(), "team_name" => f.team.as_str(), "domains" => str_list(&f.domains), "local" => local },
+            );
+        }
+        None => d.set("team_forwarders", V::None),
     }
+    d
+}
+
+/// Team 的名单里的一项：去掉空白、转小写以后是一个能信任的中转域名；不是的话说为什么（不是域名、公共邮箱的域名、像 co.uk 这样的公共后缀）
+pub fn team_fwd_check(raw: &str) -> Result<String, String> {
+    let d = text::strip(raw).to_lowercase();
+    if !MAIL_DOMAIN_RE.matches(&d) {
+        return Err(format!("「{}」不是域名：写成 relay.example.com 这样（不带 @、http://、端口和空格）", text::strip(raw)));
+    }
+    if MAIL_PUBLIC.iter().any(|p| judge::mail_fwd_ok(p, &d) || judge::mail_fwd_ok(&d, p)) {
+        return Err(format!("「{d}」是公共邮箱的域名：谁都能在那里开一个邮箱，信任它就等于谁发的登录邮件都认"));
+    }
+    let labels: Vec<&str> = d.split('.').collect();
+    let suffix = ["co", "com", "net", "org", "gov", "edu", "ac", "ne", "or", "go"];
+    if labels.len() == 2 && suffix.contains(&labels[0]) && labels[1].len() == 2 {
+        return Err(format!("「{d}」是公共的后缀：写中转自己的域名（像 relay.example.co.uk）"));
+    }
+    Ok(d)
+}
+
+/// 规整一份名单：去重，去掉被别的项盖住的（信任 example.com 就信任了 relay.example.com），排好序
+pub fn fwd_norm(items: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut v: Vec<String> = items.into_iter().collect();
+    v.sort();
+    v.dedup();
+    let all = v.clone();
+    v.retain(|d| !all.iter().any(|f| f != d && judge::mail_fwd_ok(d, f)));
+    v
+}
+
+/// new 比 old 宽：多了 old 盖不住的域名（管理员改的时候要先问同意）
+pub fn fwd_widens(old: &[String], new: &[String]) -> bool {
+    new.iter().any(|d| !old.iter().any(|f| judge::mail_fwd_ok(d, f)))
+}
+
+/// 一份 Team 的名单（Team 给这台设备的配置、admin.json 的 config 里的 mail_forwarders）：逐项过 team_fwd_check，不合格的跳过（以后公共邮箱的
+/// 名单变长了，也不会让整份配置作废），再 fwd_norm
+pub fn doc_forwarders(d: &Dict) -> Vec<String> {
+    let items = d.list("mail_forwarders").map(|l| l.items()).unwrap_or_default();
+    fwd_norm(items.iter().filter_map(|x| team_fwd_check(x.as_str()?).ok()))
+}
+
+/// 一个 Team 给的 Claude 账号信任哪些转发中转
+pub struct TeamFwd {
+    pub tid: String,
+    pub team: String,
+    /// 可以是空的：一个都不信任
+    pub domains: Vec<String>,
+}
+
+/// 编号是 tid 的 Team 的名单（它给这台设备的配置里的；这台设备不在它里面、还没同步到配置是 None）
+pub fn team_fwd(tid: &str) -> Option<TeamFwd> {
+    let gs = grants();
+    let g = gs.iter().find(|g| g.id == tid)?;
+    Some(TeamFwd { tid: g.id.clone(), team: g.name.clone(), domains: doc_forwarders(&g.doc) })
+}
+
+/// 这个邮箱的 Claude 账号是 Team 给的：它信任哪些转发中转由那个 Team 定（同一个账号在两个 Team 里，先加入的算数：policy_sources）
+pub fn team_fwd_of(email: &str) -> Option<TeamFwd> {
+    team_fwd(&policy_sources(claude()).str(&email.to_lowercase())?)
+}
+
+/// 这个账号信任的转发中转（判定登录邮件时用）：Team 给的 Claude 账号照 Team 的名单（这台设备登记的不算），别的照这台设备登记的（0 或 1 个）
+pub fn mail_forwarders(c: &Dict, key: &str) -> Vec<String> {
+    if t().kind == Kind::Claude {
+        if let Some(f) = team_fwd_of(&parse_key(key).1) {
+            return f.domains;
+        }
+    }
+    mail_cfg(c, Some(key)).and_then(|m| m.str("forwarder")).map(|f| vec![f.to_string()]).unwrap_or_default()
 }
 
 pub fn mail_pw_problem(rc: i32) -> String {
@@ -673,7 +767,9 @@ mod tests {
                 let key = row.at(0);
                 same(mail_cfg(&cfg, key.as_str()), row.at(1), &format!("mail_cfg({what}, {key:?})"));
                 if let Some(k) = key.as_str() {
-                    same(Some(mail_view(&cfg, k)), row.at(2), &format!("mail_view({what}, {k:?})"));
+                    let v = mail_view(&cfg, k, None);
+                    assert!(v.pop("team_forwarders").is_some_and(|x| x.is_none()), "不是 Team 给的账号：team_forwarders 是 null");
+                    same(Some(v), row.at(2), &format!("mail_view({what}, {k:?})"));
                 }
             }
             let mut addrs = mail_all_addrs(&cfg);
@@ -720,5 +816,44 @@ mod tests {
         assert!(MAIL_ORDER.iter().all(|w| mail_why(w).is_some()));
         let e = mail_retry("net", "x");
         assert!(e.is("MailRetry") && mail_error(&e) == Some(("net", "x")) && mail_error(&Fail::Value("x".into())).is_none());
+    }
+
+    /// Team 的「信任的转发中转」：一项项怎么查、整份怎么规整、什么算宽了、设备上读配置里的那一份
+    #[test]
+    fn team_forwarder_lists() {
+        assert_eq!(team_fwd_check(" Relay.Example.com ").as_deref(), Ok("relay.example.com"));
+        for bad in [
+            "gmail.com",
+            "mail.gmail.com",
+            "QQ.com",
+            "com.cn",
+            "co.uk",
+            "relay.example.com:25",
+            "a@relay.example.com",
+            "localhost",
+            "",
+        ] {
+            assert!(team_fwd_check(bad).is_err(), "{bad}");
+        }
+        assert!(team_fwd_check("relay.example.co.uk").is_ok(), "公共后缀下面的域名可以");
+        let v = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            fwd_norm(v(&["relay.example.com", "b.example.net", "example.com", "b.example.net"])),
+            v(&["b.example.net", "example.com"]),
+            "去重、去掉被盖住的、排好序"
+        );
+        assert!(fwd_widens(&[], &v(&["relay.example.com"])));
+        assert!(!fwd_widens(&v(&["example.com"]), &v(&["relay.example.com"])), "原来的盖得住：不算宽");
+        assert!(!fwd_widens(&v(&["a.example.com", "b.example.com"]), &v(&["a.example.com"])));
+        assert!(!fwd_widens(&v(&["a.example.com"]), &[]));
+        assert!(fwd_widens(&v(&["relay.example.com"]), &v(&["example.com"])));
+        let doc = |s: &str| crate::py::json::loads(s).unwrap().as_dict().unwrap();
+        assert_eq!(
+            doc_forwarders(&doc(r#"{"mail_forwarders": ["Relay.Example.com", "gmail.com", 1, "relay.example.com", "co.uk"]}"#)),
+            v(&["relay.example.com"]),
+            "设备上读的时候不合格的跳过"
+        );
+        assert!(doc_forwarders(&doc(r#"{"mail_forwarders": "relay.example.com"}"#)).is_empty(), "不是列表：一个都不信任");
+        assert!(doc_forwarders(&doc("{}")).is_empty());
     }
 }

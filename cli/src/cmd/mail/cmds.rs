@@ -7,15 +7,17 @@ use super::judge::{mail_ar, mail_digest, mail_from_alias, mail_fwd_ok, mail_judg
 use super::message::{mail_parse, Message};
 use super::route::{mail_route, mail_route_note};
 use super::{
-    catch_sigint, mail_all_addrs, mail_cfg, mail_clean, mail_error, mail_fatal, mail_last, mail_one, mail_pw_problem, mail_ready,
-    mail_rules, mail_why, py_int, MailRule, MAIL_ADDR_RE, MAIL_DIR, MAIL_DOMAIN_RE, MAIL_HOST, MAIL_PROXY_HINT, MAIL_RECENT,
-    MAIL_SVC, MAIL_WATCH_MAX,
+    catch_sigint, doc_forwarders, mail_all_addrs, mail_cfg, mail_clean, mail_error, mail_fatal, mail_forwarders, mail_last,
+    mail_one, mail_pw_problem, mail_ready, mail_rules, mail_why, py_int, team_fwd_of, MailRule, MAIL_ADDR_RE, MAIL_DIR,
+    MAIL_DOMAIN_RE, MAIL_HOST, MAIL_PROXY_HINT, MAIL_RECENT, MAIL_SVC, MAIL_WATCH_MAX,
 };
 use crate::cmd::secrets::{keyfile_store, keystore_name, ks_del, ks_read, ks_write};
 use crate::cmd::{arg, arity};
 use crate::core::base::{secret_re_match, CFG};
 use crate::core::ctx::cfg_save;
 use crate::core::model::{acct_id, cfg_load, name_of, parse_key, table_load};
+use crate::core::policy::policy_sources;
+use crate::core::team::grants;
 use crate::core::tool::t;
 use crate::py::fs;
 use crate::py::io::{read_stdin, read_stdin_line};
@@ -293,20 +295,39 @@ pub fn cmd_mail_status(args: &[String]) -> R<()> {
             .into(),
         ));
     }
+    // 信任的转发中转（不安全）是谁定的：Team 给的 Claude 账号照 Team 的名单（一个 Team 一行），这台设备给它们登记的不算数；别的照这台设备登记的
+    let mut fwd_rows: Vec<(String, String)> = Vec::new();
+    for g in grants().iter() {
+        let list = doc_forwarders(&g.doc);
+        if !list.is_empty() && policy_sources(t()).values().iter().any(|v| v.as_str() == Some(g.id.as_str())) {
+            fwd_rows.push((
+                "信任中转".into(),
+                format!("「{}」给的账号：{}（不安全；照 Team 的配置，这台设备上改不了）", g.name, list.join("、")),
+            ));
+        }
+    }
     if !accts.is_empty() {
-        let mut names: HashMap<String, String> = HashMap::new();
+        let mut names: HashMap<String, (String, String)> = HashMap::new();
         for k in table_load(t())?.keys() {
-            names.insert(acct_id(&k, t()), name_of(&k));
+            names.insert(acct_id(&k, t()), (name_of(&k), parse_key(&k).1));
         }
         let mut ids = accts.keys();
         ids.sort();
         for aid in ids {
+            let (name, email) = names.get(&*aid).cloned().unwrap_or_default();
+            let name = if name.is_empty() { aid.to_string() } else { name };
             if let Some(one) = mail_one(&accts.at(&aid), true, "system") {
-                let name = names.get(&*aid).filter(|n| !n.is_empty()).map_or(&*aid, |n| n.as_str());
                 rows.push((format!("账号 {name}"), stored(&one.at("user").py_str())));
             }
+            let Some(d) = accts.dict(&aid).and_then(|a| a.str("forwarder")).map(|d| d.to_lowercase()) else { continue };
+            let said = match team_fwd_of(&email) {
+                Some(f) => format!("{name}：这台设备登记的 {d} 不算数（照「{}」的配置）", f.team),
+                None => format!("{name}：{d}（不安全；这台设备登记的）"),
+            };
+            fwd_rows.push(("信任中转".into(), said));
         }
     }
+    rows.extend(fwd_rows);
     if let Some(V::Dict(last)) = fs::load_quiet(&path::join(&MAIL_DIR, "last.json")) {
         if let (Some(at), Some(text)) = (last.get("at").filter(|at| at.isinstance_int()), last.str("text")) {
             let name = last.get("name").filter(|n| n.truthy()).map(|n| n.py_str()).unwrap_or_default();
@@ -379,12 +400,23 @@ pub fn cmd_mail_forget(args: &[String]) -> R<()> {
 }
 
 /// cca mail trust-forwarder 账号 域名|off：给这个账号登记（或关闭）「信任转发中转」（不安全、默认不登记）。
-/// 存 config.json 的 mail.accounts[acct_id].forwarder。退出码：0 好了；2 域名不对
+/// 存 config.json 的 mail.accounts[acct_id].forwarder。Team 给的 Claude 账号信任哪些中转照 Team 的（mail_forwarders），这里登记不了：
+/// stdout 一行「Team 的编号\tTeam 的名字\t名单（逗号连起来，可以是空的）」、退出码 3（off 照样能清掉这台设备上以前登记的）。
+/// 账号 --check：只看是不是这样（是：同上；不是：什么都不打、退出码 0）。退出码：0 好了；2 域名不对；3 Team 给的账号
 pub fn cmd_mail_trust_forwarder(args: &[String]) -> R<()> {
     arity("mail-trust-forwarder", args, 2, 2)?;
     let (key, domain) = (&args[0], &args[1]);
     let aid = acct_id(key, t());
     let off = matches!(domain.as_str(), "off" | "");
+    if !off {
+        if let Some(f) = team_fwd_of(&parse_key(key).1) {
+            out!("{}\t{}\t{}", f.tid, f.team, f.domains.join(","));
+            return exit(3);
+        }
+        if domain == "--check" {
+            return Ok(());
+        }
+    }
     let d = text::strip(domain).to_lowercase();
     if !off && !MAIL_DOMAIN_RE.matches(&d) {
         err!("! 中转域名写成 relay.example.com 这样（不带 @、http://、端口和空格）");
@@ -418,37 +450,27 @@ pub fn cmd_mail_trust_forwarder(args: &[String]) -> R<()> {
     cfg_save(&c)
 }
 
-/// 一封邮件是哪个账号的：收件人是账号表里的邮箱（严格），或者 From 的显示名是开了 trust-forwarder 的账号的邮箱、From 的域名是
-/// 它登记的中转（信任中转路由）。返回 (To, From, 账号的键, 这个账号登记的中转)
+/// 一封邮件是哪个账号的：收件人是账号表里的邮箱（严格），或者 From 的显示名是一个信任转发中转的账号的邮箱、From 的域名是它信任的
+/// 中转之一（信任中转路由）。返回 (To, From, 账号的键, 这个账号信任的中转：mail_forwarders)
 #[allow(clippy::type_complexity)]
-fn whose(
-    msg: &Message,
-    names: &HashMap<String, String>,
-    c: &Dict,
-) -> R<(Vec<String>, Vec<String>, Option<String>, Option<String>)> {
+fn whose(msg: &Message, names: &HashMap<String, String>, c: &Dict) -> R<(Vec<String>, Vec<String>, Option<String>, Vec<String>)> {
     let to = mail_addrs(msg, "To")?;
     let frm = mail_addrs(msg, "From")?;
-    let forwarder_of = |key: &str| mail_cfg(c, Some(key)).and_then(|m| m.str("forwarder")).map(|f| f.to_string());
     let mut acctkey = to.iter().find_map(|a| names.get(a)).cloned();
-    let mut rfwd = acctkey.as_deref().and_then(forwarder_of);
+    let mut rfwds = acctkey.as_deref().map(|k| mail_forwarders(c, k)).unwrap_or_default();
     if acctkey.is_none() {
         let cand = names.get(&mail_from_alias(msg)?).cloned();
-        let cfwd = cand.as_deref().and_then(forwarder_of).filter(|f| !f.is_empty());
-        if let (Some(cfwd), Some(first)) = (&cfwd, frm.first()) {
-            if mail_fwd_ok(domain_of(first), cfwd) {
-                (acctkey, rfwd) = (cand, Some(cfwd.clone()));
-            }
+        let cfwds = cand.as_deref().map(|k| mail_forwarders(c, k)).unwrap_or_default();
+        if via_forwarder(&cfwds, &frm) {
+            (acctkey, rfwds) = (cand, cfwds);
         }
     }
-    Ok((to, frm, acctkey, rfwd))
+    Ok((to, frm, acctkey, rfwds))
 }
 
-/// `rfwd and frm and mail_fwd_ok(frm[0].rpartition('@')[2], rfwd)`
-fn via_forwarder(rfwd: &Option<String>, frm: &[String]) -> bool {
-    match (rfwd.as_deref().filter(|f| !f.is_empty()), frm.first()) {
-        (Some(f), Some(first)) => mail_fwd_ok(domain_of(first), f),
-        _ => false,
-    }
+/// From 的域名落在 rfwds 里的一个中转下面
+fn via_forwarder(rfwds: &[String], frm: &[String]) -> bool {
+    frm.first().is_some_and(|first| rfwds.iter().any(|f| mail_fwd_ok(domain_of(first), f)))
 }
 
 /// 核对过了的那条规则（没有规则却通过了：原来是往下用 None 的 AttributeError，实际走不到）
@@ -508,14 +530,14 @@ pub fn cmd_mail_test(args: &[String]) -> R<()> {
         let show = |s: String| out!("{}", mail_clean(&s));
         for (got, u, label, name, _, raw) in rows.iter().take(20) {
             let msg = mail_parse(raw)?;
-            let (to, frm, acctkey, rfwd) = whose(&msg, &names, &c)?;
-            let via = via_forwarder(&rfwd, &frm);
+            let (to, frm, acctkey, rfwds) = whose(&msg, &names, &c)?;
+            let via = via_forwarder(&rfwds, &frm);
             let acct = match &acctkey {
                 Some(k) => parse_key(k).1.to_lowercase(),
                 None => to.first().cloned().unwrap_or_default(),
             };
             let got = *got as f64;
-            let (rule, why) = mail_judge_any(&rules, &msg, got, &acct, since, rfwd.as_deref())?;
+            let (rule, why) = mail_judge_any(&rules, &msg, got, &acct, since, &rfwds)?;
             let ar = mail_ar(&msg);
             let subject = mail_text(msg.get("Subject"));
             let subject = text::head(&subject, 80);
@@ -547,7 +569,7 @@ pub fn cmd_mail_test(args: &[String]) -> R<()> {
             }
             let rule = passed(rule)?;
             bx.examine(name)?;
-            let (why, link, full) = mail_verdict(rule, &bx.message(*u)?, got, &acct, since, rfwd.as_deref())?;
+            let (why, link, full) = mail_verdict(rule, &bx.message(*u)?, got, &acct, since, &rfwds)?;
             if let Some(link) = link.filter(|l| !l.is_empty()) {
                 out!("      ✓ 通过核对，链接 {}", mail_shape(&link));
             } else if let Some(why) = why {
@@ -598,7 +620,7 @@ fn mail_open_one(src: &mut MailSource<MailBox>, h: &Hunt, handle: &Handle, deliv
         };
         let got = *got as f64;
         let msg = mail_parse(hdr)?;
-        let (rule, why) = mail_judge_any(h.rules, &msg, got, h.acct, got, h.forwarder)?;
+        let (rule, why) = mail_judge_any(h.rules, &msg, got, h.acct, got, h.forwarders)?;
         if let Some(why) = why {
             return Ok((why.to_string(), mail_why(why).unwrap_or("").to_string()));
         }
@@ -640,7 +662,7 @@ pub fn cmd_mail_open(args: &[String]) -> R<()> {
         return die(format!("账号表里 {} 没写邮箱：认不出哪封登录邮件是它的", name_of(key)));
     }
     let rules = mail_rules();
-    let fwd = m.str("forwarder");
+    let fwds = mail_forwarders(&cfg_load()?, key);
     let mut src = MailSource::new(MailBox::new(&m.at("user").py_str(), &pw, &route), &rules);
     let say = |s: &str| err!("{s}");
     let (now, sleep) = (|| time::time(), |s: f64| sleep_interruptible(s));
@@ -649,7 +671,7 @@ pub fn cmd_mail_open(args: &[String]) -> R<()> {
         dir: &MAIL_DIR,
         rules: &rules,
         acct: &acct,
-        forwarder: fwd.as_deref(),
+        forwarders: &fwds,
         again,
         once: true,
         now: &now,
@@ -773,16 +795,16 @@ pub fn cmd_gui_mail_list(args: &[String]) -> R<()> {
         let mut rows: Vec<V> = Vec::new();
         for (got, u, label, name, valid, raw) in found.iter().take(50) {
             let msg = mail_parse(raw)?;
-            let (to, frm, acctkey, rfwd) = whose(&msg, &names, &c)?;
+            let (to, frm, acctkey, rfwds) = whose(&msg, &names, &c)?;
             let tgt = acctkey.as_deref().map(|k| parse_key(k).1.to_lowercase());
             // 账号作用域：只留发给这个账号的
             if want.as_ref().is_some_and(|w| tgt.as_ref() != Some(w)) {
                 continue;
             }
             let judge = tgt.filter(|t| !t.is_empty()).or_else(|| to.first().cloned()).unwrap_or_default();
-            let (rule, why) = mail_judge_any(&rules, &msg, *got as f64, &judge, since, rfwd.as_deref())?;
+            let (rule, why) = mail_judge_any(&rules, &msg, *got as f64, &judge, since, &rfwds)?;
             let ar = mail_ar(&msg);
-            let via = via_forwarder(&rfwd, &frm).then_some("forwarder");
+            let via = via_forwarder(&rfwds, &frm).then_some("forwarder");
             let strs = |v: &[String]| V::from(v.iter().map(|s| V::from(s.as_str())).collect::<Vec<_>>());
             let row = dict! {
                 "got_epoch" => *got, "folder" => label.as_str(), "subject" => mail_text(msg.get("Subject")),
@@ -794,7 +816,7 @@ pub fn cmd_gui_mail_list(args: &[String]) -> R<()> {
             };
             if why.is_none() {
                 bx.examine(name)?;
-                let (why2, link, _) = mail_verdict(passed(rule)?, &bx.message(*u)?, *got as f64, &judge, since, rfwd.as_deref())?;
+                let (why2, link, _) = mail_verdict(passed(rule)?, &bx.message(*u)?, *got as f64, &judge, since, &rfwds)?;
                 match link.filter(|l| !l.is_empty()) {
                     Some(link) => {
                         row.set("link_shape", mail_shape(&link));
@@ -878,14 +900,14 @@ fn mail_watch(key: &str, alive: &dyn Fn() -> bool, limit: f64) -> R<()> {
     let hello = || {
         say(&format!("• 邮箱助手：已连上 {}（{}），{} 的登录邮件一到就在它专属的浏览器里打开", user, mail_route_note(&route), name))
     };
-    let fwd = m.str("forwarder");
+    let fwds = mail_forwarders(&c, key);
     let (now, sleep) = (|| time::time(), |s: f64| sleep_interruptible(s));
     let (poll, base) = Hunt::knobs();
     let h = Hunt {
         dir: &MAIL_DIR,
         rules: &rules,
         acct: &acct,
-        forwarder: fwd.as_deref(),
+        forwarders: &fwds,
         again: false,
         once: false,
         now: &now,

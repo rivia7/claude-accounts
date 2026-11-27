@@ -3065,6 +3065,21 @@ mail_trust_forwarder_cmd() {   # cca mail trust-forwarder <账号> [<中转域�
 	eval "$(py env "$acct")"
 	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：没有登录邮件"
 	[ -n "$ACC_EMAIL" ] || die "账号表里 ${ACC_NAME} 没写邮箱：认不出登录邮件"
+	# Team 给的账号：信任哪些转发中转照 Team 的配置，这里登记不了（off 照样能清掉这台设备以前登记的）
+	local tf ttid tname tdoms
+	tf=$(py mail-trust-forwarder "$acct" --check); rc=$?
+	if [ $rc -eq 3 ]; then
+		IFS=$'\t' read -r ttid tname tdoms <<< "$tf"
+		tdoms=${tdoms//,/、}
+		if [ "$dom" = off ]; then
+			py mail-trust-forwarder "$acct" off || exit 1
+			gui_done mail_ready "已清掉这台设备给 ${ACC_NAME} 登记的转发中转" "$acct"
+			okay "已清掉这台设备给 ${ACC_NAME} 登记的转发中转（这个账号照「${tname}」的配置：${tdoms:-不信任转发中转}）"
+			return
+		fi
+		FAIL_CODE=mail_team die "${ACC_NAME} 是「${tname}」给的账号：信任哪些转发中转照 Team 的配置（${tdoms:+现在是 }${tdoms:-现在一个都不信任}），这台设备上改不了；要改请 Team 的管理员运行 cca team forwarder ${tname} 域名…"
+	fi
+	[ $rc -eq 0 ] || exit 1
 	if [ "$dom" = off ]; then
 		py mail-trust-forwarder "$acct" off && { gui_done mail_ready "已关闭 ${ACC_NAME} 的信任转发中转" "$acct"; okay "已关闭 ${ACC_NAME} 的信任转发中转（改回只认 Anthropic 直签）"; }
 		return
@@ -6578,6 +6593,8 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team alias Team 账号 新别名              改一个账号在这个 Team 里的别名（没起过的各工具各自编成「Team 的名字-1」「Team 的名字-2」……；
                                                    账号写 工具:邮箱 只改这个工具里的，只写邮箱改它在的每个工具里的）
       cca team alias Team --lock | --unlock        锁定（解开）账号的别名：锁定了，各台设备上照 Team 给的用、不能自己改
+      cca team forwarder Team [域名… | off]        Team 给的 Claude 账号在各台设备上信任哪些转发中转（不安全；设备上照它，
+                                                   这些账号在设备上登记的不算）。不写是看现在的，off 是一个都不信任
       cca team publish Team                        和服务器对一遍、发布配置"
 
 restore_teams() {   # restore_teams plan | apply：卸载时的 Team。plan 说会怎样（成员：退出；管理员：根密钥跟着删掉），apply 各个都退出
@@ -6662,6 +6679,7 @@ cmd_team() {
 			okay "改好了：${2} 在这个 Team 里叫「${3}」${al_was}；$(team_stored "$al_stored")"
 			say "  各台设备上照 Team 给的名字用着的，下次同步配置时跟着改；自己改过名字的不动"
 			team_settle ;;
+		forwarder) [ $# -ge 1 ] || die "用法: cca team forwarder Team [域名… | off]"; team_forwarder "$@" ;;
 		publish)
 			out=$(py team-publish "$@") || team_fail "$out" "没发布成"
 			okay "$(team_stored "$(printf '%s\n' "$out" | sed -n 1p)")"
@@ -6733,9 +6751,9 @@ team_config_apply() {   # team_config_apply Team 文件 [打开时的摘要]：�
 	                      # 节点定义拿内核校验，问过同意（consent team_config，范围是 Team 的编号和文件的摘要：App 里同意以后文件又改过的话对不上、
 	                      # 照新的内容重问；去掉账号的默认答「不」）再换、发布，然后照新的配置对一遍账号表。
 	                      # 摘要：cca team edit 打开时的（这中间在别处改过的话提醒一句）。一样的不问、不换
-	local team="$1" f="$2" out tid name count removed sha defs summary l detail="" warns="" def=y
+	local team="$1" f="$2" out tid name count removed sha defs fwd fwd_new summary l detail="" warns="" def=y
 	out=$(py team-config check "$team" "$f" ${3:+--base "$3"}) || team_fail "$out" "没导入成"
-	{ IFS= read -r tid; IFS= read -r name; IFS= read -r count; IFS= read -r removed; IFS= read -r sha; IFS= read -r defs; summary=$(cat); } <<< "$out"
+	{ IFS= read -r tid; IFS= read -r name; IFS= read -r count; IFS= read -r removed; IFS= read -r sha; IFS= read -r defs; IFS= read -r fwd; IFS= read -r fwd_new; summary=$(cat); } <<< "$out"
 	if [ "$count" = 0 ]; then
 		okay "「${name}」的配置和这份一样，没有要改的"
 		gui_done team_imported "「${name}」的配置和这份一样，没有要改的"
@@ -6760,7 +6778,10 @@ team_config_apply() {   # team_config_apply Team 文件 [打开时的摘要]：�
 		1) say "已取消"; gui_cancelled; return 1 ;;
 		*) die "要先同意：在终端里运行 cca team import（会先问你）" ;;
 	esac
-	out=$(py team-config apply "$team" "$f" --sha "$sha") || team_fail "$out" "没换成"
+	# 信任的转发中转比现在宽了：另外问一次（默认「不」）
+	if [ "$fwd" != - ]; then team_forwarder_consent "$tid" "$name" "$fwd_new" "$fwd" "cca team import" || return 1
+	else fwd=""; fi
+	out=$(py team-config apply "$team" "$f" --sha "$sha" ${fwd:+--fwd "$fwd"}) || team_fail "$out" "没换成"
 	okay "换好了「${name}」的配置；$(team_stored "$out")"
 	gui_done team_imported "换好了「${name}」的配置；$(team_stored "$out")"
 	team_settle
@@ -6809,6 +6830,48 @@ team_alias_lock() {   # cca team alias Team --lock|--unlock：锁定（解开）
 		okay "已解开「${name}」里账号的别名；$(team_stored "$stored")"
 		say "  各台设备上又能自己改别名了（现在用着的不变）"
 	fi
+	team_settle
+}
+
+TEAM_FWD_WHY="信任转发中转以后，这个 Team 给的 Claude 账号在它的每台设备上都会接受经这些中转 DKIM 签过、标注原件来自 Anthropic 的登录邮件——中转把 Anthropic 的签名去掉了，没有密码学依据证明真来自 Anthropic。安全从「只信 Anthropic 直签」降到「信这些中转 + 各账号的别名不泄露」：别名一旦泄露，知道的人可经中转发来伪造的登录邮件，打开后登进的是攻击者的账号。各台设备上关不掉，只有 Team 的管理员能改。"
+
+team_forwarder_consent() {   # team_forwarder_consent 编号 名字 新名单（逗号连起来） 摘要 再运行哪条命令：名单比现在宽了，先说清楚、问过同意（默认「不」）。
+	                           # 范围是 Team 的编号和新名单的摘要（辅助程序在锁里照它核对）。0 同意了；1 取消（已经说了）；不能问时 die
+	[ -n "$PROMPT_GUI" ] || say "${C_Y}⚠️ 不安全${C_0}：${TEAM_FWD_WHY}"
+	consent team_forwarders "$1:$4" "Team 信任转发中转（不安全）" "确定让「${2}」给的 Claude 账号信任转发中转 ${3//,/、}？（不安全，见说明）" "$TEAM_FWD_WHY" n
+	case $? in
+		0) return 0 ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 ${5}（会先问你）" ;;
+	esac
+}
+
+team_forwarder() {   # cca team forwarder Team [域名… | off]：Team 给的 Claude 账号在各台设备上信任哪些转发中转（不安全：见 TEAM_FWD_WHY）。不写域名是看现在的；
+	                   # 比现在宽了（多了现在盖不住的域名）先问同意（team_forwarder_consent），再存、发布。这台设备马上同步一次自己的配置（它也拿到了这些账号的话
+	                   # 照新的名单，不用等一小时），再照新的配置对一遍账号表
+	local team="$1" out tid name old new widen sha stored
+	shift
+	if [ $# -eq 0 ]; then
+		out=$(py team-forwarder "$team") || team_fail "$out" "没读出来"
+		{ IFS= read -r tid; IFS= read -r name; IFS= read -r old; } <<< "$out"
+		if [ -n "$old" ]; then say "「${name}」给的 Claude 账号信任的转发中转：${old//,/、}（不安全）"
+		else say "「${name}」给的 Claude 账号不信任转发中转（只认 Anthropic 直签的登录邮件）"; fi
+		return 0
+	fi
+	out=$(py team-forwarder "$team" check "$@") || team_fail "$out" "没改成"
+	{ IFS= read -r tid; IFS= read -r name; IFS= read -r old; IFS= read -r new; IFS= read -r widen; IFS= read -r sha; } <<< "$out"
+	if [ "$old" = "$new" ]; then
+		okay "「${name}」给的 Claude 账号信任的转发中转本来就是这样，没有要改的"
+		return 0
+	fi
+	if [ "$widen" = 1 ]; then team_forwarder_consent "$tid" "$name" "$new" "$sha" "cca team forwarder" || return 1
+	else sha=""; fi
+	out=$(py team-forwarder "$team" set "$@" ${sha:+--ok "$sha"}) || team_fail "$out" "没改成"
+	{ IFS= read -r name; IFS= read -r stored; } <<< "$out"
+	if [ -n "$new" ]; then okay "「${name}」给的 Claude 账号现在信任转发中转 ${new//,/、}（不安全）；$(team_stored "$stored")"
+	else okay "「${name}」给的 Claude 账号不再信任转发中转（只认 Anthropic 直签的登录邮件）；$(team_stored "$stored")"; fi
+	say "  各台设备下次同步配置时照它：这些账号在设备上自己登记的转发中转不再算数；没拿到 Claude 账号的设备不受影响"
+	py team-sync "$tid" >/dev/null 2>&1 || true
 	team_settle
 }
 

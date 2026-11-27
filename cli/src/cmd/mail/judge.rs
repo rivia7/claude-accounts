@@ -179,14 +179,15 @@ fn domain_of(addr: &str) -> &str {
 }
 
 /// 这封邮件是不是 acct（小写的邮箱）这一次登录的登录邮件：是返回 None，不是返回原因（MAIL_WHY 的键）。got 是 Gmail 收到它的时间。
-/// forwarder 给定时（这个账号开了「信任转发中转」，默认不开）：From 是 Anthropic 时照严格路走，From 是这个中转时走 mail_judge_fwd
+/// forwarders：这个账号信任的转发中转（mail::mail_forwarders：Team 给的账号照 Team 的名单，别的照这台设备登记的；默认一个都没有）。
+/// From 是 Anthropic 时照严格路走，From 是其中一个中转（或者它下面的）时走 mail_judge_fwd
 pub fn mail_judge(
     rule: &MailRule,
     msg: &Message,
     got: f64,
     acct: &str,
     since: f64,
-    forwarder: Option<&str>,
+    forwarders: &[String],
 ) -> R<Option<&'static str>> {
     let _frame = super::py_frame();
     if got < since - MAIL_SKEW {
@@ -215,7 +216,7 @@ pub fn mail_judge(
         }
         return Ok(None);
     }
-    if let Some(f) = forwarder.filter(|f| !f.is_empty() && mail_fwd_ok(dom, f)) {
+    if let Some(f) = forwarders.iter().find(|f| mail_fwd_ok(dom, f)) {
         return mail_judge_fwd(rule, msg, acct, f);
     }
     Ok(Some("from"))
@@ -249,13 +250,13 @@ pub fn mail_judge_any(
     got: f64,
     acct: &str,
     since: f64,
-    forwarder: Option<&str>,
+    forwarders: &[String],
 ) -> R<(Option<&'static MailRule>, Option<&'static str>)> {
     let _frame = super::py_frame();
     let order = |why: &str| MAIL_ORDER.iter().position(|w| *w == why).unwrap_or(0);
     let mut best: (Option<&'static MailRule>, &'static str) = (rules.first().copied(), "subject");
     for &r in rules {
-        match mail_judge(r, msg, got, acct, since, forwarder)? {
+        match mail_judge(r, msg, got, acct, since, forwarders)? {
             None => return Ok((Some(r), None)),
             Some(why) => {
                 if order(why) > order(best.1) {
@@ -434,22 +435,22 @@ mod tests {
             assert_eq!(mail_from_alias(&msg).unwrap_or_default(), c.at("alias").py_str(), "{what}：显示名里的别名");
             for j in c.at("judge").as_list().unwrap().items() {
                 let j = j.as_dict().unwrap();
-                let fwd = opt(j.get("forwarder"));
+                let fwd: Vec<String> = opt(j.get("forwarder")).into_iter().collect();
                 let (got, since) = (j.at("got").as_num().unwrap(), j.at("since").as_num().unwrap());
-                let why = mail_judge(rule(), &msg, got, &j.at("acct").py_str(), since, fwd.as_deref());
+                let why = mail_judge(rule(), &msg, got, &j.at("acct").py_str(), since, &fwd);
                 let want = opt(j.get("why"));
                 match &why {
                     Ok(w) => assert_eq!(w.map(str::to_string), want, "{what}：{j:?}"),
                     Err(e) => assert_eq!(Some(format!("!{}", class_of(e))), want, "{what}：{j:?}"),
                 }
                 // 只有一条规则时 mail_judge_any 说的原因：比「标题不像」核对得更远才换（old 报成 subject）
-                match mail_judge_any(&[rule()], &msg, got, &j.at("acct").py_str(), since, fwd.as_deref()) {
+                match mail_judge_any(&[rule()], &msg, got, &j.at("acct").py_str(), since, &fwd) {
                     Ok((r, w)) => {
                         assert_eq!((r.is_some(), w.map(str::to_string)), (true, opt(j.get("any"))), "{what}：mail_judge_any {j:?}")
                     }
                     Err(e) => assert_eq!(Some(format!("!{}", class_of(&e))), opt(j.get("any")), "{what}：mail_judge_any {j:?}"),
                 }
-                let none = mail_judge_any(&[], &msg, got, &j.at("acct").py_str(), since, fwd.as_deref()).unwrap();
+                let none = mail_judge_any(&[], &msg, got, &j.at("acct").py_str(), since, &fwd).unwrap();
                 assert!(none.0.is_none() && none.1 == Some("subject"), "{what}：没有规则时");
             }
             // 正文的字符集 Python 认识、这里不认识（GBK、UTF-16……）时这里照 UTF-8 解，链接可能不一样：
@@ -497,7 +498,8 @@ mod tests {
         let now = 1794708000.0;
         let alice = "alice@example.com";
         let judge = |name: &str, acct: &str, got: f64, fwd: Option<&str>| {
-            mail_judge(rule(), &msg(name), got, acct, now - 60.0, fwd).unwrap()
+            let fwd: Vec<String> = fwd.map(str::to_string).into_iter().collect();
+            mail_judge(rule(), &msg(name), got, acct, now - 60.0, &fwd).unwrap()
         };
         // 好的那一封，和每一种过不了的
         assert_eq!(judge("good", alice, now, None), None);
@@ -543,6 +545,15 @@ mod tests {
         );
         assert_eq!(judge("fwd good", alice, now, None), Some("from"), "默认不开 → 拒");
         assert_eq!(judge("fwd good", alice, now, Some("evil.com")), Some("from"), "登记的是别的域名 → 拒");
+        // Team 的名单可以有好几个：From 落在哪一个下面，就照哪一个核对签名（名单里别的中转签的不算）
+        let two = ["evil.com".to_string(), "relay.example.com".to_string()];
+        let judge2 = |name: &str| mail_judge(rule(), &msg(name), now, alice, now - 60.0, &two).unwrap();
+        assert_eq!(judge2("fwd good"), None, "名单里第二个是这个中转 → 放行");
+        assert_eq!(
+            judge2("fwd signed by evil"),
+            Some("dkim"),
+            "From 是 relay.example.com、签名是 evil.com 的：evil.com 在名单里也不认"
+        );
         for (name, why) in [
             ("fwd reply-to evil", "from"),
             ("fwd reply-to missing", "from"),
@@ -561,7 +572,7 @@ mod tests {
         assert_eq!(judge("twin signature", alice, now, None), Some("dkim"), "两个签名的 b 开头一样：分不清，不认");
         assert_eq!(judge("other signature", alice, now, None), None, "b 开头不一样的另一个签名不影响");
         // mail_judge_any 报的是走得最远的那个原因
-        let (r, why) = mail_judge_any(&[rule()], &msg("to bob"), now, alice, 0.0, None).unwrap();
+        let (r, why) = mail_judge_any(&[rule()], &msg("to bob"), now, alice, 0.0, &[]).unwrap();
         assert!(r.is_some_and(|r| std::ptr::eq(r, rule())) && why == Some("to"));
         // Links
         assert_eq!(mail_extract(rule(), &msg("body two links")).unwrap().as_deref(), Some("https://claude.ai/magic-link#tok-X"));

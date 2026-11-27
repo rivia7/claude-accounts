@@ -5086,7 +5086,15 @@
             "user": "team-login@gmail.com",
             "source": "default",
             "auto": true,
-            "forwarder": null
+            "forwarder": null,
+            "team_forwarders": {
+              "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
+              "team_name": "书房组",
+              "domains": [
+                "relay.example.com"
+              ],
+              "local": null
+            }
           }
         },
         {
@@ -6073,7 +6081,15 @@
             "user": null,
             "source": null,
             "auto": true,
-            "forwarder": null
+            "forwarder": null,
+            "team_forwarders": {
+              "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
+              "team_name": "书房组",
+              "domains": [
+                "relay.example.com"
+              ],
+              "local": null
+            }
           }
         },
         {
@@ -6137,7 +6153,8 @@
             "user": "dave-login@gmail.com",
             "source": "account",
             "auto": true,
-            "forwarder": "relay.example.com"
+            "forwarder": "relay.example.com",
+            "team_forwarders": null
           }
         },
         {
@@ -8256,7 +8273,15 @@
             "user": "team-login@gmail.com",
             "source": "default",
             "auto": true,
-            "forwarder": null
+            "forwarder": null,
+            "team_forwarders": {
+              "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
+              "team_name": "书房组",
+              "domains": [
+                "relay.example.com"
+              ],
+              "local": "old-relay.example.net"
+            }
           }
         },
         {

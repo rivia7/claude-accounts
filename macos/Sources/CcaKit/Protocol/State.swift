@@ -741,10 +741,15 @@ struct MailConfig: Decodable, Sendable, Equatable {
     var source: String?
     /// 登录时自不自动打开登录邮件里的链接
     var auto: Bool
-    /// 这个账号登记的「信任转发中转」域名（不安全的开关，默认 nil = 关；PROTOCOL 4.11）
+    /// 这个账号登记的「信任转发中转」域名（不安全的开关，默认 nil = 关；PROTOCOL 4.11）。Team 给的账号总是 nil：看 `teamForwarders`
     var forwarder: String?
+    /// 这个账号是 Team 给的：信任哪些转发中转照那个 Team 的配置，这台设备上改不了（cca 3.7.9 起；不是 Team 给的、旧版 cca 是 nil）
+    var teamForwarders: TeamForwarders?
 
-    enum CodingKeys: String, CodingKey { case configured, user, source, auto, forwarder }
+    enum CodingKeys: String, CodingKey {
+        case configured, user, source, auto, forwarder
+        case teamForwarders = "team_forwarders"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -753,12 +758,37 @@ struct MailConfig: Decodable, Sendable, Equatable {
         source = c.string(.source)
         auto = c.bool(.auto) ?? true
         forwarder = nonEmpty(c.string(.forwarder))
+        teamForwarders = c.lossy(TeamForwarders.self, .teamForwarders)
     }
 
     /// 这个账号单独配了 Gmail（不是用的默认那个）
     var isAccountSpecific: Bool { source == "account" }
     /// 开了「信任转发中转」（不安全）
     var trustsForwarder: Bool { forwarder != nil }
+}
+
+/// Team 给的账号信任的转发中转（`account.mail.team_forwarders`，PROTOCOL 2.2、4.11）：由那个 Team 的配置定（管理员 `cca team forwarder`）
+struct TeamForwarders: Decodable, Sendable, Equatable {
+    /// 定这件事的 Team：编号、名字
+    var team: String
+    var teamName: String
+    /// 信任的中转域名（每一项也认它的子域名）；空的是一个都不信
+    var domains: [String]
+    /// 这台设备以前给这个账号登记过、现在不算数的那一个
+    var local: String?
+
+    enum CodingKeys: String, CodingKey {
+        case team, domains, local
+        case teamName = "team_name"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        team = c.string(.team) ?? ""
+        teamName = c.string(.teamName) ?? ""
+        domains = c.lossyArray(String.self, .domains) ?? []
+        local = nonEmpty(c.string(.local))
+    }
 }
 
 func nonEmpty(_ s: String?) -> String? {

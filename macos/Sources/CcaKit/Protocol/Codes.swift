@@ -380,6 +380,8 @@ struct FailCode: KnownValues {
     static let costOff = FailCode(rawValue: "cost_off")
     /// 邮箱助手：连不上 Gmail（网络 / 代理 / 证书 / 认证，`cca mail setup`，PROTOCOL 4.11）。
     static let mailConnect = FailCode(rawValue: "mail_connect")
+    /// 邮箱助手（`cca mail trust-forwarder`，cca 3.7.9 起）：这个账号是 Team 给的，信任哪些转发中转照 Team 的配置，这台设备上登记不了
+    static let mailTeam = FailCode(rawValue: "mail_team")
     /// 换自定义代理（`cca [codex|agy] node use`）：Team 的配置固定了这个账号的节点。
     static let nodePinned = FailCode(rawValue: "node_pinned")
     /// Team 的部署（`cca team deploy`，PROTOCOL 4.14）：App 里问 SSH 密码，错了三次（3.5.3 以前自己的同步服务器的那些 `hub_` 开头的码都没有了；
@@ -393,7 +395,7 @@ struct FailCode: KnownValues {
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .aliasLocked, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .hubSSH, .teamLan]
+                                       .costUnavailable, .costOff, .mailConnect, .mailTeam, .nodePinned, .hubSSH, .teamLan]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -447,12 +449,15 @@ struct ConsentItem: KnownValues {
     /// `cca team import` / `edit`：照文件整份换掉一个 Team 的配置，再发布（范围是 Team 的编号和文件的摘要：同意以后文件又改过就对不上，cca 重问；
     /// detail 一项一句、提醒在最后，要去掉账号时默认不同意）。
     static let teamConfig = ConsentItem(rawValue: "team_config")
+    /// `cca team forwarder` / `import`（cca 3.7.9 起）：这个 Team 给的 Claude 账号在各台设备上信任这些转发中转（不安全，各台设备上关不掉；
+    /// 范围是 Team 的编号和新名单的摘要，默认不同意；只在名单变宽时问，import 先问 team_config）。
+    static let teamForwarders = ConsentItem(rawValue: "team_forwarders")
     /// `cca cost hook on`：在共享的 ~/.claude/settings.json 里加一条 SessionStart hook，Claude App 里的 Code 会话开始时记下 App 登录的账号
     /// （范围为空，默认同意；PROTOCOL 4.2）。
     static let costHook = ConsentItem(rawValue: "cost_hook")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .remoteLaunch,
-                                          .teamLeave, .teamDelete, .teamRevoke, .teamAdminAdd, .teamAdminRemove, .teamConfig, .costHook]
+                                          .teamLeave, .teamDelete, .teamRevoke, .teamAdminAdd, .teamAdminRemove, .teamConfig, .teamForwarders, .costHook]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

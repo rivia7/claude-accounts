@@ -4,7 +4,7 @@
 use super::base::*;
 use super::model::*;
 use super::policy::*;
-use super::tool::{acct_json_cached, acct_json_store, t, tools, Tool};
+use super::tool::{acct_json_cached, acct_json_store, t, tools, Kind, Tool};
 use crate::dict;
 use crate::py::fs::{load_json, load_quiet, save_json};
 use crate::py::num::ceil_to;
@@ -72,6 +72,10 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
             &format!("• 按「{team}」的配置把 {} 账号 {} 的别名改成 {}", tool.label, label_of(k), parse_key(new).0),
             dict! { "tool" => tool.name, "key" => new, "old_key" => k },
         );
+    }
+    // 邮箱助手只在 Mac 上有：别处不说转发中转的事
+    if tool.kind == Kind::Claude && cfg!(target_os = "macos") {
+        team_forwarders_say(&st, tool);
     }
     let pm = policy_map(tool, Some(c));
     let pinned = |k: &str| pm.get(&parse_key(k).1.to_lowercase());

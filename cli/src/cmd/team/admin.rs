@@ -29,15 +29,16 @@ use crate::cmd::hub::deploy::{team_install, team_uninstall, url_parts};
 use crate::cmd::hub::hosted::team_files;
 use crate::cmd::hub::own_account;
 use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, with_https_port, NAME_BAD};
+use crate::cmd::mail::{doc_forwarders, fwd_norm, fwd_widens, team_fwd_check};
 use crate::cmd::presence::{key_at, presence_post, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
 use crate::core::model::{is_api, node_of, parse_key};
 use crate::core::policy::{alias_ok, legacy_n, policy_sources, team_default_alias, team_default_n};
 use crate::core::team::{load_team, team_dir, team_path, teams, Role, Team, TEAMS_DIR};
-use crate::core::tool::tools;
+use crate::core::tool::{claude, tools};
 use crate::py::fs::{self, load_quiet, save_json};
-use crate::py::hash::{from_hex, hmac_sha256, to_hex};
+use crate::py::hash::{from_hex, hmac_sha256, sha256_hex, to_hex};
 use crate::py::obj::{str_list, Dict, List, V};
 use crate::py::rand::token_hex;
 use crate::py::{json, path, Fail, R};
@@ -516,6 +517,7 @@ fn build_doc(t: &Team, a: &Dict, id: &str, dev: &Dict) -> Dict {
     if !install.is_empty() {
         used.insert(install.clone());
     }
+    let has_claude = accounts.dict(claude().name).is_some_and(|m| !m.is_empty());
     let doc = dict! {
         "v" => 1, "at" => now(), "name" => t.name.as_str(), "salt" => a.at("salt"),
         "server" => dict! { "u" => t.url.as_str(), "p" => str_list(&t.pins) },
@@ -525,6 +527,12 @@ fn build_doc(t: &Team, a: &Dict, id: &str, dev: &Dict) -> Dict {
     // 锁定了别名才有这一项（没锁定的 Team 的配置和以前一样，不用重新发布）
     if alias_locked(a) {
         doc.set("alias_lock", true);
+    }
+    // 信任的转发中转（cca team forwarder）：设了、这台设备又拿到了 Claude 账号才有这一项（没设的 Team、没有 Claude 账号的设备，配置和以前
+    // 一样，不用重新发布）。设备上照它，这台设备给这些账号登记的不算（mail::mail_forwarders）
+    let fw = doc_forwarders(&config);
+    if !fw.is_empty() && has_claude {
+        doc.set("mail_forwarders", str_list(&fw));
     }
     // 给过别的设备管理员身份才有这两项（3.6.15 起）：管理员名单到第几版了（设备照它不认更旧的名单），给管理员的那几台带着管理员的
     // 密钥（只认根密钥签的这一项：别的管理员签的那一份也带着同一把，免得内容变来变去）
@@ -1674,7 +1682,7 @@ fn grants_text(g: &V) -> String {
 }
 
 /// py team-devices Team [--json]：这个 Team 的设备（先和服务器对一遍，见 reconcile）。--json：{"version": 1, "kind": "team_devices",
-/// "team": 编号, "alias_lock": 别名锁定着没有, "devices": [{dev, label, name, state, me, grants, seq, have: 它手里是第几版（没说过是 null）,
+/// "team": 编号, "alias_lock": 别名锁定着没有, "mail_forwarders": 信任的转发中转（没有是 []）, "devices": [{dev, label, name, state, me, grants, seq, have: 它手里是第几版（没说过是 null）,
 /// seen_age, expires_epoch: 邀请什么时候过期, problem: 对一遍时发现的、要告诉管理员的（没有是 null）, role: owner（建 Team 的那台）|
 /// admin（别的管理员，3.6.15 起）| member}]}；不带时第一行是别名锁定着没有（1 | 0），后面一台一行：设备编号\t名字\t状态\t授权\t
 /// 发布到第几版\t它手里第几版\t要告诉管理员的\t角色（没有的写 -）
@@ -1723,7 +1731,7 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
             "version" => 1, "kind" => "team_devices", "team" => t.id.as_str(), "name" => t.name.as_str(),
             "accounts" => config.get("accounts").filter(|x| x.is_dict()).unwrap_or_else(|| V::Dict(Dict::new())),
             "aliases" => plan.flat, "tool_aliases" => plan.by_tool, "alias_lock" => alias_locked(&a), "nodes" => nodes,
-            "devices" => list,
+            "mail_forwarders" => str_list(doc_forwarders(&config)), "devices" => list,
         };
         out!("{}", json::dumps(&V::Dict(doc), json::Fmt::new().utf8().indent(2)));
         return Ok(());
@@ -2071,6 +2079,78 @@ pub fn cmd_team_alias_lock(args: &[String]) -> R<()> {
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
     out!("{}\n{stored}", t.name);
+    Ok(())
+}
+
+/// 命令行上写的转发中转（每个参数也可以用逗号分开写好几个；只写 off 是一个都不信任）→ 规整好的名单；不对的说出第一处（原因码 domain）
+fn fwd_args(words: &[String]) -> Result<Vec<String>, String> {
+    if matches!(words, [w] if w == "off") {
+        return Ok(Vec::new());
+    }
+    let mut got = Vec::new();
+    for w in words.iter().flat_map(|w| w.split(',')).filter(|w| !w.trim().is_empty()) {
+        got.push(team_fwd_check(w)?);
+    }
+    if got.is_empty() {
+        return Err("要写中转的域名（像 relay.example.com），不信任写 off".into());
+    }
+    Ok(fwd_norm(got))
+}
+
+/// 问同意时的范围：新名单的摘要（App 里同意的是这一份；改的时候在锁里照它核对）
+pub(super) fn fwd_token(list: &[String]) -> String {
+    sha256_hex(list.join("\n"))[..16].to_string()
+}
+
+/// py team-forwarder Team [check|set 域名…|off [--ok 摘要]]：这个 Team 给的 Claude 账号在各台设备上信任哪些转发中转（不安全；admin.json 的
+/// config.mail_forwarders，发给拿到 Claude 账号的设备：build_doc；设备上照它，这台设备给这些账号登记的不算：mail::mail_forwarders）。
+/// 不写：stdout 一行一项：Team 的编号、名字、现在的名单（逗号连起来，没有是空行）。check（只看）：编号、名字、现在的名单、新名单、
+/// 比现在宽没有（1 | 0：多了现在的名单盖不住的域名，要先问同意）、新名单的摘要（同意的范围）。set：在锁里照现在的名单再算一遍，
+/// 宽了而 --ok 和新名单的摘要对不上就不改（consent）；改了接上了服务器就发布，stdout：名字、存上了几台的配置。
+/// 原因码：no_team、not_admin、usage、domain（不是域名、公共邮箱的域名、公共的后缀）、consent、server、publish
+pub fn cmd_team_forwarder(args: &[String]) -> R<()> {
+    const USE: &str = "用法: cca team forwarder Team [域名… | off]";
+    let (sel, mode, rest) = match args {
+        [s] => (s, "show", &args[1..]),
+        [s, m, ..] if m == "check" || m == "set" => (s, m.as_str(), &args[2..]),
+        _ => return fail("usage", USE),
+    };
+    let (words, ok) = match rest {
+        [w @ .., flag, h] if flag == "--ok" && mode == "set" => (w, Some(h.as_str())),
+        w => (w, None),
+    };
+    let new = if mode == "show" {
+        Vec::new()
+    } else if words.is_empty() {
+        return fail("usage", USE);
+    } else {
+        match fwd_args(words) {
+            Ok(v) => v,
+            Err(why) => return fail("domain", &why),
+        }
+    };
+    let (t, a, _lk) = admin_of(sel)?;
+    let config = a.dict("config").unwrap_or_default();
+    let old = doc_forwarders(&config);
+    let widen = fwd_widens(&old, &new);
+    match mode {
+        "show" => out!("{}\n{}\n{}", t.id, t.name, old.join(",")),
+        "check" => out!("{}\n{}\n{}\n{}\n{}\n{}", t.id, t.name, old.join(","), new.join(","), u8::from(widen), fwd_token(&new)),
+        _ => {
+            if widen && ok != Some(fwd_token(&new).as_str()) {
+                return fail("consent", "名单比现在宽了，要先同意（也可能刚在别处改过）：重新运行 cca team forwarder，会先问你");
+            }
+            if new.is_empty() {
+                config.pop("mail_forwarders");
+            } else {
+                config.set("mail_forwarders", str_list(&new));
+            }
+            a.set("config", config);
+            admin_save(&t.id, &a)?;
+            let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
+            out!("{}\n{stored}", t.name);
+        }
+    }
     Ok(())
 }
 

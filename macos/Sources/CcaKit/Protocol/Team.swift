@@ -107,6 +107,8 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
     var toolAliases: [String: [String: String]]?
     /// 管理员锁定了别名（各台设备上不能自己改；cca 3.5.3-beta.7 起，以前的 cca 没有这一项：nil，App 不给锁定的开关）
     var aliasLock: Bool?
+    /// 这个 Team 给的 Claude 账号信任的转发中转（不安全；空的是一个都不信；cca 3.7.9 起，以前的 cca 没有这一项：nil，App 不给这一行）
+    var mailForwarders: [String]?
     /// 配置里带着定义的节点的名字
     var nodes: [String]
     var devices: [TeamDevice]
@@ -115,6 +117,7 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
         case version, kind, team, name, accounts, aliases, nodes, devices
         case toolAliases = "tool_aliases"
         case aliasLock = "alias_lock"
+        case mailForwarders = "mail_forwarders"
     }
 
     init(from decoder: Decoder) throws {
@@ -127,6 +130,7 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
         aliases = c.lossyDictionary(String.self, .aliases) ?? [:]
         toolAliases = c.lossyDictionary([String: String].self, .toolAliases)
         aliasLock = c.bool(.aliasLock)
+        mailForwarders = c.lossyArray(String.self, .mailForwarders)
         nodes = c.lossyArray(String.self, .nodes) ?? []
         devices = c.lossyArray(TeamDevice.self, .devices) ?? []
     }

@@ -42,6 +42,7 @@ pub const MODULE: Module = Module {
         case!(alias_per_tool),
         case!(alias_migrate),
         case!(alias_lock),
+        case!(mail_forwarders),
         case!(nodes),
         case!(spec_admin),
         case!(records_lost_and_move),
@@ -1429,6 +1430,101 @@ fn alias_lock(t: &mut Ctx) {
     assert!(table(&m).obj().contains_key("mybob(bob@example.com)"));
 }
 
+/// Team 信任的转发中转（cca team forwarder）：管理员写的时候查（不是域名、公共邮箱的域名、公共的后缀不收）、规整；比现在宽了要先同意
+/// （--ok 带新名单的摘要，在锁里核对）；发给拿到 Claude 账号的设备，没拿到的配置不变；设备上照它（这台设备上登记不了：mail-trust-forwarder
+/// 退出码 3），第一次拿到、变了说一声，说过的不再说，去掉了说「不再信任」（建 Team 的那台不说）；导出的文件里带着，导入一份更宽的同样要同意
+fn mail_forwarders(t: &mut Ctx) {
+    let fx = fx(t);
+    let (admin, tid, _root, _srv, _url, _pin) = fx.new_team();
+    let tid = tid.as_str();
+    load(&admin, tid);
+    // m 拿到 Claude 的 alice，c 只拿到 Codex 的 carol
+    let m = fx.device("m");
+    with_nodes(&m);
+    lines_in(&m, &["team-join"], &invite(&admin, tid, "m-mini", &["--accounts", "claude:alice@example.com"]).0);
+    let c = fx.device("c");
+    with_nodes(&c);
+    lines_in(&c, &["team-join"], &invite(&admin, tid, "c-mini", &["--accounts", "codex:carol@example.com"]).0);
+    team_apply(&m);
+    let c_seq = doc(&c, tid).0;
+    let mac = cfg!(target_os = "macos"); // 邮箱助手只在 Mac 上有：别处不说转发中转的事
+    assert_eq!(lines(&admin, &["team-forwarder", tid]), [tid, "测试组", ""], "没设：一个都不信任");
+    assert_eq!(devices(&admin, tid)["mail_forwarders"], list![]);
+    for bad in ["gmail.com", "mail.qq.com", "co.uk", "relay.example.com:25", "off,relay.example.com"] {
+        assert_eq!(code(&admin, &["team-forwarder", tid, "check", bad]), "domain", "{bad}");
+    }
+    assert_eq!(code(&admin, &["team-forwarder", tid, "check"]), "usage");
+    assert_eq!(code(&m, &["team-forwarder", tid]), "not_admin");
+    let ck = lines(&admin, &["team-forwarder", tid, "check", "Relay.Example.com,b.example.net", "a.relay.example.com"]);
+    assert_eq!(ck[..5], [tid, "测试组", "", "b.example.net,relay.example.com", "1"], "规整：小写、去掉被盖住的、排好序；比现在宽");
+    let ok = ck[5].clone();
+    assert_eq!(ok.len(), 16, "{ck:?}");
+    // 宽了：没带同意、同意的是另一份名单的都不改
+    assert_eq!(code(&admin, &["team-forwarder", tid, "set", "relay.example.com", "b.example.net"]), "consent");
+    assert_eq!(code(&admin, &["team-forwarder", tid, "set", "relay.example.com", "--ok", &ok]), "consent", "同意的是另一份名单");
+    assert_eq!(lines(&admin, &["team-forwarder", tid]), [tid, "测试组", ""]);
+    assert_eq!(lines(&admin, &["team-forwarder", tid, "set", "b.example.net,relay.example.com", "--ok", &ok]), ["测试组", "2"]);
+    assert_eq!(lines(&admin, &["team-forwarder", tid]), [tid, "测试组", "b.example.net,relay.example.com"]);
+    assert_eq!(devices(&admin, tid)["mail_forwarders"], list!["b.example.net", "relay.example.com"]);
+    m.ok(&["team-sync"]);
+    c.ok(&["team-sync"]);
+    assert_eq!(doc(&m, tid).1["mail_forwarders"], list!["b.example.net", "relay.example.com"]);
+    assert_eq!(doc(&c, tid).0, c_seq, "没拿到 Claude 账号的设备：配置不变");
+    let said = team_apply(&m);
+    if mac {
+        assert_in("按「测试组」的配置，它给的 Claude 账号信任转发中转 b.example.net、relay.example.com（不安全", &said);
+        assert_eq!(team_apply(&m), "", "说过了不再说");
+    }
+    // 设备上登记不了；不是 Team 给的账号照旧
+    let key = key_list(&table(&m)).into_iter().find(|k| k.contains("alice@example.com")).expect("alice 加进来了").to_string();
+    let r = m.run(&["mail-trust-forwarder", &key, "relay.example.com"]);
+    assert_eq!((r.code, r.out.as_str()), (3, format!("{tid}\t测试组\tb.example.net,relay.example.com\n").as_str()), "{}", r.err);
+    assert_eq!(m.run(&["mail-trust-forwarder", &key, "--check"]).code, 3);
+    let r = m.run(&["mail-trust-forwarder", "zed@example.com", "--check"]);
+    assert_eq!((r.code, r.out.as_str()), (0, ""));
+    // 窄了不用同意；一样的不改
+    assert_eq!(lines(&admin, &["team-forwarder", tid, "check", "relay.example.com"])[4], "0", "窄了：不用问同意");
+    assert_eq!(lines(&admin, &["team-forwarder", tid, "set", "relay.example.com"]), ["测试组", "2"]);
+    assert_eq!(lines(&admin, &["team-forwarder", tid, "set", "relay.example.com"]), ["测试组", "0"], "一样的：配置没变");
+    m.ok(&["team-sync"]);
+    let said = team_apply(&m);
+    if mac {
+        assert_in("信任转发中转 relay.example.com（不安全", &said);
+    }
+    // 建 Team 的那台照它（它也拿到了这些账号），但不说
+    admin.ok(&["team-sync"]);
+    assert_eq!(doc(&admin, tid).1["mail_forwarders"], list!["relay.example.com"]);
+    assert_not_in("转发中转", &team_apply(&admin));
+    // 导出的文件里带着；导入一份更宽的：check 给出新名单的摘要，apply 不带它不换
+    let f = fx.d.join("team.json");
+    let fs_ = path_str(&f);
+    lines(&admin, &["team-config", "export", tid, fs_]);
+    let mut j = fsx::read_json(&f);
+    assert_eq!(j["mail_forwarders"], list!["relay.example.com"]);
+    sub(&mut j, &[]).insert("mail_forwarders", list!["relay.example.com", "b.example.net"]);
+    put(&f, &j);
+    let ck = lines(&admin, &["team-config", "check", tid, fs_]);
+    assert_eq!((ck[2].as_str(), ck[6].len(), ck[7].as_str()), ("1", 16, "b.example.net,relay.example.com"), "{ck:?}");
+    assert_in(
+        "Team 给的 Claude 账号信任的转发中转：relay.example.com（不安全） → b.example.net、relay.example.com（不安全）",
+        &ck[8..].join("\n"),
+    );
+    assert_eq!(code(&admin, &["team-config", "apply", tid, fs_, "--sha", &ck[4]]), "consent");
+    assert_eq!(lines(&admin, &["team-config", "apply", tid, fs_, "--sha", &ck[4], "--fwd", &ck[6]]), ["2"]);
+    assert_eq!(devices(&admin, tid)["mail_forwarders"], list!["b.example.net", "relay.example.com"]);
+    // 去掉：配置里没有这一项了，设备上说「不再信任」；不信任也是 Team 定的
+    assert_eq!(lines(&admin, &["team-forwarder", tid, "set", "off"]), ["测试组", "2"]);
+    assert_eq!(devices(&admin, tid)["mail_forwarders"], list![]);
+    m.ok(&["team-sync"]);
+    assert!(!doc(&m, tid).1.obj().contains_key("mail_forwarders"));
+    if mac {
+        assert_in("「测试组」不再信任转发中转", &team_apply(&m));
+        assert_eq!(team_apply(&m), "");
+    }
+    let r = m.run(&["mail-trust-forwarder", &key, "--check"]);
+    assert_eq!((r.code, r.out.as_str()), (3, format!("{tid}\t测试组\t\n").as_str()));
+}
+
 /// Team 的节点（cca team node）：列出来不带密钥；加、复制（整份复制，密钥不出这台设备）、去掉；还有账号、别的节点、安装客户端
 /// 用着的去不掉；没人用的节点不改各台设备的配置，有账号走它了才发出去；实测用的临时内核配置；照实测的结果判断
 fn nodes(t: &mut Ctx) {
@@ -2176,7 +2272,8 @@ fn config_file(t: &mut Ctx) {
     assert_eq!(code(&admin, &["team-config", "nope"]), "usage");
     // 原样导入：没有要改的
     let same = lines(&admin, &["team-config", "check", tid, file]);
-    assert_eq!((same[2].as_str(), same[3].as_str(), same[5].as_str(), same.len()), ("0", "0", "0", 6));
+    assert_eq!((same[2].as_str(), same[3].as_str(), same[5].as_str(), same.len()), ("0", "0", "0", 8));
+    assert_eq!(same[6..], ["-", ""], "信任的转发中转没变宽（没设）：不用另外问");
     // 改：去掉 alice、bob 换到 US-E、Codex 的 carol 改名、加 dave（只写节点：编成 测试组-2）、锁定别名
     let mut e2 = e.clone();
     sub(&mut e2, &["accounts", "claude"]).remove("alice@example.com");
@@ -2189,8 +2286,9 @@ fn config_file(t: &mut Ctx) {
     let chk = lines(&admin, &["team-config", "check", tid, path_str(&f2)]);
     assert_eq!(chk[..4], [tid, "测试组", "5", "1"]);
     assert_eq!((chk[4].len(), chk[5].as_str()), (64, "0"), "文件的 SHA-256、没有新的节点定义");
+    assert_eq!(chk[6..8], ["-", ""]);
     assert_eq!(
-        chk[6..],
+        chk[8..],
         [
             "加 1 个账号：Claude dave@example.com（US-A）",
             "去掉 1 个账号：Claude alice@example.com（各台设备上收起来，登录留着）",
@@ -2242,7 +2340,7 @@ fn config_file(t: &mut Ctx) {
     lines(&admin, &["team-map", tid, "claude", "erin@example.com", "US-A"]);
     let chk = lines(&admin, &["team-config", "check", tid, &ed[0], "--base", &ed[5]]);
     assert_eq!(
-        chk[6..],
+        chk[8..],
         [
             "去掉 1 个账号：Claude erin@example.com（各台设备上收起来，登录留着）",
             "! 打开以后「测试组」的配置在别处改过（App 里、别的命令）：照这份换掉的话，那些改动就没了",

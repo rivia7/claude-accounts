@@ -59,6 +59,17 @@ import Foundation
         check("mail_list.json 夹具能解码", false)
     }
 
+    // Team 给的账号（cca 3.7.9 起）：信任哪些转发中转照 Team 的配置，这台设备上登记的不算数
+    if let st = loadFixture(StateDoc.self, "state.json") {
+        func mail(_ key: String) -> MailConfig? { st.allAccounts.first { $0.key == key }?.mail }
+        let bob = mail("工作(bob@example.com)"), grace = mail("grace@example.com"), dave = mail("测试(dave@example.com)"), erin = mail("erin@example.com")
+        check("mail.team_forwarders：Team 给的账号带着 Team 的编号、名字和名单（forwarder 是 nil）；这台设备登记过、不算数的在 local；不是 Team 给的、旧版 cca 是 nil",
+              bob?.forwarder == nil && bob?.teamForwarders?.team == "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b" && bob?.teamForwarders?.teamName == "书房组"
+              && bob?.teamForwarders?.domains == ["relay.example.com"] && bob?.teamForwarders?.local == nil
+              && grace?.teamForwarders?.local == "old-relay.example.net"
+              && dave?.teamForwarders == nil && dave?.forwarder == "relay.example.com" && erin != nil && erin?.teamForwarders == nil)
+    }
+
     // MARK: 模型：按需拉、打开、gate
     guard let hello = fixture("hello.json").map({ String(decoding: $0, as: UTF8.self) }),
           let state = fixture("state.json").map({ String(decoding: $0, as: UTF8.self) }),

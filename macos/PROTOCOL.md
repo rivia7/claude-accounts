@@ -188,7 +188,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "can_why": {},
   "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1794020000.0,
               "from_device": "dan-air", "sync_error": null},
-  "mail": {"configured": true, "user": "team-login@gmail.com", "source": "default", "auto": true, "forwarder": null},
+  "mail": {"configured": true, "user": "team-login@gmail.com", "source": "default", "auto": true, "forwarder": null,
+           "team_forwarders": {"team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "team_name": "书房组", "domains": ["relay.example.com"], "local": null}},
   "usage": { "…用量条目，见 3.1…" },
   "usage_weeks": { "…每周用量，见下面…" },
   "cost": { "…折合金额，见下面…" },
@@ -254,7 +255,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `mail`：这个账号的邮箱助手状态（账号页的「邮箱」一节，4.11；只在 `can.mail` 为 true 的账号上有，否则为 null）。只读 config.json、**不碰钥匙串**：
   `configured`：解析得到收登录邮件的 Gmail 了没有（这个账号单独配的覆盖，或默认那个）；`user`：那个 Gmail 地址（没配置为 null）；
   `source`：`account`（这个账号单独配了 Gmail）| `default`（用的是默认那个，所有账号共用）| `null`（没配置）；`auto`：登录时自不自动打开登录邮件里的链接；
-  `forwarder`：这个账号登记的「信任转发中转」域名（4.11，不安全的开关，默认 null）。
+  `forwarder`：这个账号登记的「信任转发中转」域名（4.11，不安全的开关，默认 null）；Team 给的账号总是 null（照 Team 的配置，见下一项）。
+  `team_forwarders`（3.7.9 起；以前的 cca 没有，当作 null）：这个账号是 Team 给的时候是 `{"team": Team 的编号, "team_name": 名字, "domains": [域名…], "local": 域名 | null}`——
+  信任哪些转发中转由这个 Team 的配置定（`domains`；`[]` 是一个都不信；每一项也认它的子域名），这台设备上改不了；`local` 是这台设备以前给它登记过、
+  现在不算数的那一个（没有是 null）。不是 Team 给的是 null。
   旧版 cca 没有这个字段，当作 null（不显示「邮箱」一节）。应用专用密码存不存在、能不能连上，要调 `cca _gui mail-list`（2.4）才知道。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `usage_weeks`：每周用量（账号页的「每周用量」、侧栏的「用量统计」）：最近 12 周每周用到这一周额度的百分之几，和这几周的统计。
@@ -833,7 +837,8 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
   `unsupported`（这种账号没有这个功能：Antigravity 的 `app`、`billing`、`limit-resets`、`add api`；旧版 cca 的 `cca agy usage` 也是它）|
   `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）|
-  `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `node_pinned`（`node use`：Team 的配置锁定了这个账号的节点）|
+  `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `mail_team`（3.7.9 起，`mail trust-forwarder`：这个账号是 Team 给的，
+  信任哪些转发中转照 Team 的配置，这台设备上登记不了，4.11）| `node_pinned`（`node use`：Team 的配置锁定了这个账号的节点）|
   `hub_ssh`（`team deploy` 在 App 里问的服务器登录不上：密码错了三次、主机密钥和记下的不一样，4.6 的 `hub.deploy`、`hub.password`；
   删除 Team 时登录不上的不是它：问要不要照样删，`team.keep_server`）|
   `team_…`（Team 的命令没成、做完了带着的提醒，4.14）。3.5.2 的 cca 还有自己的同步服务器的 `hub_…`（`hub_link`、`hub_denied`……），3.5.3 去掉了；
@@ -867,7 +872,8 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `team_admin_add` | 设备在 Team 里的编号 | `cca team admin add`（3.6.15 起，只有建 Team 的设备能）：让这台设备也当管理员：它拿到这个 Team 的全部设置（各台设备的配置的密钥、节点的密码），能邀请、移除设备、改账号和节点；收回以后它已经看过的收不回来 | no |
 | `team_admin_remove` | 设备在 Team 里的编号 | `cca team admin remove`（3.6.15 起）：收回它的管理员身份：服务器不再认它，管理员共用的密钥换一把、各台设备的配置重新发布；它已经看过的节点密码收不回来，要紧的话换掉 | no |
 | `team_revoke` | 设备在 Team 里的编号（16 个十六进制字符） | `cca team revoke`：管理员移除一台设备（或者撤回还没用掉的邀请）：服务器就此不认它的密钥，给它的配置、它同步过的折合金额删掉（3.6.6 起），管理员这边也不再列它；它已经拿到的节点凭证收不回来 | no |
-| `team_config` | Team 的编号和这份文件的摘要（`<编号>:<文件的 SHA-256 前 16 位>`） | `cca team import <Team> <文件>`、`cca team edit`（3.6.14 起）：照文件整份换掉这个 Team 的配置（账号走哪个节点、别名、锁定别名、安装客户端用的节点、节点的定义），再发布给各台设备。`detail` 是会改的几项，一项一句（「。」结尾），有提醒时最后是「注意：」和提醒（走的节点这份配置里没有定义、这台设备上也没有，新的定义和这台设备上已有的节点同名，`cca team edit` 打开以后配置在别处改过）。终端里问之前先一行一项打出来。同意以后、带着同意重跑之前文件又改过的话范围对不上，cca 照新的内容再发一次 consent（App 再问一次） | yes；要去掉账号时 no |
+| `team_config` | Team 的编号和这份文件的摘要（`<编号>:<文件的 SHA-256 前 16 位>`） | `cca team import <Team> <文件>`、`cca team edit`（3.6.14 起）：照文件整份换掉这个 Team 的配置（账号走哪个节点、别名、锁定别名、安装客户端用的节点、信任的转发中转、节点的定义），再发布给各台设备。`detail` 是会改的几项，一项一句（「。」结尾），有提醒时最后是「注意：」和提醒（走的节点这份配置里没有定义、这台设备上也没有，新的定义和这台设备上已有的节点同名，`cca team edit` 打开以后配置在别处改过）。终端里问之前先一行一项打出来。同意以后、带着同意重跑之前文件又改过的话范围对不上，cca 照新的内容再发一次 consent（App 再问一次） | yes；要去掉账号时 no |
+| `team_forwarders` | Team 的编号和新名单的摘要（`<编号>:<排好序的域名一行一个、最后不带换行，它的 SHA-256 前 16 位>`） | `cca team forwarder <Team> <域名…>`、`cca team import`（3.7.9 起，管理员）：让这个 Team 给的 Claude 账号在每台拿到它们的设备上信任这些转发中转（4.11）——经它们转来、标注来自 Anthropic 的登录邮件也会认，没有密码学依据；别名一旦泄露，知道的人能经中转发来伪造的登录邮件。各台设备上关不掉。只在新名单比现在宽（多了现在的盖不住的域名）时问；`import` 先问 `team_config`，同意了再问它（App 把两次的授权一起带上重跑） | no |
 | `cost_hook` | 空 | `cca cost hook on`（3.5）：在共享的 `~/.claude/settings.json` 里加一条 SessionStart hook，Claude App 里的 Code 会话开始时运行 cca，记下会话 id 和 App 登录的账号（不读对话的内容），折合金额按它算；命令行里的会话不受影响。`detail` 里说怎么去掉 | yes |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
@@ -1036,7 +1042,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `mail.setup` | `mail setup [--account]` | `text`、`secret` | 邮箱助手（App 里一页问完，4.11）：收登录邮件的 Gmail 地址（校验 gmail，预填上次的）、应用专用密码（校验 `any`，Gmail 的密码带空格）。cca 登录一次核对过才存进钥匙串；地址 / 密码不对、连不上时带着原因重问 |
 | `mail.address` | `mail setup`（终端） | `text` | 邮箱助手的终端流程：收登录邮件的 Gmail 地址（预填上次的；地址不对、要换地址时重问）。App 里用 `mail.setup` 一页问完 |
 | `mail.password` | `mail setup`（终端） | `secret` | 邮箱助手的终端流程：这个 Gmail 的应用专用密码（cca 登录一次核对过才存进钥匙串；不对时重问）。只经答案管道 |
-| `mail.forwarder` | `mail trust-forwarder` | `text` | 「信任转发中转」要信任的中转域名（像 relay.example.com）。问之前 / 之后都有不安全的警告（页面 `message` + 随后的 `consent.mail_trust_forwarder`，4.11）。只给 Claude 账号 |
+| `mail.forwarder` | `mail trust-forwarder` | `text` | 「信任转发中转」要信任的中转域名（像 relay.example.com）。问之前 / 之后都有不安全的警告（页面 `message` + 随后的 `consent.mail_trust_forwarder`，4.11）。只给 Claude 账号；Team 给的账号不问（`fail` 的 `mail_team`，3.7.9 起） |
 | `remote.pair` | `remote pair` | `code` | 显示配对码的那一页（字段 id 是 `code`，`value` 是配对码 `XXXX-XXXX-XXXX-XXXX`，10 分钟内有效、只能用一次）。**没有要回答的**：另一台机器输入了，cca 自己发 `result` 的 `remote_paired` 退出；过期、服务器那边没成是 `fail`。App 取消（关掉答案管道）时 cca 把后台的配对停掉、告诉服务器作废这个配对码。前面先问 `consent.remote_pair`（4.2） |
 | `remote.pair_web` | `remote pair --web` | `qr`、`code` | 和手机配对的那一页：字段 `url`（`qr`：给 iPhone 上的 cca App 的链接 `cca-remote://pair?v=1&u=服务器的地址&p=证书公钥的指纹…&c=配对码&n=机器名[&t=Team 的名字]`，格式见 docs/dev/ios.md「二维码里的链接」；3.5.3 的 cca 给的是网页端的地址 `https://主机[:端口]/`。App 只管画，不解析）、`code`（配对码，和 `remote.pair` 的一样）。**没有要回答的**，收场、取消和 `remote.pair` 一样。前面先问 `consent.remote_pair`（范围是 `web`） |
 | `remote.code` | `remote join` | `text` | 另一台机器上显示的配对码（16 个字母和数字，大小写、横线随意；空着是取消）。不对、过期、服务器那边没成都是 `fail`（配对码错了不重问：那一头试错几次就作废，要重新显示一个） |
@@ -1065,11 +1071,12 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `team new`、`team join`、`team deploy <Team>`、`team leave <Team>`（管理员） | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」「删掉这个 Team…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`；`consent.team_delete`、`hub.password`、`hub.pubkey`、`team.keep_server`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` / `team_left` |
 | `team export <Team> <文件> --force`、`team import <Team> <文件>`、`team edit <Team>` | 管理员的「更多」里的「导出配置…」（保存面板选文件：面板问过覆盖，所以带 `--force`）、「导入配置…」（打开面板选文件）、「在终端里修改配置…」（要 `hello.team_config`） | `export` 是无交互命令（`result` 的 `team_exported`）；`import` 是无交互命令 + 同意重跑（`consent.team_config`），做完 `result` 的 `team_imported`；`edit` 交给终端（6；提问会话里是 `terminal` 事件的 `team_edit`） |
 | `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team admin`（3.6.15 起）、`team leave`（成员） | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」、建 Team 的设备的「设为管理员…」「收回管理员…」）；「更多」里的「退出这个 Team…」 | 无交互命令（`revoke`、`admin`、`leave` 先同意：`consent.team_revoke`、`consent.team_admin_add` / `team_admin_remove`、`consent.team_leave`；`invite` 的 stdout 只经内存里的管道读，4.14） |
+| `team forwarder <Team> <域名…>`、`team forwarder <Team> off` | 管理员的「信任的转发中转（不安全）」一行：「修改…」「不再信任」（`team devices --json` 有 `mail_forwarders` 时才有，3.7.9 起） | 无交互命令 + 同意重跑（`consent.team_forwarders`，名单变宽时才问）；跑完为止（4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页（含端口池旧了时的「现在更新」）、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `mail setup [--account]` | 账号页「邮箱」一节的「配置 / 更换」 | 提问会话（`mail.setup`；要 `hello.mail`，4.11） |
-| `mail trust-forwarder <账号>` | 「邮箱」一节的「信任转发中转（不安全）」开关 | 提问会话（`mail.forwarder` + `consent.mail_trust_forwarder`，4.11）；关闭是 `cca mail trust-forwarder <账号> off` |
+| `mail trust-forwarder <账号>` | 「邮箱」一节的「信任转发中转（不安全）」开关（`mail.team_forwarders` 是 null 的账号才有） | 提问会话（`mail.forwarder` + `consent.mail_trust_forwarder`，4.11）；关闭是 `cca mail trust-forwarder <账号> off` |
 | `_gui mail-list`、`mail open --msg`、`mail forget` | 「邮箱」一节的列表 / 刷新、每封的「在浏览器打开」、「移除」 | 无交互命令（4.11、2.4；`mail open` 进 `launch:` 闸门） |
 | `remote list --json` | 「远程会话」页（看得见时每 15 秒一次、「刷新」；要 `hello.remote`，9.1） | 无交互命令 |
 | `remote pair`、`remote join` | 「远程会话」页「已配对的机器」的「显示配对码…」「输入配对码…」 | 提问会话（`consent.remote_pair` + `remote.pair` / `remote.code`，9.2） |
@@ -1114,6 +1121,11 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   **这是安全降级**：信任从「只信 Anthropic 直签」降到「信这个中转 + 你的别名不泄露」——别名一旦泄露，知道的人可经 F 给你发伪造的登录邮件，打开后你会登进攻击者的账号。
   所以 App 的开关默认关、打开前弹**明确的不安全警告**（cca 先在 `mail.forwarder` 的页面 `message` 里说明、再发 `consent.mail_trust_forwarder` 确认；两处都讲清风险）。
   状态在 `account.mail.forwarder`（2.2，null = 没开）；经这个中转认的列表行带 `via: "forwarder"`（2.4），App 上标明「经可信中转（不安全）」。关闭是 `… off`。成功发 `result` 的 `mail_ready`。
+- **Team 给的账号：Team 说了算**（3.7.9 起）：Team 给这台设备的 Claude 账号信任哪些转发中转由那个 Team 的配置定（管理员 `cca team forwarder`，4.14；没写是一个都不信），
+  这台设备上登记的不算数、也登记不了：`cca mail trust-forwarder <账号> <域名>` 不问、直接 `fail` 的 `mail_team`；`… off` 照样能清掉以前登记的（成功发 `result` 的 `mail_ready`）。
+  状态在 `account.mail.team_forwarders`（2.2；有它时 `forwarder` 是 null）：App 不给开关，照它说「Team「名字」信任的转发中转 a、b（不安全）」（`domains` 是空的就说这个 Team
+  不信任转发中转），`local` 不是 null 时另说一句这台设备登记的那个不算数。经这些中转认的列表行同样带 `via: "forwarder"`。Team 的名单第一次拿到、变了时 cca 在终端里说一声
+  （不进 `_gui state` 的 `notices`），App 照 `mail.team_forwarders` 显示就行。
 
 ### 4.12 维护者的共享（3.6.0 去掉了）
 
@@ -1147,7 +1159,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
 - **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", coadmin（3.6.15 起：这台设备是成员、建 Team 的设备给了它管理员身份；以前的 cca 没有这一项：false）, url, host, device,
   state: "local"（管理员还没接上服务器）| "pending"（还没同步过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
   error, seq, accounts, joined_epoch, server_level, server_update}]}`，只看本机记着的、不联网。`server_level`（3.7.1 起，以前的 cca 没有）：上次同步配置时问到的服务端级别（服务器的 `GET /v1/version`；没有这个地址的旧服务器照 `/v1/health`：认手机的 3.7.0 是 1，更早的是 0），没问到过是 null；`server_update`（3.7.1 起）：这个级别比这一版 cca 要的低时是 `{level, need, why}`（`why` 是 cca 给的一句话：旧服务器少了什么），不用更新、不知道是 null。App 在「共享与同步」的 Team 下面提示：建 Team 的设备给「更新服务器…」（同「更新服务器、搬到别的服务器…」），别的设备只说请管理员更新；更新后 cca 同步一次就没了。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
-  "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "alias_lock": 别名锁定着没有,
+  "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "alias_lock": 别名锁定着没有, "mail_forwarders": [域名…],
   "nodes": [配置里带着定义的节点的名字…],
   "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked"（`left`、`revoked` 3.6.6 起不再有：
   退出了的、移除了的不再记，3.6.5 及以前的 cca 还给，App 不列它们）, me, grants: "all" | {工具: [邮箱…]},
@@ -1155,7 +1167,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
   别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的号，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
   `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。`alias_lock`（3.5.3-beta.7 起；没有这一项时 App 不给锁定的开关）
-  见下面「锁定别名」。设备只有一个名字：`label`（管理员起的，界面上只用它）；`name` 是它在服务器上的名字，3.5.3-beta.7 起和服务器对一遍时照
+  见下面「锁定别名」；`mail_forwarders`（3.7.9 起；没有这一项时 App 不给这一行）见下面「信任的转发中转」。设备只有一个名字：`label`（管理员起的，界面上只用它）；`name` 是它在服务器上的名字，3.5.3-beta.7 起和服务器对一遍时照
   `label` 改成一样的（以前的设备加入时报的是主机名），App 不显示。`seq`、`have` 只用来比新旧：App 只说「配置是最新的」「还没同步到最新的配置」，不说第几版。
 - **新建**（`cca team new [名字] [--accounts all|none|工具:邮箱,…]`）：App 里不写名字，提问会话里问（`team.new`），再问这台设备上哪些账号放进去
   （`team.accounts`，3.5.5 起）；成了 `result` 的 `team_created`（这时 `config.teams` 里它的
@@ -1203,17 +1215,23 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   管理员自己这台的账号表照旧不动。管理员照样能改别名（`cca team alias`），各台设备跟着换。解开以后又能自己改，现在用着的不变。
   旧版本的 cca 不认得锁定：照没锁定的用，更新以后才换。
 - **导出、导入、修改配置**（`hello.team_config`，3.6.14 起；管理员）：`cca team export <Team> <文件> [--force]` 把这个 Team 的配置（账号走哪个节点、
-  别名、锁定别名、安装客户端用的节点、节点的定义；设备和各台设备能用哪些账号不在里面）写成一个 JSON 文件（只给自己读写：节点的定义带着密钥），
+  别名、锁定别名、安装客户端用的节点、信任的转发中转（3.7.9 起：`mail_forwarders`，没设不写）、节点的定义；设备和各台设备能用哪些账号不在里面）写成一个 JSON 文件（只给自己读写：节点的定义带着密钥），
   成了 `result` 的 `team_exported`；文件已经有了、没写 `--force` 是 `fail` 的 `team_file`（App 的保存面板问过覆盖，所以总是带 `--force`）。
   `cca team import <Team> <文件>` 照这样一个文件（导出的、改过的）整份换掉这个 Team 的配置：文件不对（不是导出的、写错了、有不认得的项、
   节点的定义内核认不出）是 `fail` 的 `team_file`（`message` 一处处说）；和现在的一样时直接 `result` 的 `team_imported`、不问；不一样时要同意
   （`team_config`，范围是 Team 的编号和这份文件的摘要，`detail` 一项一句，要去掉账号时默认否），换好、发布以后 `result` 的 `team_imported`（`message` 说几台设备的
   配置发布了新的一版）。问过同意以后文件又改过了不换：重跑时范围对不上，照新的内容再问（终端里同一次运行中改了是 `team_file`）。`cca team edit <Team>` 只在终端里（编辑器）：提问会话里发 `terminal` 事件
   （`code` 是 `team_edit`），App 直接交给终端（6）。
+- **信任的转发中转**（`cca team forwarder <Team> [域名… | off]`，3.7.9 起；管理员）：这个 Team 给的 Claude 账号在各台设备上信任哪些转发中转（4.11，不安全）。
+  不写域名是看现在的（只说一句话；App 读 `team devices --json` 的 `mail_forwarders`，`[]` 是一个都不信）；写了是换成这些（几个域名用空格或逗号隔开，大写照小写认，
+  每一项也认它的子域名；`off` 是一个都不信）：不是域名、是公共邮箱的域名（gmail.com、qq.com 这类）或者公共的后缀（co.uk 这类）是 `team_domain`；比现在宽（多了现在的
+  盖不住的域名）要同意（`team_forwarders`，4.2，默认否），窄了、去掉不问；改完给拿到 Claude 账号的设备发布，跑完为止（和 `alias` 一样）。导入的文件让名单变宽时先问
+  `team_config`、再问 `team_forwarders`。带着的同意不是这一份名单的是 `team_consent`。设备上照它（4.11）：以前的 cca 不认得这一项，照一个都不信用；
+  以前的 cca 当管理员发布配置时会把它丢掉（各台设备上就一个都不信了），几位管理员要一起更新。
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
-  `team_alias`、`team_no_account`、`team_accounts`（`cca team new --accounts` 写的账号这台设备上没有、不能放：什么都没建）、几位管理员（3.6.15 起）的 `team_owner`（只有建 Team 的设备能做）、`team_already`（已经是管理员）、`team_not_admin_dev`（收回时：它本来就不是管理员）、`team_state`（还没加入、公钥没核对过的设备不能当管理员）、`team_admin_dev`（移除时：它还是管理员，先收回）、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
+  `team_alias`、`team_no_account`、`team_domain`、`team_consent`（3.7.9 起：信任的转发中转写的不是域名、是公共邮箱的域名或者公共的后缀；带着的同意不是这一份名单的）、`team_accounts`（`cca team new --accounts` 写的账号这台设备上没有、不能放：什么都没建）、几位管理员（3.6.15 起）的 `team_owner`（只有建 Team 的设备能做）、`team_already`（已经是管理员）、`team_not_admin_dev`（收回时：它本来就不是管理员）、`team_state`（还没加入、公钥没核对过的设备不能当管理员）、`team_admin_dev`（移除时：它还是管理员，先收回）、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
   别的节点、安装客户端用着它）、
   `team_usage`、`team_url`、`team_file`（导入、导出的文件不对、写不了，3.6.14 起也是导入的节点定义内核认不出）、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）、删除 Team 时卸载
   （`cca team leave`）那一步的

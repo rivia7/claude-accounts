@@ -467,6 +467,59 @@ pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<
     ren
 }
 
+/// Team 给的 Claude 账号信任的转发中转变了（第一次拿到、换了名单、不再信任）：在 stderr 上说一声（notice 的 team_forwarders）。说过的记在 st 的
+/// team_forwarders_said（{Team 的编号: 名单}，只记非空的），不再说。stderr 接的是 /dev/null 时（后台同步配置、sync-state quiet）说了也没人
+/// 看得到：这一轮不说、记录照旧，留给下一条在前台的命令说。只看给了这台设备 Claude 账号、这台设备又不是建它的那台的 Team（建 Team 的
+/// 那台自己定的）；记过的 Team 这一轮没看到时，说得准（grant_settled：退出了、被移除了）就删掉记录，说不准的留着
+pub fn team_forwarders_say(st: &Dict, tool: &Tool) {
+    use crate::cmd::mail::doc_forwarders;
+    use crate::py::obj::str_list;
+    let said = st.dict("team_forwarders_said").unwrap_or_default();
+    let gs = super::team::grants();
+    if gs.is_empty() && said.is_empty() {
+        return; // 没用 Team 的机器：什么都不用读
+    }
+    let given: HashSet<String> = policy_sources(tool).values().iter().map(|v| v.py_str()).collect();
+    // 只读（_gui state）也不说：notices 是「下次运行 cca 时会做的改动」，这一句不是；App 照 mail.team_forwarders 在「邮箱」一节里显示
+    let unheard = *RO || crate::py::io::stderr_is_null();
+    let now = Dict::new();
+    for g in gs.iter().filter(|g| !g.admin && given.contains(&g.id)) {
+        let list = doc_forwarders(&g.doc);
+        let before: Vec<String> = said.list(&g.id).map(|l| l.strs().iter().map(|s| s.to_string()).collect()).unwrap_or_default();
+        let keep = if list == before {
+            list
+        } else if unheard {
+            before
+        } else {
+            let kv = dict! { "team" => g.id.as_str(), "team_name" => g.name.as_str(), "domains" => str_list(&list) };
+            let text = if list.is_empty() {
+                format!("• 「{}」不再信任转发中转：它给的 Claude 账号改回只认 Anthropic 直签的登录邮件", g.name)
+            } else {
+                format!(
+                    "! 按「{}」的配置，它给的 Claude 账号信任转发中转 {}（不安全：经它转来、标注来自 Anthropic 的登录邮件也会认；这台设备上改不了）",
+                    g.name,
+                    list.join("、")
+                )
+            };
+            notice("team_forwarders", &text, kv);
+            list
+        };
+        if !keep.is_empty() {
+            now.set(g.id.as_str(), str_list(&keep));
+        }
+    }
+    for (tid, v) in said.items() {
+        if !now.has(&tid) && !gs.iter().any(|g| *g.id == *tid) && !super::team::grant_settled(&tid) {
+            now.set(&*tid, v);
+        }
+    }
+    if now.is_empty() {
+        st.pop("team_forwarders_said");
+    } else {
+        st.set("team_forwarders_said", now);
+    }
+}
+
 // --- 参考节点（Team 的配置带的节点：一个策略组和它引用的节点定义，管理员的设备放进去的）：
 // 直接写进路由器（OpenClash 选用的配置、ShellCrash 的订阅配置），缺的补进 proxies、名字补进同名策略组。
 // 路由器端 apply.rb 的 --fill-source 写配置文件；内置代理的参考节点直接进内核的节点定义、不写文件。

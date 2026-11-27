@@ -50,6 +50,10 @@ func teamFixtureTests() {
     let perTool = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + #","tool_aliases":{"claude":{"x@example.com":"team-3"},"codex":{"x@example.com":"team-1"}}}"#).utf8))
     let flatOnly = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + "}").utf8))
     check("team devices：旧版 cca 没有 alias_lock 时是 nil（App 不给锁定的开关）", flatOnly != nil && flatOnly?.aliasLock == nil && perTool?.aliasLock == nil)
+    let noFwd = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + #","mail_forwarders":[]}"#).utf8))
+    check("team devices：信任的转发中转（3.7.9 起 mail_forwarders）：空的是一个都不信；旧版 cca 没有这一项是 nil（App 不给这一行）",
+          flatOnly?.mailForwarders == nil && noFwd?.mailForwarders == [] && loadFixture(TeamDevicesDoc.self, "team_devices.json")?.mailForwarders == ["relay.example.com"])
+    check("命令码：同意项 team_forwarders、失败原因 mail_team 是认得的", ConsentItem.allKnown.contains(.teamForwarders) && FailCode.allKnown.contains(.mailTeam))
     check("team devices：别名按工具（同一个邮箱在 Claude、Codex 里叫得不一样）；旧版 cca 没有 tool_aliases 时用按邮箱的",
           perTool?.accountList.map(\.alias) == ["team-3", "team-1"] && flatOnly?.accountList.map(\.alias) == ["team-3", "team-3"])
     let mixed = #"{"team":"ab","accounts":{"codex":{"z@example.com":"US-A"},"claude":{"a@example.com":"US-A","b@example.com":"US-B","c@example.com":"US-A","d@example.com":"US-A","e@example.com":"US-A"}},"aliases":{},"tool_aliases":{"claude":{"a@example.com":"team-10","b@example.com":"team-2","d@example.com":"Work","e@example.com":"team-1"},"codex":{"z@example.com":"team-1"}}}"#

@@ -426,7 +426,8 @@ pub fn astate_open(keys: &Keys, tid: &str, rev: i64, ct: &V) -> Option<Dict> {
 /// 配置的明文哪里不对（管理员发布前、设备用之前都查；不认得的项不管：以后加的旧版本照样用）：
 /// {"v": 1, "at", "name", "salt", "server": {"u", "p"}, "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名},
 /// "tool_aliases": {工具: {邮箱: 别名}}（3.5.3-beta.6 起；设备有它时照它，aliases 给旧版本用）, "alias_lock": true（3.5.3-beta.7 起，
-/// 管理员锁定了别名：设备上不能自己改，改过的换回来；没锁定时没有这一项）, "install_node", "nodes": {"group", "proxies"} | null}
+/// 管理员锁定了别名：设备上不能自己改，改过的换回来；没锁定时没有这一项）, "install_node", "nodes": {"group", "proxies"} | null,
+/// "mail_forwarders": [域名…]（Team 给的 Claude 账号信任的转发中转：设了、这台设备又拿到了 Claude 账号才有这一项；以前的版本不认它）}
 pub fn doc_problems(doc: &Dict) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if !doc.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) {
@@ -477,6 +478,13 @@ pub fn doc_problems(doc: &Dict) -> Vec<String> {
     }
     if doc.get("install_node").is_some_and(|n| !n.is_str()) {
         out.push("install_node 不对".into());
+    }
+    // 信任的转发中转：只查样子（最多 64 个字符串）。内容设备上读的时候一项项过（mail::doc_forwarders：公共邮箱的域名这些跳过）：以后
+    // 那份名单变长了，也不会让整份配置作废
+    let fwd_ok =
+        |l: &V| l.as_list().is_some_and(|l| l.len() <= 64 && l.items().iter().all(|x| x.as_str().is_some_and(|s| s.len() <= 253)));
+    if doc.get("mail_forwarders").is_some_and(|l| !fwd_ok(&l)) {
+        out.push("mail_forwarders 不对".into());
     }
     if doc.get("admins_epoch").is_some_and(|e| !e.as_int().is_some_and(|e| (0..SEQ_MAX).contains(&e))) {
         out.push("admins_epoch 不对".into());
@@ -643,6 +651,11 @@ mod tests {
         assert_eq!((with("alias_lock", V::Bool(true)), with("alias_lock", V::Bool(false))), (0, 0));
         assert_eq!((with("alias_lock", V::from("yes")), with("alias_lock", V::Int(1))), (1, 1));
         assert_eq!(with("nodes", V::from("x")), 1);
+        let fwds = |v: Vec<V>| V::from(v);
+        assert_eq!(with("mail_forwarders", fwds(vec![V::from("relay.example.com")])), 0);
+        assert_eq!(with("mail_forwarders", fwds(vec![V::from("gmail.com")])), 0, "内容读的时候才查（跳过），整份配置照样用");
+        assert_eq!((with("mail_forwarders", V::from("relay.example.com")), with("mail_forwarders", fwds(vec![V::Int(1)]))), (1, 1));
+        assert_eq!(with("mail_forwarders", fwds((0..65).map(|i| V::from(format!("r{i}.example.com"))).collect())), 1);
         assert_eq!(with("later", V::from("旧版本不认得的项不管")), 0);
         let d = good_doc();
         let before = doc_digest(&d);

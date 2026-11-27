@@ -152,8 +152,8 @@ pub struct Hunt<'a> {
     pub rules: &'a [&'static MailRule],
     /// 账号的邮箱（小写）
     pub acct: &'a str,
-    /// 这个账号登记的「信任转发中转」
-    pub forwarder: Option<&'a str>,
+    /// 这个账号信任的转发中转（mail::mail_forwarders；默认一个都没有）
+    pub forwarders: &'a [String],
     /// 打开过的也再打开一次
     pub again: bool,
     /// 手动（cca mail open）：打开了、浏览器打不开就停，第一次就连不上马上停
@@ -225,11 +225,11 @@ pub fn mail_verdict(
     got: f64,
     acct: &str,
     since: f64,
-    forwarder: Option<&str>,
+    forwarders: &[String],
 ) -> R<(Option<&'static str>, Option<String>, Message)> {
     let _frame = super::py_frame();
     let msg = mail_parse(raw)?;
-    let why = mail_judge(rule, &msg, got, acct, since, forwarder)?;
+    let why = mail_judge(rule, &msg, got, acct, since, forwarders)?;
     let link = match why {
         Some(_) => None,
         None => mail_extract(rule, &msg)?,
@@ -247,7 +247,7 @@ pub fn mail_take(h: &Hunt, src: &mut dyn Source, p: &Pend, since: f64, deliver: 
     }
     let run = (|| -> R<String> {
         let raw = src.full(&p.cand)?;
-        let (why, link, _) = mail_verdict(p.rule, &raw, p.cand.got, h.acct, since, h.forwarder)?;
+        let (why, link, _) = mail_verdict(p.rule, &raw, p.cand.got, h.acct, since, h.forwarders)?;
         Ok(match (why, link) {
             (Some(why), _) => why.to_string(),
             (None, Some(link)) if !link.is_empty() => deliver(&link)?,
@@ -304,7 +304,7 @@ pub fn mail_hunt(
             }
             for c in new {
                 let msg = mail_parse(&c.hdr)?;
-                match mail_judge_any(h.rules, &msg, c.got, h.acct, since, h.forwarder)? {
+                match mail_judge_any(h.rules, &msg, c.got, h.acct, since, h.forwarders)? {
                     (_, Some(why)) => reject(&mut res, why),
                     (Some(rule), None) => {
                         if pend.as_ref().is_none_or(|p| (c.got, c.uid) > (p.cand.got, p.cand.uid)) {
@@ -641,13 +641,13 @@ mod tests {
                 Ok(if results.is_empty() { "ok".to_string() } else { results.remove(0) })
             };
             let rules: Vec<&'static MailRule> = (0..c.at("rules").as_int().unwrap()).map(|_| &MAIL_RULES[0]).collect();
-            let forwarder = c.str("forwarder");
+            let forwarders: Vec<String> = c.str("forwarder").map(|f| f.to_string()).into_iter().collect();
             let (now, sleep) = (|| clock.get(), |s: f64| clock.set(clock.get() + s));
             let h = Hunt {
                 dir: &dir,
                 rules: &rules,
                 acct: "alice@example.com",
-                forwarder: forwarder.as_deref(),
+                forwarders: &forwarders,
                 again: c.at("again").truthy(),
                 once: c.at("once").truthy(),
                 now: &now,
@@ -769,7 +769,7 @@ mod tests {
                 dir: &self.dir,
                 rules: &rules,
                 acct: "alice@example.com",
-                forwarder: None,
+                forwarders: &[],
                 again,
                 once,
                 now: &now,

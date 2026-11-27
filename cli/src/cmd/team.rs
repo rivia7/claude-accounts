@@ -58,6 +58,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-node-verdict", admin::nodes::cmd_team_node_verdict),
     Cmd::all("team-alias", admin::cmd_team_alias),
     Cmd::all("team-alias-lock", admin::cmd_team_alias_lock),
+    Cmd::all("team-forwarder", admin::cmd_team_forwarder),
     Cmd::all("team-name", admin::cmd_team_name),
     Cmd::all("team-publish", admin::cmd_team_publish),
     Cmd::all("team-admin", admin::cmd_team_admin),

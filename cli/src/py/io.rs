@@ -88,6 +88,16 @@ pub fn flush_err() {
     err().flush();
 }
 
+/// stderr 接的是 /dev/null（后台任务、`sync-state quiet` 那样）：往那里说的话没人看得到。看 /dev/fd/2 指着的那个文件（macOS 的 fdesc、
+/// Linux 的 /proc 都跟到打开的那个文件）是不是和 /dev/null 同一个字符设备；看不了的当作有人看着
+pub fn stderr_is_null() -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    match (std::fs::metadata("/dev/fd/2"), std::fs::metadata("/dev/null")) {
+        (Ok(e), Ok(n)) => e.file_type().is_char_device() && e.rdev() == n.rdev(),
+        _ => false,
+    }
+}
+
 /// 进程正常结束前：两边都写出去。stdout 写不出去（管道那头关了）时返回 false，main 照 Python 用退出码 120
 pub fn finish() -> bool {
     flush_out();

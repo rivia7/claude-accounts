@@ -424,6 +424,29 @@ ok "信任转发中转：open --msg 按句柄打开这封（经可信中转认�
 out=$(run cca mail trust-forwarder alice off 2>&1); rc=$?
 has6b=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | "$TESTBIN" val -f d=- 'sum(1 for r in d["rows"] if "noreply@relay.example.com" in r["from"])' 2>/dev/null)
 ok "mail trust-forwarder off：关掉后回到只认 Anthropic 直签，中转重签的邮件又不进列表了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已关闭" && ! cfgok "c.get(\"mail\",{}).get(\"accounts\",{}).get(\"'"$aslug"'\",{}).get(\"forwarder\")" && [ "$has6b" = 0 ]'
+# Team 给的账号：信任哪些转发中转照 Team 的配置（mail_forwarders，docs/dev/team.md「转发中转」），这台设备上登记的不算数、也登记不了。tm_fake 写一个
+# 给了 alice 的 Team（没接服务器）；账号表、config.json 测完还原
+cp "$H/.cca/accounts.json" "$T/mf-accounts.bak"; cp "$H/.cca/config.json" "$T/mf-config.bak"
+run CCA_TTY="$(ans y)" cca mail trust-forwarder alice relay.example.com >/dev/null 2>&1   # 加入 Team 以前在这台设备上登记过
+anode=$("$TESTBIN" val -f "j=$H/.cca/accounts.json" -s "a1=$akey" 'j[a1]')
+mfteam() { tm_fake 邮箱组 "{\"accounts\": {\"claude\": {\"alice@example.com\": \"$anode\"}}$1}"; }   # mfteam [', "mail_forwarders": […]']：写（换掉）这个 Team 的配置，打印编号
+mfn() { run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | "$TESTBIN" val -f d=- 'sum(1 for r in d["rows"] if "noreply@relay.example.com" in r["from"])' 2>/dev/null; }   # 列表里中转转来的有几封
+MFT=$(mfteam ""); has6t=$(mfn); stm=$(gj state)
+ok "Team 给的账号、Team 的配置里没写 mail_forwarders：一个中转都不信，这台设备登记过的也不算数（_gui state 的 mail.forwarder 是 null，team_forwarders 说是哪个 Team 定的、带着不算数的那一项）；别的账号照旧" '[ "$has6t" = 0 ] && printf "%s" "$stm" | jok "(lambda m: m[\"forwarder\"] is None and m[\"team_forwarders\"] == {\"team\": \"$MFT\", \"team_name\": \"邮箱组\", \"domains\": [], \"local\": \"relay.example.com\"})(acct(0, \"${akey}\")[\"mail\"]) and all(a[\"mail\"][\"team_forwarders\"] is None for a in d[\"tools\"][0][\"accounts\"] if a[\"key\"] != \"${akey}\" and a.get(\"mail\"))"'
+out=$(runev cca mail trust-forwarder alice relay.example.com 2>&1); rc=$?
+ok "mail trust-forwarder：Team 给的账号在这台设备上登记不了（fail 事件 mail_team）：说是哪个 Team 定的、现在是什么、谁能改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"mail_team\"" && printf "%s" "$out" | grep -q "是「邮箱组」给的账号：信任哪些转发中转照 Team 的配置（现在一个都不信任），这台设备上改不了" && printf "%s" "$out" | grep -q "cca team forwarder 邮箱组 域名"'
+mfteam ', "mail_forwarders": ["relay.example.com"]' >/dev/null
+out=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null)
+f1ok=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'r=[x for x in d["rows"] if x["msg"] and x["msg"]["uid"]==6];1 if (r and r[0]["openable"] and r[0]["via"]=="forwarder" and r[0]["verdict"]["ok"]) else 0' 2>/dev/null)
+f2rej=$(printf '%s' "$out" | "$TESTBIN" val -f d=- 'r=[x for x in d["rows"] if "noreply@relay.example.com" in x["from"] and x.get("msg") is None and x["verdict"]["why"]=="from"];1 if r else 0' 2>/dev/null)
+out1=$(run "${MENV[@]}" cca mail status 2>&1)
+ok "Team 的配置里写了 relay.example.com：照它认中转转来的那一封（via=forwarder），Reply-To 不是 Anthropic 的照样拒；mail status 说是 Team 定的、这台设备登记的不算数" '[ "$f1ok" = 1 ] && [ "$f2rej" = 1 ] && printf "%s" "$out1" | grep -q "「邮箱组」给的账号：relay.example.com（不安全；照 Team 的配置，这台设备上改不了）" && printf "%s" "$out1" | grep -q "这台设备登记的 relay.example.com 不算数（照「邮箱组」的配置）"'
+out=$(run cca mail trust-forwarder alice off 2>&1); rc=$?; out2=$(run cca mail trust-forwarder alice off 2>&1)
+ok "mail trust-forwarder off：Team 给的账号也能清掉这台设备以前登记的（不算数的那一项），说现在照 Team 的配置；Team 的名单说一声（不安全、这台设备上改不了），只说一次" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登记的转发中转（这个账号照「邮箱组」的配置：relay.example.com）" && ! cfgok "c.get(\"mail\",{}).get(\"accounts\",{}).get(\"'"$aslug"'\",{}).get(\"forwarder\")" && [ "$(printf "%s\n%s\n%s\n" "$out1" "$out" "$out2" | grep -c "按「邮箱组」的配置，它给的 Claude 账号信任转发中转 relay.example.com（不安全")" = 1 ] && [ "$(mfn)" != 0 ]'
+mfteam "" >/dev/null
+out=$(run cca mail trust-forwarder alice off 2>&1)
+ok "Team 的配置里去掉了：说一声「不再信任」，中转转来的又认不出了" 'printf "%s" "$out" | grep -q "「邮箱组」不再信任转发中转：它给的 Claude 账号改回只认 Anthropic 直签的登录邮件" && [ "$(mfn)" = 0 ]'
+rm -rf "$H/.cca/teams"; mv "$T/mf-accounts.bak" "$H/.cca/accounts.json"; mv "$T/mf-config.bak" "$H/.cca/config.json"
 rm -f "$MB/box/all/6.eml" "$MB/box/all/7.eml"
 printf '{"user":"bob-inbox@example.com","password":"abcdefghijklmnop"}' > "$MB/ctl.json"   # 让假 Gmail 认 bob-inbox（单一用户）：测这个账号单独配的 Gmail
 out=$(run "${MENV[@]}" CCA_TTY="$(ans bob-inbox@example.com abcdefghijklmnop)" cca mail setup --account 副号 2>&1); rc=$?
@@ -1932,7 +1955,7 @@ ok "_gui state：用量页入口只给 Claude 账号，其余条件和网页版�
 edit_table 'j["mail"] = {"user": "team-login@example.com"}' "$H/.cca/config.json"
 nfp=$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)
 stm=$(gj state)
-ok "_gui state：Claude 官方账号 can.mail、account.mail 说走默认 / 单独配 / 没配置（只读 config.json，不碰钥匙串）；Codex、第三方 API 账号没有" 'printf "%s" "$stm" | jok "(lambda a: a[\"can\"][\"mail\"] is True and a[\"mail\"] == {\"configured\": True, \"user\": \"team-login@example.com\", \"source\": \"default\", \"auto\": True, \"forwarder\": None})(acct(0, \"alice@example.com\")) and acct(0, \"kimi2\")[\"can\"][\"mail\"] is False and acct(0, \"kimi2\")[\"mail\"] is None and acct(1, \"dave@example.com\")[\"can\"][\"mail\"] is False and acct(1, \"dave@example.com\")[\"mail\"] is None" && [ "$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)" = "$nfp" ]'
+ok "_gui state：Claude 官方账号 can.mail、account.mail 说走默认 / 单独配 / 没配置（只读 config.json，不碰钥匙串）；Codex、第三方 API 账号没有" 'printf "%s" "$stm" | jok "(lambda a: a[\"can\"][\"mail\"] is True and a[\"mail\"] == {\"configured\": True, \"user\": \"team-login@example.com\", \"source\": \"default\", \"auto\": True, \"forwarder\": None, \"team_forwarders\": None})(acct(0, \"alice@example.com\")) and acct(0, \"kimi2\")[\"can\"][\"mail\"] is False and acct(0, \"kimi2\")[\"mail\"] is None and acct(1, \"dave@example.com\")[\"can\"][\"mail\"] is False and acct(1, \"dave@example.com\")[\"mail\"] is None" && [ "$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)" = "$nfp" ]'
 edit_table 'j.pop("mail", None)' "$H/.cca/config.json"
 mv "$T/bin/claude" "$T/claude.off"
 out=$(run PATH="$T/bin:$H/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" cca _gui state </dev/null 2>/dev/null)
@@ -3586,6 +3609,33 @@ ok "cca team node install：指定安装客户端用的节点，每台设备的�
 out=$(run cca team node 书房组 install - 2>&1); rc=$?
 TMDOC='{"install_node": "", "nodes": ["JP-B"], "seq": 10}'
 ok "cca team node install -：不再指定（说原来是哪个），再发布一版：那一头的配置不再带它" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "不再指定安装客户端用的节点（原来是「JP-A」）；2 台设备的配置发布了新的一版" && [ "$(tm_spec doc "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "$TMDOC" ] && run cca team node 书房组 ls --json | jok "d[\"install_node\"] == \"\""'
+# cca team forwarder：Team 给的 Claude 账号在各台设备上信任哪些转发中转（不安全；没写是一个都不信任）。比现在宽了先问同意（team_forwarders，范围是
+# Team 的编号和新名单的摘要：排好序、一行一个域名的 SHA-256 的前 16 位；默认「不」），存进配置、给拿到 Claude 账号的设备发布新的一版；窄了、去掉不用问。
+# 规整、不收的写法、设备上照它在 tests/team.rs 的 mail_forwarders 细测
+out=$(run cca team forwarder 书房组 2>&1); rc=$?
+ok "cca team forwarder Team：没设时说不信任转发中转" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「书房组」给的 Claude 账号不信任转发中转（只认 Anthropic 直签的登录邮件）" && run cca team devices 书房组 --json | jok "d[\"mail_forwarders\"] == []"'
+out=$(runev cca team forwarder 书房组 gmail.com 2>&1); rc=$?
+ok "cca team forwarder：公共邮箱的域名不行（fail 事件 team_domain），不问同意" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_domain\"" && printf "%s" "$out" | grep -q "「gmail.com」是公共邮箱的域名" && ! evq "e[\"ev\"] == \"consent\""'
+TMFS=$(printf 'relay.example.com' | shasum -a 256 | cut -c1-16)
+out=$(runev cca team forwarder 书房组 relay.example.com 2>&1); rc=$?
+ok "cca team forwarder（App 里：没有终端）：名单比现在宽：consent 事件（team_forwarders，范围是 Team 的编号和新名单的摘要，默认不同意，说明里说各台设备上关不掉），没同意之前不改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_forwarders\" and e[\"scope\"] == \"$TMID:$TMFS\" and e[\"default\"] == \"no\" and e[\"question\"] == \"确定让「书房组」给的 Claude 账号信任转发中转 relay.example.com？（不安全，见说明）\" and \"各台设备上关不掉\" in e[\"detail\"]" && run cca team devices 书房组 --json | jok "d[\"mail_forwarders\"] == []"'
+out=$(runev CCA_GRANT="team_forwarders:$TMID:$TMFS" cca team forwarder 书房组 Relay.Example.com 2>&1); rc=$?
+ok "带着同意再运行（大写的照小写认）：存上了，给有 Claude 账号的 dan-air 发布新的一版（建 Team 的这台不要账号：配置不变）；cca team forwarder 说现在的，team devices --json 的 mail_forwarders 是它" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「书房组」给的 Claude 账号现在信任转发中转 relay.example.com（不安全）；1 台设备的配置发布了新的一版" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  11" ] && run cca team forwarder 书房组 2>&1 | grep -q "「书房组」给的 Claude 账号信任的转发中转：relay.example.com（不安全）" && run cca team devices 书房组 --json | jok "d[\"mail_forwarders\"] == [\"relay.example.com\"]"'
+out=$(runev cca team forwarder 书房组 relay.example.com 2>&1); rc=$?
+ok "cca team forwarder：和现在一样：不问、不改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "本来就是这样，没有要改的" && ! evq "e[\"ev\"] == \"consent\"" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  11" ]'
+# 导出的文件里带着它；导入一份更宽的：先问换配置（team_config，说明里有这一项），同意了再另外问这一项（team_forwarders，同样的范围）
+run cca team export 书房组 "$T/tm-fwd.json" >/dev/null 2>&1; fwx=$(jok 'd["mail_forwarders"] == ["relay.example.com"]' < "$T/tm-fwd.json" && echo 1)
+"$TESTBIN" edit "c=$T/tm-fwd.json" 'c["mail_forwarders"] = ["b.example.net", "relay.example.com"]'
+TMFSHA=$(shasum -a 256 < "$T/tm-fwd.json" | cut -c1-16); TMFS2=$(printf 'b.example.net\nrelay.example.com' | shasum -a 256 | cut -c1-16)
+out=$(runev cca team import 书房组 "$T/tm-fwd.json" 2>&1); rc=$?
+ok "cca team export 带着 mail_forwarders；import 一份更宽的：先问换配置（consent 事件 team_config，说明里说转发中转怎么变），不换" '[ "$fwx" = 1 ] && [ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_config\" and e[\"scope\"] == \"$TMID:$TMFSHA\" and \"Team 给的 Claude 账号信任的转发中转：relay.example.com（不安全） → b.example.net、relay.example.com（不安全）\" in e[\"detail\"]" && ! evq "e.get(\"item\") == \"team_forwarders\""'
+out=$(runev CCA_GRANT="team_config:$TMID:$TMFSHA" cca team import 书房组 "$T/tm-fwd.json" 2>&1); rc=$?
+ok "同意了换配置：还要另外同意更宽的转发中转（consent 事件 team_forwarders，范围是新名单的摘要），不换" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_forwarders\" and e[\"scope\"] == \"$TMID:$TMFS2\"" && run cca team devices 书房组 --json | jok "d[\"mail_forwarders\"] == [\"relay.example.com\"]"'
+out=$(runev CCA_GRANT="team_config:$TMID:$TMFSHA,team_forwarders:$TMID:$TMFS2" cca team import 书房组 "$T/tm-fwd.json" 2>&1); rc=$?
+ok "两样都同意了：换好了（结果事件 team_imported）、发布" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_imported\"" && run cca team devices 书房组 --json | jok "d[\"mail_forwarders\"] == [\"b.example.net\", \"relay.example.com\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  12" ]'
+out=$(runev cca team forwarder 书房组 off 2>&1); rc=$?
+ok "cca team forwarder Team off：去掉不用问同意，发布；配置里没有这一项了" '[ $rc -eq 0 ] && ! evq "e[\"ev\"] == \"consent\"" && printf "%s" "$out" | grep -q "「书房组」给的 Claude 账号不再信任转发中转（只认 Anthropic 直签的登录邮件）；1 台设备的配置发布了新的一版" && run cca team devices 书房组 --json | jok "d[\"mail_forwarders\"] == []" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  13" ]'
+rm -f "$T/tm-fwd.json"
 # cca team admin（3.6.15 起）：建 Team 的设备给一台加入了的设备管理员身份、收回；先问同意（范围是设备编号）
 out=$(runev cca team admin 书房组 add dan-air 2>&1); rc=$?
 TMADEV=$("$TESTBIN" val -s "a1=$T/ev.jsonl" 'next(e["scope"] for e in map(json.loads, open(a1)) if e.get("ev") == "consent")' 2>/dev/null)
