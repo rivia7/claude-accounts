@@ -201,7 +201,7 @@ private struct TeamAdminSection: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    // 信任的转发中转（cca 3.7.9 起才给 mail_forwarders）：只管 Claude 账号，这个 Team 一个 Claude 账号都没有、也没设过时不放
+                    // 信任的转发中转（cca 3.7.11 起才给 mail_forwarders）：只管 Claude 账号，这个 Team 一个 Claude 账号都没有、也没设过时不放
                     if let fwd = doc.mailForwarders, !fwd.isEmpty || accounts.contains(where: { $0.tool == .claude }) {
                         Divider()
                         TeamForwardersBlock(team: team, domains: fwd)

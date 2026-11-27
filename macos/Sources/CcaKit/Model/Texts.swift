@@ -290,7 +290,7 @@ enum Texts {
         return "信任 \(domains.joined(separator: "、"))（不安全）：经\(it)转来、标着来自 Anthropic 的登录邮件也会打开。各台设备上都关不掉"
     }
 
-    /// 账号页「邮箱」一节，Team 给的账号（cca 3.7.9 起，`mail.team_forwarders`）：信任哪些转发中转照 Team 的配置，这台 Mac 上改不了
+    /// 账号页「邮箱」一节，Team 给的账号（cca 3.7.11 起，`mail.team_forwarders`）：信任哪些转发中转照 Team 的配置，这台 Mac 上改不了
     static func mailTeamForwarders(_ f: TeamForwarders) -> String {
         let team = nonEmpty(f.teamName) ?? String(f.team.prefix(8))
         guard !f.domains.isEmpty else { return "按 Team「\(team)」的配置，不信任转发中转：只认带 Anthropic 签名的登录邮件" }

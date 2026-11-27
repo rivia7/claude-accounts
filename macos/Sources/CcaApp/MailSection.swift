@@ -129,7 +129,7 @@ struct MailSection: View {
     // MARK: 信任转发中转（不安全）
 
     /// 开了「信任转发中转」时的警示行：这个开关让 cca 放弃验 Anthropic 的签名、改信这个域名，所以一直显眼地提示，并给个「关掉」。
-    /// Team 给的账号（cca 3.7.9 起有 `team_forwarders`）照 Team 的配置：见 `teamForwarderRows`
+    /// Team 给的账号（cca 3.7.11 起有 `team_forwarders`）照 Team 的配置：见 `teamForwarderRows`
     @ViewBuilder
     private func forwarderRow(_ mail: MailConfig?) -> some View {
         if let tf = mail?.teamForwarders {

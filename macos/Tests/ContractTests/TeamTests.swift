@@ -51,7 +51,7 @@ func teamFixtureTests() {
     let flatOnly = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + "}").utf8))
     check("team devices：旧版 cca 没有 alias_lock 时是 nil（App 不给锁定的开关）", flatOnly != nil && flatOnly?.aliasLock == nil && perTool?.aliasLock == nil)
     let noFwd = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + #","mail_forwarders":[]}"#).utf8))
-    check("team devices：信任的转发中转（3.7.9 起 mail_forwarders）：空的是一个都不信；旧版 cca 没有这一项是 nil（App 不给这一行）",
+    check("team devices：信任的转发中转（3.7.11 起 mail_forwarders）：空的是一个都不信；旧版 cca 没有这一项是 nil（App 不给这一行）",
           flatOnly?.mailForwarders == nil && noFwd?.mailForwarders == [] && loadFixture(TeamDevicesDoc.self, "team_devices.json")?.mailForwarders == ["relay.example.com"])
     check("命令码：同意项 team_forwarders、失败原因 mail_team 是认得的", ConsentItem.allKnown.contains(.teamForwarders) && FailCode.allKnown.contains(.mailTeam))
     check("team devices：别名按工具（同一个邮箱在 Claude、Codex 里叫得不一样）；旧版 cca 没有 tool_aliases 时用按邮箱的",
@@ -301,7 +301,7 @@ func teamFixtureTests() {
     m.setTeamAlias(a, acct)
     check("改别名：去掉首尾空白，按 工具:邮箱 改（只改这个工具里的）；改成了收起输入框",
           await waitUntil { !m.teamBusy && m.teamAlias == nil } && teamRuns(t).contains(["team", "alias", teamA, acct.spec, "书房-1"]))
-    // 信任的转发中转（cca 3.7.9 起 team devices --json 有 mail_forwarders）：输入框里先填着现在的；名单没变不发命令；改了照拆开的域名发
+    // 信任的转发中转（cca 3.7.11 起 team devices --json 有 mail_forwarders）：输入框里先填着现在的；名单没变不发命令；改了照拆开的域名发
     // （比现在宽了 cca 问同意）；「不再信任」是 off；输入框是别的 Team 的不发
     let fwd = doc.mailForwarders ?? []
     check("team devices 带着名单", fwd == ["relay.example.com"])

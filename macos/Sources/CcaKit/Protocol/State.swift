@@ -743,7 +743,7 @@ struct MailConfig: Decodable, Sendable, Equatable {
     var auto: Bool
     /// 这个账号登记的「信任转发中转」域名（不安全的开关，默认 nil = 关；PROTOCOL 4.11）。Team 给的账号总是 nil：看 `teamForwarders`
     var forwarder: String?
-    /// 这个账号是 Team 给的：信任哪些转发中转照那个 Team 的配置，这台设备上改不了（cca 3.7.9 起；不是 Team 给的、旧版 cca 是 nil）
+    /// 这个账号是 Team 给的：信任哪些转发中转照那个 Team 的配置，这台设备上改不了（cca 3.7.11 起；不是 Team 给的、旧版 cca 是 nil）
     var teamForwarders: TeamForwarders?
 
     enum CodingKeys: String, CodingKey {

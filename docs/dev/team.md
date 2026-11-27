@@ -172,10 +172,10 @@
 {"v": 1, "at": 管理员发布的时间, "name": Team 的名字, "salt": 盐,
  "server": {"u": 地址, "p": [证书公钥的指纹…]},
  "accounts": {"claude": {邮箱: 节点}, "codex": {…}, "agy": {…}},
- "aliases": {邮箱: 别名（3.5.3-beta.5 起每个账号都有：没起过的是默认编的「Team 的名字-N」，3.7.8 及以前是 team-N）},
+ "aliases": {邮箱: 别名（3.5.3-beta.5 起每个账号都有：没起过的是默认编的「Team 的名字-N」，3.7.10 及以前是 team-N）},
  "tool_aliases": {"claude": {邮箱: 别名}, "codex": {…}, "agy": {…}}（3.5.3-beta.6 起）,
  "alias_lock": true（3.5.3-beta.7 起，管理员锁定了别名；没锁定时没有这一项）, "install_node": 节点,
- "mail_forwarders": [域名…]（3.7.9 起：Team 给的 Claude 账号信任的转发中转；设了、这台设备又拿到了 Claude 账号才有这一项）,
+ "mail_forwarders": [域名…]（3.7.11 起：Team 给的 Claude 账号信任的转发中转；设了、这台设备又拿到了 Claude 账号才有这一项）,
  "nodes": {"group": 组名, "proxies": [节点定义…]} | null}
 ```
 
@@ -211,15 +211,15 @@
   配置要的节点还不在可选节点里、定义在 Team 的配置里的，先加进可选节点（`policy_nodes_fill`，事件 `nodes_filled`，见 fill.md）。
 - **别名**（3.5.3-beta.5 起）：`alias_sources(工具)` 是合起来的这个工具的 [(邮箱, 别名, 哪个 Team 给的、这台设备是不是它的管理员)]（照加入的先后，
   同一个邮箱先出现的算数；Team 的配置里有 `tool_aliases` 时照它里面这个工具的，没有时照 `aliases`）。管理员那边每个账号都有别名（见下面「管理员的设备」的
-  `default_aliases`：没起过的各工具各自编成「Team 的名字-1」「Team 的名字-2」……，3.7.8 及以前是 `team-1`、`team-2`……）。
+  `default_aliases`：没起过的各工具各自编成「Team 的名字-1」「Team 的名字-2」……，3.7.10 及以前是 `team-1`、`team-2`……）。
   成员设备上：加进来的带着它（`policy_merge`），只有邮箱的补上（`policy_alias_fill`）；和这台设备上别的账号撞了时，Team 给的换成「Team 的名字-N」
   （`alias_fallback`：以前默认的 `team-N` 取 N，别的别名（现在默认编的「Team 的名字-N」也是）接在 Team 的名字后面；Team 的名字里别名不能有的字符去掉，太长了截短到 24 格宽），还撞就只写邮箱 / 先不补。
   管理员后来改了：`team_alias_follow` 让这台设备上照 Team 给的用着的跟着改，自己改过的不动。哪个别名是 Team 给的记在工具状态的 `team_alias`
   （{账号目录名: {"a": 账号表里用着的别名, "t": 那时 Team 给的}}）：账号表里的就是 Team 给的（或者它撞了以后换成的那个）时记下；以后账号表里的还是
   `a`、Team 给的不再是 `t` 才换（撞了照样换成「Team 的名字-N」，还撞就下次再看）；账号表里的不是 `a` 了是这台设备上改过（`cca rename`），记着的
   去掉、不再跟。没有记录、账号表里是 `team-N`、Team 给的是默认编的（「Team 的名字-N」，或者另一个 `team-N`）也跟着换：3.5.3-beta.5 各工具
-  一起编号（Codex、Antigravity 的号接在 Claude 的后面），3.5.3-beta.6 照各工具重新编了，旧版本补上的别名没有记录；3.7.8 以后默认编的换成了
-  「Team 的名字-N」（见下面「默认的别名」），有记录的照记录换。3.7.8 及以前的成员设备只认 `team-N` 换成 `team-N`：有记录的照样跟着换，没有
+  一起编号（Codex、Antigravity 的号接在 Claude 的后面），3.5.3-beta.6 照各工具重新编了，旧版本补上的别名没有记录；3.7.10 以后默认编的换成了
+  「Team 的名字-N」（见下面「默认的别名」），有记录的照记录换。3.7.10 及以前的成员设备只认 `team-N` 换成 `team-N`：有记录的照样跟着换，没有
   记录的留着 `team-N`，更新以后再换。几个账号一起换时先当它们都换、再一轮轮去掉换不了的
   （账号表最后一起改，要换走的账号原来的别名不算占着）：挨个挪一位、两个对调都一次换好。账号不在账号表里、也没收起来的，记着的那一项去掉。
   事件还是 `policy_alias`（说「按「Team 的名字」的配置把 … 的别名改成 …」）。**这台设备是管理员的那个 Team 给的别名不补、不跟**（`Grant.admin`）：
@@ -619,7 +619,7 @@ cca 的启动器照记下的级别决定最多起几个会话，见 launch.md「
   这个字段**，账号的 `team` 也只有 Team 给的官方账号才有：没有 Team 的机器输出和原来逐字节一样。
 - `cca team devices <Team> --json` 多了 `name`、`accounts`（工具 → 邮箱 → 节点）、`aliases`、`nodes`：管理页一次要到的就是这一份。3.5.3-beta.6 起
   还有 `tool_aliases`（工具 → 邮箱 → 别名，照 `alias_plan` 算：还没发布过的旧 Team 也是按工具编好的样子），App 有它时照它（`TeamDevicesDoc.accountList`）；
-  3.5.3-beta.7 起还有 `alias_lock`（App 有它才放「锁定别名」的开关），3.7.9 起还有 `mail_forwarders`（App 有它才放「信任的转发中转」那一块）。
+  3.5.3-beta.7 起还有 `alias_lock`（App 有它才放「锁定别名」的开关），3.7.11 起还有 `mail_forwarders`（App 有它才放「信任的转发中转」那一块）。
 - `_gui state` 的账号的 `alias_locked`（3.5.3-beta.7 起）：别名被 Team 锁定了，App 里账号页的名字不能点、侧栏菜单的「改别名…」灰着。
 - 邀请链接是那台设备的密钥：`cca team invite` 的 stdout 只经内存里的管道读（`CcaCommand.teamInvite` 不是跑完为止的那种），放进剪贴板
   （`copySecret`：标成机密、60 秒后清掉），不进被观察的状态、提示和读屏。
@@ -730,7 +730,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - **默认的别名**（`default_aliases` 照 `alias_plan` 改，3.5.3-beta.5 起；3.5.3-beta.6 起按工具记）：配置的 `tool_aliases`（{工具: {邮箱: 别名}}）里
   没有别名的账号（不合规的、在这个工具里和前面的账号撞了的也算）编成「Team 的名字-1」「Team 的名字-2」……（`team_default_alias`：名字照
   `alias_fallback` 去掉别名不能有的字符、太长了截短，一个能用的字都没有时还是 `team-N`）——各工具各编各的，各自的第一个账号都是 1 号
-  （照各工具里加进来的先后）；同一个工具里不重复。3.7.8 及以前编的是 `team-N`：照现在的名字换成「Team 的名字-N」，号不变（换成的那个这个工具里
+  （照各工具里加进来的先后）；同一个工具里不重复。3.7.10 及以前编的是 `team-N`：照现在的名字换成「Team 的名字-N」，号不变（换成的那个这个工具里
   已经有别的账号叫着，就留着 `team-N`）。哪个是默认编的不另记：照名字重新拼一遍一模一样的就是（`team_default_n`，以前的 `team-N` 也算；
   管理员自己起了一个一模一样的也当成默认编的），所以换过一次以后再算还是一样，配置不会白白重新发布；以前的 Team 下次发布（发邀请、改配置、
   `cca team publish`）时换过来，各台设备照 `team_alias_follow` 跟着换。admin.json 的 `alias_n`（{工具: 编到第几}）记着各工具编到第几，用过的号不再用（去掉的账号的号
@@ -771,7 +771,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   不然以后按名字就分不清。不发布：配置里没有设备的名字。**远程会话里已经配好的对不跟着改名**：配对表（各自的 `remote/peers.json`）记的是配对那一刻服务器的设备清单里
   对方的名字（没有时是它自己报的主机名，docs/dev/remote.md），只是给人看的、认设备靠指纹；改名以后再配对一次才换成新名字。
 - `cca team devices Team [--json]`：对一遍以后列出来（`seq` 发布到第几版、`have` 它手里第几版、`problem` 对这一遍时发现的要告诉管理员的；
-  `--json` 另有 `alias_lock`、`mail_forwarders`（3.7.9 起），给 bash 的那一份第一行是 1 / 0）。序号只用来比新旧：给人看的地方（`cca team`、`team sync`、`team devices`、App）
+  `--json` 另有 `alias_lock`、`mail_forwarders`（3.7.11 起），给 bash 的那一份第一行是 1 / 0）。序号只用来比新旧：给人看的地方（`cca team`、`team sync`、`team devices`、App）
   只说「配置已同步」「配置是最新的」「还没同步到最新的配置」，不说第几版。
 - 给 bash 的一行一项、制表符分开的输出里，没有的栏写 `-`（`team-list`、`team-devices`）：bash 按制表符读，空的栏会被并掉、后面的往前挪。
   `team-leave plan` 是例外（空的栏照样空着：没接上的地址、没写的 SSH 端口）：bash 先把制表符换成 \037 再按它读（`IFS=$'\037'`，不是空白，不并）。
@@ -827,7 +827,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 管理员把一个 Team 的配置整份写成 JSON 文件、照这样一个文件整份换掉（备份、搬到另一个 Team、一次改很多项）。辅助程序在 `cmd/team/admin/config.rs`
 （`py team-config`），bash 是 `team_export`、`team_import`、`team_edit`、`team_config_apply`：
 
-- 文件：`{"kind": "cca-team-config", "version": 1, "team": 名字, "accounts": {工具: {邮箱: {"node", "alias"}}}, "alias_lock", "install_node", "mail_forwarders"（3.7.9 起，没设不写）, "nodes": {"group", "proxies"} | null}`。
+- 文件：`{"kind": "cca-team-config", "version": 1, "team": 名字, "accounts": {工具: {邮箱: {"node", "alias"}}}, "alias_lock", "install_node", "mail_forwarders"（3.7.11 起，没设不写）, "nodes": {"group", "proxies"} | null}`。
   `team` 只给人看（导入时不管：名字用 `cca team name` 改）；设备、每台设备能用哪些账号不在里面（它们是这个 Team 自己的），导入时照旧。
   导出时各工具都列出来（没有账号的是 `{}`），每个账号带着现在的别名（没起过的是默认编的「Team 的名字-N」，`alias_plan`）。账号的值也可以只写节点；
   没写别名的：原来就在的照原来的（和文件里写了的撞了就不留），新加的照 `default_aliases` 编（用过的号不再用）。账号的先后照原来的，新加的接在后面
@@ -857,7 +857,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `cca team import` 照 4.3 问同意、重跑）、「在终端里修改配置…」（`Handoff.teamEdit`）。
 - 以前的 `cca team import Team policy.json`（维护者的映射，3.6.0 去掉了，那时说用法）现在照这个流程查：不是导出的配置，说清楚、不导。`--mine` 照旧。
 
-## 转发中转（`cca team forwarder`，3.7.9 起）
+## 转发中转（`cca team forwarder`，3.7.11 起）
 
 Team 给的 Claude 账号信任哪些转发中转（mail.md「信任转发中转」：隐私别名、转发服务去掉 Anthropic 的 DKIM、用自己的域名重签的那种）由 Team 的配置定，
 Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` 认，这台设备上登记的（`mail.accounts[acct_id].forwarder`）不算数、也登记不了；
@@ -960,7 +960,7 @@ Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` �
   `changes` 的每一种说法和提醒、和自己比没有改动。regress 11b3d：导出（600、提醒、事件）、不覆盖 / `--force`、一样的不问、App 里的同意事件
   （`detail` 逐行）和带着 `CCA_GRANT` 重跑、终端里先列出来、去掉账号时直接回车是不换、内核认不出的节点（`$T/core/reject_text`）不问不换、
   `cca team edit`（假的编辑器：先写坏再改好、没改、提问会话里交给终端），测完换回导出的那一份（下面的用例照原来的别名号）。
-- 转发中转（3.7.9 起）：`tests/team.rs` 的 `mail_forwarders`（不合格的写法、规整、变宽要同意、同意的不是这一份不改、只发给拿到 Claude 账号的设备、
+- 转发中转（3.7.11 起）：`tests/team.rs` 的 `mail_forwarders`（不合格的写法、规整、变宽要同意、同意的不是这一份不改、只发给拿到 Claude 账号的设备、
   设备上说一次（App 起的、只读的不说也不记）、登记不了（退出码 3）、窄了不问、一样的不发布、建 Team 的那台照它但不说、导出导入、去掉以后说「不再信任」、
   超了上限是 `domain`、配置文件读不出来时本机登记的也不算（`mail-status`））、`config_file`（`check` 多了两行）；
   `cargo test`：`team_forwarder_lists`（`cmd/mail.rs`：查、规整、太长、变宽、配置里读）、`doc_shape`（样子）、`mail_forwarders_in_the_file`（`config.rs`，最多 64 个）、
@@ -975,7 +975,7 @@ Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` �
 - 别名（`tests/team.rs` 的 `aliases`、`alias_per_tool`、`alias_migrate`）：各工具各自从「Team 的名字-1」编、同一个邮箱在两个工具里各有各的号
   （成员设备上各工具的账号表各用各的）、3.5.3-beta.5 的 Team 发布时照各工具重新编、成员设备上没有记录的旧编号跟着换、几个账号对调别名一次换好、
   `team-name` 改名字（默认编的跟着换成新名字的，成员设备跟着换）；导入时编号、再导入（先后变了、多了账号）编号不变、去掉的号不再用；两个 Team
-  默认编的不撞（各带各的名字），Team 给的别名和成员设备上的撞了时叫「Team 的名字-别名」；3.7.8 及以前的 `team-N` 管理页上已经是换好的样子、
+  默认编的不撞（各带各的名字），Team 给的别名和成员设备上的撞了时叫「Team 的名字-别名」；3.7.10 及以前的 `team-N` 管理页上已经是换好的样子、
   发布时存下来（换成的那个被占着的留着 `team-N`）、再发布不变、成员设备上没有记录的 `team-N` 跟着换，`team-alias` 不收 `team-数字`；`team-alias` 的原因码（不合规、重名、没有这个账号、不是管理员）；改了以后成员设备上照 Team 给的用着的
   （连同撞了以后换成的）跟着改、自己改过的不跟；管理员这台设备上只有邮箱的不补、以前加进来的不跟；以前的 Team 发布时补上编号。
   单元测试：`core/policy.rs` 的 `team_default_names`（带前导 0 的 `team-007`、`team-0` 不算以前默认编的）、`admin.rs` 的 `rename_keeps_flat_aliases`

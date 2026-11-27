@@ -59,7 +59,7 @@ import Foundation
         check("mail_list.json 夹具能解码", false)
     }
 
-    // Team 给的账号（cca 3.7.9 起）：信任哪些转发中转照 Team 的配置，这台设备上登记的不算数
+    // Team 给的账号（cca 3.7.11 起）：信任哪些转发中转照 Team 的配置，这台设备上登记的不算数
     if let st = loadFixture(StateDoc.self, "state.json") {
         func mail(_ key: String) -> MailConfig? { st.allAccounts.first { $0.key == key }?.mail }
         let bob = mail("工作(bob@example.com)"), grace = mail("grace@example.com"), dave = mail("测试(dave@example.com)"), erin = mail("erin@example.com")

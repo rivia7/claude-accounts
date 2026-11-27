@@ -1311,7 +1311,7 @@ fn alias_per_tool(t: &mut Ctx) {
     assert_in("Claude 账号 新组-2（bob@example.com） 的别名改成 新组二-2", &apply(&["claude", "codex"]));
 }
 
-/// 以前（3.7.8 及以前）默认编的 team-N：管理页上已经是换好的样子，下一次发布时换成「Team 的名字-N」存下来（号不变；换成的那个被别的账号
+/// 以前（3.7.10 及以前）默认编的 team-N：管理页上已经是换好的样子，下一次发布时换成「Team 的名字-N」存下来（号不变；换成的那个被别的账号
 /// 用着的留着 team-N），再算还是一样；成员设备上没有记录的 team-N 也跟着换；cca team alias 不收 team-数字
 fn alias_migrate(t: &mut Ctx) {
     let fx = fx(t);
@@ -1322,7 +1322,7 @@ fn alias_migrate(t: &mut Ctx) {
     load(&admin, tid);
     lines(&admin, &["team-map", tid, "claude", "erin@example.com", "US-C"]);
     lines(&admin, &["team-map", tid, "claude", "dave@example.com", "US-C"]);
-    // 3.7.8 的 Team：bob、erin、Codex 的 carol 是默认编的 team-N；dave 是管理员起的「测试组-2」（erin 要换成的就是它）
+    // 3.7.10 的 Team：bob、erin、Codex 的 carol 是默认编的 team-N；dave 是管理员起的「测试组-2」（erin 要换成的就是它）
     let old = obj! {
         "claude" => obj! {
             "alice@example.com" => "alice", "bob@example.com" => "team-1", "erin@example.com" => "team-2", "dave@example.com" => "测试组-2",

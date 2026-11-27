@@ -123,7 +123,7 @@ enum CcaCommand: Sendable, Hashable {
     case teamAlias(team: String, account: String, alias: String)
     /// 锁定（解开）这个 Team 里账号的别名，再发布（`cca team alias Team --lock|--unlock`）
     case teamAliasLock(team: String, on: Bool)
-    /// Team 给的 Claude 账号信任哪些转发中转（`cca team forwarder <Team> <域名…>`，一个域名都没有时是 `off`：不再信任；cca 3.7.9 起，
+    /// Team 给的 Claude 账号信任哪些转发中转（`cca team forwarder <Team> <域名…>`，一个域名都没有时是 `off`：不再信任；cca 3.7.11 起，
     /// `team devices --json` 有 `mail_forwarders` 时才有）：比现在宽了要同意（team_forwarders，范围是 Team 的编号和新名单的摘要，默认不同意），
     /// 改完发布、这台设备马上同步一次、照它对一遍账号表
     case teamForwarders(team: String, domains: [String])

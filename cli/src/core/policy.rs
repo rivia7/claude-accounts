@@ -166,7 +166,7 @@ pub fn alias_fallback(alias: &str, team: &str) -> Option<String> {
     (!base.trim_end_matches('-').is_empty() && alias_ok(&V::from(cand.as_str()))).then_some(cand)
 }
 
-/// 以前（3.7.8 及以前）Team 给没起过别名的账号默认编的 team-N 的 N（以前只编过从 1 起、不带前导 0 的：team-007 这样的是管理员自己起的）；
+/// 以前（3.7.10 及以前）Team 给没起过别名的账号默认编的 team-N 的 N（以前只编过从 1 起、不带前导 0 的：team-007 这样的是管理员自己起的）；
 /// 别的样子是 None
 pub fn legacy_n(alias: &str) -> Option<i64> {
     alias

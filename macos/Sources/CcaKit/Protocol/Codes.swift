@@ -380,7 +380,7 @@ struct FailCode: KnownValues {
     static let costOff = FailCode(rawValue: "cost_off")
     /// 邮箱助手：连不上 Gmail（网络 / 代理 / 证书 / 认证，`cca mail setup`，PROTOCOL 4.11）。
     static let mailConnect = FailCode(rawValue: "mail_connect")
-    /// 邮箱助手（`cca mail trust-forwarder`，cca 3.7.9 起）：这个账号是 Team 给的，信任哪些转发中转照 Team 的配置，这台设备上登记不了
+    /// 邮箱助手（`cca mail trust-forwarder`，cca 3.7.11 起）：这个账号是 Team 给的，信任哪些转发中转照 Team 的配置，这台设备上登记不了
     static let mailTeam = FailCode(rawValue: "mail_team")
     /// 换自定义代理（`cca [codex|agy] node use`）：Team 的配置固定了这个账号的节点。
     static let nodePinned = FailCode(rawValue: "node_pinned")
@@ -449,7 +449,7 @@ struct ConsentItem: KnownValues {
     /// `cca team import` / `edit`：照文件整份换掉一个 Team 的配置，再发布（范围是 Team 的编号和文件的摘要：同意以后文件又改过就对不上，cca 重问；
     /// detail 一项一句、提醒在最后，要去掉账号时默认不同意）。
     static let teamConfig = ConsentItem(rawValue: "team_config")
-    /// `cca team forwarder` / `import`（cca 3.7.9 起）：这个 Team 给的 Claude 账号在各台设备上信任这些转发中转（不安全，各台设备上关不掉；
+    /// `cca team forwarder` / `import`（cca 3.7.11 起）：这个 Team 给的 Claude 账号在各台设备上信任这些转发中转（不安全，各台设备上关不掉；
     /// 范围是 Team 的编号和新名单的摘要，默认不同意；只在名单变宽时问，import 先问 team_config）。
     static let teamForwarders = ConsentItem(rawValue: "team_forwarders")
     /// `cca cost hook on`：在共享的 ~/.claude/settings.json 里加一条 SessionStart hook，Claude App 里的 Code 会话开始时记下 App 登录的账号

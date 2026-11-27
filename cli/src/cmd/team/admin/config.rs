@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn default_aliases_migrate_and_follow_the_name() {
-        // 3.7.8 的 Team：a、c 是以前默认的 team-N，b 是管理员起的 Lab-1（a 要换成的就是它：a 留着 team-1），d 还没有别名
+        // 3.7.10 的 Team：a、c 是以前默认的 team-N，b 是管理员起的 Lab-1（a 要换成的就是它：a 留着 team-1），d 还没有别名
         let a = d(r#"{"alias_n": {"claude": 2}, "config": {"accounts": {"claude": {"a@x.com": "JP-A", "b@x.com": "JP-A", "c@x.com": "JP-A",
             "d@x.com": "JP-A"}}, "tool_aliases": {"claude": {"a@x.com": "team-1", "b@x.com": "Lab-1", "c@x.com": "team-2"}}, "aliases": {},
             "nodes": null}}"#)
