@@ -5,6 +5,14 @@ import SwiftUI
 struct SessionsView: View {
     @Environment(AppModel.self) private var model
 
+    /// 「排序」：拖动右边的把手调整会话的先后（List 的编辑状态，只能挪、不能删）。不点它也能长按拖动
+    private var editing: Bool { model.sortingSessions }
+    private var editMode: Binding<EditMode> {
+        Binding(get: { model.sortingSessions ? .active : .inactive }, set: { model.sortingSessions = $0.isEditing })
+    }
+    /// 有一台电脑上不止一个会话时才排得了
+    private var sortable: Bool { model.peers.contains { (model.listing($0)?.sessions.count ?? 0) > 1 } }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = context.date.timeIntervalSince1970
@@ -28,10 +36,20 @@ struct SessionsView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .environment(\.editMode, editMode)
         }
         .navigationTitle("远程会话")
         .refreshable { await model.fetch() }
-        .toolbar { PageToolbar(mark: { RemoteMark(size: 22) }) }
+        .toolbar {
+            PageToolbar(mark: { RemoteMark(size: 22) }, extra: {
+                if editing || sortable {
+                    Button(editing ? "完成" : "排序") {
+                        withAnimation { model.sortingSessions.toggle() }
+                    }
+                    .accessibilityHint(editing ? "结束排序" : "拖动会话右边的把手调整先后")
+                }
+            })
+        }
     }
 
     private func footer(now: Double) -> some View {
@@ -72,9 +90,21 @@ private struct MachineSection: View {
                              : "暂无可接入的会话。点「新建会话」在电脑上启动一个，或在电脑的终端里用 cca 启动。")
                             .font(.callout).foregroundStyle(.secondary)
                     } else {
-                        ForEach(l.sessions) { s in
+                        // 照这台手机记着的先后（拖动排过的，SessionOrder）；读屏的用「上移」「下移」
+                        let ordered = model.sessions(l)
+                        ForEach(Array(ordered.enumerated()), id: \.element.id) { i, s in
                             SessionRow(peer: peer, session: s, now: now)
+                                .moveDisabled(ordered.count < 2)
+                                .accessibilityActions {
+                                    if i > 0 {
+                                        Button("上移") { model.moveSessions(of: l, from: IndexSet(integer: i), to: i - 1) }
+                                    }
+                                    if i + 1 < ordered.count {
+                                        Button("下移") { model.moveSessions(of: l, from: IndexSet(integer: i), to: i + 2) }
+                                    }
+                                }
                         }
+                        .onMove { model.moveSessions(of: l, from: $0, to: $1) }
                     }
                     if let launcher = l.launcher {
                         LaunchRow(peer: peer, launcher: launcher)
@@ -122,13 +152,17 @@ private struct LaunchRow: View {
 /// 一个会话：状态点、名字、在哪个文件夹、开了多久；点一下接入（那台电脑只让看的只能看），长按可以选只看。账号的那一页也用它
 struct SessionRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.editMode) private var editMode
     let peer: Peer
     let session: RemoteSession
     let now: Double
 
     var body: some View {
         let detail = Texts.sessionDetail(session, now: now)
+        let editing = editMode?.wrappedValue.isEditing == true
         Button {
+            // 排序的时候点了不接入（拖的是右边的把手）
+            guard !editing else { return }
             model.attach(session, on: peer, readOnly: false)
         } label: {
             HStack(spacing: 12) {
@@ -145,14 +179,14 @@ struct SessionRow: View {
                 Spacer(minLength: 6)
                 if !session.online {
                     Text("离线").font(.caption).foregroundStyle(.secondary)
-                } else {
+                } else if !editing {
                     Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!session.online)
+        .disabled(!session.online && !editing)
         .contextMenu {
             if session.online {
                 if !session.info.viewOnly {

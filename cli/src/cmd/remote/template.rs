@@ -1,21 +1,25 @@
-//! 远程启动用的模板（docs/dev/launch.md）：主人在这台机器上写好「哪个工具、哪个账号、在哪个文件夹、带哪些参数」；允许远程启动的手机
-//! （配对表的 `launch`）只能挑一个模板起会话，再加一句开场白（launch.rs）：账号、文件夹、参数都改不了。
+//! 远程启动用的模板（docs/dev/launch.md）：主人在这台机器上写好「哪个工具、在哪个文件夹、带哪些参数」；允许远程启动的手机
+//! （配对表的 `launch`）挑一个模板、挑一个账号起会话，再加一句开场白（launch.rs）：文件夹、参数都改不了，账号只能挑这个工具的账号表里
+//! 会话走那台服务器的。
 //!
-//! - 存在 `~/.cca/remote/templates.json`（600，改之前拿 `Lock`）：`{"v":1,"templates":[{"id","name","tool","account","dir","args","at"}]}`。
-//!   账号存邮箱（没有邮箱的存账号表的键），每次用的时候重新找：改别名不影响，账号删了这个模板就用不了（`no_account`）
-//! - 摘要（`digest`）：工具、账号、文件夹、参数算出来的，放在给手机的说明里；手机起会话时带回来，和现在的对不上（模板改过了）就不起：
+//! - 存在 `~/.cca/remote/templates.json`（600，改之前拿 `Lock`）：`{"v":1,"templates":[{"id","name","tool","dir","args","at"}]}`。
+//!   3.7.9 及以前的模板还带着账号（`account`）：读的时候不理，存的时候不再写
+//! - 摘要（`digest`）：工具、文件夹、参数算出来的，放在给手机的说明里；手机起会话时带回来，和现在的对不上（模板改过了）就不起：
 //!   手机上看到的参数就是要运行的
+//! - 起会话时挑的账号（`Pick`）：给手机的说明里列出模板用到的工具的账号（会话走这台服务器的），各带一个按配对算的编号（和手机上
+//!   「账号」页里同一个账号的编号一样：status.rs 的 `account_tag`），手机起会话时说用哪个（LAUNCH 的 `a`）
 //! - `remote-template list [--json]`、`add`、`rm`：bash 的 `cca remote template`（PROTOCOL 9.4）
 
 use super::far::{aid_of, clean, short_name, team_salt};
+use super::status::account_tag;
 use super::{launch, local, peers, relay};
 use crate::cmd::agy::agy_interactive;
 use crate::cmd::codex::codex_interactive;
 use crate::cmd::hub::HubKind;
 use crate::cmd::settings::{home_tilde, launch_settings_problems_in, CLAUDE_VALUES, CODEX_VALUES};
-use crate::cmd::table::account_named;
 use crate::core::base::Lock;
-use crate::core::model::parse_key;
+use crate::core::model::{acct_id, name_of};
+use crate::core::team::{index_path, team_path, teams};
 use crate::core::tool::{tools, Tool, Using};
 use crate::dict;
 use crate::py::fs;
@@ -27,9 +31,14 @@ use crate::py::rand::token_hex;
 use crate::py::text::{sh_quote, sh_split};
 use crate::py::time::time;
 use crate::py::{die, R};
+use std::collections::HashMap;
 
 /// 最多存这么多个（给手机的说明里也最多放这么多）
 pub const MAX: usize = 16;
+/// 给手机的说明里一个工具最多列几个能挑的账号（照账号表的先后）
+const PICKS_MAX: usize = 16;
+/// 给旧版的 App、cca 看的账号的名字（它们不认 `accounts`，照模板的 `a` 显示）：能挑的账号不止一个时
+const ANY_ACCOUNT: &str = "启动时选账号";
 const NAME_MAX: usize = 40;
 /// 参数最多几个、合起来最多多少字节
 const ARGS_MAX: usize = 64;
@@ -37,7 +46,7 @@ const ARGS_BYTES: usize = 4096;
 /// 给手机的说明（明文）最多这么大：服务器收的密文最长 4096 个字符（base64），正好是 3072 个字节
 pub const DOC_MAX: usize = 3072;
 const USAGE: &str =
-    "用法：remote-template list [--json] | add 名字 工具 账号 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数) | rm 名字或编号";
+    "用法：remote-template list [--json] | add 名字 工具 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数) | rm 名字或编号";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template {
@@ -45,8 +54,6 @@ pub struct Template {
     pub id: String,
     pub name: String,
     pub tool: String,
-    /// 邮箱，没有邮箱的账号是账号表的键
-    pub account: String,
     /// 绝对路径
     pub dir: String,
     pub args: Vec<String>,
@@ -57,9 +64,16 @@ fn file() -> String {
     path::join(&local::dir(), "templates.json")
 }
 
-/// 模板文件现在的样子（启动器隔几秒看一眼：变了就重发给手机的说明）
-pub fn stamp() -> peers::Stamp {
-    peers::stamp_of(&file())
+/// 说明里用到的文件现在的样子：模板文件，和能挑的账号用到的——各个工具的账号表、各个 Team 的配置（账号归谁、走哪台服务器）。
+/// 启动器隔几秒看一眼：变了就重算一遍说明（和原来的不一样才重发给手机）
+pub fn stamp() -> Vec<peers::Stamp> {
+    let mut out = vec![peers::stamp_of(&file()), peers::stamp_of(&index_path())];
+    out.extend(tools().iter().map(|t| peers::stamp_of(&t.table)));
+    for t in teams() {
+        out.push(peers::stamp_of(&team_path(&t.id, "doc.json")));
+        out.push(peers::stamp_of(&team_path(&t.id, "sync.json")));
+    }
+    out
 }
 
 fn row_of(d: &Dict) -> Option<Template> {
@@ -68,16 +82,11 @@ fn row_of(d: &Dict) -> Option<Template> {
         id: d.str("id")?.to_string(),
         name: d.str("name")?.to_string(),
         tool: d.str("tool")?.to_string(),
-        account: d.str("account")?.to_string(),
         dir: d.str("dir")?.to_string(),
         args: args?,
         at: d.get("at").and_then(|v| v.as_num()).unwrap_or(0.0),
     };
-    let ok = peers::lower_hex(&t.id, 8)
-        && !t.name.is_empty()
-        && tool_named(&t.tool).is_some()
-        && !t.account.is_empty()
-        && t.dir.starts_with('/');
+    let ok = peers::lower_hex(&t.id, 8) && !t.name.is_empty() && tool_named(&t.tool).is_some() && t.dir.starts_with('/');
     ok.then_some(t)
 }
 
@@ -103,8 +112,8 @@ fn save(all: &[Template]) -> R<()> {
     let list = List::new();
     for t in all {
         list.push(dict! {
-            "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "account" => t.account.as_str(),
-            "dir" => t.dir.as_str(), "args" => t.args_v(), "at" => t.at
+            "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "dir" => t.dir.as_str(),
+            "args" => t.args_v(), "at" => t.at
         });
     }
     fs::save_json(&file(), &V::Dict(dict! { "v" => 1, "templates" => list }), Some(0o600), true)?;
@@ -125,22 +134,11 @@ impl Template {
         V::from(self.args.iter().map(|a| V::from(a.as_str())).collect::<Vec<V>>())
     }
 
-    /// 摘要：`SHA256(紧凑的 JSON [工具, 账号, 文件夹, [参数…]])` 的前 16 个十六进制字符（server/README.md「启动器」）
+    /// 摘要：`SHA256(紧凑的 JSON [工具, 文件夹, [参数…]])` 的前 16 个十六进制字符（server/README.md「启动器」）。账号不在里面：
+    /// 起会话时另外挑（LAUNCH 的 `a`）
     pub fn digest(&self) -> String {
-        let doc = crate::list![self.tool.as_str(), self.account.as_str(), self.dir.as_str(), self.args_v()];
+        let doc = crate::list![self.tool.as_str(), self.dir.as_str(), self.args_v()];
         sha256_hex(json::dumps(&V::List(doc), json::Fmt::new().utf8().compact()))[..16].to_string()
-    }
-
-    /// 账号表里现在的这个账号：(键, 给人看的名字：别名，没有别名的是邮箱)。没有了是 None
-    pub fn account_now(&self) -> Option<(String, String)> {
-        let table = fs::load_quiet(&self.tool().table)?.as_dict()?;
-        let want = self.account.to_lowercase();
-        let key = table.keys().into_iter().find(|k| {
-            let (_, e) = parse_key(k);
-            **k == *self.account || (!e.is_empty() && e.to_lowercase() == want)
-        })?;
-        let (a, e) = parse_key(&key);
-        Some((key.to_string(), if a.is_empty() { e } else { a }))
     }
 
     /// 能不能带开场白（接在参数后面：`-- 开场白`，工具当它是头一句话）：Claude Code、Codex 认；agy 还没核对过，先不给。参数里
@@ -154,17 +152,20 @@ impl Template {
         }
     }
 
-    /// 现在用得了用不了：`no_account`（账号表里没有了）、`no_dir`（文件夹没了）、`bad_args`（参数有问题，或者不是交互的会话）、
-    /// `no_relay`（这个账号的会话不经中转：这台机器不在哪个 Team 里）；用得了是 None
-    pub fn problem(&self) -> R<Option<&'static str>> {
-        let Some((key, _)) = self.account_now() else { return Ok(Some("no_account")) };
+    /// 现在用得了用不了（picks：这个工具的账号，[`picks`]）：`no_account`（这个工具一个账号都没有）、`no_dir`（文件夹没了）、
+    /// `bad_args`（参数有问题，或者不是交互的会话）、`no_relay`（这个工具的账号的会话都不经中转：这台机器不在哪个 Team 里）；
+    /// 用得了是 None
+    pub fn problem(&self, picks: &[Pick]) -> R<Option<&'static str>> {
+        if picks.is_empty() {
+            return Ok(Some("no_account"));
+        }
         if !path::isdir(&self.dir) {
             return Ok(Some("no_dir"));
         }
         if !args_problems(self.tool(), &self.args, &self.dir)?.is_empty() {
             return Ok(Some("bad_args"));
         }
-        if relay::session_hub(&self.tool, &key).is_none() {
+        if picks.iter().all(|p| p.hub.is_none()) {
             return Ok(Some("no_relay"));
         }
         Ok(None)
@@ -185,6 +186,33 @@ impl Template {
         s.push('…');
         s
     }
+}
+
+/// 起会话时能挑的一个账号（这个工具的账号表里的）
+#[derive(Clone)]
+pub struct Pick {
+    pub tool: &'static Tool,
+    /// 账号表的键
+    pub key: String,
+    /// 给人看的名字：别名，没起别名的是邮箱
+    pub name: String,
+    /// 它的会话走哪台服务器中转（relay.rs 的 `session_hub`；没有中转是 None，远程起不了）
+    pub hub: Option<HubKind>,
+}
+
+impl Pick {
+    /// 按配对算的编号（16 个十六进制字符；p 是这个配对的密钥）：同一个账号在这个配对里一直是它（换别名不变），和手机上「账号」页里的
+    /// 那个账号的编号一样（status.rs）；别的配对、服务器看不出是哪个账号
+    pub fn tag(&self, p: &[u8]) -> String {
+        account_tag(p, self.tool.name, &acct_id(&self.key, self.tool))
+    }
+}
+
+/// 这个工具的账号表里的账号，照账号表的先后，各自的会话走哪台服务器现查
+pub fn picks(tool: &'static Tool) -> Vec<Pick> {
+    let Some(table) = fs::load_quiet(&tool.table).and_then(|v| v.as_dict()) else { return Vec::new() };
+    let keys: Vec<String> = table.keys().into_iter().map(|k| k.to_string()).collect();
+    keys.into_iter().map(|key| Pick { tool, name: name_of(&key), hub: relay::session_hub(tool.name, &key), key }).collect()
 }
 
 /// Claude Code 的子命令（`claude mcp …` 这些不是会话）
@@ -239,41 +267,97 @@ pub fn args_problems(tool: &'static Tool, args: &[String], dir: &str) -> R<Vec<S
     Ok(with.into_iter().filter(|p| !without.contains(p)).collect())
 }
 
-/// 给手机的说明（server/README.md「启动器」）：账号走 hub 这台服务器、现在用得了的模板（账号、文件夹还在），最多 MAX 个；明文放不下
-/// DOC_MAX 的不放、记在 `more` 里。参数有没有问题这里不看（共享的设置变了它也跟着变）：起的时候再查
-pub fn launch_doc(hub: HubKind) -> Dict {
-    let salt = team_salt(hub);
-    let machine = peers::machine_name();
-    let doc_of = |rows: &[V], more: usize| dict! { "v" => 1, "machine" => machine.as_str(), "t" => rows.to_vec(), "more" => more };
-    let (mut rows, mut more): (Vec<V>, usize) = (Vec::new(), 0);
-    for t in load() {
-        let Some((key, name)) = t.account_now() else { continue };
-        if relay::session_hub(&t.tool, &key) != Some(hub) || !path::isdir(&t.dir) {
-            continue;
+/// 给手机的说明（server/README.md「启动器」）：现在用得了的模板（文件夹还在、这个工具有会话走 hub 这台服务器的账号），最多 MAX 个；
+/// 明文放不下 DOC_MAX 的不放、记在 `more` 里。起会话时能挑的账号（`accounts`）：模板用到的工具的、会话走 hub 的，一个工具最多
+/// PICKS_MAX 个，各带按配对算的编号——封给每台手机之前各算各的（`for_peer`）。参数有没有问题这里不看（共享的设置变了它也跟着变）：
+/// 起的时候再查
+pub struct LaunchDoc {
+    machine: String,
+    rows: Vec<V>,
+    more: usize,
+    /// 能挑的账号，各带账号摘要（这个 Team 的盐算的；没有邮箱、还没有盐的没有）
+    picks: Vec<(Pick, Option<String>)>,
+}
+
+impl LaunchDoc {
+    pub fn build(hub: HubKind) -> LaunchDoc {
+        let salt = team_salt(hub);
+        let aid = |p: &Pick| salt.as_deref().and_then(|s| aid_of(s, p.tool.name, &p.key));
+        let mut doc = LaunchDoc { machine: peers::machine_name(), rows: Vec::new(), more: 0, picks: Vec::new() };
+        // 各个工具会话走 hub 的账号（一个工具只查一次）
+        let mut here: HashMap<&'static str, Vec<Pick>> = HashMap::new();
+        for t in load() {
+            if !path::isdir(&t.dir) {
+                continue;
+            }
+            let tool = t.tool();
+            let mine = here
+                .entry(tool.name)
+                .or_insert_with(|| picks(tool).into_iter().filter(|p| p.hub == Some(hub)).take(PICKS_MAX).collect())
+                .clone();
+            if mine.is_empty() {
+                continue;
+            }
+            let before = doc.picks.len();
+            if !doc.picks.iter().any(|(p, _)| p.tool.name == tool.name) {
+                doc.picks.extend(mine.iter().map(|p| (p.clone(), aid(p))));
+            }
+            let row = dict! {
+                "i" => t.id.as_str(), "h" => t.digest(), "n" => clean(&t.name, NAME_MAX), "k" => t.tool.as_str(),
+                "d" => clean(&home_tilde(&t.dir), 200), "x" => t.args_text(300), "l" => t.line_ok()
+            };
+            // 给旧版的 App、cca 看的账号（它们不认 accounts，起会话时也不说用哪个：能挑的只有一个时启动器就用它）
+            match mine.as_slice() {
+                [only] => {
+                    row.set("a", clean(short_name(&only.name), 64));
+                    if let Some(a) = aid(only) {
+                        row.set("aid", a);
+                    }
+                }
+                _ => row.set("a", ANY_ACCOUNT),
+            }
+            doc.rows.push(V::Dict(row));
+            // more 最多两位数：按两位数算，放进去以后也不会超
+            let more = std::mem::replace(&mut doc.more, 99);
+            let fits = doc.text().len() <= DOC_MAX;
+            doc.more = more;
+            if !fits {
+                doc.rows.pop();
+                doc.picks.truncate(before);
+                doc.more += 1;
+            }
         }
-        let row = dict! {
-            "i" => t.id.as_str(), "h" => t.digest(), "n" => clean(&t.name, NAME_MAX), "k" => t.tool.as_str(),
-            "a" => clean(short_name(&name), 64), "d" => clean(&home_tilde(&t.dir), 200), "x" => t.args_text(300), "l" => t.line_ok()
-        };
-        if let Some(aid) = salt.as_deref().and_then(|s| aid_of(s, &t.tool, &key)) {
-            row.set("aid", aid);
-        }
-        rows.push(V::Dict(row));
-        // more 最多两位数：按两位数算，放进去以后也不会超
-        if json::dumps(&V::Dict(doc_of(&rows, 99)), json::Fmt::new().utf8().compact()).len() > DOC_MAX {
-            rows.pop();
-            more += 1;
-        }
+        doc
     }
-    doc_of(&rows, more)
+
+    /// 封给一台手机的那一份（p：和它配对的密钥）：`{"v":1,"machine","t":[模板…],"more","accounts":[{"i","k","n","aid"}…]}`
+    pub fn for_peer(&self, p: &[u8]) -> Dict {
+        let accounts: Vec<V> = self
+            .picks
+            .iter()
+            .map(|(a, aid)| {
+                let d = dict! { "i" => a.tag(p), "k" => a.tool.name, "n" => clean(short_name(&a.name), 64) };
+                if let Some(aid) = aid {
+                    d.set("aid", aid.as_str());
+                }
+                V::Dict(d)
+            })
+            .collect();
+        dict! { "v" => 1, "machine" => self.machine.as_str(), "t" => self.rows.clone(), "more" => self.more, "accounts" => accounts }
+    }
+
+    /// 和配对无关的样子（变了才重发、量多长）：账号的编号用一把全是 0 的密钥算，账号变了它也跟着变，长度和真的一样
+    pub fn text(&self) -> String {
+        json::dumps(&V::Dict(self.for_peer(&[0u8; 32])), json::Fmt::new().utf8().compact())
+    }
 }
 
 fn problem_text(code: &str) -> &'static str {
     match code {
-        "no_account" => "账号表里没有这个账号了",
+        "no_account" => "这个工具还没有账号",
         "no_dir" => "文件夹不在了",
         "bad_args" => "参数用不了",
-        "no_relay" => "这个账号的会话不经中转（先加入一个 Team）",
+        "no_relay" => "这个工具的账号的会话都不经中转（先加入一个 Team）",
         _ => "用不了",
     }
 }
@@ -288,7 +372,7 @@ pub fn cmd_remote_template(args: &[String]) -> R<()> {
     }
 }
 
-/// 列出来：一行一个（`编号  名字  工具  账号  文件夹  参数`，用不了的后面说原因）；--json 是给界面 App 的（PROTOCOL 9.4）
+/// 列出来：一行一个（`编号  名字  工具  文件夹  参数`，用不了的后面说原因）；--json 是给界面 App 的（PROTOCOL 9.4）
 fn list(args: &[String]) -> R<()> {
     let as_json = match args {
         [] => false,
@@ -296,15 +380,17 @@ fn list(args: &[String]) -> R<()> {
         _ => return die(USAGE),
     };
     let all = load();
+    // 各个工具的账号（一个工具只查一次）
+    let mut seen: HashMap<&'static str, Vec<Pick>> = HashMap::new();
+    let mut problem = |t: &Template| t.problem(seen.entry(t.tool().name).or_insert_with(|| picks(t.tool())));
     if as_json {
         let rows = List::new();
         for t in &all {
-            let problem = t.problem()?;
-            let now = t.account_now();
-            let (key, name) = (now.as_ref().map(|(k, _)| k.as_str()), now.as_ref().map(|(_, n)| n.as_str()));
+            let problem = problem(t)?;
+            // account、account_key、account_name：3.7.9 及以前模板带着账号，旧版的 App 读它们；现在总是空的
             rows.push(dict! {
-                "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "account" => t.account.as_str(),
-                "account_key" => key.map_or(V::None, V::from), "account_name" => name.map_or(V::None, V::from), "dir" => t.dir.as_str(),
+                "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "account" => "",
+                "account_key" => V::None, "account_name" => V::None, "dir" => t.dir.as_str(),
                 "args" => t.args_v(), "args_line" => t.args_line(), "line" => t.line_ok(), "digest" => t.digest(),
                 "problem" => problem.map_or(V::None, V::from)
             });
@@ -314,20 +400,19 @@ fn list(args: &[String]) -> R<()> {
         return Ok(());
     }
     for t in &all {
-        let who = t.account_now().map_or_else(|| t.account.clone(), |(_, n)| n);
-        let note = t.problem()?.map(|p| format!("  （{}）", problem_text(p))).unwrap_or_default();
+        let note = problem(t)?.map(|p| format!("  （{}）", problem_text(p))).unwrap_or_default();
         let args = if t.args.is_empty() { String::new() } else { format!("  {}", t.args_text(200)) };
-        crate::out!("{}  {}  {}  {}  {}{}{}", t.id, clean(&t.name, NAME_MAX), t.tool().label, who, home_tilde(&t.dir), args, note);
+        crate::out!("{}  {}  {}  {}{}{}", t.id, clean(&t.name, NAME_MAX), t.tool().label, home_tilde(&t.dir), args, note);
     }
     Ok(())
 }
 
-/// `add 名字 工具 账号 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数)`：账号照 `cca @账号` 那样认（别名、邮箱、编号、唯一的
-/// 前缀），存成邮箱；文件夹相对当前目录、可以带 ~，要已经在。--replace：改那一个（编号、位置不变）。参数是一项一项的（`--` 后面），
-/// 或者照 shell 的写法写成的一行（`--args-line`：App 给的，这里拆，不展开 ~、$ 这些）。stdout：`编号<TAB>名字`
+/// `add 名字 工具 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数)`：文件夹相对当前目录、可以带 ~，要已经在。--replace：改那一个
+/// （编号、位置不变）。参数是一项一项的（`--` 后面），或者照 shell 的写法写成的一行（`--args-line`：App 给的，这里拆，不展开 ~、$ 这些）。
+/// 账号不存在模板里：起会话时挑。stdout：`编号<TAB>名字`
 fn add(args: &[String]) -> R<()> {
     // 照位置认（名字、文件夹、参数那一行本身是 `--` 也不会认错）
-    let [name, tool, account, dir, rest @ ..] = args else { return die(USAGE) };
+    let [name, tool, dir, rest @ ..] = args else { return die(USAGE) };
     let (replace, rest) = match rest {
         [flag, id, rest @ ..] if flag == "--replace" => (Some(id.as_str()), rest),
         _ => (None, rest),
@@ -343,13 +428,6 @@ fn add(args: &[String]) -> R<()> {
         return die(format!("模板的名字要有，最长 {NAME_MAX} 个字"));
     }
     let Some(tool) = tool_named(tool) else { return die("工具只能是 claude、codex、agy") };
-    let table = fs::load_quiet(&tool.table).and_then(|v| v.as_dict()).unwrap_or_default();
-    let key = {
-        let _using = Using::tool(tool);
-        account_named(&table, account)?
-    };
-    let (_, email) = parse_key(&key);
-    let account = if email.is_empty() { key.clone() } else { email };
     let dir = path::abspath(&path::join(&std::env::current_dir()?.to_string_lossy(), &path::expanduser(dir)));
     if !path::isdir(&dir) {
         return die(format!("没有这个文件夹：{dir}"));
@@ -390,7 +468,7 @@ fn add(args: &[String]) -> R<()> {
             }
         },
     };
-    let t = Template { id, name, tool: tool.name.to_string(), account, dir, args: argv.to_vec(), at: time() };
+    let t = Template { id, name, tool: tool.name.to_string(), dir, args: argv.to_vec(), at: time() };
     let said = format!("{}\t{}", t.id, t.name);
     match at {
         Some(i) => all[i] = t,
@@ -437,7 +515,6 @@ mod tests {
             id: "0123abcd".into(),
             name: "修 bug".into(),
             tool: tool.into(),
-            account: "a@example.com".into(),
             dir: "/srv/项目".into(),
             args: args.iter().map(|a| a.to_string()).collect(),
             at: 1.0,
@@ -480,18 +557,13 @@ mod tests {
     #[test]
     fn digest_covers_what_runs() {
         let t = tpl("claude", &["--model", "opus"]);
-        // 照 server/README.md「启动器」：SHA256('["claude","a@example.com","/srv/项目",["--model","opus"]]')
-        assert_eq!(t.digest(), sha256_hex(r#"["claude","a@example.com","/srv/项目",["--model","opus"]]"#)[..16]);
+        // 照 server/README.md「启动器」：SHA256('["claude","/srv/项目",["--model","opus"]]')（账号不在里面：起的时候挑）
+        assert_eq!(t.digest(), sha256_hex(r#"["claude","/srv/项目",["--model","opus"]]"#)[..16]);
         let mut u = t.clone();
         u.name = "别的名字".into();
         u.at = 9.0;
         assert_eq!(u.digest(), t.digest(), "名字、时间不算");
-        let changes: [fn(&mut Template); 4] = [
-            |t| t.args.push("-c".into()),
-            |t| t.dir.push('x'),
-            |t| t.account = "b@example.com".into(),
-            |t| t.tool = "codex".into(),
-        ];
+        let changes: [fn(&mut Template); 3] = [|t| t.args.push("-c".into()), |t| t.dir.push('x'), |t| t.tool = "codex".into()];
         for change in changes {
             let mut u = t.clone();
             change(&mut u);
@@ -525,13 +597,16 @@ mod tests {
     fn rows_and_text() {
         let base = || {
             dict! {
-                "id" => "0123abcd", "name" => "x", "tool" => "codex", "account" => "a@example.com", "dir" => "/tmp",
-                "args" => crate::list!["a b", "c"], "at" => 2.0
+                "id" => "0123abcd", "name" => "x", "tool" => "codex", "dir" => "/tmp", "args" => crate::list!["a b", "c"], "at" => 2.0
             }
         };
         let t = row_of(&base()).unwrap();
         assert_eq!(t.args_text(100), "'a b' c");
         assert_eq!(t.args_text(4), "'a …");
+        // 3.7.9 及以前存的带着账号：照样认，账号不理（存的时候也不再写）
+        let old = base();
+        old.set("account", "a@example.com");
+        assert_eq!(row_of(&old), Some(t.clone()));
         for (k, bad) in
             [("id", V::from("0123ABCD")), ("tool", "vim".into()), ("dir", "rel".into()), ("args", crate::list![1].into())]
         {
@@ -539,5 +614,35 @@ mod tests {
             e.set(k, bad);
             assert!(row_of(&e).is_none(), "{k}");
         }
+    }
+
+    #[test]
+    fn accounts_in_the_launcher_doc() {
+        let claude = tool_named("claude").unwrap();
+        let pick = |key: &str, name: &str| Pick { tool: claude, key: key.into(), name: name.into(), hub: None };
+        let doc = LaunchDoc {
+            machine: "box".into(),
+            rows: Vec::new(),
+            more: 0,
+            picks: vec![
+                (pick("工作(alice@example.com)", "工作"), Some("ab".repeat(16))),
+                (pick("bob@example.com", "bob@example.com"), None),
+            ],
+        };
+        let (p1, p2) = ([1u8; 32], [2u8; 32]);
+        let mine = doc.for_peer(&p1);
+        let accts: Vec<Dict> = mine.list("accounts").unwrap().items().iter().map(|v| v.as_dict().unwrap()).collect();
+        // 编号和手机上「账号」页里的同一个账号一样（status.rs：按配对、工具、账号目录名算），别的配对算出来的不一样
+        let want = account_tag(&p1, "claude", &acct_id("工作(alice@example.com)", claude));
+        assert_eq!(accts[0].str("i").as_deref(), Some(want.as_str()));
+        assert!(peers::lower_hex(&want, 16));
+        assert_ne!(doc.for_peer(&p2).list("accounts").unwrap().items()[0].as_dict().unwrap().str("i"), accts[0].str("i"));
+        assert_eq!(pick("主力(alice@example.com)", "主力").tag(&p1), want, "按邮箱认：改别名不算");
+        // 名字只给短的（没起别名的给邮箱 @ 前面那一截），摘要有才给
+        assert_eq!((accts[0].str("n").as_deref(), accts[0].str("k").as_deref()), (Some("工作"), Some("claude")));
+        assert_eq!(accts[0].str("aid").map(|s| s.len()), Some(32));
+        assert_eq!((accts[1].str("n").as_deref(), accts[1].get("aid").is_none()), (Some("bob"), true));
+        let text = doc.text();
+        assert!(!text.contains("example.com") && text.contains(r#""more":0"#), "{text}");
     }
 }

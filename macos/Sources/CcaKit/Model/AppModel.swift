@@ -365,6 +365,8 @@ final class AppModel {
         static let terminalDirectories = "terminal.directories"
         /// 账号在各组里的排序和置顶（AccountArrangement 的 JSON）
         static let arrangement = "accounts.arrangement"
+        /// 「远程会话」页里会话的先后（拖动排的：会话编号的 JSON 数组，RemoteOrder）
+        static let remoteOrder = "remote.order"
         /// 折合金额按周还是按天（CostGranularity）、看哪台设备（CostScope：all、me、d:设备 id）：账号页、折合金额页共用
         static let costGranularity = "cost.period"
         static let costScope = "cost.scope"
@@ -390,6 +392,7 @@ final class AppModel {
            let saved = try? JSONDecoder().decode(AccountArrangement.self, from: Data(s.utf8)) {
             arrangement = saved
         }
+        remoteOrder = RemoteOrder(stored: defaults.string(forKey: Prefs.remoteOrder))
         if let transport {
             self.transport = transport
             isFixtureMode = transport.isFixture
@@ -1899,9 +1902,9 @@ final class AppModel {
     }
     /// 还接着的有几个（侧栏那一行说一声）
     var remoteAttachedCount: Int { remoteTerminals.filter { $0.isRunning }.count }
-    /// 最多同时开几个终端：每个都是一个进程、在会话那边占一处接入（窗口大小要照顾它）；接着别的机器的那些断线时各自重试，
-    /// 都要问 Team 的服务器，而服务器给每台设备限了流
-    static let remoteTerminalLimit = 8
+    /// 最多同时开几个终端：一台机器最多开 100 个会话（3.7.10 起的服务器，PROTOCOL 9.1），都开着也够。每个终端都是一个进程、在会话那边
+    /// 占一处接入（窗口大小要照顾它）；接着别的机器的那些断线时各自重试，都要问 Team 的服务器，而服务器给每台设备限了流
+    static let remoteTerminalLimit = 100
     @ObservationIgnored private var remoteAgain = false
 
     var remoteVisible: Bool { mainVisible && selection == .remoteSessions }
@@ -2071,42 +2074,27 @@ final class AppModel {
     /// 模板可以选的工具（启用了的）
     var remoteTemplateTools: [ToolID] { visibleTools }
 
-    /// 模板存着的账号在账号表里是哪一个（cca 找好了给的键 `account_key`）；没有了是 nil
-    func remoteTemplateAccount(_ t: RemoteTemplate) -> Account? {
-        guard let tool = t.tool, let key = t.accountKey else { return nil }
-        return accounts(tool).first { $0.key == key }
-    }
-
-    /// 新建模板时（换了工具时）先选上的账号：这个工具上次用的，没有就是第一个
-    func remoteTemplateDefaultAccount(_ tool: ToolID) -> String {
-        let list = accounts(tool)
-        if let last = toolState(tool)?.last, list.contains(where: { $0.key == last }) { return last }
-        return list.first?.key ?? ""
-    }
-
-    /// 新建一个模板（不给）、改一个模板：弹层里填名字、工具、账号、文件夹、参数，存的时候 cca 校验
+    /// 新建一个模板（不给）、改一个模板：弹层里填名字、工具、文件夹、参数，存的时候 cca 校验。账号不在模板里（3.7.10 起）：
+    /// 起会话的那一头（手机、另一台机器）挑这台 Mac 上这个工具的一个账号
     func editRemoteTemplate(_ t: RemoteTemplate? = nil) {
         guard phase == .ready, remoteLaunchAvailable else { return }
         let tools = remoteTemplateTools
         let d: RemoteTemplateDraft
         if let t {
-            // 工具没启用了：换成能选的，账号重新选
+            // 工具没启用了：换成能选的
             let tool = t.tool.flatMap { tools.contains($0) ? $0 : nil }
-            d = RemoteTemplateDraft(original: t, name: t.name, tool: tool ?? tools.first ?? .claude,
-                                    account: tool == nil ? "" : remoteTemplateAccount(t)?.key ?? "", dir: t.dir, args: t.argsLine)
+            d = RemoteTemplateDraft(original: t, name: t.name, tool: tool ?? tools.first ?? .claude, dir: t.dir, args: t.argsLine)
         } else {
             let tool = tools.contains(self.tool) ? self.tool : tools.first ?? .claude
-            d = RemoteTemplateDraft(original: nil, name: "", tool: tool, account: remoteTemplateDefaultAccount(tool),
-                                    dir: sessionDirectories.first ?? "", args: "")
+            d = RemoteTemplateDraft(original: nil, name: "", tool: tool, dir: sessionDirectories.first ?? "", args: "")
         }
         present(.remoteTemplate(d))
     }
 
-    /// 弹层里换了工具：账号换成这个工具的
+    /// 弹层里换了工具
     func setRemoteTemplateTool(_ d: RemoteTemplateDraft, _ tool: ToolID) {
         guard d.tool != tool else { return }
         d.tool = tool
-        d.account = remoteTemplateDefaultAccount(tool)
     }
 
     /// 选模板的文件夹（面板从现在填的、最近用的文件夹开始）
@@ -2124,7 +2112,7 @@ final class AppModel {
         guard phase == .ready, remoteLaunchAvailable, let client, d.canSave else { return }
         d.error = nil
         d.saving = true
-        let command = CcaCommand.remoteTemplateSave(name: d.name.trimmingCharacters(in: .whitespacesAndNewlines), tool: d.tool, account: d.account,
+        let command = CcaCommand.remoteTemplateSave(name: d.name.trimmingCharacters(in: .whitespacesAndNewlines), tool: d.tool,
                                                     dir: d.dir, argsLine: d.args, replace: d.original?.id)
         let prompter = hooks.prompter
         Task { [weak self] in
@@ -2159,7 +2147,7 @@ final class AppModel {
     /// 在别的机器上起的会话一开始多大：上次在这里开的终端的大小（接进去以后会话跟着这里的终端调），还没开过是 120 列 36 行
     @ObservationIgnored private(set) var remoteLaunchSize = (cols: 120, rows: 36)
 
-    /// 打开「新建会话」的弹层：挑那台机器上的一个模板（只有一个时先选上）。那台机器暂时连不上服务器时不开
+    /// 打开「新建会话」的弹层：挑那台机器上的一个模板、一个账号（只有一个时先选上）。那台机器暂时连不上服务器时不开
     func newRemoteSession(on launcher: RemotePeerLauncher) {
         guard phase == .ready, remoteLaunchMachinesAvailable, launcher.online, !launcher.templates.isEmpty else { return }
         let only = launcher.templates.count == 1 ? launcher.templates[0].id : nil
@@ -2174,7 +2162,8 @@ final class AppModel {
         d.error = nil
         d.starting = true
         let size = remoteLaunchSize
-        let command = CcaCommand.remoteStart(peer: d.launcher.peer, template: t.id, digest: t.digest, cols: size.cols, rows: size.rows, line: d.sentLine)
+        let command = CcaCommand.remoteStart(peer: d.launcher.peer, template: t.id, digest: t.digest, cols: size.cols, rows: size.rows,
+                                             line: d.sentLine, account: d.sentAccount)
         track { [weak self] in
             let (doc, r) = await client.document(command, as: RemoteLaunchStartDoc.self, prompter: nil)
             guard let self else { return }
@@ -2229,6 +2218,42 @@ final class AppModel {
             remoteTerminals.append(t)
         }
         showRemoteTerminal(t)
+    }
+
+    // MARK: 会话的先后（拖动排的）
+
+    /// 「远程会话」页里会话的先后：拖过的照拖的，没拖过的（新的）照 cca 给的先后接在后面。只记在 App 的设置里（不进 ~/.cca）
+    private(set) var remoteOrder = RemoteOrder()
+
+    /// 一台机器的会话照拖出来的先后排
+    func orderedRemoteSessions(_ sessions: [RemoteSession]) -> [RemoteSession] {
+        remoteOrder.sorted(sessions, id: \.id)
+    }
+
+    /// 把 id 那个会话拖到 target 上：排到它的位置（往下拖排在它后面，往上拖排在它前面）。group：这台机器的会话现在显示的先后；
+    /// 只在同一台机器的会话之间挪
+    @discardableResult
+    func dropRemoteSession(_ id: String, onto target: RemoteSession, in group: [RemoteSession]) -> Bool {
+        let ids = group.map(\.id)
+        guard let from = ids.firstIndex(of: id), let to = ids.firstIndex(of: target.id), from != to else { return false }
+        moveRemoteSession(in: ids, from: from, to: to)
+        return true
+    }
+
+    /// 往上 / 往下挪一个（右键菜单里的「上移」「下移」：不用拖也排得了）
+    func stepRemoteSession(_ s: RemoteSession, by step: Int, in group: [RemoteSession]) {
+        let ids = group.map(\.id)
+        guard let from = ids.firstIndex(of: s.id), ids.indices.contains(from + step), step != 0 else { return }
+        moveRemoteSession(in: ids, from: from, to: from + step)
+    }
+
+    private func moveRemoteSession(in ids: [String], from: Int, to: Int) {
+        var g = ids
+        let moved = g.remove(at: from)
+        g.insert(moved, at: to)
+        remoteOrder.record(g)
+        guard !isFixtureMode else { return }
+        defaults.set(remoteOrder.stored, forKey: Prefs.remoteOrder)
     }
 
     /// 换到一个开着的终端（别的照样接着）

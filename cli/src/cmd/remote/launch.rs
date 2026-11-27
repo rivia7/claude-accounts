@@ -9,9 +9,10 @@
 //!   当它不存在）。手机接进来（JOIN）分出一个子进程：握手、等它说起哪个（LAUNCH）、现读配对表和模板再查一遍、起会话、回话
 //!   （LAUNCHED），在 `launch.log` 记一行（不记开场白）
 //! - 起的会话：`remote-host --headless --sid 编号 --size 列x行 工具 账号键 名字 -- cca [codex|agy] @账号键 -- 模板的参数… [-- 开场白]`，
-//!   环境只给 `KEEP_ENV` 这几个，当前目录是模板的文件夹，自己一个会话（setsid）。bash 看到 `CCA_REMOTE_HOSTED` 不再套一层宿主
+//!   账号是手机挑的（LAUNCH 的 `a`：说明里列给它的账号的编号），环境只给 `KEEP_ENV` 这几个，当前目录是模板的文件夹，自己一个会话
+//!   （setsid）。bash 看到 `CCA_REMOTE_HOSTED` 不再套一层宿主
 //!
-//! 线上的格式见 server/README.md「启动器」：服务器不用改，它看启动器就是一个会话（占这台设备 8 个名额里的一个）。
+//! 线上的格式见 server/README.md「启动器」：服务器看启动器就是一个会话（占这台设备的一个名额）。
 
 use super::far::clean;
 use super::link::{self, Allowed, Join, Link, Respawn};
@@ -19,13 +20,14 @@ use super::local::{self, Asked, Decoder};
 use super::peers::{self, Peer};
 use super::pty::{self, Size};
 use super::relay::{self, ctl_frame, Tunnel};
-use super::template::{self, Template};
+use super::template::{self, LaunchDoc, Pick, Template};
 use super::{crypto, sig};
 use crate::cmd::arity;
 use crate::cmd::hub::{HubKind, TeamTag};
 use crate::cmd::presence::flock;
 use crate::cmd::session::proc_starts;
 use crate::core::base::SELF_PATH;
+use crate::core::team::forget_grants;
 use crate::dict;
 use crate::py::fs;
 use crate::py::json;
@@ -59,8 +61,12 @@ const SPAWN_WAIT: f64 = 4.0;
 const LAUNCHES_PER_MIN: usize = 4;
 /// 同一台手机两次接进来至少隔这么久（秒）
 const JOIN_GAP: f64 = 3.0;
-/// 这台机器走这台服务器的会话已经这么多：不再起（服务器给一台设备最多 8 个，启动器自己占一个）
-const SESSIONS_MAX: usize = 7;
+/// 这台机器走这台服务器的会话已经这么多：不再起。3.7.10 起的服务器（级别 3）给一台设备 101 个名额：100 个会话，加上启动器自己的一个
+const SESSIONS_MAX: usize = 100;
+/// 旧的服务器（级别 3 以前、还不知道级别的）给一台设备 8 个：启动器自己占一个
+const SESSIONS_MAX_OLD: usize = 7;
+/// 服务器到这个级别（`GET /v1/version` 的 level，同步 Team 的配置时问的）才给 SESSIONS_MAX 个
+const SESSIONS_LEVEL: i64 = 3;
 /// 子进程起成了一个会话时的退出码（转接进程照它数一分钟起了几个）
 const EXIT_LAUNCHED: i32 = 10;
 /// 后台进程隔多久看一眼配对表变了没有（转接进程照 link.rs 的 PEERS_EVERY 看配对表，跟着看模板）
@@ -413,11 +419,12 @@ fn allowed_now(hub: HubKind) -> (Vec<Allowed>, Vec<Peer>) {
     link::with_secrets(launch_peers(Some(hub)), PEERS_MAX)
 }
 
-/// ANNOUNCE：同一份说明给每台手机各封一份
-fn announce(sid: &str, allowed: &[Allowed], doc: &Dict) -> Vec<u8> {
+/// ANNOUNCE：同一份说明给每台手机各封一份（账号的编号按各自的配对算：`LaunchDoc::for_peer`；还没算出说明时是空的）
+fn announce(sid: &str, allowed: &[Allowed], doc: Option<&LaunchDoc>) -> Vec<u8> {
     let blobs = Dict::new();
     for a in allowed {
-        if let Ok(b) = crypto::launch_seal(&a.secret, &a.peer.pid, sid, doc) {
+        let plain = doc.map_or_else(Dict::new, |d| d.for_peer(&a.secret));
+        if let Ok(b) = crypto::launch_seal(&a.secret, &a.peer.pid, sid, &plain) {
             blobs.set(a.peer.pid.as_str(), b);
         }
     }
@@ -461,7 +468,7 @@ pub fn cmd_launcher_link(args: &[String]) -> R<()> {
     let mut gate = Gate::default();
     let mut unread: Vec<String> = Vec::new(); // 记过「读不出密钥」的手机：读出来以前不再记
     let (mut tstamp, mut built) = (None, f64::NEG_INFINITY);
-    let (mut doc, mut doc_text) = (Dict::new(), String::new());
+    let (mut doc, mut doc_text): (Option<LaunchDoc>, String) = (None, String::new());
     let mut buf = [0u8; 256];
     loop {
         let now = monotonic();
@@ -477,21 +484,22 @@ pub fn cmd_launcher_link(args: &[String]) -> R<()> {
                 log_line(&p.name, "读不出这个配对的密钥（钥匙串），过一会儿再试：读出来以前它上面没有「新建会话」");
             }
             unread = link.missing.iter().map(|p| p.pid.clone()).collect();
-            // 模板变了（隔一阵也重新算一遍）：说明不一样了就在原来的控制连接上再说一遍（服务器整份换掉）
+            // 模板、账号表、各个 Team 的配置变了（隔一阵也重新算一遍）：说明不一样了就在原来的控制连接上再说一遍（服务器整份换掉）
             let t = template::stamp();
-            if tstamp != Some(t) || now - built >= DOC_EVERY {
+            if tstamp.as_ref() != Some(&t) || now - built >= DOC_EVERY {
                 (tstamp, built) = (Some(t), now);
-                let fresh = template::launch_doc(hub);
-                let text = json::dumps(&V::Dict(fresh.clone()), json::Fmt::new().utf8().compact());
+                forget_grants(); // 这个进程一直开着：各个 Team 的配置（账号归谁、走哪台服务器）每次算说明前重读
+                let fresh = LaunchDoc::build(hub);
+                let text = fresh.text();
                 if text != doc_text {
-                    (doc, doc_text) = (fresh, text);
+                    (doc, doc_text) = (Some(fresh), text);
                     if let Some(c) = link.ctl.as_mut() {
-                        c.out.extend(announce(sid, &link.allowed, &doc));
+                        c.out.extend(announce(sid, &link.allowed, doc.as_ref()));
                     }
                 }
             }
         }
-        if !link.connect_if_due(now, |allowed| announce(sid, allowed, &doc))? {
+        if !link.connect_if_due(now, |allowed| announce(sid, allowed, doc.as_ref()))? {
             return exit(link::EXIT_OFF);
         }
         let Some(woke) = link.wait() else { break };
@@ -519,7 +527,7 @@ fn kid_serve(j: &Join, hub: HubKind, limited: bool) -> i32 {
     let result = match Ask::parse(&raw) {
         Some(ask) => {
             what = ask.id.clone();
-            launch(hub, &j.a.peer.pid, &ask, limited, &mut what)
+            launch(hub, j.a, &ask, limited, &mut what)
         }
         None => Err("bad"),
     };
@@ -539,9 +547,11 @@ fn kid_serve(j: &Join, hub: HubKind, limited: bool) -> i32 {
 }
 
 /// 照手机说的起会话：每一样都现读、现查（配对表、模板、账号表、文件夹、参数、这台服务器上的会话数）。返回新会话的编号，
-/// 不行是 LAUNCHED 的 code。what：记进日志的模板名字
-fn launch(hub: HubKind, pid: &str, ask: &Ask, limited: bool, what: &mut String) -> Result<String, &'static str> {
-    if !launch_peers(Some(hub)).iter().any(|p| p.pid == pid) {
+/// 不行是 LAUNCHED 的 code。a：接进来的那台手机（和它配对的密钥算账号的编号）；what：记进日志的模板名字
+fn launch(hub: HubKind, a: &Allowed, ask: &Ask, limited: bool, what: &mut String) -> Result<String, &'static str> {
+    // 启动器那里带来的各个 Team 的配置可能是旧的：账号也许刚改归别的 Team（会话走那台服务器）
+    forget_grants();
+    if !launch_peers(Some(hub)).iter().any(|p| p.pid == a.peer.pid) {
         return Err("denied");
     }
     if limited {
@@ -552,10 +562,7 @@ fn launch(hub: HubKind, pid: &str, ask: &Ask, limited: bool, what: &mut String) 
     if t.digest() != ask.digest {
         return Err("changed");
     }
-    let Some((key, name)) = t.account_now() else { return Err("no_account") };
-    if relay::session_hub(&t.tool, &key) != Some(hub) {
-        return Err("other_hub");
-    }
+    let pick = pick_account(&template::picks(t.tool()), hub, &a.secret, ask.account.as_deref())?;
     if !path::isdir(&t.dir) {
         return Err("no_dir");
     }
@@ -566,10 +573,37 @@ fn launch(hub: HubKind, pid: &str, ask: &Ask, limited: bool, what: &mut String) 
         return Err("bad");
     }
     let here = local::sessions(false).iter().filter(|s| relay::session_hub(&s.meta.tool, &s.meta.key) == Some(hub)).count();
-    if here >= SESSIONS_MAX {
+    if here >= sessions_max(hub) {
         return Err("busy");
     }
-    spawn_session(&t, &key, &name, ask).ok_or("spawn")
+    spawn_session(&t, &pick.key, &pick.name, ask).ok_or("spawn")
+}
+
+/// 用哪个账号起（picks：模板的工具的账号）：手机说了的（a：说明里那个账号的编号，按这个配对算的）要还在、会话还走这台服务器；
+/// 没说的（旧版的 App、cca 不认说明里的 accounts）只有一个账号走这台服务器时就用它，几个的话要它挑（`need_account`）
+fn pick_account(picks: &[Pick], hub: HubKind, p: &[u8], a: Option<&str>) -> Result<Pick, &'static str> {
+    let Some(a) = a else {
+        let here: Vec<&Pick> = picks.iter().filter(|x| x.hub == Some(hub)).collect();
+        return match here.as_slice() {
+            [one] => Ok((*one).clone()),
+            [] => Err("no_account"),
+            _ => Err("need_account"),
+        };
+    };
+    let Some(x) = picks.iter().find(|x| x.tag(p) == a) else { return Err("no_account") };
+    if x.hub != Some(hub) {
+        return Err("other_hub");
+    }
+    Ok(x.clone())
+}
+
+/// 这台机器走 hub 的会话最多几个：服务器给一台设备的名额减去启动器自己的一个，看服务器的级别（同步 Team 的配置时记下的）
+fn sessions_max(hub: HubKind) -> usize {
+    if crate::cmd::team::server_level(&hub.team()).is_some_and(|l| l >= SESSIONS_LEVEL) {
+        SESSIONS_MAX
+    } else {
+        SESSIONS_MAX_OLD
+    }
 }
 
 /// 等手机说要起哪个（LAUNCH 帧；别的帧不理：启动器不是会话），最多 ASK_WAIT 秒；断了、分出它的进程不在了是 None
@@ -602,13 +636,15 @@ fn wait_ask(tun: &mut Tunnel, parent: libc::pid_t) -> Option<Vec<u8>> {
     }
 }
 
-/// 手机要起的（LAUNCH 的内容：`{"v":1,"t":模板编号,"h":摘要,"c":列,"r":行,"l":开场白}`）
+/// 手机要起的（LAUNCH 的内容：`{"v":1,"t":模板编号,"h":摘要,"c":列,"r":行,"l":开场白,"a":账号的编号}`；l、a 可以不带）
 #[derive(Debug, PartialEq)]
 struct Ask {
     id: String,
     digest: String,
     size: Size,
     line: Option<String>,
+    /// 用哪个账号（说明里 accounts 的那个编号，16 个小写的十六进制字符）；旧版的 App、cca 不带
+    account: Option<String>,
 }
 
 impl Ask {
@@ -636,7 +672,11 @@ impl Ask {
                 Some(s.to_string())
             }
         };
-        Some(Ask { id, digest, size: Size { cols, rows }, line })
+        let account = match d.get("a") {
+            None | Some(V::None) => None,
+            Some(v) => Some(v.as_str().filter(|a| peers::lower_hex(a, 16))?.to_string()),
+        };
+        Some(Ask { id, digest, size: Size { cols, rows }, line, account })
     }
 }
 
@@ -685,10 +725,11 @@ fn fail_text(code: &str) -> &'static str {
         "denied" => "这台设备现在不能远程启动会话（在那台机器上运行 cca remote allow 它的名字 launch on）",
         "no_template" => "那台机器上没有这个模板了：刷新一下",
         "changed" => "模板在那台机器上改过了：刷新一下再选",
-        "no_account" => "模板的账号在那台机器的账号表里没有了",
+        "no_account" => "选的账号在那台机器的账号表里没有了：刷新一下再选",
+        "need_account" => "要选一个账号才能起：把 App（或者这台设备上的 cca）更新到最新版",
         "no_dir" => "模板的文件夹在那台机器上没有了",
         "bad_args" => "模板的参数在那台机器上用不了（启动前的检查过不了）",
-        "other_hub" => "模板的账号现在走别的 Team 的服务器：到那个 Team 里起",
+        "other_hub" => "选的账号现在走别的 Team 的服务器：到那个 Team 里起",
         "busy" => "那台机器上开着的会话太多了：先结束几个",
         "rate" => "起得太勤了：过一会儿再试",
         "spawn" => "会话没起来（在那台机器上运行 cca remote launcher log 看看）",
@@ -733,6 +774,10 @@ mod tests {
         let line = ask(r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":20,"r":300,"l":"看看 README"}"#).unwrap();
         assert_eq!(line.line.as_deref(), Some("看看 README"));
         assert!(ask(r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"l":null}"#).unwrap().line.is_none());
+        assert_eq!(ok.account, None, "旧版的 App、cca 不说用哪个账号");
+        let who = ask(r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"a":"00112233aabbccdd"}"#).unwrap();
+        assert_eq!(who.account.as_deref(), Some("00112233aabbccdd"));
+        assert!(ask(r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"a":null}"#).unwrap().account.is_none());
         for bad in [
             r#"{"v":2,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24}"#,
             r#"{"v":1,"t":"0123ABCD","h":"0123456789abcdef","c":80,"r":24}"#,
@@ -742,6 +787,10 @@ mod tests {
             r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"l":"  "}"#,
             r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"l":"a\u001b[2J"}"#,
             r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"l":7}"#,
+            r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"a":"00112233AABBCCDD"}"#,
+            r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"a":"00112233aabbcc"}"#,
+            r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"a":7}"#,
+            r#"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"a":"工作"}"#,
             "[]",
             // 缺了哪一项都是看不懂（不能崩：崩了手机那头收不到回话）
             r#"{"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24}"#,
@@ -780,9 +829,44 @@ mod tests {
 
     #[test]
     fn every_code_has_words() {
-        for code in ["denied", "no_template", "changed", "no_account", "no_dir", "bad_args", "other_hub", "busy", "rate", "spawn"] {
+        for code in [
+            "denied",
+            "no_template",
+            "changed",
+            "no_account",
+            "need_account",
+            "no_dir",
+            "bad_args",
+            "other_hub",
+            "busy",
+            "rate",
+            "spawn",
+        ] {
             assert_ne!(fail_text(code), fail_text("bad"), "{code}");
         }
+    }
+
+    #[test]
+    fn which_account() {
+        let claude = crate::core::tool::tools().iter().find(|t| t.name == "claude").unwrap();
+        let hub = |b: &str| HubKind::Team(TeamTag::new(&b.repeat(16)).unwrap());
+        let (h1, h2) = (hub("a1"), hub("b2"));
+        let pick = |key: &str, hub: Option<HubKind>| Pick { tool: claude, key: key.into(), name: key.into(), hub };
+        let all = [pick("alice@example.com", Some(h1)), pick("bob@example.com", Some(h2)), pick("carol@example.com", None)];
+        let p = [7u8; 32];
+        let tag = |i: usize| all[i].tag(&p);
+        let key = |r: Result<Pick, &'static str>| r.map(|x| x.key);
+        assert_eq!(key(pick_account(&all, h1, &p, Some(&tag(0)))), Ok("alice@example.com".to_string()));
+        assert_eq!(key(pick_account(&all, h1, &p, Some(&tag(1)))), Err("other_hub"), "走别的 Team 的服务器");
+        assert_eq!(key(pick_account(&all, h1, &p, Some(&tag(2)))), Err("other_hub"), "不经中转");
+        assert_eq!(key(pick_account(&all, h1, &p, Some(&"0".repeat(16)))), Err("no_account"));
+        assert_eq!(key(pick_account(&all, h1, &[8u8; 32], Some(&tag(0)))), Err("no_account"), "别的配对算的编号不认");
+        // 没说用哪个（旧版的 App、cca）：走这台服务器的只有一个就用它，几个要挑，一个都没有是 no_account
+        assert_eq!(key(pick_account(&all, h1, &p, None)), Ok("alice@example.com".to_string()));
+        let two = [pick("alice@example.com", Some(h1)), pick("dan@example.com", Some(h1))];
+        assert_eq!(key(pick_account(&two, h1, &p, None)), Err("need_account"));
+        assert_eq!(key(pick_account(&two, h2, &p, None)), Err("no_account"));
+        assert_eq!(key(pick_account(&two, h1, &p, Some(&two[1].tag(&p)))), Ok("dan@example.com".to_string()));
     }
 
     #[test]

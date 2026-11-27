@@ -7,7 +7,7 @@ use super::*;
 use crate::py::fs::TempDir;
 use crate::py::hash;
 use crate::py::json::Fmt;
-use crate::server::limits::{Guards, Limits};
+use crate::server::limits::{Guards, Limits, FP_RATE, IP_RATE, ROOT_RATE};
 use crate::server::store::tests::said;
 use crate::server::store::{Store, StoreCfg};
 use crate::server::web::Web;
@@ -302,8 +302,8 @@ fn get_health_and_not_found() {
         )
     );
     assert_eq!(get("/v1/health?x=1&y"), health);
-    // 服务端的级别（3.7.1 起）
-    assert_eq!(get("/v1/version"), (200, r#"{"v":1,"level":2}"#.to_string()));
+    // 服务端的级别（3.7.1 起；3：3.7.10 起）
+    assert_eq!(get("/v1/version"), (200, r#"{"v":1,"level":3}"#.to_string()));
     for target in [
         "/v1/version/",
         "/",
@@ -560,7 +560,8 @@ fn clock_nonce_and_rate() {
         );
         assert_eq!(run_from(&forged, i), denied(), "别人拿这台设备的指纹乱发");
     }
-    for i in 0..30 {
+    // 一台设备一下子 FP_RATE 的那么多个（3.7.10 起 150 个）
+    for i in 0..FP_RATE.1 as usize {
         let ts = if i % 2 == 0 { "1800000000.25" } else { "0" };
         assert_eq!(run_from(&report_by(&c, ts), i).0, if i % 2 == 0 { 200 } else { 400 }, "第 {i} 个");
     }
@@ -568,7 +569,7 @@ fn clock_nonce_and_rate() {
     assert_eq!(run_from(&report_by(&c, "0"), 1), rate(), "限流排在 ts 前面");
     assert_eq!(run_from(&report_by(&a, "1800000000.25"), 2).0, 200, "各台设备各算各的");
     // 管理员的 op 另算：一下子 120 个
-    for i in 0..120 {
+    for i in 0..ROOT_RATE.1 as usize {
         let body = b.body("team_members", &b.root, "");
         assert_eq!(run_from(&signed("team_members", &b.root, &body), i).0, 200, "第 {i} 个");
     }
@@ -577,12 +578,13 @@ fn clock_nonce_and_rate() {
     said();
 }
 
-/// 按 IP 限流在最前面（读正文之前）：一下子最多 120 个，每秒涨 2 个；GET /v1/health 不算
+/// 按 IP 限流在最前面（读正文之前）：一下子最多 240 个（IP_RATE），每秒涨 2 个；GET /v1/health 不算
 #[test]
 fn rate_by_ip_comes_first() {
+    assert_eq!((IP_RATE, ROOT_RATE.1), ((2.0, 240.0), 120.0));
     let b = Bench::new();
     let junk = request(Method::Post, "/v1/nope", &[], b"");
-    for i in 0..120 {
+    for i in 0..IP_RATE.1 as usize {
         assert_eq!(b.run_at(&junk, NOW, 50.0).0, 411, "第 {i} 个");
     }
     assert_eq!(b.run_at(&junk, NOW, 50.0), rate());

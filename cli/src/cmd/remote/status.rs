@@ -69,8 +69,14 @@ struct Acct {
 impl Acct {
     /// 按配对算的编号：同一个账号在这个配对里一直是它（换别名不变），别的配对、服务器看不出是哪个账号
     fn tag(&self, p: &[u8]) -> String {
-        tag(p, &["acct", &self.tool, &self.ident])
+        account_tag(p, &self.tool, &self.ident)
     }
+}
+
+/// 一个账号按配对算的编号（ident：`acct_id`，账号目录名）。远程启动的说明里能挑的账号也用它（template.rs 的 `Pick::tag`）：
+/// 手机照它认出是「账号」页里的哪一个
+pub(super) fn account_tag(p: &[u8], tool: &str, ident: &str) -> String {
+    tag(p, &["acct", tool, ident])
 }
 
 fn tag(p: &[u8], parts: &[&str]) -> String {

@@ -605,11 +605,26 @@ fn banner(
     line
 }
 
+/// 一个连接一个文件描述符：数据端口最多 RELAY_CONN 个连接，加上前面的 HTTP、网页端的 WebSocket、文件。有的容器给的软上限只有 1024：
+/// 起来时提到硬上限（最多 NOFILE_WANT）。提不了的照旧（systemd 的 unit 写着 LimitNOFILE=4096）
+fn raise_nofile() {
+    const NOFILE_WANT: libc::rlim_t = 65536;
+    // SAFETY: 只读写这个进程自己的上限，r 是有效的结构
+    unsafe {
+        let mut r: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut r) == 0 && r.rlim_cur < r.rlim_max.min(NOFILE_WANT) {
+            r.rlim_cur = r.rlim_max.min(NOFILE_WANT);
+            libc::setrlimit(libc::RLIMIT_NOFILE, &r);
+        }
+    }
+}
+
 /// 照查过的参数启动，然后一直接连接（不返回）；启动不了是 Err
 fn run(p: &Plan) -> R<()> {
     // Ctrl-C：不说话，退出码 0（Py:2260-2263）
     // SAFETY: quit 里只调 _exit
     unsafe { libc::signal(libc::SIGINT, quit as extern "C" fn(libc::c_int) as libc::sighandler_t) };
+    raise_nofile();
     let main_tls = match &p.pair {
         None => Tls::Plain,
         Some((cert, key)) => Tls::Fixed(tls::load_pair(cert, key).map_err(fatal)?),

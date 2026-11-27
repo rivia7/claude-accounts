@@ -262,7 +262,8 @@ enum Snapshot {
             model.cancelRename()
             try? await Task.sleep(nanoseconds: 600_000_000)
         }
-        // 在配对过的另一台机器上新建会话（PROTOCOL 9.5）：那台机器那一组的「新建会话…」打开的弹层（选上第一个模板、写了一句开场白）
+        // 在配对过的另一台机器上新建会话（PROTOCOL 9.5）：那台机器那一组的「新建会话…」打开的弹层（选上第一个能带开场白的模板、
+        // 能挑的第一个账号，写了一句开场白）
         if only.isEmpty || only.contains("remote-launch") {
             model.selection = .remoteSessions
             if model.remote.doc == nil { model.refreshRemote(manual: true) }
@@ -270,7 +271,8 @@ enum Snapshot {
             if let l = model.remotePeerLaunchers.first(where: \.online) {
                 model.newRemoteSession(on: l)
                 if case .remoteLaunch(let d)? = model.sheet {
-                    d.template = d.template ?? l.templates.first(where: \.line)?.id
+                    d.choose(template: d.template ?? l.templates.first(where: \.line)?.id)
+                    if d.account == nil { d.account = d.choices?.first?.id }
                     d.line = "先跑一遍测试"
                 }
                 for (label, appearance) in appearances {

@@ -33,9 +33,9 @@ pub struct Limits {
     pub edges_dev: usize,
     /// 配对一共最多几个（EDGES_MAX，Py:911）
     pub edges_max: usize,
-    /// 一台设备手里没用掉的票据（TICKETS_DEV，Py:914）
+    /// 一台设备手里没用掉的票据（TICKETS_DEV，Py:914 是 16；3.7.10 起 128：100 个会话一起重连）
     pub tickets_dev: usize,
-    /// 一台设备同时开着几个可以接入的会话（SESSIONS_DEV，Py:915）
+    /// 一台设备同时开着几个可以接入的会话（SESSIONS_DEV，Py:915 是 8；3.7.10 起 101：100 个远程会话加上启动器）
     pub sessions_dev: usize,
     /// 一个会话同时几处接入（VIEWERS，Py:916）
     pub viewers: usize,
@@ -53,8 +53,8 @@ impl Limits {
         pair_slots: 4,
         edges_dev: 16,
         edges_max: 4096,
-        tickets_dev: 16,
-        sessions_dev: 8,
+        tickets_dev: 128,
+        sessions_dev: 101,
         viewers: 4,
     };
 }
@@ -139,11 +139,18 @@ impl Nonces {
     }
 }
 
+/// 按 IP 限流的（每秒几个、最多攒几个）：Py 是 120 个，3.7.10 起 240 个（同一个地址后面一台机器的 100 个会话一起重连）
+pub const IP_RATE: (f64, f64) = (2.0, 240.0);
+/// 按设备限流的：Py 是 30 个，3.7.10 起 150 个（一台设备的 100 个会话一起重连，各要一张票据）
+pub const FP_RATE: (f64, f64) = (0.5, 150.0);
+/// Team 的管理员的
+pub const ROOT_RATE: (f64, f64) = (2.0, 120.0);
+
 /// 两个监听共用的那一份限流：同一个请求不能在两个端口上各用一次（Py:2043-2047）
 pub struct Guards {
-    /// 按 IP：每秒 2 个，最多攒 120 个
+    /// 按 IP：IP_RATE
     pub ip: Buckets,
-    /// 按设备的指纹（验过签名才扣）：每秒 0.5 个，最多攒 30 个
+    /// 按设备的指纹（验过签名才扣）：FP_RATE
     pub fp: Buckets,
     /// Team 的管理员（根密钥签的）：一条命令要问两三次，设备的那个限额不够用
     pub root: Buckets,
@@ -152,7 +159,8 @@ pub struct Guards {
 
 impl Guards {
     pub fn new() -> Guards {
-        Guards { ip: Buckets::new(2.0, 120.0), fp: Buckets::new(0.5, 30.0), root: Buckets::new(2.0, 120.0), nonces: Nonces::new() }
+        let new = |(rate, burst): (f64, f64)| Buckets::new(rate, burst);
+        Guards { ip: new(IP_RATE), fp: new(FP_RATE), root: new(ROOT_RATE), nonces: Nonces::new() }
     }
 }
 
@@ -210,7 +218,7 @@ impl Slots {
 mod tests {
     use super::*;
 
-    /// 默认的上限就是 Python 开头的那些常量
+    /// 默认的上限就是 Python 开头的那些常量（票据、会话 3.7.10 起放大了）
     #[test]
     fn default_limits_are_the_python_constants() {
         let d = Limits::DEFAULT;
@@ -219,7 +227,7 @@ mod tests {
             (4096, 128, 4194304, 33554432, 524288)
         );
         assert_eq!((d.max_team_members, d.max_invites), (256, 64));
-        assert_eq!((d.pair_slots, d.edges_dev, d.edges_max, d.tickets_dev, d.sessions_dev, d.viewers), (4, 16, 4096, 16, 8, 4));
+        assert_eq!((d.pair_slots, d.edges_dev, d.edges_max, d.tickets_dev, d.sessions_dev, d.viewers), (4, 16, 4096, 128, 101, 4));
         let small = Limits { max_keys: 3, ..Limits::DEFAULT };
         assert_eq!((small.max_keys, small.cost_slots), (3, 128));
     }
@@ -300,12 +308,13 @@ mod tests {
         assert_eq!(n.len(), 3);
     }
 
-    /// 两个监听共用的那一份：三个桶的速度和 Python 的一样
+    /// 两个监听共用的那一份：三个桶的速度和 Python 的一样，攒得下的按 IP、按设备的 3.7.10 起多了（Python 是 120、30）
     #[test]
     fn guards_use_the_python_rates() {
         let mut g = Guards::new();
-        let count = |b: &mut Buckets| (0..200).filter(|_| b.take("k", 0.0)).count();
-        assert_eq!((count(&mut g.ip), count(&mut g.fp), count(&mut g.root)), (120, 30, 120));
+        let count = |b: &mut Buckets| (0..400).filter(|_| b.take("k", 0.0)).count();
+        assert_eq!((count(&mut g.ip), count(&mut g.fp), count(&mut g.root)), (240, 150, 120));
+        assert!(g.fp.take("k", 2.0) && !g.fp.take("k", 2.0), "每秒涨 0.5 个");
         assert!(g.nonces.add("x", 0.0) && !g.nonces.add("x", 1.0));
     }
 

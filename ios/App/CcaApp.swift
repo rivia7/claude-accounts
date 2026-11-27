@@ -74,6 +74,9 @@ struct CcaApp: App {
         case "launch":
             // 新建会话：头一台有启动器的电脑
             model.launchFor = model.peers.first { model.launcher($0) != nil }
+        case "sort":
+            // 会话列表在「排序」
+            model.sortingSessions = true
         case "pair": model.startPairing()
         case "settings": model.showSettings = true
         default: break

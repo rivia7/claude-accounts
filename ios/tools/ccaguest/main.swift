@@ -2,13 +2,14 @@
 // 用法：ccaguest --store 目录 --name 名字 <命令>
 //   pair <链接>             配对；stdout：peer 配对编号 名字，没成是 fail 原因（退出码 1）
 //   list                    一行一个 JSON：配对过的机器（没有 sid；served：服务器转不转账号的状态，status：那台机器放上来的账号的状态，
-//                           没有是 null；launcher：那台机器的启动器 {sid, online, machine, more, t: [模板 {i, h, n, k, a, aid, d, x, l}]}，
-//                           没有是 null）、它上面的会话（有 sid）
+//                           没有是 null；launcher：那台机器的启动器 {sid, online, machine, more, t: [模板 {i, h, n, k, a, aid, d, x, l}],
+//                           accounts: [能挑的账号 {i, k, n, aid}]（旧版的 cca 没有：null）}，没有是 null）、它上面的会话（有 sid）
 //   attach 配对编号 会话编号 [--view] [--size 列x行] [--fresh]   接入（窗口大小默认 80x24）：stdin 是敲的键（读到头就断开），stdout 是终端的
 //                           字节；stderr：state open|retrying、size 会话的列 行（宿主说的）、exit 退出码、note 通知的 JSON、closed 原因。
 //                           detached、ended 退出码 0，别的 1。--fresh：刚远程启动的会话（服务器说没有它时 45 秒里接着问）
-//   launch 配对编号 模板编号 [--size 列x行] [--line 开场白]   远程启动（大小默认 80x24）：先列一遍找那台机器的启动器；stdout：
-//                           launched 新会话的编号，没起是 refused 原因码 原因、没问到是 fail 原因（退出码 1）
+//   launch 配对编号 模板编号 [--size 列x行] [--line 开场白] [--account 账号的编号]   远程启动（大小默认 80x24）：先列一遍找那台机器的
+//                           启动器；--account 原样放进 LAUNCH（不查是不是能挑的）。stdout：launched 新会话的编号，没起是 refused 原因码
+//                           原因、没问到是 fail 原因（退出码 1）
 //   unpair 配对编号          取消配对；stdout：unpaired（服务器没问到也删本地的：told-no）
 //   push-set 令牌 环境 [--only 会话编号,…] [--usage]   在配对的机器所在的每台服务器上登记推送（令牌空的是拿掉；--only：只推这几个
 //                           会话，空的是一个都不推；--usage：也推额度的通知）；stdout 一台一行：push 服务器 ok|fail 原因（带了 --only 时
@@ -107,7 +108,10 @@ func launcherJSON(_ l: HostLauncher) -> [String: Any] {
     let t: [[String: Any]] = l.info.templates.map { x in
         ["i": x.id, "h": x.digest, "n": x.name, "k": x.tool, "a": x.account, "aid": x.aid, "d": x.dir, "x": x.args, "l": x.line]
     }
-    return ["sid": l.sid, "online": l.online, "machine": l.info.machine, "more": l.info.more, "t": t]
+    let accounts: Any = l.info.accounts.map { list in
+        list.map { a -> [String: Any] in ["i": a.id, "k": a.tool, "n": a.name, "aid": a.aid] }
+    } ?? NSNull()
+    return ["sid": l.sid, "online": l.online, "machine": l.info.machine, "more": l.info.more, "t": t, "accounts": accounts]
 }
 
 /// --size 列x行（没有、不对是 80x24）
@@ -254,6 +258,7 @@ case "launch":
     }
     let (cols, rows) = sizeArg(args)
     let line = args.firstIndex(of: "--line").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+    let account = args.firstIndex(of: "--account").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
     Task {
         guard let l = await client.list().first(where: { $0.peer.pid == peer.pid })?.launcher else {
             print("fail no_launcher")
@@ -263,7 +268,7 @@ case "launch":
             print("fail no_template")
             finish(1)
         }
-        switch await client.launch(peer, launcher: l.sid, template: t, cols: cols, rows: rows, line: line) {
+        switch await client.launch(peer, launcher: l.sid, template: t, cols: cols, rows: rows, line: line, account: account) {
         case .launched(let sid):
             print("launched \(sid)")
             finish(0)

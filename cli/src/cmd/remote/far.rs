@@ -58,6 +58,23 @@ pub struct FarLauncher {
     /// 说明里放不下的模板还有几个
     pub more: i64,
     pub templates: Vec<FarTemplate>,
+    /// 起会话时能挑的账号（3.7.10 起：模板不带账号）；那台机器上的 cca 是旧版、说明里没有这一项时是 None（模板用它自己的账号）
+    pub accounts: Option<Vec<FarAccount>>,
+}
+
+/// 启动器的说明里起会话时能挑的一个账号（清理过：和 iOS 的 Launch.swift 的 `launchOpen` 一样）
+#[derive(Clone, Debug, PartialEq)]
+pub struct FarAccount {
+    /// 编号（16 个小写的十六进制字符）：按这个配对算的，起会话时说用它（LAUNCH 的 `a`）
+    pub id: String,
+    /// claude、codex、agy
+    pub tool: String,
+    /// 名字：这台机器上也有这个账号（`aid` 对得上）时是这台机器上的别名，否则是那台机器说的（短名字）
+    pub name: String,
+    /// 那台机器说的名字
+    pub host_name: String,
+    /// 账号摘要（同会话的说明；那台机器不在 Team 里、账号没有邮箱时是空的）
+    pub aid: String,
 }
 
 /// 启动器的说明里的一个模板（清理过：和 iOS 的 Launch.swift 的 `launchOpen` 一样）
@@ -70,7 +87,8 @@ pub struct FarTemplate {
     pub name: String,
     /// claude、codex、agy
     pub tool: String,
-    /// 账号的名字：这台机器上也有这个账号（`aid` 对得上）时是这台机器上的别名，否则是那台机器说的（短名字）
+    /// 账号的名字（3.7.9 及以前的模板带着账号；新的说明里这是给旧版看的：能挑的只有一个时是它，几个时是「启动时选账号」）：这台机器上
+    /// 也有这个账号（`aid` 对得上）时是这台机器上的别名，否则是那台机器说的（短名字）
     pub account: String,
     /// 那台机器说的账号的名字
     pub host_account: String,
@@ -179,12 +197,42 @@ pub struct Listing {
     pub launchers: Vec<FarLauncher>,
 }
 
+/// 打开了的启动器的说明（`launcher_of`）
+struct Opened {
+    templates: Vec<FarTemplate>,
+    /// 放不下的模板的个数
+    more: i64,
+    accounts: Option<Vec<FarAccount>>,
+}
+
 /// 启动器的说明（打开了的明文）里的模板：编号、摘要、工具不是那个样子的不要，编号和前面留下的重复的不要（留头一个）；字照会话的说明那样
-/// 清理、限长度。不是 v1 的是 None。返回 (模板, 放不下的个数)
-fn launcher_of(doc: &Dict) -> Option<(Vec<FarTemplate>, i64)> {
+/// 清理、限长度。能挑的账号（`accounts`）同样：编号、工具不是那个样子的、编号重复的不要；没有这一项（旧版的 cca）是 None。
+/// 不是 v1 的是 None
+fn launcher_of(doc: &Dict) -> Option<Opened> {
     if doc.get("v").and_then(|v| v.as_int()) != Some(1) {
         return None;
     }
+    let accounts = doc.get("accounts").map(|v| {
+        let mut out: Vec<FarAccount> = Vec::new();
+        for a in v.as_list().map(|l| l.items()).unwrap_or_default() {
+            let Some(a) = a.as_dict() else { continue };
+            let id = a.str("i").filter(|s| peers::lower_hex(s, 16));
+            let tool = a.str("k").filter(|k| matches!(&**k, "claude" | "codex" | "agy"));
+            let (Some(id), Some(tool)) = (id, tool) else { continue };
+            if out.iter().any(|x| *x.id == *id) {
+                continue;
+            }
+            let name = a.str("n").map(|s| clean(&s, 64)).unwrap_or_default();
+            out.push(FarAccount {
+                id: id.to_string(),
+                tool: tool.to_string(),
+                host_name: name.clone(),
+                name,
+                aid: a.str("aid").filter(|x| peers::hex32(x)).map(|x| x.to_string()).unwrap_or_default(),
+            });
+        }
+        out
+    });
     let mut rows: Vec<FarTemplate> = Vec::new();
     for t in doc.list("t").map(|l| l.items()).unwrap_or_default() {
         let Some(t) = t.as_dict() else { continue };
@@ -210,7 +258,7 @@ fn launcher_of(doc: &Dict) -> Option<(Vec<FarTemplate>, i64)> {
             line: t.get("l").and_then(|v| v.as_bool()) == Some(true),
         });
     }
-    Some((rows, doc.get("more").and_then(|v| v.as_int()).unwrap_or(0).clamp(0, 99)))
+    Some(Opened { templates: rows, more: doc.get("more").and_then(|v| v.as_int()).unwrap_or(0).clamp(0, 99), accounts })
 }
 
 /// 问服务器：配对过的各台机器上现在有哪些可以接入的会话。打不开的说明（不是那台机器用配对的密钥封的）不算
@@ -243,14 +291,15 @@ pub fn fetch(srv: &Server, peers: &[Peer], timeout: i64) -> R<Result<Listing, Fa
             let Some(doc) = crypto::dir_open(&secret, &peer.pid, &sid, &blob) else {
                 // 会话的说明的密钥解不开的：可能是那台机器的启动器（另一把密钥封的），也解不开的不算
                 let opened = crypto::launch_open(&secret, &peer.pid, &sid, &blob).and_then(|d| launcher_of(&d));
-                if let Some((templates, more)) = opened {
+                if let Some(o) = opened {
                     let l = FarLauncher {
                         sid: sid.to_string(),
                         pid: peer.pid.clone(),
                         peer: peer.name.clone(),
                         online,
-                        more,
-                        templates,
+                        more: o.more,
+                        templates: o.templates,
+                        accounts: o.accounts,
                     };
                     match launchers.iter_mut().find(|x| x.pid == l.pid) {
                         Some(x) if !x.online && l.online => *x = l,
@@ -329,19 +378,28 @@ pub fn fetch_all(peers: &[Peer], timeout: i64) -> R<Seen> {
     Ok(seen)
 }
 
-/// 账号的名字以这台机器为准：这台机器上也有这个账号（hub 那个 Team 的盐算出来的摘要对得上）就用这里的别名。会话、启动器的模板都是
+/// 账号的名字以这台机器为准：这台机器上也有这个账号（hub 那个 Team 的盐算出来的摘要对得上）就用这里的别名。会话、启动器的模板、
+/// 启动器能挑的账号都是
 pub fn rename_here(hub: HubKind, sessions: &mut [Far], launchers: &mut [FarLauncher]) {
-    let tagged =
-        sessions.iter().any(|f| !f.aid.is_empty()) || launchers.iter().flat_map(|l| &l.templates).any(|t| !t.aid.is_empty());
+    let tagged = sessions.iter().any(|f| !f.aid.is_empty())
+        || launchers.iter().flat_map(|l| &l.templates).any(|t| !t.aid.is_empty())
+        || launchers.iter().flat_map(|l| l.accounts.iter().flatten()).any(|a| !a.aid.is_empty());
     if !tagged {
         return;
     }
     let Some(salt) = team_salt(hub) else { return };
     let names = local_names(&salt);
     rename(sessions, &names);
-    for t in launchers.iter_mut().flat_map(|l| l.templates.iter_mut()) {
-        if let Some(n) = names.get(&(t.tool.clone(), t.aid.clone())) {
-            t.account = n.clone();
+    for l in launchers.iter_mut() {
+        for t in l.templates.iter_mut() {
+            if let Some(n) = names.get(&(t.tool.clone(), t.aid.clone())) {
+                t.account = n.clone();
+            }
+        }
+        for a in l.accounts.iter_mut().flatten() {
+            if let Some(n) = names.get(&(a.tool.clone(), a.aid.clone())) {
+                a.name = n.clone();
+            }
         }
     }
 }
@@ -402,8 +460,10 @@ mod tests {
             {{"i":"3a3b3c3d","h":"0011223344556677","n":"{long}","k":"agy","aid":"not-hex","l":"yes"}},
             "不是对象"]}}"#
         );
-        let (rows, more) = launcher_of(&doc(&good)).expect("认得");
+        let opened = launcher_of(&doc(&good)).expect("认得");
+        let (rows, more) = (opened.templates, opened.more);
         assert_eq!(more, 3);
+        assert_eq!(opened.accounts, None, "旧版的 cca 写的：没有能挑的账号（模板用它自己的）");
         assert_eq!(
             rows.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
             ["0a1b2c3d", "3a3b3c3d"],
@@ -426,8 +486,28 @@ mod tests {
         // 版本不对的不认；more 夹在 0..=99；没有模板的也认（列表里照样有这个启动器：那台机器上还没有模板）
         assert!(launcher_of(&doc(r#"{"v":2,"t":[]}"#)).is_none());
         assert!(launcher_of(&doc(r#"{"t":[]}"#)).is_none());
-        assert_eq!(launcher_of(&doc(r#"{"v":1,"more":500}"#)).map(|(r, m)| (r.len(), m)), Some((0, 99)));
-        assert_eq!(launcher_of(&doc(r#"{"v":1,"more":-5,"t":"不是列表"}"#)).map(|(r, m)| (r.len(), m)), Some((0, 0)));
+        assert_eq!(launcher_of(&doc(r#"{"v":1,"more":500}"#)).map(|o| (o.templates.len(), o.more)), Some((0, 99)));
+        assert_eq!(launcher_of(&doc(r#"{"v":1,"more":-5,"t":"不是列表"}"#)).map(|o| (o.templates.len(), o.more)), Some((0, 0)));
+        // 3.7.10 起：起会话时能挑的账号
+        let picks = format!(
+            r#"{{"v":1,"t":[],"accounts":[
+            {{"i":"00112233aabbccdd","k":"claude","n":"工作\u202e","aid":"0123456789abcdef0123456789abcdef"}},
+            {{"i":"00112233aabbccdd","k":"codex","n":"编号重复"}},
+            {{"i":"00112233AABBCCDD","k":"claude","n":"大写的编号"}},
+            {{"i":"0011","k":"claude","n":"编号太短"}},
+            {{"i":"99112233aabbccdd","k":"vim","n":"不认识的工具"}},
+            {{"i":"44112233aabbccdd","k":"agy","n":"{long}","aid":"not-hex"}},
+            7]}}"#
+        );
+        let accts = launcher_of(&doc(&picks)).and_then(|o| o.accounts).expect("有能挑的账号");
+        assert_eq!(accts.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["00112233aabbccdd", "44112233aabbccdd"]);
+        assert_eq!(
+            (accts[0].tool.as_str(), accts[0].name.as_str(), accts[0].host_name.as_str(), accts[0].aid.len()),
+            ("claude", "工作", "工作", 32),
+            "那台机器写的字去掉看不见的字符"
+        );
+        assert_eq!((accts[1].name.chars().count(), accts[1].aid.as_str()), (50, ""));
+        assert_eq!(launcher_of(&doc(r#"{"v":1,"accounts":"不是列表"}"#)).and_then(|o| o.accounts), Some(Vec::new()));
     }
 
     #[test]

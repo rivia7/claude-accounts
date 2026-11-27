@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<!-- 隐私清单（App Store 要）：不追踪、不收集数据（会话的内容端到端加密，只在这台手机和那台电脑上）。
-	     用到的“要说明原因”的接口：UserDefaults（外观、这台手机的名字、装没装过：只在 App 自己里读写，CA92.1） -->
+	     用到的“要说明原因”的接口：UserDefaults（外观、这台手机的名字、会话的先后、装没装过：只在 App 自己里读写，CA92.1） -->
 	<key>NSPrivacyTracking</key>
 	<false/>
 	<key>NSPrivacyTrackingDomains</key>

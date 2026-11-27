@@ -299,13 +299,29 @@ if let ln = v["launch"] as? [String: Any] {
               && t.account == x["a"] as? String && t.aid == (x["aid"] as? String ?? "") && t.dir == x["d"] as? String
               && t.args == x["x"] as? String && t.line == jsonBool(x["l"]), "模板：\(t)")
     }
+    // 能挑的账号（3.7.10 起）：编号、工具不对的、重复的丢掉，名字清理过
+    let wa = w["accounts"] as? [[String: Any]] ?? []
+    check(info?.accounts?.count == wa.count, "能挑的账号：\(info?.accounts?.count ?? -1) 个")
+    for (a, x) in zip(info?.accounts ?? [], wa) {
+        check(a.id == x["i"] as? String && a.tool == x["k"] as? String && a.name == x["n"] as? String && a.aid == (x["aid"] as? String ?? ""),
+              "能挑的账号：\(a)")
+    }
+    if let t0 = info?.templates.first {
+        check(info?.accounts(for: t0)?.map(\.id) == wa.filter { $0["k"] as? String == t0.tool }.map { $0["i"] as? String ?? "" },
+              "按模板的工具挑账号")
+    }
+    if let old = ln["old_blob"] {
+        let o = launchOpen(keys, pid: pid, sid: sid, old)
+        check(o != nil && o?.accounts == nil && o.flatMap { i in i.templates.first.flatMap { i.accounts(for: $0) } } == nil,
+              "旧版的 cca 的说明：没有 accounts（模板用它自己的账号，不用挑）")
+    }
     check(launchOpen(keys, pid: pid, sid: sid, ln["forged"]) == nil, "启动器的说明：别的密钥封的不认")
     check(launchOpen(keys, pid: pid, sid: sid, ln["dir"]) == nil, "启动器的说明：会话的说明不是它")
     check(dirOpen(dirKeys(p), pid: pid, sid: sid, ln["blob"]) == nil, "启动器的说明不是会话的说明（旧的 App 当它不存在）")
     check(launchOpen(keys, pid: pid, sid: ln["other_sid"] as? String ?? "", ln["blob"]) == nil, "启动器的说明：编号不对解不开")
     if let a = ln["ask"] as? [String: Any] {
         let id = a["t"] as? String ?? "", h = a["h"] as? String ?? "", c = jsonInt(a["c"]) ?? 0, r = jsonInt(a["r"]) ?? 0
-        out["launch_frame"] = LaunchAsk.frame(id: id, digest: h, cols: c, rows: r, line: a["l"] as? String)?.hex ?? ""
+        out["launch_frame"] = LaunchAsk.frame(id: id, digest: h, cols: c, rows: r, line: a["l"] as? String, account: a["a"] as? String)?.hex ?? ""
         out["launch_frame_plain"] = LaunchAsk.frame(id: id, digest: h, cols: c, rows: r)?.hex ?? ""
         for bad in ln["bad_lines"] as? [String] ?? [] {
             check(LaunchAsk.frame(id: id, digest: h, cols: c, rows: r, line: bad) == nil, "开场白不能发：\(bad.debugDescription.prefix(40))")
@@ -334,6 +350,14 @@ check([(19, 24), (501, 24), (80, 4), (80, 301)].allSatisfy { LaunchAsk.payload(i
       "LAUNCH：大小不在范围里不发")
 check(LaunchAsk.payload(id: "0123ABCD", digest: "0123456789abcdef", cols: 80, rows: 24) == nil
       && LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcde", cols: 80, rows: 24) == nil, "LAUNCH：编号、摘要不对不发")
+check(LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcdef", cols: 80, rows: 24, line: "好", account: "89abcdef01234567")
+        .map { String(decoding: $0, as: UTF8.self) } == #"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"l":"好","a":"89abcdef01234567"}"#
+      && LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcdef", cols: 80, rows: 24, account: "89abcdef01234567")
+        .map { String(decoding: $0, as: UTF8.self) } == #"{"v":1,"t":"0123abcd","h":"0123456789abcdef","c":80,"r":24,"a":"89abcdef01234567"}"#,
+      "LAUNCH 的账号：a 放在最后（开场白后面）")
+check(["89ABCDEF01234567", "89abcdef0123456", "89abcdef012345678", "", "zzzzzzzzzzzzzzzz"].allSatisfy {
+    LaunchAsk.payload(id: "0123abcd", digest: "0123456789abcdef", cols: 80, rows: 24, account: $0) == nil
+}, "LAUNCH：账号的编号不是 16 个小写的十六进制字符不发")
 check(LaunchAsk.lineOK(String(repeating: "字", count: 500)) && !LaunchAsk.lineOK(String(repeating: "字", count: 501)) && !LaunchAsk.lineOK("")
       && !LaunchAsk.lineOK(" \u{3000}") && !LaunchAsk.lineOK("a\u{7f}") && !LaunchAsk.lineOK("a\u{85}b") && LaunchAsk.lineOK("a\u{2028}b"),
       "开场白：500 个字以内、不是空白、没有控制字符")
@@ -355,5 +379,21 @@ if let s = v["sign"] as? [String: Any], let id = Identity(raw: hx(s["raw"])) {
 
 let data = try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys])
 FileManager.default.createFile(atPath: args[2], contents: data)
+// 会话的先后（SessionOrder，App 的「远程会话」页拖动排的）：记着的在前、照记着的先后，没记着的接在后面、照原来的先后；排过的一组写在
+// 最前面；最多记 limit 个（多了的从最后去掉）。和 Mac App 的 RemoteOrder 同一个规矩（macos/Tests/ContractTests/RemoteOrderTests.swift）
+do {
+    var o = SessionOrder(ids: ["c", "a", "", "c", "b"])
+    check(o.ids == ["c", "a", "b"], "会话的先后：去掉重复的、空的")
+    check(o.sorted(["d", "b", "e", "a"], id: { $0 }) == ["a", "b", "d", "e"], "会话的先后：记着的照记着的先后，没记着的接在后面")
+    check(SessionOrder().sorted(["d", "b", "e"], id: { $0 }) == ["d", "b", "e"], "会话的先后：没排过的照原样")
+    o.record(["b", "a"])
+    check(o.ids == ["b", "a", "c"] && o.sorted(["a", "c", "b"], id: { $0 }) == ["b", "a", "c"], "会话的先后：排过的一组写在最前面")
+    var big = SessionOrder(ids: (0..<500).map { String($0) })
+    check(big.ids.count == SessionOrder.limit && big.ids.last == String(SessionOrder.limit - 1), "会话的先后：最多记 \(SessionOrder.limit) 个")
+    big.record(["x"])
+    check(big.ids.count == SessionOrder.limit && big.ids.first == "x" && big.ids.last == String(SessionOrder.limit - 2),
+          "会话的先后：多了的从最后去掉")
+}
+
 print("通过 \(passed)，失败 \(failed)")
 exit(failed == 0 ? 0 : 1)

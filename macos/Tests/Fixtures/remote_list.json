@@ -154,8 +154,8 @@
           "digest": "0a1b2c3d4e5f6a7b",
           "name": "API：修 bug",
           "tool": "claude",
-          "account": "工作",
-          "host_account": "主力",
+          "account": "启动时选账号",
+          "host_account": "启动时选账号",
           "dir": "~/srv/api",
           "args": "--model opus",
           "line": true
@@ -170,6 +170,26 @@
           "dir": "~/srv/jobs",
           "args": "'看看昨晚失败的任务'",
           "line": false
+        }
+      ],
+      "accounts": [
+        {
+          "id": "a1a1a1a1a1a1a1a1",
+          "tool": "claude",
+          "name": "工作",
+          "host_name": "主力"
+        },
+        {
+          "id": "a2a2a2a2a2a2a2a2",
+          "tool": "claude",
+          "name": "carol",
+          "host_name": "carol"
+        },
+        {
+          "id": "a3a3a3a3a3a3a3a3",
+          "tool": "codex",
+          "name": "dave",
+          "host_name": "dave"
         }
       ]
     },
@@ -192,7 +212,8 @@
           "args": "",
           "line": true
         }
-      ]
+      ],
+      "accounts": null
     }
   ]
 }

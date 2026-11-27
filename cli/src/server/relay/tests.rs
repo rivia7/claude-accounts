@@ -930,7 +930,8 @@ impl Relay {
 #[test]
 fn knobs_are_the_python_constants() {
     let k = Knobs::DEFAULT;
-    assert_eq!((k.conn_max, k.conn_ip, k.queue), (256, 32, 256 * 1024));
+    // 连接数 3.7.10 起放大了（Python 的是 256、32）：一台设备能开 100 个会话
+    assert_eq!((k.conn_max, k.conn_ip, k.queue), (1024, 400, 256 * 1024));
     assert_eq!((k.idle, k.grace, k.preamble_wait, k.join_wait, k.drain_wait), (90.0, 60.0, 5.0, 10.0, 5.0));
     assert_eq!((k.poll_ms, k.sweep_every, CHUNK), (1000, 1.0, 65536));
 }

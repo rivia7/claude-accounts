@@ -199,7 +199,9 @@ impl Play {
 fn the_python_server_step_by_step() {
     let doc = json::loads(include_str!("../../../tests/vectors/server_remote.json")).unwrap().as_dict().unwrap();
     let port = u16::try_from(doc.at("port").as_int().unwrap()).unwrap();
-    let mut net = Net::open(Limits::DEFAULT, port, doc.str("web").map(|s| s.to_string()), |_| {});
+    // 录的时候是 Python 的那些上限：一台设备 16 张票据、8 个会话，数据端口同时 256 个连接、同一个 IP 32 个（3.7.10 起都放大了）
+    let python = Limits { tickets_dev: 16, sessions_dev: 8, ..Limits::DEFAULT };
+    let mut net = Net::open(python, port, doc.str("web").map(|s| s.to_string()), |k| (k.conn_max, k.conn_ip) = (256, 32));
     let mut play = Play::default();
     for (name, d) in doc.dict("devices").unwrap().items() {
         let d = d.as_dict().unwrap();
@@ -326,7 +328,7 @@ fn the_python_server_step_by_step() {
                 assert!(play.conns.is_empty(), "{at}");
                 wait_for("别的连接都关了", || net.conns() == 0);
                 let n = usize::try_from(s.at("n").as_int().unwrap()).unwrap();
-                assert_eq!(n, Knobs::DEFAULT.conn_ip, "{at}");
+                assert_eq!(n, 32, "{at}");
                 play.held = (0..n).map(|_| net.dial()).collect();
                 wait_for("都收下了", || net.conns() == n);
             }

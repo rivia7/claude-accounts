@@ -276,12 +276,12 @@ fn sync_state(tid: &str) -> Option<(String, String)> {
 
 /// 这一版 cca 要的服务端级别（服务端的 `server::LEVEL`，`GET /v1/version` 回的）：比它低的 Team 的服务器要更新（界面里提示管理员）。
 /// 服务端加了 cca 要靠的东西时两边一起加一，SERVER_WHY 改成这一级带来的
-pub const SERVER_NEED: i64 = 2;
+pub const SERVER_NEED: i64 = 3;
 /// 服务器比 SERVER_NEED 旧时少了什么（给人看的，接在「要更新服务器：」后面）
-pub const SERVER_WHY: &str = "3.7.5 以前的服务器给不了 iPhone 上的 cca App 账号的额度，也推不了额度用完、恢复的通知";
+pub const SERVER_WHY: &str = "3.7.10 以前的服务器一台设备最多只能开 8 个远程会话（更新以后能开 100 个）";
 
-/// sync.json 里记着的服务端级别（上次同步时问到的；没问到过是 None）
-fn server_level(tid: &str) -> Option<i64> {
+/// sync.json 里记着的服务端级别（上次同步时问到的；没问到过是 None）。远程启动看它定一台设备最多起几个会话（launch.rs）
+pub(crate) fn server_level(tid: &str) -> Option<i64> {
     load_quiet(&team_path(tid, "sync.json"))?.as_dict()?.get("level")?.as_int()
 }
 

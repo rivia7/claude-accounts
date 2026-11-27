@@ -2846,13 +2846,13 @@ ok "cca edit 把 Team 给的账号改成别的节点：改回 Team 的配置定�
 # 认是不是 3.7.0：tests/team.rs 的 server_level。取值放在断言外面（断言里的命令替换套转义引号，bash 3.2 解析不对）
 glsync="$H/.cca/teams/$GLTID/sync.json"
 run cca team sync >/dev/null 2>&1; lv1=$("$TESTBIN" val -f "j=$glsync" 'j["level"]' 2>/dev/null)
-svjs=$(run cca team ls --json 2>/dev/null); sv1=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 2 and j["teams"][0]["server_update"] is None' 2>/dev/null)
-perl -0pi -e 's/("level":\s*)2/${1}0/' "$glsync"
+svjs=$(run cca team ls --json 2>/dev/null); sv1=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 3 and j["teams"][0]["server_update"] is None' 2>/dev/null)
+perl -0pi -e 's/("level":\s*)3/${1}0/' "$glsync"
 out=$(run cca team ls 2>&1)
-svjs=$(run cca team ls --json 2>/dev/null); sv2=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 0 and j["teams"][0]["server_update"]["level"] == 0 and j["teams"][0]["server_update"]["need"] == 2 and "iPhone" in j["teams"][0]["server_update"]["why"]' 2>/dev/null)
+svjs=$(run cca team ls --json 2>/dev/null); sv2=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 0 and j["teams"][0]["server_update"]["level"] == 0 and j["teams"][0]["server_update"]["need"] == 3 and "100" in j["teams"][0]["server_update"]["why"]' 2>/dev/null)
 run cca team sync >/dev/null 2>&1
-svjs=$(run cca team ls --json 2>/dev/null); sv3=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 2 and j["teams"][0]["server_update"] is None' 2>/dev/null)
-ok "服务器要更新：同步时记下服务器的级别；记着的是旧服务器的（级别 0）时 cca team ls 说请管理员更新、--json 给 server_update（级别、要的、原因）；再同步问到这台服务器的就没了" '[ "$lv1" = 2 ] && [ "$sv1" = True ] && [ "$sv2" = True ] && printf "%s" "$out" | grep -q "「阁楼组」的服务器要更新：3.7.5 以前的服务器给不了 iPhone 上的 cca App 账号的额度，也推不了额度用完、恢复的通知。请建这个 Team 的管理员更新服务器" && [ "$sv3" = True ]'
+svjs=$(run cca team ls --json 2>/dev/null); sv3=$(printf '%s' "$svjs" | "$TESTBIN" val -f j=- 'j["teams"][0]["server_level"] == 3 and j["teams"][0]["server_update"] is None' 2>/dev/null)
+ok "服务器要更新：同步时记下服务器的级别；记着的是旧服务器的（级别 0）时 cca team ls 说请管理员更新、--json 给 server_update（级别、要的、原因）；再同步问到这台服务器的就没了" '[ "$lv1" = 3 ] && [ "$sv1" = True ] && [ "$sv2" = True ] && printf "%s" "$out" | grep -q "「阁楼组」的服务器要更新：3.7.10 以前的服务器一台设备最多只能开 8 个远程会话（更新以后能开 100 个）。请建这个 Team 的管理员更新服务器" && [ "$sv3" = True ]'
 gl_put '{"accounts": {"claude": {"alice@example.com": "US-D"}}}' "$GLD/evil"; out=$(run cca team sync 2>&1); rc=$?
 gl_put '{"accounts": {"claude": {"Not-An-Email": "US-D", "alice@example.com": "US-D"}}}'; out2=$(run cca team sync 2>&1); rc2=$?
 gl_down; out3=$(run cca team sync 2>&1); rc3=$?; gl_up
@@ -3349,31 +3349,31 @@ la_up() { local i; for i in $(seq 1 100); do run cca remote launcher 2>/dev/null
 out=$(run cca remote template 2>&1); rc=$?
 ok "cca remote template：还没有模板时说怎么加" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还没有模板（加一个：cca remote template add）"'
 mkdir -p "$H/work"
-out=$(run CCA_TTY="$(ans "修 bug" "" alice "$H/work")" cca remote template add -- --model opus 2>&1); rc=$?
+out=$(run CCA_TTY="$(ans "修 bug" "" "$H/work")" cca remote template add -- --model opus 2>&1); rc=$?
 LT1=$(printf '%s' "$out" | sed -n 's/.*（编号 \([0-9a-f]\{8\}\)）.*/\1/p')
-ok "cca remote template add：没写的在终端里问（名字、工具——默认 claude、账号、文件夹），-- 后面的是模板的参数；说编号，还没有配对的设备能用时说怎么打开；存在 remote/templates.json（600）" '[ $rc -eq 0 ] && [ -n "$LT1" ] && printf "%s" "$out" | grep -q "已存好模板「修 bug」" && printf "%s" "$out" | grep -q "cca remote allow 配对的名字 launch on" && [ "$(stat -f %Lp "$H/.cca/remote/templates.json")" = 600 ]'
+ok "cca remote template add：没写的在终端里问（名字、工具——默认 claude、文件夹；账号不问：起会话时挑），-- 后面的是模板的参数；说编号，还没有配对的设备能用时说怎么打开；存在 remote/templates.json（600）" '[ $rc -eq 0 ] && [ -n "$LT1" ] && printf "%s" "$out" | grep -q "已存好模板「修 bug」" && printf "%s" "$out" | grep -q "cca remote allow 配对的名字 launch on" && [ "$(stat -f %Lp "$H/.cca/remote/templates.json")" = 600 ]'
 out=$(runev cca remote template add --name 审代码 --tool claude --account alice@example.com --dir "$H/work" -- --permission-mode plan 2>&1); rc=$?
 LT2=$(run cca remote template list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- '[t["id"] for t in d["templates"] if t["name"] == "审代码"][0]' 2>/dev/null)
-ok "界面 App 存模板（都给全，不问）：result 事件 remote_updated" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"审代码\" in e[\"message\"]" && [ -n "$LT2" ] && [ "$LT2" != "$LT1" ]'
-out=$(runev cca remote template add --name 打印 --tool claude --account alice --dir "$H/work" -- -p hi 2>&1); rc=$?
-out2=$(runev cca remote template add --name 别的 --tool vim --account alice --dir "$H/work" -- 2>&1); rc2=$?
-out3=$(runev cca remote template add --name 别的 --tool claude --account alice --dir "$H/no-such-dir" -- 2>&1); rc3=$?
+ok "界面 App 存模板（都给全，不问）：result 事件 remote_updated；3.7.9 及以前的 App 还给 --account：收下、不存（账号起会话时挑）" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"审代码\" in e[\"message\"]" && [ -n "$LT2" ] && [ "$LT2" != "$LT1" ] && ! grep -q "alice" "$H/.cca/remote/templates.json"'
+out=$(runev cca remote template add --name 打印 --tool claude --dir "$H/work" -- -p hi 2>&1); rc=$?
+out2=$(runev cca remote template add --name 别的 --tool vim --dir "$H/work" -- 2>&1); rc2=$?
+out3=$(runev cca remote template add --name 别的 --tool claude --dir "$H/no-such-dir" -- 2>&1); rc3=$?
 ok "模板只能起交互的会话（-p 这类跑完就退出的不行）、工具只能是 claude / codex / agy、文件夹要已经在：说原因，什么都不存" '[ $rc -ne 0 ] && [ $rc2 -ne 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "模板只能起交互的会话" && printf "%s" "$out2" | grep -q "工具只能是 claude、codex、agy" && printf "%s" "$out3" | grep -q "没有这个文件夹" && [ "$(run cca remote template list 2>/dev/null | grep -c .)" = 2 ]'
-out=$(runev cca remote template add --name 审代码 --tool claude --account alice --dir "$H/work" --replace "$LT2" -- --permission-mode plan --model sonnet 2>&1); rc=$?
+out=$(runev cca remote template add --name 审代码 --tool claude --dir "$H/work" --replace "$LT2" -- --permission-mode plan --model sonnet 2>&1); rc=$?
 out2=$(run cca remote template 2>&1)
-ok "--replace 编号：改那一个（编号、位置不变）；cca remote template 一行一个（编号、名字、工具、账号、文件夹、参数），还没有配对的设备能用时说怎么打开" '[ $rc -eq 0 ] && printf "%s" "$out2" | sed -n 1p | grep -q "^$LT1  修 bug  Claude  .*  ~/work  --model opus$" && printf "%s" "$out2" | sed -n 2p | grep -q "^$LT2  审代码  Claude  .*  ~/work  --permission-mode plan --model sonnet$" && printf "%s" "$out2" | grep -q "还没有配对的设备能用它们"'
+ok "--replace 编号：改那一个（编号、位置不变）；cca remote template 一行一个（编号、名字、工具、文件夹、参数），还没有配对的设备能用时说怎么打开" '[ $rc -eq 0 ] && printf "%s" "$out2" | sed -n 1p | grep -q "^$LT1  修 bug  Claude  ~/work  --model opus$" && printf "%s" "$out2" | sed -n 2p | grep -q "^$LT2  审代码  Claude  ~/work  --permission-mode plan --model sonnet$" && printf "%s" "$out2" | grep -q "还没有配对的设备能用它们"'
 want="--model opus --append-system-prompt '说中文，别改测试' ''"
-out=$(runev cca remote template add --name 一行 --tool claude --account alice --dir "$H/work" --args-line "$want" 2>&1); rc=$?
+out=$(runev cca remote template add --name 一行 --tool claude --dir "$H/work" --args-line "$want" 2>&1); rc=$?
 LT3=$(run cca remote template list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- '[t["id"] for t in d["templates"] if t["name"] == "一行"][0]' 2>/dev/null)
 la_line=$(run cca remote template list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- '[t["args_line"] for t in d["templates"] if t["name"] == "一行"][0]' 2>/dev/null)
-out2=$(runev cca remote template add --name 一行二 --tool claude --account alice --dir "$H/work" --args-line "--append-system-prompt '说中文" 2>&1); rc2=$?
-out3=$(runev cca remote template add --name 一行三 --tool claude --account alice --dir "$H/work" --args-line "--model opus" -- --model opus 2>&1); rc3=$?
+out2=$(runev cca remote template add --name 一行二 --tool claude --dir "$H/work" --args-line "--append-system-prompt '说中文" 2>&1); rc2=$?
+out3=$(runev cca remote template add --name 一行三 --tool claude --dir "$H/work" --args-line "--model opus" -- --model opus 2>&1); rc3=$?
 ok "--args-line（界面 App 用它）：照 shell 的写法写成的一行，cca 拆成一项一项（单引号里的原样，'' 也是一项）；list --json 的 args_line 是同一种写法，拆回去是原样；拆不开说原因，和 -- 只能用一种：都不存" '[ $rc -eq 0 ] && [ -n "$LT3" ] && [ "$la_line" = "$want" ] && run cca remote template list --json 2>/dev/null </dev/null | jok "[t[\"args\"] for t in d[\"templates\"] if t[\"name\"] == \"一行\"] == [[\"--model\", \"opus\", \"--append-system-prompt\", \"说中文，别改测试\", \"\"]] and [t[\"name\"] for t in d[\"templates\"]] == [\"修 bug\", \"审代码\", \"一行\"]" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "参数里的引号没有配对" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "用法：cca remote template"'
 run cca remote template rm "$LT3" >/dev/null 2>&1
 out=$(run cca remote template list --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/remote_templates.json"
-ok "cca remote template list --json（给界面 App，PROTOCOL 9.4）：模板的编号、名字、工具、账号（存的是邮箱；账号表里现在的键）、文件夹（绝对路径）、参数（一项一项的、拼成的那一行）、能不能带开场白、摘要、用得了；还没有配对的设备能用：后台进程没在跑、0 台" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"remote_templates\" and [t[\"id\"] for t in d[\"templates\"]] == [\"$LT1\", \"$LT2\"] and (lambda a, b: a[\"name\"] == \"修 bug\" and a[\"tool\"] == \"claude\" and a[\"account\"] == \"alice@example.com\" and a[\"dir\"] == \"$H/work\" and a[\"args\"] == [\"--model\", \"opus\"] and a[\"args_line\"] == \"--model opus\" and a[\"account_key\"] is not None and len(a[\"account_key\"]) > 0 and a[\"line\"] is True and a[\"problem\"] is None and len(a[\"digest\"]) == 16 and b[\"args\"] == [\"--permission-mode\", \"plan\", \"--model\", \"sonnet\"] and b[\"args_line\"] == \"--permission-mode plan --model sonnet\" and b[\"digest\"] != a[\"digest\"])(d[\"templates\"][0], d[\"templates\"][1]) and d[\"launcher\"] == {\"running\": False, \"templates\": 2, \"peers\": 0}"'
+ok "cca remote template list --json（给界面 App，PROTOCOL 9.4）：模板的编号、名字、工具、文件夹（绝对路径）、参数（一项一项的、拼成的那一行）、能不能带开场白、摘要、用得了；账号不在模板里（account 是空的、account_key / account_name 是 null：给 3.7.9 及以前的 App）；还没有配对的设备能用：后台进程没在跑、0 台" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"remote_templates\" and [t[\"id\"] for t in d[\"templates\"]] == [\"$LT1\", \"$LT2\"] and (lambda a, b: a[\"name\"] == \"修 bug\" and a[\"tool\"] == \"claude\" and a[\"account\"] == \"\" and a[\"account_key\"] is None and a[\"account_name\"] is None and a[\"dir\"] == \"$H/work\" and a[\"args\"] == [\"--model\", \"opus\"] and a[\"args_line\"] == \"--model opus\" and a[\"line\"] is True and a[\"problem\"] is None and len(a[\"digest\"]) == 16 and b[\"args\"] == [\"--permission-mode\", \"plan\", \"--model\", \"sonnet\"] and b[\"args_line\"] == \"--permission-mode plan --model sonnet\" and b[\"digest\"] != a[\"digest\"])(d[\"templates\"][0], d[\"templates\"][1]) and d[\"launcher\"] == {\"running\": False, \"templates\": 2, \"peers\": 0}"'
 out=$(runev cca remote allow "$DPID" launch on 2>&1); rc=$?
-ok "cca remote allow … launch on：另一台机器（dan-air）也能打开（2026-11-27 起；3.7.6 只给手机）：一样先发同意事件（对着它的配对编号），没同意不打开" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"remote_launch\" and e[\"scope\"] == \"$DPID\" and \"「dan-air」可以用这台机器上的模板新建会话\" in e[\"detail\"] and \"它起的会话也不问就执行命令\" in e[\"detail\"]" && lal | jok "[p[\"launch\"] for p in d[\"peers\"] if p[\"id\"] == \"$DPID\"] == [False]" && [ ! -e "$LAF" ]'
+ok "cca remote allow … launch on：另一台机器（dan-air）也能打开（2026-11-27 起；3.7.6 只给手机）：一样先发同意事件（对着它的配对编号），没同意不打开" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"remote_launch\" and e[\"scope\"] == \"$DPID\" and \"「dan-air」可以用这台机器上的模板新建会话\" in e[\"detail\"] and \"用它挑的账号\" in e[\"detail\"] and \"它起的会话也不问就执行命令\" in e[\"detail\"]" && lal | jok "[p[\"launch\"] for p in d[\"peers\"] if p[\"id\"] == \"$DPID\"] == [False]" && [ ! -e "$LAF" ]'
 out=$(runev cca remote allow "$WPID" launch on 2>&1); rc=$?
 ok "界面 App 打开远程启动：先不打开，发一条同意事件（对着这台手机的配对编号，默认不同意；说明里是能做什么、几个模板、--dangerously-skip-permissions 这类参数也照带、要装一个后台进程）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"remote_launch\" and e[\"scope\"] == \"$WPID\" and e[\"grant\"] == \"remote_launch:$WPID\" and e[\"default\"] == \"no\" and \"现在有 2 个\" in e[\"detail\"] and \"--dangerously-skip-permissions\" in e[\"detail\"] and \"后台进程\" in e[\"detail\"]" && lal | jok "[p[\"launch\"] for p in d[\"peers\"] if p[\"id\"] == \"$WPID\"] == [False]" && [ ! -e "$LAF" ]'
 out=$(run CCA_TTY="$(ans n)" cca remote allow phone launch on 2>&1); rc=$?

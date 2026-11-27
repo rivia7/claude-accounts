@@ -165,26 +165,28 @@ fn limits() {
     }
     assert_eq!(t.pair(100, 300, 99).0, bad(429, "edges"));
     assert_eq!(t.edges().len(), 16);
-    // 没用掉的票据：16 张；过期了又能换
+    // 没用掉的票据：128 张（3.7.10 起；Python 是 16）；过期了又能换
     let pid = hex(0);
-    for i in 0..16 {
-        assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(500 + i), "pids" => vec![V::str(&pid)] }).0, 200);
+    let (tickets, sessions) = (Limits::DEFAULT.tickets_dev as u32, Limits::DEFAULT.sessions_dev as u32);
+    assert_eq!((tickets, sessions), (128, 101));
+    for i in 0..tickets {
+        assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(5000 + i), "pids" => vec![V::str(&pid)] }).0, 200);
     }
-    assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(600), "pids" => vec![V::str(&pid)] }), bad(429, "rate"));
+    assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(6000), "pids" => vec![V::str(&pid)] }), bad(429, "rate"));
     t.now += 31.0;
-    assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(600), "pids" => vec![V::str(&pid)] }).0, 200);
-    // 开着的会话：8 个；别人的会话编号不能拿来用；接入的满 4 处就不给票据
-    for i in 0..8 {
-        t.session(&hex(700 + i), 100, &[&pid]);
+    assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(6000), "pids" => vec![V::str(&pid)] }).0, 200);
+    // 开着的会话：101 个（3.7.10 起：100 个远程会话加上启动器；Python 是 8）；别人的会话编号不能拿来用；接入的满 4 处就不给票据
+    for i in 0..sessions {
+        t.session(&hex(7000 + i), 100, &[&pid]);
     }
     t.now += 31.0;
-    assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(800), "pids" => vec![V::str(&pid)] }), bad(429, "sessions"));
-    let again = t.op("relay_host", 100, dict! { "sid" => hex(700), "pids" => vec![V::str(&pid)] });
+    assert_eq!(t.op("relay_host", 100, dict! { "sid" => hex(8000), "pids" => vec![V::str(&pid)] }), bad(429, "sessions"));
+    let again = t.op("relay_host", 100, dict! { "sid" => hex(7000), "pids" => vec![V::str(&pid)] });
     assert_eq!(again.0, 200, "已经开着的会话换票据（重连）不算新的");
-    assert_eq!(t.op("relay_host", 200, dict! { "sid" => hex(700), "pids" => vec![V::str(&pid)] }), bad(409, "taken"));
-    assert_eq!(t.op("relay_attach", 200, dict! { "sid" => hex(700), "pid" => &pid }).0, 200);
-    t.sh.lock().sessions.get_mut(&hex(700)).unwrap().viewers = 4;
-    assert_eq!(t.op("relay_attach", 200, dict! { "sid" => hex(700), "pid" => &pid }), bad(429, "busy"));
+    assert_eq!(t.op("relay_host", 200, dict! { "sid" => hex(7000), "pids" => vec![V::str(&pid)] }), bad(409, "taken"));
+    assert_eq!(t.op("relay_attach", 200, dict! { "sid" => hex(7000), "pid" => &pid }).0, 200);
+    t.sh.lock().sessions.get_mut(&hex(7000)).unwrap().viewers = 4;
+    assert_eq!(t.op("relay_attach", 200, dict! { "sid" => hex(7000), "pid" => &pid }), bad(429, "busy"));
 }
 
 #[test]
@@ -443,7 +445,7 @@ fn relay_attach_answers() {
         );
     }
     // 手里没用掉的票据太多：rate；满 4 处接入：busy
-    for _ in 0..15 {
+    for _ in 1..Limits::DEFAULT.tickets_dev {
         assert_eq!(t.op("relay_attach", 2, dict! { "sid" => &sid, "pid" => &p1 }).0, 200);
     }
     assert_eq!(t.op("relay_attach", 2, dict! { "sid" => &sid, "pid" => &p1 }), bad(429, "rate"));

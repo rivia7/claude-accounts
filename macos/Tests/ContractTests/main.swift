@@ -55,6 +55,8 @@ if fullMode {
     remoteLaunchProtocolTests()
     await remoteLaunchModelTests()
     await remoteLaunchGuestTests()
+    remoteOrderTests()
+    await remoteOrderModelTests()
     await ptyProcessTests()
     await mailTests()
     arrangementTests()

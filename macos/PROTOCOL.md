@@ -861,7 +861,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
 | `remote_pair` | 空；和手机配对（`cca remote pair --web`）时是 `web` | `cca remote pair`：这台机器显示一个配对码；在另一台机器上输入它以后，那台机器可以经中转的服务器（加入的某个 Team 的，9.2）看和操作这台机器上开着远程会话的会话（两头之间加密；之后能改成只看、不让，或者取消配对）。这台设备用得了不止一台中转服务器时，`detail` 末尾说这次配对记在哪一台上（对方看得到的只是走这台服务器的会话）。App 里是提问会话（「远程会话」页的「显示配对码…」，9.2），当场问；终端里问之前先把这段说明打出来 范围是 `web` 时说的是手机：手机在浏览器里输入配对码以后可以看和操作这台机器的会话；那一页是中转的服务器给的，内容照样在两头之间加密，但管着服务器的人能换掉那一页的代码（`detail` 里写着） | yes |
 | `remote_end` | 会话的 id（`remote list --json` 的 `sessions[].id`，32 个十六进制字符） | `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到通知（SIGHUP）后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。`detail` 开头是列表里这个会话的那一行（编号、工具、账号、文件夹）。同意只对这一个会话有效 | no |
-| `remote_launch` | 配对的 id（`remote list --json` 的 `peers[].id`，32 个十六进制字符） | `cca remote allow <配对的 id> launch on`（9.4）：让这台配对的设备（手机；有 `hello.remote_launch_machines` 时配对过的电脑也行）能用这台机器上的模板新建会话，不用人在这台机器前面。起的会话和在终端里启动的一样：用模板的账号、在模板的文件夹里运行、带着模板的参数（模板里有 `--dangerously-skip-permissions` 这类参数的话，它起的会话也不问就执行命令）；这台机器上会装一个登录以后自己起来的后台进程等它来。`detail` 说现在有几个模板、怎么关掉（终端里问之前先打出来）。只给能看和操作这台机器的（`incoming` 是 `control`；3.7.6 的 cca 还只给手机：`peers[].web`），不是的 cca 不问、直接 `fail`。同意只对这一台有效；关掉（`launch off`）不用同意 | no |
+| `remote_launch` | 配对的 id（`remote list --json` 的 `peers[].id`，32 个十六进制字符） | `cca remote allow <配对的 id> launch on`（9.4）：让这台配对的设备（手机；有 `hello.remote_launch_machines` 时配对过的电脑也行）能用这台机器上的模板新建会话，不用人在这台机器前面。起的会话和在终端里启动的一样：用它挑的账号（这台机器上模板的那个工具、经同一台中转服务器的账号都能挑；3.7.9 及以前的 cca 是模板定的账号）、在模板的文件夹里运行、带着模板的参数（模板里有 `--dangerously-skip-permissions` 这类参数的话，它起的会话也不问就执行命令）；这台机器上会装一个登录以后自己起来的后台进程等它来。`detail` 说现在有几个模板、怎么关掉（终端里问之前先打出来）。只给能看和操作这台机器的（`incoming` 是 `control`；3.7.6 的 cca 还只给手机：`peers[].web`），不是的 cca 不问、直接 `fail`。同意只对这一台有效；关掉（`launch off`）不用同意 | no |
 | `team_leave` | Team 的编号（32 个十六进制字符） | `cca team leave`（这台设备是成员）：服务器上移除这台设备，这台设备上这个 Team 的配置都删掉；以后要再加入要管理员重新发邀请 | no |
 | `team_delete` | Team 的编号 | `cca team leave`（这台设备是管理员）：删除这个 Team——部署过同步服务器的先经 SSH 卸掉它（`detail` 说登录哪台（端口、部署时写的私钥：App 里删除照它登录）、删掉哪个目录；没记下部署到哪的照部署的默认猜，也说怎么写清楚），这台设备上就没有这个 Team 的根密钥了，这个 Team 再没有谁能邀请、移除设备、改配置（别的设备照旧用着手里的配置）。App 里是提问会话（「删掉这个 Team…」，4.14），当场问 | no |
 | `team_admin_add` | 设备在 Team 里的编号 | `cca team admin add`（3.6.15 起，只有建 Team 的设备能）：让这台设备也当管理员：它拿到这个 Team 的全部设置（各台设备的配置的密钥、节点的密码），能邀请、移除设备、改账号和节点；收回以后它已经看过的收不回来 | no |
@@ -1080,7 +1080,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `remote template list --json` | 「远程会话」页的「远程启动」一节（这一页打开时、「刷新」、改过东西以后；要 `hello.remote_launch`，9.4） | 无交互命令 |
 | `remote template add … [--replace <编号>] -- 参数…`、`remote template rm <编号>` | 「远程启动」一节的「新建模板…」、每个模板的「修改…」「删除…」（要 `hello.remote_launch`） | 无交互命令（参数都给全，cca 不问；9.4） |
 | `remote allow <配对的 id> launch on\|off` | 「已配对的机器」里手机那一行的「允许远程启动」（要 `hello.remote_launch`；有 `hello.remote_launch_machines` 时电脑那一行也有） | 无交互命令，打开时先 `consent.remote_launch`（4.2、9.4） |
-| `remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行> [--line <开场白>] --json` | 「可以接入的会话」里允许这台 Mac 远程启动的那台机器那一组的「新建会话…」（要 `hello.remote_launch_machines`，9.5） | 无交互命令；起好了 App 接着 `remote attach`（9.3） |
+| `remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行> [--account <账号的编号>] [--line <开场白>] --json` | 「可以接入的会话」里允许这台 Mac 远程启动的那台机器那一组的「新建会话…」（要 `hello.remote_launch_machines`，9.5） | 无交互命令；起好了 App 接着 `remote attach`（9.3） |
 | `remote`（`status`、`peers`、不带 `--json` 的 `list`、不带 `--json` 的 `template`、`launcher`、不带 `--json` 的 `launch`） | 没有入口 | 终端里自己运行 |
 | `cost hook on` | 没有入口（3.7.5 起；3.7.4 及以前是折合金额页「认不出账号」那一句旁边的「记下账号…」） | 无交互命令，先 `consent.cost_hook`（4.2）；`on`、`off` 和不带参数的 `cost hook`（看开没开）都在终端里自己运行 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
@@ -1410,8 +1410,10 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   "peer_launchers": [
     {"id": "6a6a…（32 个十六进制字符）", "peer": "b1b1…", "machine": "office-linux", "state": "ok",
      "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "more": 0,
-     "templates": [{"id": "2b2b2b2b", "digest": "0a1b2c3d4e5f6a7b", "name": "API：修 bug", "tool": "claude", "account": "工作",
-                    "host_account": "主力", "dir": "~/srv/api", "args": "--model opus", "line": true}]}
+     "templates": [{"id": "2b2b2b2b", "digest": "0a1b2c3d4e5f6a7b", "name": "API：修 bug", "tool": "claude", "account": "启动时选账号",
+                    "host_account": "启动时选账号", "dir": "~/srv/api", "args": "--model opus", "line": true}],
+     "accounts": [{"id": "a1a1a1a1a1a1a1a1", "tool": "claude", "name": "工作", "host_name": "主力"},
+                  {"id": "a2a2a2a2a2a2a2a2", "tool": "claude", "name": "carol", "host_name": "carol"}]}
   ]
 }
 ```
@@ -1462,12 +1464,16 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
     `more`：那台机器上还有几个模板说明里放不下、没列出来。
   - `templates[]`：那台机器上能用的模板（那边用不了的不列）。`id`：8 个十六进制字符（`remote launch` 的第二个参数）；`digest`：模板的摘要
     （16 个十六进制字符，起的时候原样带上：那边改过了就不起）；`name`；`tool`；`account`：账号的名字（这台 Mac 上也有这个账号时是这台 Mac 上的
-    别名，同 `sessions[].name`），`host_account`：那台机器说的名字；`dir`：那台机器上的文件夹（主目录写成 `~`）；`args`：参数拼成的一行（只是给人看）；
+    别名，同 `sessions[].name`），`host_account`：那台机器说的名字——那台机器的 cca 3.7.10 起模板不带账号，这两项是给旧版 App 看的：能挑的只有一个时是它，
+    不止一个时是「启动时选账号」；`dir`：那台机器上的文件夹（主目录写成 `~`）；`args`：参数拼成的一行（只是给人看）；
     `line`：能带一句开场白。这几样是那台机器说的，cca 去掉了控制字符、截短了，App 当普通文字显示。
+  - `accounts`（新加的；那台机器的 cca 3.7.10 起才有，旧的是 null：模板用它自己的账号，不用挑、也不能 `--account`）：起会话时能挑的账号（那台机器上
+    会话走这个配对的服务器的），`[{id, tool, name, host_name}]`。`id`：16 个十六进制字符，`remote launch --account` 的参数（按配对算的，和这台 Mac 上
+    别处的账号编号不是一回事）；`tool`：只给 `tool` 和选着的模板一样的；`name`、`host_name`：同 `sessions[].name`、`host_name`。
 - `errors[]`：`{code, message}`，没问到别的机器上的会话的原因。`code`：`relay_off`（这台 Mac 用不了中转）| `relay_old`（服务器还不支持中转）|
   `relay_unreachable`（连不上）| `relay_denied`（服务器不认这台 Mac）| `relay_error`（别的）。`message` 是给人看的，App 原样显示。
 - 刷新：这一页看得见时马上查一次，之后每 15 秒一次（低优先级），用户 15 分钟没碰键盘鼠标时不查；点「刷新」、做完 9.2、9.4 的命令、
-  界面里的终端结束时各查一次。同一时间只跑一个：服务器给每台设备限了流（每 2 秒 1 次、最多攒 30 次），查得太勤会让后面的配对、取消配对被拒。
+  界面里的终端结束时各查一次。同一时间只跑一个：服务器给每台设备限了流（每 2 秒 1 次、最多攒 150 次；3.7.10 以前的服务器 30 次），查得太勤会让后面的配对、取消配对被拒。
 
 ### 9.2 配对、开关、对方能做什么
 
@@ -1508,7 +1514,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   也不要自己再起一个：它先把会话在终端上打开的模式关掉，在终端上说一句“连接断了，正在重新接上…”，隔 1～15 秒试一次（一共最多 5 分钟；
   服务器说那台机器上没有这个会话了，45 秒后就不再等），接上以后那边照新接入的补上模式、回放最近的输出、重画。等的这一阵敲的键不送过去
   （不攒着），断开的键（Ctrl-\ 再按 d）和 SIGTERM 照样管用。那边这期间改成只让看了，接上以后在终端上说一句、按键不再送。没接上才退出（68）。
-- 同时接着几个：App 可以同时开着几个终端（最多 8 个），各是各的 `cca remote attach` 进程、各有一个伪终端，页顶一排里点哪个显示哪个，
+- 同时接着几个：App 可以同时开着几个终端（最多 100 个，3.7.10 起；以前 8 个），各是各的 `cca remote attach` 进程、各有一个伪终端，页顶一排里点哪个显示哪个，
   没在显示的照样接着、照样收输出。一个会话只开一个：已经接着、要的又是同一种接法（操作 / 只看）就换过去，不再运行一次；
   换一种接法是断开原来的再运行。没在显示的终端不改伪终端的窗口大小（停在上次显示时的）。
 - 断开：给进程组发 SIGTERM（接入端收到就断开、退出码 0，会话在那边照常运行），3 秒后还在就 SIGKILL。用户在终端里按断开的键
@@ -1536,8 +1542,8 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 ### 9.4 远程启动：`cca remote template`、`cca remote allow <配对的 id> launch on|off`
 
 要 `hello.remote_launch`。允许远程启动的配对的设备能挑这台 Mac 上的一个模板新建会话、再接入它：iPhone 上的 cca App；有
-`hello.remote_launch_machines` 的 cca 配对过的电脑也行（`cca remote launch`，Mac 上的 cca App，9.5）。模板写好用哪个工具、哪个账号、
-在哪个文件夹、带哪些参数，那边改不了，只能带一句开场白。等它们来的是这台 Mac 上的一个后台进程（启动器：有允许远程启动的设备时 cca 装上、起来，
+`hello.remote_launch_machines` 的 cca 配对过的电脑也行（`cca remote launch`，Mac 上的 cca App，9.5）。模板写好用哪个工具、
+在哪个文件夹、带哪些参数，那边改不了；起的时候那边挑用哪个账号（这台 Mac 上这个工具的、会话走同一台中转服务器的，3.7.10 起；以前的模板定好了账号），能带一句开场白。等它们来的是这台 Mac 上的一个后台进程（启动器：有允许远程启动的设备时 cca 装上、起来，
 macOS 上是 LaunchAgent；一台都没有了卸掉），经 Team 的服务器中转，和那边之间照样端到端加密（细节、线上的格式见 docs/dev/launch.md、
 server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」页「远程启动」一节列出模板，能新建、修改、删除；「已配对的机器」里手机（cca 够新时
 电脑也有）那一行有「允许远程启动」。
@@ -1548,10 +1554,10 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 {
   "version": 1, "kind": "remote_templates",
   "templates": [
-    {"id": "1a2b3c4d", "name": "网站：修 bug", "tool": "claude", "account": "bob@example.com", "account_key": "工作(bob@example.com)",
-     "account_name": "工作", "dir": "/Users/me/projects/site", "args": ["--model", "opus", "--append-system-prompt", "说中文"],
+    {"id": "1a2b3c4d", "name": "网站：修 bug", "tool": "claude", "account": "", "account_key": null, "account_name": null,
+     "dir": "/Users/me/projects/site", "args": ["--model", "opus", "--append-system-prompt", "说中文"],
      "args_line": "--model opus --append-system-prompt '说中文'", "line": true, "digest": "3f9a0c1d2e4b5a69", "problem": null},
-    {"id": "9c0d1e2f", "name": "旧笔记", "tool": "claude", "account": "old@example.com", "account_key": null, "account_name": null,
+    {"id": "9c0d1e2f", "name": "笔记", "tool": "codex", "account": "", "account_key": null, "account_name": null,
      "dir": "/Users/me/notes", "args": [], "args_line": "", "line": true, "digest": "0f1e2d3c4b5a6978", "problem": "no_account"}
   ],
   "launcher": {"running": true, "templates": 2, "peers": 1}
@@ -1561,16 +1567,15 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 - 退出 0 就有文档；没有模板时 `templates` 是空的。
 - `templates[]`：照加的先后（改过的位置不变），最多 16 个。
   - `id`：8 个十六进制字符，`add --replace`、`rm` 的参数。`name`：对方挑模板时看到的名字（不重名，最长 40 个字）。`tool`：`claude` | `codex` | `agy`。
-  - `account`：存着的账号：邮箱（没有邮箱的账号是账号表的键）。`account_key`：账号表里现在的这个账号的键（App 在弹层里选上它，不自己找）；
-    `account_name`：它叫什么（别名，没起别名的是邮箱）。账号没了时这两项都是 null（这时 `problem` 是 `no_account`），App 不选账号，
-    要重新选。
+  - `account`、`account_key`、`account_name`：3.7.10 起模板不带账号（起的时候挑），`account` 是空字符串、另两项是 null，只为 3.7.9 及以前的 App 留着
+    （它当这个模板的账号没了：改模板时要先选一个账号才存得了，选的 cca 不理）。3.7.9 及以前的 cca 给的是存着的账号（邮箱）、账号表里现在的键、名字。
   - `dir`：在哪个文件夹里起（绝对路径；App 显示时主目录写成 `~`）。`args`：起会话时带的参数，一项一个，原样交给工具（不经 shell）。
     `args_line`：`args` 拼成的一行，照 shell 的写法（要引的才用单引号引起来，空格隔开；没有参数是空字符串）：App 显示它、修改时填它，
     `add --args-line` 拆回去是原样。缺了这一项时 App 照同样的写法拼（不然改模板时参数会被清空）。
   - `line`：起会话时能带一句开场白（Claude Code、Codex 的模板，参数里还没有一句话的：除了选项和选项的值没有别的参数，也没有 `--`）。
-  - `digest`：工具、账号、文件夹、参数的摘要（16 个十六进制字符）：对方起会话时带回来，和现在的对不上（模板改过了）就不起。这一节 App 不用它（9.5 里用的是那台机器给的）。
-  - `problem`：现在用不了的原因，用得了是 null：`no_account`（账号表里没有这个账号了）| `no_dir`（文件夹不在了）| `bad_args`（不是交互的会话
-    ——打印模式、子命令这类跑完就退出的——或者带着这些参数启动前的检查过不了）| `no_relay`（这个账号的会话不经中转：这台 Mac 还不在哪个 Team 里；
+  - `digest`：工具、文件夹、参数的摘要（16 个十六进制字符；3.7.9 及以前账号也算在里面）：对方起会话时带回来，和现在的对不上（模板改过了）就不起。这一节 App 不用它（9.5 里用的是那台机器给的）。
+  - `problem`：现在用不了的原因，用得了是 null：`no_account`（这个工具一个账号都没有：先加一个）| `no_dir`（文件夹不在了）| `bad_args`（不是交互的会话
+    ——打印模式、子命令这类跑完就退出的——或者带着这些参数启动前的检查过不了）| `no_relay`（这个工具的账号的会话都不经中转：这台 Mac 还不在哪个 Team 里；
     对方看不到这个模板）。App 把原因标在那一行；不认识的值说“现在用不了”。
 - `launcher`：`running`：启动器在不在跑；`templates`：有几个模板；`peers`：有几台配对的设备能远程启动（`peers[].launch` 是 true 的）。
   `remote list --json` 里也有同样的一份（9.1）。有允许远程启动的设备时，App 在「远程启动」一节说一句启动器在不在跑。
@@ -1579,11 +1584,11 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 
 | 命令 | 做什么 | 方式 |
 |---|---|---|
-| `cca remote template add --name <名字> --tool <工具> --account <账号> --dir <文件夹> [--replace <编号>] (--args-line <一行参数> \| -- [参数…])` | 新建一个模板；带 `--replace` 是改那一个（编号、位置不变）。`--account` 照 `cca @账号` 那样认（App 给账号表的键），存成邮箱；`--dir` 要已经在。参数两种给法，只能用一种：`--args-line` 后面是照 shell 的写法写成的一行（App 一律用它，弹层里的那一行原样给；没有参数是空字符串），cca 拆成一项一项（空白隔开；单引号里的原样；双引号里反斜杠只让 `"`、`\` 原样；引号外的反斜杠让下一个字符原样；不展开 `~`、`$HOME`、`*`）；或者一项一项放在 `--` 后面（终端里用）。校验不过（参数那一行拆不开、名字重了、没有这个账号、文件夹不在、模板太多、参数太多或者用不了）时 `fail`，`message` 说原因 | 无交互命令（都给全时不问；缺了的只在终端里问）；`result` 的 `remote_updated` |
+| `cca remote template add --name <名字> --tool <工具> --dir <文件夹> [--replace <编号>] (--args-line <一行参数> \| -- [参数…])` | 新建一个模板；带 `--replace` 是改那一个（编号、位置不变）。3.7.10 起不带账号（给了 `--account` 也不理；3.7.9 及以前的 cca 要它：照 `cca @账号` 那样认，存成邮箱，这一版的 App 不给，那样的 cca 会 `fail`）；`--dir` 要已经在。参数两种给法，只能用一种：`--args-line` 后面是照 shell 的写法写成的一行（App 一律用它，弹层里的那一行原样给；没有参数是空字符串），cca 拆成一项一项（空白隔开；单引号里的原样；双引号里反斜杠只让 `"`、`\` 原样；引号外的反斜杠让下一个字符原样；不展开 `~`、`$HOME`、`*`）；或者一项一项放在 `--` 后面（终端里用）。校验不过（参数那一行拆不开、名字重了、文件夹不在、模板太多、参数太多或者用不了）时 `fail`，`message` 说原因 | 无交互命令（都给全时不问；缺了的只在终端里问）；`result` 的 `remote_updated` |
 | `cca remote template rm <编号>` | 删掉一个模板（也认名字，App 一律给编号）；已经用它起的会话照常运行。App 先自己问一句（cca 不发 `consent`） | 无交互命令；`result` 的 `remote_updated` |
 | `cca remote allow <配对的 id> launch on\|off` | 这台配对的设备能不能用这台 Mac 上的模板新建会话（9.2） | 无交互命令；打开时先 `consent.remote_launch`（4.2、4.3）；`result` 的 `remote_updated` |
 
-- App 里新建、修改模板是一个弹层：名字；工具（启用了的）；账号（`state` 里这个工具的账号，传账号表的键；新建时先选上这个工具上次用的）；
+- App 里新建、修改模板是一个弹层：名字；工具（启用了的；这个工具还没有账号时说一句：存得了，加了账号才用得了）；
   文件夹（打开面板选）；参数是一行字（修改时填 `args_line`），存的时候原样交给 cca（`--args-line`），App 不自己拆。cca 说不行（拆不开、
   校验不过）时原因写在弹层里，接着改。
 - 「允许远程启动」：有 `hello.remote_launch_machines` 时手机、电脑那一行都有，没有时只给手机（`peers[].web`）；`incoming` 不是 `control` 时开关停用、
@@ -1594,10 +1599,10 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 
 要 `hello.remote_launch_machines`。9.4 反过来：配对过的另一台机器（它上面的 cca 3.7.7 起）允许这台 Mac 远程启动时（那台机器上
 `cca remote allow <这台 Mac> launch on`），这台 Mac 能挑那台机器上的一个模板，在那台机器上新建会话、接入它，和 iPhone 上的 cca App 做的一样。
-那台机器的启动器和它能用的模板在 `remote list --json` 的 `peer_launchers` 里（9.1，跟着列表定时查）。账号、文件夹、参数都照那台机器写的模板，
-这里改不了，只能带一句开场白。
+那台机器的启动器和它能用的模板在 `remote list --json` 的 `peer_launchers` 里（9.1，跟着列表定时查）。文件夹、参数都照那台机器写的模板，
+这里改不了；账号起的时候挑（`peer_launchers[].accounts`；那台机器的 cca 3.7.9 及以前的照模板定的账号），能带一句开场白。
 
-`cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行> [--line <开场白>] --json`：
+`cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行> [--account <账号的编号>] [--line <开场白>] --json`：
 
 ```json
 {"version": 1, "kind": "remote_launch", "id": "f7f7…（32 个十六进制字符）",
@@ -1607,16 +1612,19 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
 ```
 
 - 参数：`peer_launchers[].peer`、`templates[].id`、`templates[].digest`（原样带上：那台机器上改过了就不起）；`--size`：新会话一开始多大
-  （20～500 列、5～300 行，超出的 cca 夹到范围里；接进去以后会话跟着接入的终端调）；`--line`：开场白（模板的 `line` 是 true 才能带；
+  （20～500 列、5～300 行，超出的 cca 夹到范围里；接进去以后会话跟着接入的终端调）；`--account`：挑的账号（`peer_launchers[].accounts[].id`；
+  `accounts` 是 null 时不能写，能挑的只有一个时可以不写）；`--line`：开场白（模板的 `line` 是 true 才能带；
   不能是空白、不超过 500 个字、不能有换行这些控制字符，不对的 cca `fail`）。cca 问服务器、进那台机器的启动器（端到端加密）、说要起哪个，
   等它回话（最多 25 秒），起好了再等新会话在服务器上登记好（最多 45 秒，每 1.5 秒问一次）才退出。
 - 退出 0 就有文档：`id` 是新会话的编号；`session` 是 `remote list --json` 的 `sessions[]` 里它那一项，45 秒还没登记好时是 null
   （会话起来了，过一会儿列表里会有）。App 拿到 `session` 就照 9.3 接入它（`remote attach`，能操作）；是 null 时说一句，不接。
-- 没成都有一条 `fail` 事件（`code` 是 `error`，`message` 说原因，stderr 上也是这一句）。退出码：64 参数不对；65 没有这个配对、这个模板，
-  那台机器现在没让这台 Mac 远程启动（或者它的启动器不在）；66 经服务器没成（连不上、那台机器不在线、没等到回话）；67 那台机器不起
-  （模板在那边改过了、没有这个模板了、账号、文件夹没了、那边的会话太多、起得太勤……`message` 是 cca 照那台机器给的原因说的）。
+- 没成都有一条 `fail` 事件（`code` 是 `error`，`message` 说原因，stderr 上也是这一句）。退出码：64 参数不对（能挑的不止一个却没写 `--account`、
+  那台机器的 cca 是旧版却写了）；65 没有这个配对、这个模板、这个账号，那台机器现在没让这台 Mac 远程启动（或者它的启动器不在）；66 经服务器没成（连不上、
+  那台机器不在线、没等到回话）；67 那台机器不起（模板在那边改过了、没有这个模板了、挑的账号没了或者改走别的 Team 的服务器、文件夹没了、那边的会话太多、
+  起得太勤……`message` 是 cca 照那台机器给的原因说的）。
   App 把 `message` 写在弹层里，列表再查一次（模板、摘要可能变了）。
 - App 里：「可以接入的会话」里允许这台 Mac 远程启动的那台机器自成一组（没有会话也有），标题旁边是「新建会话…」（那台机器 `state` 不是 `ok`、
-  没有模板时停用）；点了是一个弹层：挑模板（只有一个时先选上）、能带开场白的可以写一句，「新建会话」。`--size` 用上一次在这里开的终端的大小，
+  没有模板时停用）；点了是一个弹层：挑模板（只有一个时先选上）、挑账号（`accounts` 不是 null 时：这个模板的工具能挑的，只有一个时先选上；换了模板、
+  选着的不在能挑的里面了就不选）、能带开场白的可以写一句，「新建会话」。`--size` 用上一次在这里开的终端的大小，
   还没开过是 120x36。
 - 终端里：`cca remote launch`（不写模板）列出能用的模板，`cca remote launch [机器] <模板> [--line 开场白]` 起好了在这个终端里接进去；App 不用。

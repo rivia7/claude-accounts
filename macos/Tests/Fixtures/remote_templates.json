@@ -6,9 +6,9 @@
       "id": "1a2b3c4d",
       "name": "网站：修 bug",
       "tool": "claude",
-      "account": "bob@example.com",
-      "account_key": "工作(bob@example.com)",
-      "account_name": "工作",
+      "account": "",
+      "account_key": null,
+      "account_name": null,
       "dir": "/Users/me/projects/site",
       "args": [
         "--model",
@@ -25,9 +25,9 @@
       "id": "5e6f7a8b",
       "name": "任务队列",
       "tool": "codex",
-      "account": "frank@example.com",
-      "account_key": "frank@example.com",
-      "account_name": "frank@example.com",
+      "account": "",
+      "account_key": null,
+      "account_name": null,
       "dir": "/Users/me/srv/jobs",
       "args": [],
       "args_line": "",
@@ -39,7 +39,7 @@
       "id": "9c0d1e2f",
       "name": "旧笔记",
       "tool": "claude",
-      "account": "old@example.com",
+      "account": "",
       "account_key": null,
       "account_name": null,
       "dir": "/Users/me/notes",
@@ -50,7 +50,7 @@
       "args_line": "--permission-mode plan",
       "line": true,
       "digest": "0f1e2d3c4b5a6978",
-      "problem": "no_account"
+      "problem": "no_dir"
     }
   ],
   "launcher": {

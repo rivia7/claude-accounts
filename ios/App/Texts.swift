@@ -300,22 +300,31 @@ enum Texts {
 
     // MARK: 新建会话（远程启动）
 
-    /// 模板的第二行：「Claude Code · 工作」
-    static func templateTool(_ t: LaunchTemplate) -> String {
-        [cliProduct(t.tool), nonEmpty(t.account)].compactMap { $0 }.joined(separator: " · ")
+    /// 模板的第二行：「Claude Code · 工作」；withAccount 是 false（那台电脑的 cca 让起的时候挑账号）时只写工具
+    static func templateTool(_ t: LaunchTemplate, withAccount: Bool = true) -> String {
+        [cliProduct(t.tool), withAccount ? nonEmpty(t.account) : nil].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 选着的模板没有能挑的账号（那台电脑上这个工具的账号都不经这个配对所在的服务器中转，或者都删了）
+    static func launchNoAccount(_ tool: String) -> String {
+        "电脑上没有可用于这个模板的 \(cliProduct(tool) ?? tool) 账号（账号需要经这个配对所在的服务器中转）。请在电脑上添加账号后再试"
     }
 
     /// 那台电脑的启动器说没起：原因码（server/README.md「启动器」）→ App 自己的一句话；不认识的原因码照那台电脑写的原因说，
-    /// 它也没写的说一句通用的
-    static func launchFailure(code: String, text: String) -> String {
+    /// 它也没写的说一句通用的。picked：挑了账号（3.7.10 起的 cca）：说账号的那几个照挑的账号说，不是模板的
+    static func launchFailure(code: String, text: String, picked: Bool = false) -> String {
         switch code {
         case "denied": return "电脑不允许这台手机远程启动会话。请在 Mac 上打开 cca App 的「远程会话」，在「已配对的机器」中为这台手机打开「允许远程启动」（或在终端运行 cca remote allow 手机名称 launch on）"
         case "no_template": return "这个模板已被删除。列表已刷新，请重新选择"
         case "changed": return "这个模板已被修改。列表已刷新，请确认后再启动"
-        case "no_account": return "模板使用的账号已不存在，请在电脑上修改这个模板"
+        case "no_account":
+            return picked ? "选择的账号在电脑上已不存在（可能已删除或改了登录）。列表已刷新，请重新选择" : "模板使用的账号已不存在，请在电脑上修改这个模板"
+        case "need_account": return "电脑上的 cca 已更新，启动时要选择账号。列表已刷新，请选择账号后再启动"
         case "no_dir": return "模板的文件夹已不存在，请在电脑上修改这个模板"
         case "bad_args": return "模板的参数无法使用（未通过启动前的检查），请在电脑上修改这个模板"
-        case "other_hub": return "模板的账号现在经另一个 Team 的服务器中转，无法从这里启动，请使用经那个 Team 的配对"
+        case "other_hub":
+            return picked ? "这个账号现在经另一个 Team 的服务器中转，无法从这里启动。请换一个账号，或使用经那个 Team 的配对"
+                : "模板的账号现在经另一个 Team 的服务器中转，无法从这里启动，请使用经那个 Team 的配对"
         case "busy": return "电脑上打开的会话太多，请先结束几个再试"
         case "rate": return "启动太频繁，请稍后再试"
         case "spawn": return "会话启动失败。可在电脑上运行 cca remote launcher log 查看原因"

@@ -1129,10 +1129,20 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
         check("\(name) peer_launchers 都解码了：编号 32 个十六进制字符，是配对过的机器（一台一个），不是会话", (rl as? [Any])?.count == ls.count
               && ls.allSatisfy { l in hex(l.id, 32) && doc.peers.contains { $0.id == l.peer } && nonEmpty(l.machine) != nil }
               && Set(ls.map(\.peer)).count == ls.count && ls.allSatisfy { l in !doc.sessions.contains { $0.id == l.id } })
+        let rows = rl as? [[String: Any]] ?? []
         for l in ls {
             check("\(name) peer_launchers[\(l.machine)]：state 是 ok 或 offline，more 不是负的，模板的编号、摘要对、编号不重复，有名字",
                   (l.state == .ok || l.state == .offline) && l.more >= 0 && l.templates.allSatisfy { hex($0.id, 8) && hex($0.digest, 16) && !$0.name.isEmpty }
                   && Set(l.templates.map(\.id)).count == l.templates.count)
+            // accounts（3.7.10 起：起会话时挑的账号）：那台机器上的 cca 是旧版时是 null
+            let ra = rows.first { $0["id"] as? String == l.id }?["accounts"]
+            if let accts = l.accounts {
+                check("\(name) peer_launchers[\(l.machine)].accounts 都解码了：编号 16 个十六进制字符、不重复，有名字",
+                      (ra as? [Any])?.count == accts.count && accts.allSatisfy { hex($0.id, 16) && !$0.name.isEmpty && !$0.hostName.isEmpty }
+                      && Set(accts.map(\.id)).count == accts.count)
+            } else {
+                check("\(name) peer_launchers[\(l.machine)] 没有能挑的账号（旧版的 cca）：accounts 是 null", ra == nil || isNull(ra))
+            }
         }
     }
     check("\(name) 用不了中转时不列别的机器上的会话", doc.relayAvailable || doc.sessions.allSatisfy(\.isLocal))
@@ -1141,8 +1151,8 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
 }
 
 /// `cca remote template list --json`（PROTOCOL 9.4）：模板的编号是 8 个十六进制字符、不重复，名字不空不重复，文件夹是绝对路径，
-/// 参数都是字符串、拼成的那一行（`args_line`）有参数才不空；账号没了（`account_name`、`account_key` 是 null）和 `no_account` 是一回事；
-/// 启动器的模板个数就是列出来的这几个
+/// 参数都是字符串、拼成的那一行（`args_line`）有参数才不空；账号不在模板里（3.7.10 起），给 3.7.9 及以前的 App 看的 `account`、`account_key`、
+/// `account_name` 照旧有；启动器的模板个数就是列出来的这几个
 @discardableResult
 func genericRemoteTemplates(_ name: String, _ d: Data) -> RemoteTemplatesDoc? {
     guard let doc = decodeOrFail(RemoteTemplatesDoc.self, name, d) else { return nil }
@@ -1156,12 +1166,12 @@ func genericRemoteTemplates(_ name: String, _ d: Data) -> RemoteTemplatesDoc? {
     check("\(name) 名字不空、不重复", doc.templates.allSatisfy { !$0.name.isEmpty } && Set(doc.templates.map(\.name)).count == doc.templates.count)
     for (i, t) in doc.templates.enumerated() {
         let r = i < rows.count ? rows[i] : [:]
-        check("\(name) \(t.id) 有账号、文件夹是绝对路径", !t.account.isEmpty && t.dir.hasPrefix("/"))
-        check("\(name) \(t.id) 的参数都是字符串，line 是布尔", (r["args"] as? [Any])?.count == t.args.count && r["args"] is [String] && isBool(r["line"]))
-        check("\(name) \(t.id) 账号没了（account_name 是 null）就是 no_account", (t.accountName == nil) == (t.problem == .noAccount)
-              && (isNull(r["account_name"]) || r["account_name"] is String) && (isNull(r["problem"]) || r["problem"] is String))
-        check("\(name) \(t.id) 有 account_key（账号没了是 null，和 account_name 一起）", r.keys.contains("account_key")
-              && (isNull(r["account_key"]) || r["account_key"] is String) && (t.accountKey == nil) == (t.accountName == nil))
+        check("\(name) \(t.id) 文件夹是绝对路径", t.dir.hasPrefix("/"))
+        check("\(name) \(t.id) 的参数都是字符串，line 是布尔，problem 是 null 或字符串", (r["args"] as? [Any])?.count == t.args.count && r["args"] is [String]
+              && isBool(r["line"]) && (isNull(r["problem"]) || r["problem"] is String))
+        check("\(name) \(t.id) 给 3.7.9 及以前的 App 看的：account 是字符串，account_key、account_name 是 null 或字符串（3.7.9 及以前的 App 读不到 account_key 就让人重选账号）",
+              r["account"] is String && r.keys.contains("account_key") && (isNull(r["account_key"]) || r["account_key"] is String)
+              && r.keys.contains("account_name") && (isNull(r["account_name"]) || r["account_name"] is String))
         check("\(name) \(t.id) 的 args_line 是字符串，有参数才不空", r["args_line"] is String && t.argsLine.isEmpty == t.args.isEmpty, t.argsLine)
         if let h = r["digest"] {
             check("\(name) \(t.id) 的摘要是 16 个十六进制字符", (h as? String).map { $0.count == 16 && $0.allSatisfy(\.isHexDigit) } == true)
@@ -1682,6 +1692,7 @@ func auditRemote(_ doc: RemoteDoc) -> [String] {
     for l in doc.peerLaunchers {
         a.add("peer_launchers[\(l.machine)].state", l.state)
         for t in l.templates { a.add("peer_launchers[\(l.machine)].templates[\(t.id)].tool", t.tool) }
+        for x in l.accounts ?? [] { a.add("peer_launchers[\(l.machine)].accounts[\(x.id)].tool", x.tool) }
     }
     return a.unknown
 }

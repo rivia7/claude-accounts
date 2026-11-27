@@ -1,5 +1,5 @@
-// 远程启动（docs/dev/ios.md「新建会话（远程启动）」）：允许远程启动的手机挑那台电脑上写好的一个模板（工具、账号、文件夹、参数），
-// 那台电脑起一个新的会话，手机接着接入它。那台电脑上常驻的启动器（cli/src/cmd/remote/launch.rs）在服务器上登记成一个“会话”，
+// 远程启动（docs/dev/ios.md「新建会话（远程启动）」）：允许远程启动的手机挑那台电脑上写好的一个模板（工具、文件夹、参数）和那台电脑上
+// 这个工具的一个账号（3.7.10 起模板不带账号：说明里的 accounts），那台电脑起一个新的会话，手机接着接入它。那台电脑上常驻的启动器（cli/src/cmd/remote/launch.rs）在服务器上登记成一个“会话”，
 // 它的说明（有哪些模板）用另一把密钥封给这台手机（launchOpen：旧的 App 拿会话说明的密钥解不开，当它不存在）。点了模板：进启动器
 // （和接入会话一样的票据、开场白、握手），头一帧说要起哪个（LAUNCH，不发 HELLO），等它回话（LAUNCHED）。格式见 server/README.md
 // 「启动器」，和辅助程序的 launch.rs、template.rs、crypto.rs 的 launch_seal，tests/kit/spec.rs 的 launch_seal 是同一套
@@ -9,14 +9,16 @@ import Foundation
 public struct LaunchTemplate: Sendable, Equatable, Hashable, Identifiable {
     /// 编号（8 个小写的十六进制字符）
     public let id: String
-    /// 摘要（16 个小写的十六进制字符）：工具、账号、文件夹、参数算出来的，起会话时带回去；那台电脑上改过了就对不上（changed）
+    /// 摘要（16 个小写的十六进制字符）：工具、文件夹、参数算出来的（3.7.9 及以前还有账号），起会话时带回去；那台电脑上改过了就对不上
+    /// （changed）
     public let digest: String
     public let name: String
     /// claude、codex、agy
     public let tool: String
-    /// 账号（给人看的短名字）
+    /// 账号（给人看的短名字）。3.7.10 起的电脑写的是给旧版的 App 看的：能挑的只有一个时是它，几个时是「启动时选账号」——有
+    /// `LauncherInfo.accounts` 时不用它
     public let account: String
-    /// 账号摘要（和账号的状态、会话的说明里的一样；那台电脑不在 Team 里时是空的）
+    /// 账号摘要（和账号的状态、会话的说明里的一样；那台电脑不在 Team 里时、3.7.10 起能挑的不止一个时是空的）
     public let aid: String
     /// 文件夹（~/… 的样子）
     public let dir: String
@@ -42,16 +44,43 @@ public struct LaunchTemplate: Sendable, Equatable, Hashable, Identifiable {
     static let tools: Set<String> = ["claude", "codex", "agy"]
 }
 
-/// 启动器的说明：那台电脑叫什么、这台手机能起的模板、说明里放不下的还有几个
+/// 那台电脑上起会话时能挑的一个账号（启动器的说明里的 accounts，3.7.10 起）：模板用到的工具的、会话经这台服务器中转的
+public struct LaunchAccount: Sendable, Equatable, Hashable, Identifiable {
+    /// 编号（16 个小写的十六进制字符，按配对算的，和账号的状态里的编号一样）：起会话时带回去（LAUNCH 的 a）
+    public let id: String
+    /// claude、codex、agy
+    public let tool: String
+    /// 名字（那台电脑上的别名的短名字）
+    public let name: String
+    /// 账号摘要（和账号的状态、会话的说明里的一样；那台电脑不在 Team 里时是空的）
+    public let aid: String
+
+    public init(id: String, tool: String, name: String, aid: String = "") {
+        self.id = id
+        self.tool = tool
+        self.name = name
+        self.aid = aid
+    }
+}
+
+/// 启动器的说明：那台电脑叫什么、这台手机能起的模板、说明里放不下的还有几个、起会话时能挑的账号
 public struct LauncherInfo: Sendable, Equatable {
     public let machine: String
     public let templates: [LaunchTemplate]
     public let more: Int
+    /// 能挑的账号（3.7.10 起）；那台电脑上的 cca 是旧版时是 nil：模板用它自己的账号，起的时候不说用哪个
+    public let accounts: [LaunchAccount]?
 
-    public init(machine: String, templates: [LaunchTemplate], more: Int = 0) {
+    public init(machine: String, templates: [LaunchTemplate], more: Int = 0, accounts: [LaunchAccount]? = nil) {
         self.machine = machine
         self.templates = templates
         self.more = more
+        self.accounts = accounts
+    }
+
+    /// 用这个模板起会话时能挑的账号（模板的那个工具的）；那台电脑上的 cca 是旧版时是 nil
+    public func accounts(for t: LaunchTemplate) -> [LaunchAccount]? {
+        accounts.map { list in list.filter { $0.tool == t.tool } }
     }
 }
 
@@ -77,7 +106,9 @@ func launchKeys(_ p: Bytes) -> SealKeys {
 }
 
 /// 解开启动器的说明：认证带着配对编号、启动器的编号（别的配对的、别的密钥封的、会话的说明都解不开）；不是 v1 的是 nil。
-/// 模板：编号、摘要、工具不是那个样子的不要，编号和前面留下的重复的不要（留头一个）；字照会话的说明那样清理、限长度
+/// 模板：编号、摘要、工具不是那个样子的不要，编号和前面留下的重复的不要（留头一个）；字照会话的说明那样清理、限长度。
+/// 能挑的账号（accounts）同样：编号、工具不是那个样子的、编号重复的不要；没有这一项（旧版的 cca）是 nil，不是列表的当作空的
+/// （和辅助程序 far.rs 的 launcher_of 一样）
 func launchOpen(_ keys: SealKeys, pid: String, sid: String, _ blob: Any?) -> LauncherInfo? {
     guard let pt = unseal("cca-remote-launch", keys, [pid, sid], blob), let j = parsed(pt), jsonInt(j["v"]) == 1 else { return nil }
     var seen = Set<String>()
@@ -91,11 +122,24 @@ func launchOpen(_ keys: SealKeys, pid: String, sid: String, _ blob: Any?) -> Lau
         rows.append(LaunchTemplate(id: id, digest: h, name: clean(t["n"], 40), tool: k, account: clean(t["a"], 64), aid: aid,
                                    dir: clean(t["d"], 200), args: clean(t["x"], 300), line: jsonBool(t["l"]) == true))
     }
-    return LauncherInfo(machine: clean(j["machine"], 48), templates: rows, more: max(jsonInt(j["more"]) ?? 0, 0))
+    var accounts: [LaunchAccount]?
+    if let raw = j["accounts"] {
+        var list = [LaunchAccount]()
+        for x in raw as? [Any] ?? [] {
+            guard let a = x as? [String: Any], let id = a["i"] as? String, lowerHex(id, 16), let k = a["k"] as? String,
+                  LaunchTemplate.tools.contains(k), !list.contains(where: { $0.id == id })
+            else { continue }
+            let aid = (a["aid"] as? String).flatMap { lowerHex($0, 32) ? $0 : nil } ?? ""
+            list.append(LaunchAccount(id: id, tool: k, name: clean(a["n"], 64), aid: aid))
+        }
+        accounts = list
+    }
+    return LauncherInfo(machine: clean(j["machine"], 48), templates: rows, more: max(jsonInt(j["more"]) ?? 0, 0), accounts: accounts)
 }
 
-/// 要起哪个（LAUNCH 帧的内容）：`{"v":1,"t":编号,"h":摘要,"c":列,"r":行,"l":开场白}`，紧凑的 JSON、非 ASCII 原样、键照这个先后，
-/// 没有开场白时不带 l。和辅助程序 launch.rs 的 `Ask::parse` 是一对：它不认的这里就不发
+/// 要起哪个（LAUNCH 帧的内容）：`{"v":1,"t":编号,"h":摘要,"c":列,"r":行,"l":开场白,"a":账号}`，紧凑的 JSON、非 ASCII 原样、键照这个
+/// 先后，没有开场白时不带 l，不说用哪个账号（那台电脑上的 cca 是旧版）时不带 a。和辅助程序 launch.rs 的 `Ask::parse` 是一对：它不认的
+/// 这里就不发
 public enum LaunchAsk {
     /// 新会话的大小（列、行）的范围
     public static let cols = 20...500
@@ -116,21 +160,25 @@ public enum LaunchAsk {
         (min(max(c, cols.lowerBound), cols.upperBound), min(max(r, rows.lowerBound), rows.upperBound))
     }
 
-    /// LAUNCH 的内容。编号、摘要不是那个样子，大小不在范围里，开场白不能发（空的、空白、太长、有控制字符）：nil
-    public static func payload(id: String, digest: String, cols c: Int, rows r: Int, line: String? = nil) -> Bytes? {
+    /// LAUNCH 的内容。编号、摘要、账号（LaunchAccount.id）不是那个样子，大小不在范围里，开场白不能发（空的、空白、太长、有控制字符）：nil
+    public static func payload(id: String, digest: String, cols c: Int, rows r: Int, line: String? = nil, account: String? = nil) -> Bytes? {
         guard lowerHex(id, 8), lowerHex(digest, 16), cols.contains(c), rows.contains(r) else { return nil }
         var s = "{\"v\":1,\"t\":\"\(id)\",\"h\":\"\(digest)\",\"c\":\(c),\"r\":\(r)"
         if let line {
             guard lineOK(line) else { return nil }
             s += ",\"l\":" + quoted(line)
         }
+        if let account {
+            guard lowerHex(account, 16) else { return nil }
+            s += ",\"a\":\"\(account)\""
+        }
         let b = Bytes(utf8: s + "}")
         return b.count <= payloadMax ? b : nil
     }
 
     /// 整个 LAUNCH 帧（类型、4 个字节的大端长度、内容）；不能发是 nil（同 payload）
-    public static func frame(id: String, digest: String, cols c: Int, rows r: Int, line: String? = nil) -> Bytes? {
-        payload(id: id, digest: digest, cols: c, rows: r, line: line).map { Frame.make(Frame.launch, $0) }
+    public static func frame(id: String, digest: String, cols c: Int, rows r: Int, line: String? = nil, account: String? = nil) -> Bytes? {
+        payload(id: id, digest: digest, cols: c, rows: r, line: line, account: account).map { Frame.make(Frame.launch, $0) }
     }
 
     /// JSON 的字符串：引号、反斜杠转义，控制字符写成 \u00XX（开场白里本来就不许有），别的原样
@@ -157,7 +205,7 @@ public enum LaunchAsk {
 public enum LaunchResult: Equatable, Sendable {
     /// 起来了：新会话的编号（接着用 Attachment 接入它，fresh）
     case launched(sid: String)
-    /// 启动器说不起：原因码（denied、changed……，App 的 Texts.launchFailure 照它说）、那台电脑写的原因（清理过，可能是空的）
+    /// 启动器说不起：原因码（denied、changed、need_account……，App 的 Texts.launchFailure 照它说）、那台电脑写的原因（清理过，可能是空的）
     case refused(code: String, text: String)
     /// 没等到启动器回话。原因是服务器、这一头的（RemoteFailure 的那些：unreachable、no_session……）、连接关掉的那几个词（Link：
     /// nohost、lost、refused……），另有 timeout（20 秒没回话）、cancelled（调用方不等了）、bad_ask（大小、开场白不能发）

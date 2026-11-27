@@ -399,7 +399,7 @@ enum Texts {
     /// 远程启动的模板用不了的原因（PROTOCOL 9.4 的 `problem`）：标在那一行的名字后面
     static func remoteTemplateProblem(_ p: RemoteTemplateProblem) -> String {
         switch p {
-        case .noAccount: return "账号不存在"
+        case .noAccount: return "没有账号"
         case .noDir: return "文件夹不存在"
         case .badArgs: return "参数不可用"
         case .noRelay: return "不经中转"
@@ -410,22 +410,30 @@ enum Texts {
     /// 同上，长一点（鼠标停在上面时）：怎么了、怎么办
     static func remoteTemplateProblemHelp(_ p: RemoteTemplateProblem) -> String {
         switch p {
-        case .noAccount: return "账号表里已没有这个账号：请修改模板，换一个账号"
+        case .noAccount: return "这台 Mac 上还没有这个工具的账号：先添加一个，模板才能用（账号在启动会话时选择）"
         case .noDir: return "文件夹不存在：请修改模板，换一个文件夹"
         case .badArgs: return "参数不可用（例如打印模式这类运行完就退出的，或未通过启动前的检查）：请修改参数"
-        case .noRelay: return "这个账号的会话不经中转（这台 Mac 未加入 Team）：手机上看不到这个模板"
+        case .noRelay: return "这个工具的账号的会话都不经中转（这台 Mac 未加入 Team）：手机上看不到这个模板"
         default: return "这个模板暂不可用"
         }
     }
 
-    /// 模板的第二行：「工作 · ~/projects/site · --model opus」（账号没了时是存着的邮箱；dir 是给人看的那样）
+    /// 模板的第二行：「~/projects/site · --model opus」（dir 是给人看的那样；账号不在模板里：起会话时挑）
     static func remoteTemplateDetail(_ t: RemoteTemplate, dir: String) -> String {
-        [nonEmpty(t.accountName) ?? nonEmpty(t.account), nonEmpty(dir), nonEmpty(t.argsLine)].compactMap { $0 }.joined(separator: " · ")
+        [nonEmpty(dir), nonEmpty(t.argsLine)].compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// 另一台机器上的模板的第二行（PROTOCOL 9.5）：账号（这台 Mac 上的名字）、那台机器上的文件夹、参数
-    static func remotePeerTemplateDetail(_ t: RemotePeerTemplate) -> String {
-        [nonEmpty(t.account) ?? t.hostAccount, nonEmpty(t.dir), nonEmpty(t.args)].compactMap { $0 }.joined(separator: " · ")
+    /// 另一台机器上的模板的第二行（PROTOCOL 9.5）：那台机器上的文件夹、参数；withAccount（那台机器上的 cca 是旧版、模板带着账号时）
+    /// 前面还有账号（这台 Mac 上的名字）
+    static func remotePeerTemplateDetail(_ t: RemotePeerTemplate, withAccount: Bool = true) -> String {
+        [withAccount ? nonEmpty(t.account) ?? t.hostAccount : nil, nonEmpty(t.dir), nonEmpty(t.args)].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 在别的机器上起会话时能挑的一个账号：这台 Mac 上的名字，和那台机器上叫的不一样时括号里说一声
+    static func remotePeerAccount(_ a: RemotePeerAccount) -> String {
+        let name = nonEmpty(a.name) ?? nonEmpty(a.hostName) ?? a.id
+        guard let host = nonEmpty(a.hostName), host != name else { return name }
+        return "\(name)（那台机器上叫「\(host)」）"
     }
 
     static func product(_ tool: ToolID) -> String {

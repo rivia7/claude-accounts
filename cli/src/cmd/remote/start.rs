@@ -5,9 +5,10 @@
 //! `cca remote attach` 那样接进去；刚起的可能还没在服务器上登记好：头 45 秒里隔 1.5 秒再问一次（同 iOS 的 `Attachment` 的
 //! `freshFor`、`freshGap`）。线上的格式见 server/README.md「启动器」。
 //!
-//! - `remote-launch`：列出配对过的机器上能用的模板，一行一个：`机器  编号  名字  工具  账号  文件夹  参数`
-//! - `remote-launch [机器] 模板 [--line 开场白] [--size 列x行]`：起一个、接进去（要在终端里：先查，不在终端里什么都不起）。
-//!   机器认配对的名字、配对编号的前几位（同 `cca remote allow`）；模板认编号、名字；只有一台机器上有这个模板时不用写机器
+//! - `remote-launch`：列出配对过的机器上能用的模板，一行一个：`机器  编号  名字  工具  账号  文件夹  参数`（账号是起的时候能挑的那几个）
+//! - `remote-launch [机器] 模板 [--account 账号] [--line 开场白] [--size 列x行]`：起一个、接进去（要在终端里：先查，不在终端里什么都不起）。
+//!   机器认配对的名字、配对编号的前几位（同 `cca remote allow`）；模板认编号、名字；只有一台机器上有这个模板时不用写机器。账号认名字
+//!   （这台机器上的别名、那台机器说的名字）、编号（`--json` 里的 `accounts[].id`）；那台机器上能挑的只有一个时不用写
 //! - 加 `--json`（界面 App，PROTOCOL 9.5）：起一个、等它在服务器上登记好，stdout 一份文档（新会话的编号、`remote list --json` 里
 //!   它那一项），不接进去。`--digest 摘要`：App 列出来时看到的模板的摘要（那台机器上改过了就不起：`changed`）。失败时设了
 //!   `CCA_EVENTS` 的话另记一条 `fail` 事件（原因的话和 stderr 的一样）
@@ -17,7 +18,7 @@
 //! 69 不在终端里；接进去以后同 `cca remote attach`。
 
 use super::attach::{self, EXIT_NOT_FOUND, EXIT_NO_TTY, EXIT_RELAY, EXIT_USAGE};
-use super::far::{self, clean, Far, FarLauncher, FarTemplate};
+use super::far::{self, clean, Far, FarAccount, FarLauncher, FarTemplate};
 use super::local::{self, Decoder};
 use super::manage::far_entry;
 use super::peers::{self, Peer};
@@ -45,7 +46,8 @@ const DEFAULT_SIZE: Size = Size { cols: 120, rows: 36 };
 /// 开场白最多几个字（同 launch.rs 的 LINE_MAX）
 const LINE_MAX: usize = 500;
 
-const USAGE: &str = "用法：cca remote launch [机器] [模板] [--line 开场白]（不写模板是列出能用的；起好以后接进去）";
+const USAGE: &str =
+    "用法：cca remote launch [机器] [模板] [--account 账号] [--line 开场白]（不写模板是列出能用的；起好以后接进去）";
 
 fn usage() -> R<()> {
     crate::err!("{USAGE}");
@@ -80,14 +82,64 @@ fn clamp(s: Size) -> Size {
     Size { cols: s.cols.clamp(*COLS.start(), *COLS.end()), rows: s.rows.clamp(*ROWS.start(), *ROWS.end()) }
 }
 
-/// 列出来的一行：`机器  编号  名字  工具  账号  文件夹  参数`（没有参数的没有最后那一截）
+/// 起这个模板时能挑的账号（那台机器上的 cca 是旧版的：None，模板用它自己的账号）
+fn choices<'a>(l: &'a FarLauncher, t: &FarTemplate) -> Option<Vec<&'a FarAccount>> {
+    l.accounts.as_ref().map(|list| list.iter().filter(|a| a.tool == t.tool).collect())
+}
+
+/// 列出来的一行：`机器  编号  名字  工具  账号  文件夹  参数`（账号是起的时候能挑的那几个；没有参数的没有最后那一截）
 fn row(l: &FarLauncher, t: &FarTemplate) -> String {
-    let mut s = format!("{}  {}  {}  {}  {}  {}", l.peer, t.id, t.name, t.tool, t.account, t.dir);
+    let who = match choices(l, t) {
+        Some(c) => c.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join("、"),
+        None => t.account.clone(),
+    };
+    let mut s = format!("{}  {}  {}  {}  {}  {}", l.peer, t.id, t.name, t.tool, who, t.dir);
     if !t.args.is_empty() {
         s.push_str("  ");
         s.push_str(&t.args);
     }
     s
+}
+
+/// 用哪个账号起（want：--account 写的，认名字——这台机器上的别名、那台机器说的名字——和编号）。那台机器上能挑的只有一个时不用写；
+/// 那台机器上的 cca 是旧版（说明里没有能挑的账号）时模板用它自己的账号：None，写了 --account 不行。Err：(退出码, 原因)
+fn pick_for<'a>(l: &'a FarLauncher, t: &FarTemplate, want: Option<&str>) -> Result<Option<&'a FarAccount>, (i32, String)> {
+    let Some(mine) = choices(l, t) else {
+        return match want {
+            None => Ok(None),
+            Some(_) => Err((
+                EXIT_USAGE,
+                format!(
+                    "「{}」上的 cca 是旧版：模板「{}」只能用它自己的账号（{}），不能 --account（先把那台机器上的 cca 更新到最新版）",
+                    l.peer, t.name, t.account
+                ),
+            )),
+        };
+    };
+    let names = || mine.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join("、");
+    let Some(want) = want else {
+        return match mine.as_slice() {
+            [one] => Ok(Some(*one)),
+            [] => Err((EXIT_NOT_FOUND, format!("「{}」上没有能用模板「{}」起会话的账号", l.peer, t.name))),
+            _ => Err((EXIT_USAGE, format!("模板「{}」起的时候要挑账号：加上 --account 账号（能挑：{}）", t.name, names()))),
+        };
+    };
+    if let Some(a) = mine.iter().find(|a| a.id == want) {
+        return Ok(Some(*a));
+    }
+    let low = want.to_lowercase();
+    let mut hits: Vec<&FarAccount> = mine.iter().copied().filter(|a| a.name == want || a.host_name == want).collect();
+    if hits.is_empty() {
+        hits = mine.iter().copied().filter(|a| a.name.to_lowercase() == low || a.host_name.to_lowercase() == low).collect();
+    }
+    match hits.as_slice() {
+        [one] => Ok(Some(*one)),
+        [] => Err((EXIT_NOT_FOUND, format!("模板「{}」能挑的账号里没有「{want}」（能挑：{}）", t.name, names()))),
+        _ => {
+            let ids: Vec<String> = hits.iter().map(|a| format!("{}（{}）", a.name, a.id)).collect();
+            Err((EXIT_USAGE, format!("有 {} 个账号叫「{want}」：用编号（--account 编号）：{}", hits.len(), ids.join("、"))))
+        }
+    }
 }
 
 /// 启动器说不起的原因（LAUNCHED 的 code）：照这一头说（那台机器写的 text 是给手机看的，不认识的 code 才用它）
@@ -96,10 +148,11 @@ fn refused_text(code: &str, text: &str) -> String {
         "denied" => "那台机器现在不让这台机器远程启动会话（在那台机器上运行 cca remote allow 这台机器的名字 launch on）",
         "no_template" => "那台机器上没有这个模板了（cca remote launch 看现在有哪些）",
         "changed" => "模板在那台机器上改过了：刷新一下再起",
-        "no_account" => "模板的账号在那台机器的账号表里没有了",
+        "no_account" => "选的账号在那台机器的账号表里没有了（cca remote launch 看现在能挑哪些）",
+        "need_account" => "那台机器要知道用哪个账号：加上 --account 账号（cca remote launch 看能挑哪些）",
         "no_dir" => "模板的文件夹在那台机器上没有了",
         "bad_args" => "模板的参数在那台机器上用不了（启动前的检查过不了）",
-        "other_hub" => "模板的账号现在走别的 Team 的服务器：在那个 Team 的配对上起",
+        "other_hub" => "选的账号现在走别的 Team 的服务器：在那个 Team 的配对上起",
         "busy" => "那台机器上开着的会话太多了：先结束几个",
         "rate" => "起得太勤了：过一会儿再试",
         "spawn" => "会话没起来（在那台机器上运行 cca remote launcher log 看看）",
@@ -176,14 +229,16 @@ fn fresh(srv: &Server, peer: &Peer, sid: &str) -> Option<Far> {
 pub fn cmd_remote_launch(args: &[String]) -> R<()> {
     let mut pos: Vec<&str> = Vec::new();
     let (mut line, mut size, mut digest, mut as_json) = (None::<String>, None::<Size>, None::<String>, false);
+    let mut account = None::<String>;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" if !as_json => as_json = true,
-            "--line" | "--size" | "--digest" => {
+            "--line" | "--size" | "--digest" | "--account" => {
                 let Some(v) = it.next() else { return usage() };
                 match a.as_str() {
                     "--line" if line.is_none() => line = Some(v.clone()),
+                    "--account" if account.is_none() && !v.trim().is_empty() => account = Some(v.clone()),
                     "--size" if size.is_none() => match parse_size(v) {
                         Some(s) => size = Some(s),
                         None => return usage(),
@@ -200,7 +255,7 @@ pub fn cmd_remote_launch(args: &[String]) -> R<()> {
             s => pos.push(s),
         }
     }
-    if pos.len() > 2 || (pos.is_empty() && (as_json || line.is_some() || size.is_some() || digest.is_some())) {
+    if pos.len() > 2 || (pos.is_empty() && (as_json || line.is_some() || size.is_some() || digest.is_some() || account.is_some())) {
         return usage();
     }
     let all = peers::load();
@@ -223,9 +278,11 @@ pub fn cmd_remote_launch(args: &[String]) -> R<()> {
             crate::err!("配对过的机器上现在都没有能用的模板（那台机器上要先 cca remote template add，再 cca remote allow 这台机器的名字 launch on）");
             return Ok(());
         }
+        let mut pick = false;
         for l in &seen.launchers {
             for t in &l.templates {
                 crate::out!("{}", row(l, t));
+                pick = pick || choices(l, t).is_some_and(|c| c.len() > 1);
             }
             if !l.online {
                 crate::err!("「{}」暂时没连着服务器：它上面的模板现在起不了", l.peer);
@@ -233,6 +290,9 @@ pub fn cmd_remote_launch(args: &[String]) -> R<()> {
             if l.more > 0 {
                 crate::err!("「{}」上还有 {} 个模板没列出来（说明里放不下）", l.peer, l.more);
             }
+        }
+        if pick {
+            crate::err!("起的时候用 --account 挑账号（能挑的只有一个时不用写）：cca remote launch [机器] 模板 --account 账号");
         }
         return Ok(());
     }
@@ -293,6 +353,10 @@ pub fn cmd_remote_launch(args: &[String]) -> R<()> {
             return fail(EXIT_USAGE, &format!("「{}」不能带开场白（参数里已经有一句话了，或者这个工具不认）", t.name));
         }
     }
+    let acct = match pick_for(l, t, account.as_deref()) {
+        Ok(a) => a,
+        Err((code, why)) => return fail(code, &why),
+    };
     if !l.online {
         return fail(EXIT_RELAY, &format!("「{}」暂时没连着服务器：过一会儿再试", l.peer));
     }
@@ -320,6 +384,9 @@ pub fn cmd_remote_launch(args: &[String]) -> R<()> {
     };
     if let Some(s) = &line {
         ask.set("l", s.as_str());
+    }
+    if let Some(a) = acct {
+        ask.set("a", a.id.as_str());
     }
     tun.send(&local::frame(local::LAUNCH, json::dumps(&V::Dict(ask), json::Fmt::new().utf8().compact()).as_bytes()));
     let got = answer(&mut tun);
@@ -381,9 +448,77 @@ mod tests {
         assert!(refused_text("changed", "模板在那台机器上改过了：刷新一下再选").contains("刷新一下再起"));
         assert_eq!(refused_text("new_code", "那边说的"), "那边说的");
         assert_eq!(refused_text("new_code", ""), "那台机器没起（new_code）");
-        for code in ["denied", "no_template", "changed", "no_account", "no_dir", "bad_args", "other_hub", "busy", "rate", "spawn"] {
+        for code in [
+            "denied",
+            "no_template",
+            "changed",
+            "no_account",
+            "need_account",
+            "no_dir",
+            "bad_args",
+            "other_hub",
+            "busy",
+            "rate",
+            "spawn",
+        ] {
             assert_ne!(refused_text(code, ""), refused_text("bad", ""), "{code}");
         }
+    }
+
+    #[test]
+    fn which_account_to_ask_for() {
+        let acct = |id: &str, tool: &str, name: &str, host: &str| FarAccount {
+            id: id.into(),
+            tool: tool.into(),
+            name: name.into(),
+            host_name: host.into(),
+            aid: String::new(),
+        };
+        let tpl = |tool: &str| FarTemplate {
+            id: "0a1b2c3d".into(),
+            digest: "0011223344556677".into(),
+            name: "修 bug".into(),
+            tool: tool.into(),
+            account: "启动时选账号".into(),
+            host_account: "启动时选账号".into(),
+            aid: String::new(),
+            dir: "~/work".into(),
+            args: String::new(),
+            line: true,
+        };
+        let launcher = |accounts: Option<Vec<FarAccount>>| FarLauncher {
+            sid: "0123456789abcdef0123456789abcdef".into(),
+            pid: "ab".repeat(16),
+            peer: "Mac mini".into(),
+            online: true,
+            more: 0,
+            templates: Vec::new(),
+            accounts,
+        };
+        let l = launcher(Some(vec![
+            acct("1111111111111111", "claude", "工作", "主力"),
+            acct("2222222222222222", "claude", "Alice", "alice"),
+            acct("3333333333333333", "codex", "工作", "工作"),
+        ]));
+        let id = |r: Result<Option<&FarAccount>, (i32, String)>| r.map(|a| a.map(|a| a.id.clone())).map_err(|(c, _)| c);
+        let (claude, codex) = (tpl("claude"), tpl("codex"));
+        assert_eq!(id(pick_for(&l, &claude, Some("工作"))), Ok(Some("1111111111111111".into())), "这台机器上的别名");
+        assert_eq!(id(pick_for(&l, &claude, Some("主力"))), Ok(Some("1111111111111111".into())), "那台机器说的名字");
+        assert_eq!(id(pick_for(&l, &claude, Some("ALICE"))), Ok(Some("2222222222222222".into())), "不分大小写（对不上原样的时候）");
+        assert_eq!(id(pick_for(&l, &claude, Some("2222222222222222"))), Ok(Some("2222222222222222".into())), "编号");
+        assert_eq!(id(pick_for(&l, &claude, Some("3333333333333333"))), Err(EXIT_NOT_FOUND), "别的工具的账号");
+        assert_eq!(id(pick_for(&l, &claude, None)), Err(EXIT_USAGE), "能挑的不止一个：要写");
+        assert_eq!(id(pick_for(&l, &codex, None)), Ok(Some("3333333333333333".into())), "只有一个：不用写");
+        assert_eq!(id(pick_for(&l, &tpl("agy"), None)), Err(EXIT_NOT_FOUND));
+        let same =
+            launcher(Some(vec![acct("1111111111111111", "claude", "工作", "x"), acct("2222222222222222", "claude", "工作", "y")]));
+        assert_eq!(id(pick_for(&same, &claude, Some("工作"))), Err(EXIT_USAGE), "重名：要写编号");
+        // 那台机器上的 cca 是旧版：模板用它自己的账号，不能 --account
+        let old = launcher(None);
+        assert_eq!(id(pick_for(&old, &claude, None)), Ok(None));
+        assert_eq!(id(pick_for(&old, &claude, Some("工作"))), Err(EXIT_USAGE));
+        assert_eq!(row(&l, &claude), "Mac mini  0a1b2c3d  修 bug  claude  工作、Alice  ~/work");
+        assert_eq!(row(&old, &claude), "Mac mini  0a1b2c3d  修 bug  claude  启动时选账号  ~/work");
     }
 
     #[test]

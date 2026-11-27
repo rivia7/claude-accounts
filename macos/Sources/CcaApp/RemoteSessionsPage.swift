@@ -236,7 +236,8 @@ private struct RemoteSessionList: View {
         var launcher: RemotePeerLauncher? = nil
     }
 
-    /// 这台 Mac 上的在前，别的机器按 cca 给的先后，一台一组；允许这台 Mac 远程启动的机器没有会话也有一组
+    /// 这台 Mac 上的在前，别的机器按 cca 给的先后，一台一组；允许这台 Mac 远程启动的机器没有会话也有一组。一组里的会话能拖着排
+    /// （`MovableSessionLine`），先后记在这台 Mac 上
     private func groups(_ doc: RemoteDoc) -> [SessionGroup] {
         var out: [SessionGroup] = []
         for s in doc.sessions {
@@ -256,6 +257,8 @@ private struct RemoteSessionList: View {
                 out.append(SessionGroup(id: l.peer, title: name, sessions: [], launcher: l))
             }
         }
+        // 一台机器的会话照拖出来的先后（没拖过的照 cca 给的）
+        for i in out.indices { out[i].sessions = model.orderedRemoteSessions(out[i].sessions) }
         return out.filter { $0.id.isEmpty } + out.filter { !$0.id.isEmpty }
     }
 
@@ -290,7 +293,7 @@ private struct RemoteSessionList: View {
                                 Text("现在没有开着的会话：「新建会话…」照那台机器上的模板起一个").font(.callout).foregroundStyle(.secondary)
                             }
                             ForEach(g.sessions) { s in
-                                RemoteSessionLine(session: s, now: now)
+                                MovableSessionLine(session: s, group: g.sessions, now: now)
                             }
                         }
                         .padding(.horizontal, 4)
@@ -337,6 +340,51 @@ private struct RemoteSessionList: View {
             }
             .padding(.horizontal, 4)
         }
+    }
+}
+
+/// 会话那一行能拖：拖到同一台机器的另一个会话上，排到它的位置（往下拖排在它后面，往上拖排在它前面）；右键也能上移、下移。
+/// 先后只记在这台 Mac 上（`AppModel.remoteOrder`）。
+private struct MovableSessionLine: View {
+    @Environment(AppModel.self) private var model
+    let session: RemoteSession
+    /// 这台机器的会话现在的先后：只在它们之间挪
+    let group: [RemoteSession]
+    let now: Double
+    /// 别的会话正拖到这一行上面（命令行工具编不了 @State 宏：State 类型直接用）
+    private let targeted = State(initialValue: false)
+
+    var body: some View {
+        let s = session
+        let at = group.firstIndex { $0.id == s.id } ?? 0
+        RemoteSessionLine(session: s, now: now)
+            .padding(.horizontal, 6)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(targeted.wrappedValue ? Color.accentColor : Color.clear, lineWidth: 2))
+            .padding(.horizontal, -6)
+            .contentShape(Rectangle())
+            .draggable(s.id) { RemoteSessionDragPreview(session: s) }
+            .dropDestination(for: String.self) { ids, _ in
+                ids.first.map { model.dropRemoteSession($0, onto: s, in: group) } ?? false
+            } isTargeted: { targeted.wrappedValue = $0 }
+            .contextMenu {
+                if group.count > 1 {
+                    Button("上移") { model.stepRemoteSession(s, by: -1, in: group) }.disabled(at == 0)
+                    Button("下移") { model.stepRemoteSession(s, by: 1, in: group) }.disabled(at == group.count - 1)
+                }
+            }
+    }
+}
+
+/// 拖着一个会话时跟着鼠标的那一块：它的名字
+private struct RemoteSessionDragPreview: View {
+    let session: RemoteSession
+
+    var body: some View {
+        Label(nonEmpty(Texts.remoteTitle(session)) ?? session.short, systemImage: "terminal")
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -497,8 +545,9 @@ private struct RemotePeerLine: View {
 
 // MARK: 远程启动
 
-/// 「远程启动」（PROTOCOL 9.4）：手机用这台 Mac 上的模板新建会话。模板写好用哪个工具、哪个账号、在哪个文件夹、带哪些参数，
-/// 手机只能挑一个起（可以带一句开场白）；哪台手机能用在「已配对的机器」里开。只有 cca 有远程启动（`hello.remote_launch`）时才有这一节。
+/// 「远程启动」（PROTOCOL 9.4）：手机用这台 Mac 上的模板新建会话。模板写好用哪个工具、在哪个文件夹、带哪些参数，手机挑一个模板、
+/// 一个账号（这台 Mac 上这个工具的）起（可以带一句开场白）；哪台手机能用在「已配对的机器」里开。只有 cca 有远程启动（`hello.remote_launch`）
+/// 时才有这一节。
 private struct RemoteLaunchSection: View {
     @Environment(AppModel.self) private var model
     /// 要删掉的那个模板（等确认）
@@ -511,7 +560,7 @@ private struct RemoteLaunchSection: View {
                 if model.remoteTemplatesLoading, snap.doc != nil { ProgressView().controlSize(.small) }
                 SectionAction("新建模板…", systemImage: "plus") { model.editRemoteTemplate() }
                     .disabled(model.remoteBusy)
-                    .help("设定用哪个工具、哪个账号、在哪个文件夹、带哪些参数启动会话：允许远程启动的已配对设备可以选择一个模板，在这台 Mac 上新建会话")
+                    .help("设定用哪个工具、在哪个文件夹、带哪些参数启动会话：允许远程启动的已配对设备可以选择一个模板和这台 Mac 上的一个账号，在这台 Mac 上新建会话")
             }
             VStack(alignment: .leading, spacing: 9) {
                 if let running = model.remoteLauncherRunning { launcher(running) }
@@ -533,8 +582,8 @@ private struct RemoteLaunchSection: View {
                     ProgressView().controlSize(.small)
                 }
                 Text(model.remoteLaunchMachinesAvailable
-                     ? "在「已配对的机器」中为一台手机或电脑打开「允许远程启动」后，它就能选择一个模板在这台 Mac 上新建会话并接入：账号、文件夹、参数都按模板设置，对方无法修改，只能附带一句开场白。"
-                     : "在「已配对的机器」中为一台手机打开「允许远程启动」后，它就能选择一个模板在这台 Mac 上新建会话并接入：账号、文件夹、参数都按模板设置，手机上无法修改，只能附带一句开场白。")
+                     ? "在「已配对的机器」中为一台手机或电脑打开「允许远程启动」后，它就能选择一个模板和这台 Mac 上这个工具的一个账号，在这台 Mac 上新建会话并接入：文件夹、参数都按模板设置，对方无法修改，只能附带一句开场白。"
+                     : "在「已配对的机器」中为一台手机打开「允许远程启动」后，它就能选择一个模板和这台 Mac 上这个工具的一个账号，在这台 Mac 上新建会话并接入：文件夹、参数都按模板设置，手机上无法修改，只能附带一句开场白。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 4)
@@ -566,7 +615,7 @@ private struct RemoteLaunchSection: View {
     }
 }
 
-/// 一个模板：名字、工具，用不了时标出原因；第二行是账号、文件夹、参数。右边「修改…」「删除…」
+/// 一个模板：名字、工具，用不了时标出原因；第二行是文件夹、参数。右边「修改…」「删除…」
 private struct RemoteTemplateLine: View {
     @Environment(AppModel.self) private var model
     let template: RemoteTemplate
@@ -594,7 +643,7 @@ private struct RemoteTemplateLine: View {
             Spacer(minLength: 8)
             RowAction("修改…", systemImage: "pencil") { model.editRemoteTemplate(t) }
                 .disabled(model.remoteBusy)
-                .help("改这个模板的名字、账号、文件夹、参数")
+                .help("改这个模板的名字、工具、文件夹、参数")
             RowAction("删除…", systemImage: "trash") { remove() }
                 .disabled(model.remoteBusy)
                 .help("删除这个模板：已配对的设备将不再看到它")
@@ -605,7 +654,7 @@ private struct RemoteTemplateLine: View {
     }
 }
 
-/// 新建、修改一个模板（弹层）：名字、工具、账号、文件夹、参数。存的时候 cca 校验，不行的原因写在下面，接着改。
+/// 新建、修改一个模板（弹层）：名字、工具、文件夹、参数（账号在起会话时挑）。存的时候 cca 校验，不行的原因写在下面，接着改。
 struct RemoteTemplateSheet: View {
     @Environment(AppModel.self) private var model
     let draft: RemoteTemplateDraft
@@ -616,7 +665,7 @@ struct RemoteTemplateSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(d.original == nil ? "新建模板" : "修改模板").font(.title3.weight(.semibold))
-                Text("在「已配对的机器」中允许远程启动的设备可以选择这个模板，在这台 Mac 上新建会话：账号、文件夹、参数都按这里的设置，对方无法修改。")
+                Text("在「已配对的机器」中允许远程启动的设备可以选择这个模板，在这台 Mac 上新建会话：文件夹、参数都按这里的设置，对方无法修改；账号由对方启动时从这台 Mac 上这个工具的账号中选择。")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             field("名字") {
@@ -624,7 +673,7 @@ struct RemoteTemplateSheet: View {
                     .textFieldStyle(.roundedBorder)
             }
             if tools.count > 1 {
-                field("工具") {
+                field("工具", note: toolNote) {
                     Picker("工具", selection: Binding(get: { d.tool }, set: { model.setRemoteTemplateTool(d, $0) })) {
                         ForEach(tools, id: \.self) { t in Text(Texts.cliProduct(t)).tag(t) }
                     }
@@ -632,17 +681,8 @@ struct RemoteTemplateSheet: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                 }
-            }
-            field("账号", note: accountNote) {
-                Picker("账号", selection: Binding(get: { d.account }, set: { d.account = $0 })) {
-                    if d.account.isEmpty { Text("选一个账号").tag("") }
-                    ForEach(model.accounts(d.tool)) { a in
-                        Text(a.isAPI ? a.displayName + "（第三方 API）" : a.displayName).tag(a.key)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
+            } else if let note = toolNote {
+                Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             field("文件夹") {
                 HStack(spacing: 10) {
@@ -682,12 +722,10 @@ struct RemoteTemplateSheet: View {
         .frame(width: 520)
     }
 
-    /// 账号下面那一句：这个工具还没有账号；改的模板原来的账号没了
-    private var accountNote: String? {
+    /// 工具下面那一句：这个工具还没有账号时，模板存得了、用不了（起会话时没有账号可挑）
+    private var toolNote: String? {
         let d = draft
-        if model.accounts(d.tool).isEmpty { return "\(Texts.cliProduct(d.tool)) 还没有账号" }
-        if let t = d.original, d.account.isEmpty { return "模板原来的账号（\(nonEmpty(t.accountName) ?? t.account)）已不在账号表中，请换一个" }
-        return nil
+        return model.accounts(d.tool).isEmpty ? "\(Texts.cliProduct(d.tool)) 还没有账号：先添加一个，这个模板才能用" : nil
     }
 
     private func field<Content: View>(_ label: String, note: String? = nil, @ViewBuilder content: () -> Content) -> some View {
@@ -702,8 +740,9 @@ struct RemoteTemplateSheet: View {
     }
 }
 
-/// 在配对过的另一台机器上新建会话（弹层，PROTOCOL 9.5）：挑那台机器上的一个模板（账号、文件夹、参数都是那台机器写好的，这里改不了），
-/// 能带开场白的可以写一句。起好了在这一页里开一个终端接入它；起不成的原因（cca 说的）写在下面，可以再起。
+/// 在配对过的另一台机器上新建会话（弹层，PROTOCOL 9.5）：挑那台机器上的一个模板（文件夹、参数都是那台机器写好的，这里改不了）、
+/// 那台机器上这个工具的一个账号（那台机器上的 cca 是旧版时模板带着账号，不用挑），能带开场白的可以写一句。起好了在这一页里开一个终端
+/// 接入它；起不成的原因（cca 说的）写在下面，可以再起。
 struct RemoteLaunchSheet: View {
     @Environment(AppModel.self) private var model
     let draft: RemoteLaunchDraft
@@ -715,10 +754,11 @@ struct RemoteLaunchSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("在「\(machine)」上新建会话").font(.title3.weight(.semibold))
-                Text("选择那台机器上的一个模板：账号、文件夹、参数都按模板设置（在那台机器上修改），启动后在这里接入。")
+                Text(l.accounts == nil ? "选择那台机器上的一个模板：账号、文件夹、参数都按模板设置（在那台机器上修改），启动后在这里接入。"
+                     : "选择那台机器上的一个模板和一个账号：文件夹、参数都按模板设置（在那台机器上修改），启动后在这里接入。")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Picker("模板", selection: Binding(get: { d.template }, set: { d.template = $0 })) {
+            Picker("模板", selection: Binding(get: { d.template }, set: { d.choose(template: $0) })) {
                 ForEach(l.templates) { t in
                     templateLabel(t).tag(Optional(t.id))
                 }
@@ -729,6 +769,7 @@ struct RemoteLaunchSheet: View {
             if l.more > 0 {
                 Text("那台机器上还有 \(l.more) 个模板没列出来（说明里放不下）").font(.caption).foregroundStyle(.secondary)
             }
+            if d.chosen != nil, let list = d.choices { accountPicker(d, list) }
             if let t = d.chosen {
                 if t.line {
                     VStack(alignment: .leading, spacing: 5) {
@@ -773,9 +814,29 @@ struct RemoteLaunchSheet: View {
         .frame(width: 520)
     }
 
-    /// 一个模板：名字、工具；第二行是账号、文件夹、参数
+    /// 选账号：模板的那个工具在那台机器上的账号（名字是这台 Mac 上的，这台 Mac 上没有的是那台机器说的）
+    private func accountPicker(_ d: RemoteLaunchDraft, _ list: [RemotePeerAccount]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("账号").font(.callout.weight(.medium))
+            if list.isEmpty {
+                Text("那台机器上没有能用这个模板启动会话的账号（这个工具的账号都不经这个 Team 的服务器）")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Picker("账号", selection: Binding(get: { d.account }, set: { d.account = $0 })) {
+                    if d.account == nil { Text("选一个账号").tag(String?.none) }
+                    ForEach(list) { a in Text(Texts.remotePeerAccount(a)).tag(Optional(a.id)) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+                .disabled(d.starting)
+            }
+        }
+    }
+
+    /// 一个模板：名字、工具；第二行是文件夹、参数（那台机器上的 cca 是旧版时前面还有模板的账号）
     private func templateLabel(_ t: RemotePeerTemplate) -> some View {
-        let detail = Texts.remotePeerTemplateDetail(t)
+        let detail = Texts.remotePeerTemplateDetail(t, withAccount: draft.launcher.accounts == nil)
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Text(nonEmpty(t.name) ?? t.id).fontWeight(.medium).lineLimit(1)

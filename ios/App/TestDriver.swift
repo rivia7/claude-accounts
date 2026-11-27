@@ -7,7 +7,8 @@ import Foundation
 /// - `-test-attach`：配好以后（或者本来就配过）等会话列出来，接入第一个在线的 → `state open` …
 /// - `-test-launch <模板编号>`（可以再给 `-test-line <开场白>`）：配好以后（或者本来就配过）等启动器列出这个模板，照「新建会话」那样启动 →
 ///   `launch size 列 行`（新会话照多大起）、`launch ok <新会话的编号>` / `launch fail <原因码> <App 说的那句话>`；起来了接着像 -test-attach 那样
-///   接入它（`state open` …，后面几项照样）
+///   接入它（`state open` …，后面几项照样）。那台电脑的 cca 让挑账号时（3.7.10 起）挑 `-test-account <名字>` 给的那个，没给的话能挑的只有
+///   一个时挑它，挑不出来是 `launch fail no_pick`
 /// - `-test-type <文字>`：接上以后敲进去（\r 结尾）
 /// - `-test-note`：会话推来的通知不真的弹（不要权限），说出来 → `note 标题|副标题|正文`
 /// - `-test-wheel`：（敲完以后）等会话开了鼠标上报，当成手指往下拖了三行 → `wheel`（会话那头收到三格往上的滚轮）
@@ -137,9 +138,21 @@ enum TestDriver {
             say("launch fail no_template")
             return nil
         }
+        var account: LaunchAccount?
+        if let list = model.launcher(peer)?.info.accounts(for: template) {
+            if let n = value("-test-account") {
+                account = list.first { $0.name == n }
+            } else if list.count == 1 {
+                account = list.first
+            }
+            guard account != nil else {
+                say("launch fail no_pick")
+                return nil
+            }
+        }
         let size = TerminalGrid.forLaunch
         say("launch size \(size.cols) \(size.rows)")
-        if let why = await model.launch(template, on: peer, line: value("-test-line")) {
+        if let why = await model.launch(template, on: peer, as: account, line: value("-test-line")) {
             say("launch fail \(why.code) \(why.text)")
             return nil
         }

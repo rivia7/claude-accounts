@@ -476,8 +476,8 @@ fn against_the_spec(t: &mut Ctx) {
         ],
     );
     // 启动器的说明（远程启动，docs/dev/launch.md：辅助程序 template.rs 的 launch_doc、crypto.rs 的 launch_seal 封的那种）：解开、清理，样子不对的
-    // 模板（编号、摘要不是小写十六进制，不认识的工具，重复的编号）丢掉；会话的说明的密钥解不开它，它的密钥也解不开会话的说明。
-    // LAUNCH 由这一份拼（下面核对），LAUNCHED 照样读
+    // 模板（编号、摘要不是小写十六进制，不认识的工具，重复的编号）丢掉，能挑的账号（3.7.10 起的 accounts）也一样；旧版的 cca 的说明没有
+    // accounts。会话的说明的密钥解不开它，它的密钥也解不开会话的说明。LAUNCH 由这一份拼（下面核对），LAUNCHED 照样读
     let (lp, lpid, lsid) = (crypto::random(32), crypto::token_hex(16), crypto::token_hex(16));
     let tpl = |i: &str, h: &str, n: &str, k: &str| {
         obj! { "i" => i, "h" => h, "n" => n, "k" => k, "a" => "a", "d" => "~", "x" => "", "l" => false }
@@ -497,6 +497,15 @@ fn against_the_spec(t: &mut Ctx) {
             tpl("00000000", "0123", "摘要不对", "claude"),
             tpl("11111111", "1111111111111111", "别的工具", "vim"),
             tpl("0123abcd", "1111111111111111", "重复的编号", "claude")
+        ],
+        "accounts" => list![
+            obj! { "i" => "0011223344556677", "k" => "claude", "n" => "主力\u{1b}[31m", "aid" => "cd".repeat(16) },
+            obj! { "i" => "8899aabbccddeeff", "k" => "codex", "n" => "x".repeat(80), "aid" => "XYZ" },
+            obj! { "i" => "0011223344556677", "k" => "claude", "n" => "重复的编号" },
+            obj! { "i" => "00112233", "k" => "claude", "n" => "编号不对" },
+            obj! { "i" => "FFFFFFFFFFFFFFFF", "k" => "claude", "n" => "大写的编号" },
+            obj! { "i" => "1111222233334444", "k" => "vim", "n" => "别的工具" },
+            obj! { "k" => "claude", "n" => "没有编号" }
         ]
     };
     let launched = |payload: &str, want: Value| obj! { "payload_hex" => hx(payload.as_bytes()), "want" => want };
@@ -509,6 +518,7 @@ fn against_the_spec(t: &mut Ctx) {
             "blob" => spec::launch_seal(&lp, &lpid, &lsid, &ldoc),
             "forged" => spec::launch_seal(&crypto::random(32), &lpid, &lsid, &ldoc),
             "dir" => spec::dir_seal(&lp, &lpid, &lsid, &obj! { "v" => 1, "machine" => "m", "tool" => "claude", "name" => "n", "cwd" => "~", "since" => 1 }),
+            "old_blob" => spec::launch_seal(&lp, &lpid, &lsid, &obj! { "v" => 1, "machine" => "m", "more" => 0, "t" => list![tpl("0a0b0c0d", "0123456789abcdef", "旧的", "claude")] }),
             "want" => obj! {
                 "machine" => "box", "more" => 3,
                 "t" => list![
@@ -520,9 +530,13 @@ fn against_the_spec(t: &mut Ctx) {
                         "i" => "89abcdef", "h" => "fedcba9876543210", "n" => "x".repeat(40), "k" => "codex", "a" => "bob", "aid" => "",
                         "d" => format!("~/{}", "y".repeat(198)), "x" => "z".repeat(300), "l" => false
                     }
+                ],
+                "accounts" => list![
+                    obj! { "i" => "0011223344556677", "k" => "claude", "n" => "主力[31m", "aid" => "cd".repeat(16) },
+                    obj! { "i" => "8899aabbccddeeff", "k" => "codex", "n" => "x".repeat(64), "aid" => "" }
                 ]
             },
-            "ask" => obj! { "t" => "0123abcd", "h" => "0123456789abcdef", "c" => 100, "r" => 30, "l" => "你好" },
+            "ask" => obj! { "t" => "0123abcd", "h" => "0123456789abcdef", "c" => 100, "r" => 30, "l" => "你好", "a" => "0011223344556677" },
             "bad_lines" => list!["", "   ", "a\u{1b}b", "a\nb", "字".repeat(501)],
             "launched" => list![
                 launched(&ok_reply(&new_sid, 1), obj! { "ok" => true, "sid" => &new_sid }),
@@ -559,7 +573,7 @@ fn against_the_spec(t: &mut Ctx) {
     let got: Vec<Vec<u8>> = lens.iter().map(|_| host.open(&mut buf).expect("记录认证得过").expect("够一条")).collect();
     assert_eq!(got, lens.iter().map(|n| pattern(*n)).collect::<Vec<_>>());
     assert!(buf.is_empty(), "多出来 {} 个字节", buf.len());
-    // 这一份拼的 LAUNCH：类型、长度、内容（JSON；开场白只在有的时候带）
+    // 这一份拼的 LAUNCH：类型、长度、内容（JSON；开场白、账号只在有的时候带）
     let launch_frame = |key: &str| {
         let raw = crypto::unhex(out[key].str()).unwrap_or_else(|e| panic!("{key} 不是十六进制：{e}"));
         assert_eq!(raw.first(), Some(&relay::LAUNCH), "{key}");
@@ -569,8 +583,8 @@ fn against_the_spec(t: &mut Ctx) {
     };
     let got = launch_frame("launch_frame");
     assert_eq!(
-        (got.obj().len(), relay::cols(&got, &["v", "t", "h", "c", "r", "l"])),
-        (6, list![1, "0123abcd", "0123456789abcdef", 100, 30, "你好"])
+        (got.obj().len(), relay::cols(&got, &["v", "t", "h", "c", "r", "l", "a"])),
+        (7, list![1, "0123abcd", "0123456789abcdef", 100, 30, "你好", "0011223344556677"])
     );
     let got = launch_frame("launch_frame_plain");
     assert_eq!(
@@ -857,13 +871,14 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
     let pid = out.split_whitespace().nth(1).expect("peer 后面是配对编号").to_string();
     let work = relay::work(&a);
     let dir = work.to_str().expect("临时目录的路径是 UTF-8");
-    let added = a.ok(&["remote-template", "add", "修 bug", "claude", "alice", dir, "--", "--model", "opus"]);
+    let added = a.ok(&["remote-template", "add", "修 bug", "claude", dir, "--", "--model", "opus"]);
     let tid = added.split('\t').next().expect("编号").to_string();
     a.ok(&["remote-allow", &pid, "launch", "on"]);
     let mut cmd = relay::helper_cmd(&a, &["remote-launcher", "serve"]);
     cmd.env("CCA_SELF", relay::client(&a));
     let mut l = Popen::spawn(&mut cmd);
-    // 手机上：那台机器有启动器（不算会话），模板的编号、名字、工具、账号、文件夹、参数、能带开场白
+    // 手机上：那台机器有启动器（不算会话），模板的编号、名字、工具、账号（能挑的只有 alice：给旧版的 App 看的就是它）、文件夹、参数、
+    // 能带开场白；能挑的账号（编号按配对算的）
     let row = wait_for("手机看到启动器", secs(30), || g.rows().into_iter().find(|r| r["launcher"].as_obj().is_some()));
     let launcher = &row["launcher"];
     assert_eq!(launcher["online"], Value::Bool(true), "{row}");
@@ -872,9 +887,14 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
         relay::cols(first, &["i", "n", "k", "a", "d", "x", "l"]),
         list![&tid, "修 bug", "claude", "alice", "~/work", "--model opus", true]
     );
+    let accts = launcher["accounts"].list();
+    assert_eq!(accts.len(), 1, "{launcher}");
+    assert_eq!(relay::cols(&accts[0], &["k", "n", "aid"]), list!["claude", "alice", first["aid"].str()]);
+    let acct = accts[0]["i"].str().to_string();
+    assert!(acct.len() == 16 && acct.bytes().all(|c| c.is_ascii_hexdigit()), "{acct}");
     assert!(g.rows().iter().all(|r| r.get("sid").is_none()), "启动器不是会话");
-    // 起一个：带开场白，窗口是手机说的；起来了马上接进去
-    let r = g.run(&["launch", &pid, &tid, "--size", "120x40", "--line", "看一下 README"]);
+    // 起一个：挑 alice、带开场白，窗口是手机说的；起来了马上接进去
+    let r = g.run(&["launch", &pid, &tid, "--size", "120x40", "--line", "看一下 README", "--account", &acct]);
     assert_eq!(r.code, 0, "{} {}", r.out, r.err);
     let sid = r.out.trim().strip_prefix("launched ").unwrap_or_else(|| panic!("{:?}", r.out)).to_string();
     let mut p = g.attach(&pid, &sid, &["--fresh", "--size", "120x40"]);

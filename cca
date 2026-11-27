@@ -5538,13 +5538,13 @@ cmd_remote() {
 			esac
 			out=$(py remote-end "$code" 2>&1) || die "${out:-没有结束成}"
 			okay "会话 ${code:0:8} 已经结束"; gui_done remote_updated "会话已经结束" ;;
-		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|notify [--title 标题] [--subtitle 副标题] 正文|pair [--web] [--team 名字]|join [--team 名字]|peers|allow 名字 control|view|none|allow 名字 launch on|off|unpair 名字|template [list|add|rm]|launcher [status|log]|launch [机器] [模板] [--line 开场白]]" ;;
+		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|notify [--title 标题] [--subtitle 副标题] 正文|pair [--web] [--team 名字]|join [--team 名字]|peers|allow 名字 control|view|none|allow 名字 launch on|off|unpair 名字|template [list|add|rm]|launcher [status|log]|launch [机器] [模板] [--account 账号] [--line 开场白]]" ;;
 	esac
 }
 
 remote_template() {   # cca remote template …：远程启动用的模板（docs/dev/launch.md）。list [--json]、add、rm；存取、校验都在辅助程序（remote-template）
-	local name="" tool="" acct="" dir="" replace="" out line="" byline=""
-	local usage="用法：cca remote template [list [--json] | add [--name 名字] [--tool claude|codex|agy] [--account 账号] [--dir 文件夹] [--replace 编号] [-- 参数… | --args-line 一行参数] | rm 名字或编号]"
+	local name="" tool="" dir="" replace="" out line="" byline=""
+	local usage="用法：cca remote template [list [--json] | add [--name 名字] [--tool claude|codex|agy] [--dir 文件夹] [--replace 编号] [-- 参数… | --args-line 一行参数] | rm 名字或编号]"
 	case "${1:-list}" in
 		list|ls)
 			case "$#:${2:-}" in 0:|1:|2:--json) ;; *) die "$usage" ;; esac
@@ -5553,14 +5553,14 @@ remote_template() {   # cca remote template …：远程启动用的模板（doc
 			if [ -z "$out" ]; then info "还没有模板（加一个：cca remote template add）"; return 0; fi
 			printf '%s\n' "$out"
 			if ! py remote-launcher wanted; then say "  还没有配对的设备能用它们：cca remote allow 配对的名字 launch on（手机、电脑都行）"; fi ;;
-		add)   # 没写的在终端里问（App 都给全）
+		add)   # 没写的在终端里问（App 都给全）。账号不在模板里（3.7.10 起：起会话时挑），3.7.9 及以前的 App 还会给 --account：收下、不理
 			shift
 			while [ $# -gt 0 ]; do
 				case "$1" in
 					--) shift; break ;;
 					--name|--tool|--account|--dir|--replace|--args-line)   # --args-line：照 shell 的写法写成的一行参数（App 给的），辅助程序拆
 						[ $# -ge 2 ] || die "$usage"
-						case "$1" in --name) name=$2 ;; --tool) tool=$2 ;; --account) acct=$2 ;; --dir) dir=$2 ;; --replace) replace=$2 ;; *) line=$2 byline=1 ;; esac
+						case "$1" in --name) name=$2 ;; --tool) tool=$2 ;; --account) ;; --dir) dir=$2 ;; --replace) replace=$2 ;; *) line=$2 byline=1 ;; esac
 						shift 2 ;;
 					*) die "$usage" ;;
 				esac
@@ -5568,11 +5568,10 @@ remote_template() {   # cca remote template …：远程启动用的模板（doc
 			[ -z "$byline" ] || [ $# -eq 0 ] || die "$usage"   # 两种写法只能用一种
 			[ -n "$name" ] || name=$(ask "模板的名字（远程启动时看到的）: " "")
 			[ -n "$tool" ] || tool=$(ask "哪个工具（claude、codex、agy）: " claude)
-			[ -n "$acct" ] || acct=$(ask "哪个账号（别名、邮箱或编号）: " "")
 			[ -n "$dir" ] || dir=$(ask "在哪个文件夹里启动: " "$PWD")
-			[ -n "$name" ] && [ -n "$acct" ] || { say "已取消"; gui_cancelled; return 1; }
+			[ -n "$name" ] || { say "已取消"; gui_cancelled; return 1; }
 			if [ -n "$byline" ]; then set -- --args-line "$line"; else set -- -- "$@"; fi
-			out=$(py remote-template add "$name" "$tool" "$acct" "$dir" ${replace:+--replace "$replace"} "$@" 2>&1) || die "${out:-没有存成}"
+			out=$(py remote-template add "$name" "$tool" "$dir" ${replace:+--replace "$replace"} "$@" 2>&1) || die "${out:-没有存成}"
 			IFS=$'\t' read -r replace name <<<"$out"
 			okay "已存好模板「${name}」（编号 ${replace}）"
 			if ! py remote-launcher wanted; then say "  配对的设备要能用它：cca remote allow 配对的名字 launch on（手机、电脑都行）"; fi
@@ -5592,7 +5591,7 @@ remote_allow_launch() {   # remote_allow_launch 名字 on|off：这台配对的�
 	if [ "$2" = on ]; then
 		[ "$inc" = control ] || die "「${name}」现在不能操作这台机器上的会话：先运行 cca remote allow $(shq "$name") control"
 		n=$(py remote-template list | grep -c .)
-		out="打开以后，「${name}」可以用这台机器上的模板新建会话（现在有 ${n} 个：cca remote template 看），不用你在这台机器前面。起的会话和在终端里启动的一样：用模板的账号、在模板的文件夹里运行、带着模板的参数（模板里有 --dangerously-skip-permissions 这类参数的话，它起的会话也不问就执行命令）。这台机器上会装一个登录以后自己起来的后台进程等它来（关掉：cca remote allow $(shq "$name") launch off）"
+		out="打开以后，「${name}」可以用这台机器上的模板新建会话（现在有 ${n} 个：cca remote template 看），不用你在这台机器前面。起的会话和在终端里启动的一样：用它挑的账号（这台机器上模板的那个工具、经这个 Team 的服务器的账号都能挑）、在模板的文件夹里运行、带着模板的参数（模板里有 --dangerously-skip-permissions 这类参数的话，它起的会话也不问就执行命令）。这台机器上会装一个登录以后自己起来的后台进程等它来（关掉：cca remote allow $(shq "$name") launch off）"
 		[ -n "$PROMPT_GUI" ] || say "$out"
 		consent remote_launch "$pid" "远程启动" "让「${name}」能用模板新建会话吗？" "$out" n
 		case $? in
@@ -8548,15 +8547,16 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
                              之后在手机上接入这台机器上的会话。要那台服务器认手机（3.7.0 起的服务器都认）
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
   cca remote template [add|rm]
-                             远程启动用的模板（工具、账号、文件夹、参数）：允许远程启动的手机（cca App）、电脑（cca remote
-                             launch，Mac 上的 cca App）挑一个，这台机器照它新建会话，那边接着接进去（add 没写的在终端里问；
-                             rm 名字或编号）
+                             远程启动用的模板（工具、文件夹、参数）：允许远程启动的手机（cca App）、电脑（cca remote
+                             launch，Mac 上的 cca App）挑一个模板、一个账号，这台机器照它新建会话，那边接着接进去（add 没写的
+                             在终端里问；rm 名字或编号）
   cca remote allow 名字 launch on|off
                              让这台配对的设备（手机、电脑）能 / 不能用模板新建会话（打开要同意；会装一个登录以后自己起来的
                              后台进程等它来：cca remote launcher 看它的状态，cca remote launcher log 看哪台设备什么时候起过会话）
-  cca remote launch [机器] [模板] [--line 开场白]
+  cca remote launch [机器] [模板] [--account 账号] [--line 开场白]
                              用配对过的另一台机器上的模板在那台机器上新建会话、接进去（那台机器上要先 cca remote allow
-                             这台机器的名字 launch on）。不写模板是列出能用的；--line 带一句开场白
+                             这台机器的名字 launch on）。不写模板是列出能用的；--account 挑那台机器上的账号（能挑的只有一个时
+                             不用写）；--line 带一句开场白
   cca uninstall [--no-backup]
                              完全卸载：撤销 cca 做过的全部改动（账号退出登录、路由器和内置代理还原），删掉 cca 自己和它放在
                              别处的缓存、设置。先把配置打包备份到主目录（--no-backup 不留）。cca restore 是同一条命令

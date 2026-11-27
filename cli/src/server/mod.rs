@@ -69,8 +69,9 @@ use std::sync::{Arc, Mutex};
 pub const API: i64 = 1;
 /// 服务端的级别（GET /v1/version 回的 level）：服务器加了这一版 cca 要靠的东西时加一，cca 的 `team::SERVER_NEED` 跟着改（cca 同步配置时
 /// 问一次，比它低的 Team 在界面里提示管理员更新服务器）。这个地址 3.7.1 起有；1：3.7.0 起（认 iPhone 上的 cca App：pair_open 的 guest）；
-/// 2：3.7.5 起（手机上看账号的状态、收额度的通知：status_put、push_note，relay_list 的 have / status，push_set 的 usage）
-pub const LEVEL: i64 = 2;
+/// 2：3.7.5 起（手机上看账号的状态、收额度的通知：status_put、push_note，relay_list 的 have / status，push_set 的 usage）；
+/// 3：3.7.10 起（一台设备同时 101 个可以接入的会话：100 个远程会话加上启动器；票据、数据端口的连接、限流跟着放宽）
+pub const LEVEL: i64 = 3;
 /// 设备给请求签名用的命名空间（Py:68）
 pub const NS_REPORT: &str = "cca-presence";
 /// 一个请求的内容最多这么大（Py:69）
@@ -178,10 +179,10 @@ pub const EDGE_IDLE: i64 = 180 * 86400;
 pub const TICKET_TTL: i64 = 30;
 /// 会话的说明（密文，base64）最长多少个字符（Py:917）
 pub const DIR_BLOB: usize = 4096;
-/// 数据端口同时几个连接（Py:918）
-pub const RELAY_CONN: usize = 256;
-/// 数据端口上同一个 IP 同时几个连接（Py:919）
-pub const RELAY_CONN_IP: usize = 32;
+/// 数据端口同时几个连接（Py:918 是 256；3.7.10 起一台设备能开 100 个会话：一个会话一条控制连接，接入时两头各一条）
+pub const RELAY_CONN: usize = 1024;
+/// 数据端口上同一个 IP 同时几个连接（Py:919 是 32；3.7.10 起：同一个地址后面的一台机器开着 100 个会话、另一台全接着也够）
+pub const RELAY_CONN_IP: usize = 400;
 /// 一头还没转出去的超过这么多，就先不从另一头读（Py:920）
 pub const RELAY_QUEUE: usize = 256 * 1024;
 /// 这么久一个字节都没有的连接断开（Py:921）

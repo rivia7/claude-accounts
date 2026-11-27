@@ -334,7 +334,8 @@ struct RemoteTemplatesDoc: CcaDocument, Equatable {
     func template(_ id: String) -> RemoteTemplate? { templates.first { $0.id == id } }
 }
 
-/// 一个模板：用哪个工具、哪个账号、在哪个文件夹、带哪些参数起会话。
+/// 一个模板：用哪个工具、在哪个文件夹、带哪些参数起会话。账号不在模板里（3.7.10 起）：起会话的那一头挑（手机、另一台机器）；
+/// cca 照旧给的 `account`（空的）、`account_key`、`account_name`（null）是给 3.7.9 及以前的 App 看的，这里不读。
 struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
     /// 模板的编号（8 个十六进制字符）：`cca remote template add --replace`、`rm` 的参数
     var id: String
@@ -342,12 +343,6 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
     var name: String
     /// 用哪个工具起；不认识的照样列出来
     var tool: ToolID?
-    /// 存着的账号：邮箱（没有邮箱的账号是账号表的键）
-    var account: String
-    /// 账号表里现在的这个账号的键（弹层里选上它；cca 找的，App 不自己找）；账号没了、旧版 cca 没给是 nil
-    var accountKey: String?
-    /// 账号表里现在的这个账号叫什么（别名，没起别名的是邮箱）；账号没了是 nil
-    var accountName: String?
     /// 在哪个文件夹里起（绝对路径）
     var dir: String
     /// 起会话时带的参数（一项一个）
@@ -361,8 +356,8 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
     var problem: RemoteTemplateProblem?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, tool, account, dir, args, line, problem
-        case accountKey = "account_key", accountName = "account_name", argsLine = "args_line"
+        case id, name, tool, dir, args, line, problem
+        case argsLine = "args_line"
     }
 
     init(from decoder: Decoder) throws {
@@ -373,9 +368,6 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
         self.id = id
         name = c.string(.name) ?? ""
         tool = c.lossy(ToolID.self, .tool)
-        account = c.string(.account) ?? ""
-        accountKey = nonEmpty(c.string(.accountKey))
-        accountName = nonEmpty(c.string(.accountName))
         dir = c.string(.dir) ?? ""
         args = c.lossyArray(String.self, .args) ?? []
         argsLine = c.string(.argsLine) ?? args.map(shellQuoteIfNeeded).joined(separator: " ")
@@ -384,8 +376,9 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// 模板现在用不了的原因（`templates[].problem`）：`no_account` 账号表里没有这个账号了；`no_dir` 文件夹不在了；`bad_args` 参数用不了
-/// （不是交互的会话，或者启动前的检查过不了）；`no_relay` 这个账号的会话不经中转（这台 Mac 不在哪个 Team 里）。
+/// 模板现在用不了的原因（`templates[].problem`）：`no_account` 模板的工具还没有账号（3.7.9 及以前是模板存着的账号在账号表里没有了）；
+/// `no_dir` 文件夹不在了；`bad_args` 参数用不了（不是交互的会话，或者启动前的检查过不了）；`no_relay` 这个工具的账号的会话都不经中转
+/// （这台 Mac 不在哪个 Team 里）。
 struct RemoteTemplateProblem: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
@@ -421,8 +414,11 @@ struct RemotePeerLauncher: Decodable, Sendable, Equatable, Identifiable {
     /// 说明里放不下、没列出来的模板有几个
     var more: Int
     var templates: [RemotePeerTemplate]
+    /// 起会话时能挑的账号（3.7.10 起：模板不带账号，起的时候挑一个）；那台机器上的 cca 是旧版时是 nil（模板用它自己的账号：
+    /// `templates[].account`）
+    var accounts: [RemotePeerAccount]?
 
-    enum CodingKeys: String, CodingKey { case id, peer, machine, state, team, more, templates }
+    enum CodingKeys: String, CodingKey { case id, peer, machine, state, team, more, templates, accounts }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -436,14 +432,47 @@ struct RemotePeerLauncher: Decodable, Sendable, Equatable, Identifiable {
         team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
         more = max(c.int(.more) ?? 0, 0)
         templates = c.lossyArray(RemotePeerTemplate.self, .templates) ?? []
+        accounts = c.lossyArray(RemotePeerAccount.self, .accounts)
     }
 
     /// 现在起得了：那台机器连着服务器
     var online: Bool { state == .ok }
     func template(_ id: String) -> RemotePeerTemplate? { templates.first { $0.id == id } }
+    /// 用这个模板起会话时能挑的账号（模板的那个工具的）；那台机器上的 cca 是旧版时是 nil（模板用它自己的账号，不用挑）
+    func accounts(for t: RemotePeerTemplate) -> [RemotePeerAccount]? {
+        accounts.map { list in list.filter { $0.tool != nil && $0.tool == t.tool } }
+    }
 }
 
-/// 另一台机器上的一个模板（那台机器写好的：用哪个工具、哪个账号、在哪个文件夹、带哪些参数）。这台 Mac 只能挑一个起，能带开场白的可以带一句。
+/// 另一台机器上起会话时能挑的一个账号（`peer_launchers[].accounts[]`，3.7.10 起）。
+struct RemotePeerAccount: Decodable, Sendable, Equatable, Identifiable {
+    /// 编号（16 个十六进制字符，按配对算的）：`cca remote launch … --account` 的值
+    var id: String
+    var tool: ToolID?
+    /// 名字：这台 Mac 上也有这个账号时是这台 Mac 上的名字，不然是那台机器说的
+    var name: String
+    /// 那台机器说的名字（它那里的别名）
+    var hostName: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, tool, name
+        case hostName = "host_name"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = nonEmpty(c.string(.id)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "peer account without id"))
+        }
+        self.id = id
+        tool = c.lossy(ToolID.self, .tool)
+        name = c.string(.name) ?? ""
+        hostName = nonEmpty(c.string(.hostName)) ?? name
+    }
+}
+
+/// 另一台机器上的一个模板（那台机器写好的：用哪个工具、在哪个文件夹、带哪些参数；那台机器上的 cca 是旧版时还有哪个账号）。这台 Mac
+/// 挑一个起（3.7.10 起另挑一个账号：`RemotePeerLauncher.accounts`），能带开场白的可以带一句。
 struct RemotePeerTemplate: Decodable, Sendable, Equatable, Identifiable {
     /// 模板的编号（8 个十六进制字符）：`cca remote launch` 的第二个参数
     var id: String
@@ -451,7 +480,8 @@ struct RemotePeerTemplate: Decodable, Sendable, Equatable, Identifiable {
     var digest: String
     var name: String
     var tool: ToolID?
-    /// 账号：这台 Mac 上也有这个账号时是这台 Mac 上的名字，不然是那台机器说的
+    /// 账号：这台 Mac 上也有这个账号时是这台 Mac 上的名字，不然是那台机器说的。3.7.10 起的那一头写的是给旧版看的（能挑的只有一个时是它，
+    /// 几个时是「启动时选账号」）：有 `RemotePeerLauncher.accounts` 时不用它
     var account: String
     /// 那台机器说的名字（它那里的别名）
     var hostAccount: String?

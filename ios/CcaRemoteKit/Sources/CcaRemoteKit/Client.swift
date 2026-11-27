@@ -368,9 +368,11 @@ public final class RemoteClient: @unchecked Sendable {
 
     /// 请那台机器上的启动器照模板起一个新的会话（Launch.swift）：进启动器（票据、开场白、握手都和接入会话一样），头一帧说要起哪个
     /// （LAUNCH），等它回话（LAUNCHED），从要票据算起最多 20 秒。cols、rows：新会话的大小（LaunchAsk 的范围）；line：开场白（模板
-    /// 能带的才给）。起来了回新会话的编号：接着用 Attachment（fresh）接入它
-    public func launch(_ peer: Peer, launcher: String, template: LaunchTemplate, cols: Int, rows: Int, line: String? = nil) async -> LaunchResult {
-        guard let ask = LaunchAsk.frame(id: template.id, digest: template.digest, cols: cols, rows: rows, line: line) else {
+    /// 能带的才给）；account：挑的账号（LaunchAccount.id；那台电脑上的 cca 是旧版时不给）。起来了回新会话的编号：接着用 Attachment
+    /// （fresh）接入它
+    public func launch(_ peer: Peer, launcher: String, template: LaunchTemplate, cols: Int, rows: Int, line: String? = nil,
+                       account: String? = nil) async -> LaunchResult {
+        guard let ask = LaunchAsk.frame(id: template.id, digest: template.digest, cols: cols, rows: rows, line: line, account: account) else {
             return .failed(RemoteFailure("bad_ask"))
         }
         return await awaitLaunch { events in

@@ -57,12 +57,13 @@ final class DemoBackend: Backend {
         }
     }
 
-    func launch(peer: Peer, launcher: HostLauncher, template: LaunchTemplate, cols: Int, rows: Int, line: String?) async -> LaunchResult {
+    func launch(peer: Peer, launcher: HostLauncher, template: LaunchTemplate, account: LaunchAccount?, cols: Int, rows: Int,
+                line: String?) async -> LaunchResult {
         try? await Task.sleep(for: .milliseconds(900))
         guard launcher.online else { return .failed(RemoteFailure("nohost")) }
         let sid = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
-        let info = SessionInfo(machine: peer.name, tool: template.tool, name: template.account, cwd: template.dir,
-                               since: Date().timeIntervalSince1970, viewOnly: false, aid: template.aid)
+        let info = SessionInfo(machine: peer.name, tool: template.tool, name: account?.name ?? template.account, cwd: template.dir,
+                               since: Date().timeIntervalSince1970, viewOnly: false, aid: account?.aid ?? template.aid)
         launched.append((peer.pid, RemoteSession(sid: sid, info: info, online: true, viewers: 0), line))
         return .launched(sid: sid)
     }
@@ -101,26 +102,36 @@ final class DemoBackend: Backend {
     func syncNoteKeys() {}
 }
 
-/// 演示的「新建会话」：工作室的 Mac mini 上写好了三个模板（两个能带开场白），MacBook Air 的启动器不在线
+/// 演示的「新建会话」：工作室的 Mac mini 上写好了三个模板（两个能带开场白），起的时候挑账号（Claude Code 的有工作、备用、API 三个，
+/// Codex 的只有个人：替人选好），MacBook Air 的启动器不在线
 enum DemoLaunch {
     static func launcher(_ p: Peer) -> HostLauncher? {
         switch p.pid.prefix(2) {
         case "a1":
             let t = [
-                LaunchTemplate(id: "0a1b2c3d", digest: "0123456789abcdef", name: "修 api 的 bug", tool: "claude", account: "工作",
-                               aid: DemoAccounts.aid(1), dir: "~/srv/api", args: "--model opus", line: true),
+                LaunchTemplate(id: "0a1b2c3d", digest: "0123456789abcdef", name: "修 api 的 bug", tool: "claude", account: "启动时选账号",
+                               aid: "", dir: "~/srv/api", args: "--model opus", line: true),
                 LaunchTemplate(id: "1b2c3d4e", digest: "123456789abcdef0", name: "整理笔记", tool: "codex", account: "个人",
                                aid: DemoAccounts.aid(2), dir: "~/notes", args: "", line: true),
-                LaunchTemplate(id: "2c3d4e5f", digest: "23456789abcdef01", name: "看看网站", tool: "claude", account: "备用",
-                               aid: DemoAccounts.aid(3), dir: "~/Projects/site", args: "--permission-mode plan", line: false),
+                LaunchTemplate(id: "2c3d4e5f", digest: "23456789abcdef01", name: "看看网站", tool: "claude", account: "启动时选账号",
+                               aid: "", dir: "~/Projects/site", args: "--permission-mode plan", line: false),
             ]
-            return HostLauncher(sid: String(repeating: "f1", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: true)
+            let a = [
+                LaunchAccount(id: DemoAccounts.id(1), tool: "claude", name: "工作", aid: DemoAccounts.aid(1)),
+                LaunchAccount(id: DemoAccounts.id(3), tool: "claude", name: "备用", aid: DemoAccounts.aid(3)),
+                LaunchAccount(id: DemoAccounts.id(7), tool: "claude", name: "API"),
+                LaunchAccount(id: DemoAccounts.id(2), tool: "codex", name: "个人", aid: DemoAccounts.aid(2)),
+            ]
+            return HostLauncher(sid: String(repeating: "f1", count: 16), info: LauncherInfo(machine: p.name, templates: t, accounts: a),
+                                online: true)
         case "b2":
             let t = [
                 LaunchTemplate(id: "3d4e5f60", digest: "3456789abcdef012", name: "写周报", tool: "claude", account: "账号 2",
                                aid: DemoAccounts.aid(4), dir: "~/Documents", args: "", line: true),
             ]
-            return HostLauncher(sid: String(repeating: "f2", count: 16), info: LauncherInfo(machine: p.name, templates: t), online: false)
+            let a = [LaunchAccount(id: DemoAccounts.id(4), tool: "claude", name: "账号 2", aid: DemoAccounts.aid(4))]
+            return HostLauncher(sid: String(repeating: "f2", count: 16), info: LauncherInfo(machine: p.name, templates: t, accounts: a),
+                                online: false)
         default:
             return nil
         }

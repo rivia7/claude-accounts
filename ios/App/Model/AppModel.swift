@@ -81,6 +81,10 @@ final class AppModel {
     var showSettings = false
     /// 「新建会话」那一页开着的：在哪台电脑上起（nil 是没开）
     var launchFor: Peer?
+    /// 会话列表里会话的先后（拖动排的，CcaRemoteKit 的 SessionOrder）：记在 UserDefaults 里；演示模式的只在内存里，退出演示时丢掉
+    private(set) var sessionOrder = SessionOrder()
+    /// 会话列表在「排序」（List 的编辑状态：拖动右边的把手调整先后）
+    var sortingSessions = false
     /// 底下选着的那一页（记着，下次打开还是它）
     var tab: AppTab {
         didSet { UserDefaults.standard.set(tab.rawValue, forKey: "tab") }
@@ -129,6 +133,7 @@ final class AppModel {
         let name = Texts.nonEmpty(d.string(forKey: "deviceName")) ?? Self.defaultName
         deviceName = name
         backend = demo ? DemoBackend() : LiveBackend(deviceName: name)
+        sessionOrder = demo ? SessionOrder() : Self.storedOrder()
         peers = backend.peers()
     }
 
@@ -156,6 +161,8 @@ final class AppModel {
         backend = b
         peers = b.peers()
         listings = [:]
+        sessionOrder = b.isDemo ? SessionOrder() : Self.storedOrder()
+        sortingSessions = false
         accountPath = []
         statsPath = []
         costPath = []
@@ -208,6 +215,27 @@ final class AppModel {
     }
 
     func listing(_ p: Peer) -> PeerListing? { listings[p.pid] }
+
+    // MARK: 会话的先后
+
+    private static let orderKey = "sessionOrder"
+
+    private static func storedOrder() -> SessionOrder {
+        SessionOrder(ids: UserDefaults.standard.stringArray(forKey: orderKey) ?? [])
+    }
+
+    /// 一台电脑的会话，照拖动排过的先后（排过的在前，新起的照列表原来的先后接在后面）
+    func sessions(_ l: PeerListing) -> [RemoteSession] { sessionOrder.sorted(l.sessions, id: \.sid) }
+
+    /// 拖动排一台电脑的会话（List 的 onMove 给的位置，照 sessions(_:) 的先后）：整组记下来；演示模式的不写进 UserDefaults
+    func moveSessions(of l: PeerListing, from: IndexSet, to: Int) {
+        var ids = sessions(l).map(\.sid)
+        let before = ids
+        ids.move(fromOffsets: from, toOffset: to)
+        guard ids != before else { return }
+        sessionOrder.record(ids)
+        if !isDemo { UserDefaults.standard.set(sessionOrder.ids, forKey: Self.orderKey) }
+    }
 
     // MARK: 账号
 
@@ -307,18 +335,19 @@ final class AppModel {
     /// 一台电脑的启动器：那台电脑让这台手机远程启动会话、它的启动器在服务器上登记着时才有
     func launcher(_ p: Peer) -> HostLauncher? { listings[p.pid]?.launcher }
 
-    /// 请那台电脑照模板起一个会话（多大见 TerminalGrid）。起来了：关掉「新建会话」那一页，打开新会话的终端（fresh：服务器上可能
-    /// 还没有它），回 nil；没起成：回原因码和要说的那句话，列表过时了的（模板变了、没了，不让启动了，启动器不在了）顺手刷新
-    func launch(_ t: LaunchTemplate, on peer: Peer, line: String?) async -> (code: String, text: String)? {
+    /// 请那台电脑照模板起一个会话（多大见 TerminalGrid）；account：挑的账号（那台电脑的 cca 让挑时，见 LaunchSheet；旧版的 cca 是 nil：
+    /// 用模板自己定的）。起来了：关掉「新建会话」那一页，打开新会话的终端（fresh：服务器上可能还没有它），回 nil；没起成：回原因码和
+    /// 要说的那句话，列表过时了的（模板变了、没了，不让启动了，账号没了、改走别的 Team 了，要挑账号了，启动器不在了）顺手刷新
+    func launch(_ t: LaunchTemplate, on peer: Peer, as account: LaunchAccount?, line: String?) async -> (code: String, text: String)? {
         guard let l = launcher(peer) else { return ("no_session", Texts.launchUnreached("no_session")) }
         let size = TerminalGrid.forLaunch
         let b = backend
-        let r = await b.launch(peer: peer, launcher: l, template: t, cols: size.cols, rows: size.rows, line: line)
+        let r = await b.launch(peer: peer, launcher: l, template: t, account: account, cols: size.cols, rows: size.rows, line: line)
         guard b === backend else { return nil }   // 中途切了演示
         switch r {
         case .launched(let sid):
-            let info = SessionInfo(machine: l.info.machine, tool: t.tool, name: t.account, cwd: t.dir, since: Date().timeIntervalSince1970,
-                                   viewOnly: false, aid: t.aid)
+            let info = SessionInfo(machine: l.info.machine, tool: t.tool, name: account?.name ?? t.account, cwd: t.dir,
+                                   since: Date().timeIntervalSince1970, viewOnly: false, aid: account?.aid ?? t.aid)
             launchFor = nil
             closeTerminal()
             terminalTab = tab
@@ -326,8 +355,8 @@ final class AppModel {
                                        readOnly: false, fresh: true)
             return nil
         case .refused(let code, let text):
-            if ["changed", "no_template", "denied", "other_hub"].contains(code) { refresh() }
-            return (code, Texts.launchFailure(code: code, text: text))
+            if ["changed", "no_template", "denied", "other_hub", "no_account", "need_account"].contains(code) { refresh() }
+            return (code, Texts.launchFailure(code: code, text: text, picked: account != nil))
         case .failed(let f):
             if f.code == "no_session" || f.code == "nohost" { refresh() }
             return (f.code, Texts.launchUnreached(f.code))

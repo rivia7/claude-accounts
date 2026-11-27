@@ -44,20 +44,29 @@ struct AccountsView: View {
 }
 
 /// 各页左上角的图标（和 Mac App 侧栏里这一页的图标一样）、右上角的配对和设置
-struct PageToolbar<Mark: View>: ToolbarContent {
+struct PageToolbar<Mark: View, Extra: View>: ToolbarContent {
     @Environment(AppModel.self) private var model
     @ViewBuilder let mark: () -> Mark
+    /// 这一页自己的按钮，放在配对、设置前面（会话列表的「排序」）；别的页没有
+    @ViewBuilder let extra: () -> Extra
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             mark().accessibilityHidden(true)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            extra()
             Button { model.startPairing() } label: { Image(systemName: "qrcode.viewfinder") }
                 .accessibilityLabel("和另一台电脑配对")
             Button { model.showSettings = true } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("设置")
         }
+    }
+}
+
+extension PageToolbar where Extra == EmptyView {
+    init(@ViewBuilder mark: @escaping () -> Mark) {
+        self.init(mark: mark, extra: { EmptyView() })
     }
 }
 

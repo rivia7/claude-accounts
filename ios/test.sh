@@ -121,7 +121,7 @@ xcrun simctl launch "$UDID" "$BUNDLE" -demo >/dev/null
 sleep 6
 for mode in light dark; do
 	xcrun simctl ui "$UDID" appearance "$mode"
-	for screen in list accounts account stats cost account-cost sharing terminal pair settings launch; do
+	for screen in list accounts account stats cost account-cost sharing terminal pair settings launch sort; do
 		shot "$screen" -screen "$screen"
 	done
 	# 总览换到 ChatGPT、只看 Pro 套餐的样子；折合金额按天看

@@ -2,7 +2,7 @@
 //! 联网的事都在这里，宿主自己不碰网络——这个进程卡住、崩了，会话和这台机器上的接入都不受影响（宿主过一会儿再起一个）。
 //!
 //! - 和服务器之间一条控制连接（`relay_host` 拿票据进数据端口）：把会话的说明封给各个允许接入的配对（ANNOUNCE），
-//!   隔一阵说一声（PING），断了按退避重连；
+//!   隔一阵说一声（PING），断了按退避重连（等的时间乱一点：一台机器上的会话很多时，服务器重启以后不会一起连上去）；
 //! - 服务器说有接入方来了（JOIN，带一个令牌）：分出一个子进程，拿令牌另连一条上去和接入方对接，握手（核对它有
 //!   配对的密钥），然后像这台机器上的接入方一样连宿主的 socket，两头对转。一个接入方一个进程：握手是阻塞着做的，
 //!   一个慢的、捣乱的拖不住别人；
@@ -29,6 +29,7 @@ use crate::cmd::arity;
 use crate::cmd::hub::HubKind;
 use crate::py::json;
 use crate::py::obj::{Dict, V};
+use crate::py::rand::urandom;
 use crate::py::time::{monotonic, sleep, time};
 use crate::py::{exit, R};
 use std::collections::VecDeque;
@@ -51,6 +52,13 @@ const SECRET_RETRY: f64 = 30.0;
 /// 和服务器断着时宿主交来的通知最多攒几条、攒多久（连上了再推；再早的推过去也没用了）
 const NOTES_KEPT: usize = 8;
 const NOTE_KEEP: f64 = 60.0;
+
+/// 等 secs 秒再连：乘上 0.5～1.5 之间的一个随机数。一台机器能开 100 个会话，服务器重启、网络断了一下以后各自错开着连回去
+/// （服务器给同一个地址同时几个 HTTP 连接、每台设备多少个请求都限了数，一起来的话大半要被拒、再退避）
+fn jitter(secs: f64) -> f64 {
+    let r = urandom(2);
+    secs * (0.5 + f64::from(u16::from_le_bytes([r[0], r[1]])) / 65536.0)
+}
 
 /// 一个允许接入的配对
 pub(super) struct Allowed {
@@ -527,7 +535,7 @@ impl Link {
             }
             Err(Some(wait)) => {
                 self.fails += 1;
-                self.next_try = now + wait;
+                self.next_try = now + jitter(wait);
             }
             Err(None) => {
                 stop(&self.kids);
@@ -563,7 +571,7 @@ impl Link {
                 Err(()) => {
                     self.ctl = None;
                     self.fails += 1;
-                    self.next_try = monotonic() + (2.0 * f64::from(1u32 << self.fails.min(5))).min(60.0);
+                    self.next_try = monotonic() + jitter((2.0 * f64::from(1u32 << self.fails.min(5))).min(60.0));
                 }
             }
         }
@@ -626,5 +634,17 @@ fn fork_kid(ctl: &Ctl, run: impl FnOnce(libc::pid_t) -> i32) -> Option<libc::pid
         }
         child if child > 0 => Some(child),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jitter;
+
+    #[test]
+    fn waits_are_spread_out() {
+        let got: Vec<f64> = (0..200).map(|_| jitter(4.0)).collect();
+        assert!(got.iter().all(|w| (2.0..6.0).contains(w)), "{got:?}");
+        assert!(got.iter().any(|w| *w < 3.0) && got.iter().any(|w| *w > 5.0), "错开了：{got:?}");
     }
 }

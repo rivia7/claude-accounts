@@ -1,7 +1,8 @@
 import Foundation
 
 // 远程启动（PROTOCOL 9.4）：模板的命令和文档、App 里查模板、新建 / 修改 / 删掉模板（参数那一行原样交给 cca）、「允许远程启动」的开关；
-// 用配对过的另一台机器上的模板在那台机器上新建会话（PROTOCOL 9.5）：`peer_launchers`、`cca remote launch … --json`、弹层、起好了接入。
+// 用配对过的另一台机器上的模板在那台机器上新建会话（PROTOCOL 9.5）：`peer_launchers`（3.7.10 起带能挑的账号）、`cca remote launch … --json`、
+// 弹层（挑模板、账号）、起好了接入。
 
 /// 测试里 cca 那一头：模板列表（可以换）、查模板查不成、存模板时 cca 说的不行（线程安全）
 private final class LaunchScript: @unchecked Sendable {
@@ -39,18 +40,16 @@ func remoteLaunchProtocolTests() {
     let list = CcaCommand.remoteTemplates
     check("查模板：cca remote template list --json；只读，不和改东西的排队", list.arguments == ["remote", "template", "list", "--json"] && list.gate == nil
           && !list.runsToCompletion && list.tool == nil && list.key == nil)
-    let add = CcaCommand.remoteTemplateSave(name: "网站", tool: .claude, account: "工作(bob@example.com)", dir: "/Users/me/projects/site",
-                                            argsLine: "--model opus 'a b'", replace: nil)
-    check("存模板：都给全（cca 不在终端里问），参数那一行原样放在 --args-line 后面（cca 拆）",
-          add.arguments == ["remote", "template", "add", "--name", "网站", "--tool", "claude", "--account", "工作(bob@example.com)",
+    let add = CcaCommand.remoteTemplateSave(name: "网站", tool: .claude, dir: "/Users/me/projects/site", argsLine: "--model opus 'a b'", replace: nil)
+    check("存模板：都给全（cca 不在终端里问），参数那一行原样放在 --args-line 后面（cca 拆）；账号不在模板里：不带 --account",
+          add.arguments == ["remote", "template", "add", "--name", "网站", "--tool", "claude",
                             "--dir", "/Users/me/projects/site", "--args-line", "--model opus 'a b'"], "\(add.arguments)")
-    let replace = CcaCommand.remoteTemplateSave(name: "队列", tool: .codex, account: "frank@example.com", dir: "/Users/me/srv/jobs", argsLine: "",
-                                                replace: "5e6f7a8b")
+    let replace = CcaCommand.remoteTemplateSave(name: "队列", tool: .codex, dir: "/Users/me/srv/jobs", argsLine: "", replace: "5e6f7a8b")
     check("改模板：带 --replace <编号>；没有参数也有 --args-line（空的）",
-          replace.arguments == ["remote", "template", "add", "--name", "队列", "--tool", "codex", "--account", "frank@example.com",
+          replace.arguments == ["remote", "template", "add", "--name", "队列", "--tool", "codex",
                                 "--dir", "/Users/me/srv/jobs", "--replace", "5e6f7a8b", "--args-line", ""], "\(replace.arguments)")
     check("参数那一行是 --、以 - 开头的也原样是 --args-line 的值",
-          CcaCommand.remoteTemplateSave(name: "n", tool: .claude, account: "a", dir: "/d", argsLine: "-- -x", replace: nil).arguments.suffix(2) == ["--args-line", "-- -x"])
+          CcaCommand.remoteTemplateSave(name: "n", tool: .claude, dir: "/d", argsLine: "-- -x", replace: nil).arguments.suffix(2) == ["--args-line", "-- -x"])
     check("删模板：按编号", CcaCommand.remoteTemplateRemove(id: "1a2b3c4d").arguments == ["remote", "template", "rm", "1a2b3c4d"])
     check("允许、不允许远程启动：按配对的 id", CcaCommand.remoteLaunch(peer: pid, on: true).arguments == ["remote", "allow", pid, "launch", "on"]
           && CcaCommand.remoteLaunch(peer: pid, on: false).arguments == ["remote", "allow", pid, "launch", "off"])
@@ -58,12 +57,13 @@ func remoteLaunchProtocolTests() {
     check("改模板、改远程启动和改配对表的几条一个接一个；都不是哪个账号的",
           changes.allSatisfy { $0.gate != nil && $0.gate == CcaCommand.remoteUnpair(peer: pid).gate && !$0.runsToCompletion && $0.tool == nil && $0.key == nil })
     check("同意项认识", ConsentItem.remoteLaunch.isKnown && ConsentItem.remoteLaunch.rawValue == "remote_launch")
-    let start = CcaCommand.remoteStart(peer: pid, template: "2b2b2b2b", digest: "0a1b2c3d4e5f6a7b", cols: 132, rows: 40, line: "先跑一遍测试")
-    check("在别的机器上新建会话：cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size 列x行 --line 开场白 --json",
-          start.arguments == ["remote", "launch", pid, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "132x40", "--line", "先跑一遍测试", "--json"],
-          "\(start.arguments)")
+    let start = CcaCommand.remoteStart(peer: pid, template: "2b2b2b2b", digest: "0a1b2c3d4e5f6a7b", cols: 132, rows: 40, line: "先跑一遍测试",
+                                       account: "a1a1a1a1a1a1a1a1")
+    check("在别的机器上新建会话：cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size 列x行 --account 挑的账号 --line 开场白 --json",
+          start.arguments == ["remote", "launch", pid, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "132x40", "--account", "a1a1a1a1a1a1a1a1",
+                              "--line", "先跑一遍测试", "--json"], "\(start.arguments)")
     let bare = CcaCommand.remoteStart(peer: pid, template: "2b2b2b2b", digest: "0a1b2c3d4e5f6a7b", cols: 120, rows: 36, line: nil)
-    check("没有开场白：不带 --line；一个接一个，不和改配对表的排队，不是哪个账号的；要等那台机器起好、登记好（超时比问一次服务器长得多）",
+    check("没有开场白、不用挑账号（那台机器上的 cca 是旧版）：不带 --line、--account；一个接一个，不和改配对表的排队，不是哪个账号的；要等那台机器起好、登记好（超时比问一次服务器长得多）",
           bare.arguments == ["remote", "launch", pid, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "120x36", "--json"]
           && bare.gate != nil && bare.gate != CcaCommand.remoteUnpair(peer: pid).gate && !bare.runsToCompletion && bare.tool == nil && bare.key == nil
           && bare.timeout >= 90 && !bare.isBackground, "\(bare.arguments)")
@@ -80,13 +80,12 @@ func remoteLaunchProtocolTests() {
         return
     }
     let t = doc.templates
-    check("模板：编号、名字、工具、账号、文件夹、参数", t.map(\.id) == ["1a2b3c4d", "5e6f7a8b", "9c0d1e2f"] && t.map(\.tool) == [.claude, .codex, .claude]
-          && t[0].name == "网站：修 bug" && t[0].account == "bob@example.com" && t[0].accountName == "工作" && t[0].dir == "/Users/me/projects/site"
+    check("模板：编号、名字、工具、文件夹、参数（账号不在模板里）", t.map(\.id) == ["1a2b3c4d", "5e6f7a8b", "9c0d1e2f"] && t.map(\.tool) == [.claude, .codex, .claude]
+          && t[0].name == "网站：修 bug" && t[0].dir == "/Users/me/projects/site"
           && t[0].args == ["--model", "opus", "--append-system-prompt", "说中文，改完跑一遍测试"] && t[1].args.isEmpty && t.allSatisfy(\.line))
-    check("用不了的说原因：账号没了（现在叫什么、键都是 null）", t[2].problem == .noAccount && t[2].accountName == nil && t[2].accountKey == nil
-          && t.prefix(2).allSatisfy { $0.problem == nil })
-    check("账号表里现在的键、参数拼成的那一行：cca 给的", t.map(\.accountKey) == ["工作(bob@example.com)", "frank@example.com", nil]
-          && t.map(\.argsLine) == ["--model opus --append-system-prompt '说中文，改完跑一遍测试'", "", "--permission-mode plan"], "\(t.map(\.argsLine))")
+    check("用不了的说原因：文件夹不在了", t[2].problem == .noDir && t.prefix(2).allSatisfy { $0.problem == nil })
+    check("参数拼成的那一行：cca 给的",
+          t.map(\.argsLine) == ["--model opus --append-system-prompt '说中文，改完跑一遍测试'", "", "--permission-mode plan"], "\(t.map(\.argsLine))")
     check("启动器：在跑、几个模板、几台手机", doc.launcher == RemoteLauncher(running: true, templates: 3, peers: 1))
     check("按编号找", doc.template("5e6f7a8b")?.name == "任务队列" && doc.template("nope") == nil)
     let odd = try? DocumentDecoder.decode(RemoteTemplatesDoc.self, from: Data(#"""
@@ -100,8 +99,8 @@ func remoteLaunchProtocolTests() {
         {"version":1,"kind":"remote_templates","templates":[{"id":"0a0b0c0d","name":"x","tool":"claude","account":"a@example.com",
          "account_name":"a","dir":"/x","args":["--append-system-prompt","it's 中文",""]}]}
         """#.utf8))
-    check("文档里缺了 args_line、account_key：参数照 shell 的写法拼（要引的才引，不然改模板时参数会被清空），账号的键是 nil",
-          older?.templates.first?.argsLine == #"--append-system-prompt 'it'\''s 中文' ''"# && older?.templates.first?.accountKey == nil,
+    check("3.7.9 及以前的 cca 写的（模板带着账号、缺了 args_line）：照样读；参数照 shell 的写法拼（要引的才引，不然改模板时参数会被清空）",
+          older?.templates.first?.argsLine == #"--append-system-prompt 'it'\''s 中文' ''"# && older?.templates.first?.dir == "/x",
           older?.templates.first?.argsLine ?? "nil")
 
     // 列表里的：哪台手机能远程启动、启动器
@@ -118,17 +117,28 @@ func remoteLaunchProtocolTests() {
     check("peer_launchers：哪个配对、机器的名字、连没连着、模板（编号、摘要、名字、工具、账号、那台机器上的名字、文件夹、参数、能不能带开场白）",
           pl.map(\.machine) == ["office-linux", "home-mini"] && pl.map(\.online) == [true, false] && pl[0].peer == "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
           && pl[0].templates.map(\.id) == ["2b2b2b2b", "4d4d4d4d"] && pl[0].templates.map(\.line) == [true, false] && pl[0].templates.map(\.tool) == [.claude, .codex]
-          && pl[0].templates[0].digest == "0a1b2c3d4e5f6a7b" && pl[0].templates[0].account == "工作" && pl[0].templates[0].hostAccount == "主力"
+          && pl[0].templates[0].digest == "0a1b2c3d4e5f6a7b" && pl[0].templates[0].account == "启动时选账号" && pl[1].templates[0].account == "个人"
           && pl[0].templates[0].dir == "~/srv/api" && pl[0].templates[0].args == "--model opus" && pl[1].more == 2 && pl[0].more == 0
           && rl.peerLauncher("c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2")?.machine == "home-mini" && rl.peerLauncher("zz") == nil)
+    check("peer_launchers 的 accounts（3.7.10 起：起会话时挑）：编号、工具、这台 Mac 上的名字、那台机器上的名字；那台机器上的 cca 是旧版时是 null",
+          pl[0].accounts?.map(\.id) == ["a1a1a1a1a1a1a1a1", "a2a2a2a2a2a2a2a2", "a3a3a3a3a3a3a3a3"] && pl[0].accounts?.map(\.tool) == [.claude, .claude, .codex]
+          && pl[0].accounts?.first?.name == "工作" && pl[0].accounts?.first?.hostName == "主力" && pl[1].accounts == nil)
+    check("按模板的工具挑：claude 的模板两个、codex 的一个；那台机器上的 cca 是旧版：nil（模板用它自己的账号）",
+          pl[0].accounts(for: pl[0].templates[0])?.map(\.id) == ["a1a1a1a1a1a1a1a1", "a2a2a2a2a2a2a2a2"]
+          && pl[0].accounts(for: pl[0].templates[1])?.map(\.id) == ["a3a3a3a3a3a3a3a3"] && pl[1].accounts(for: pl[1].templates[0]) == nil)
     let oddL = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(#"""
         {"version":1,"kind":"remote","sessions":[],"peers":[],"peer_launchers":[{"peer":"b1"},{"id":"aa","peer":"b1","state":"zz_new","more":-3,
-         "templates":[{"id":"0a0b0c0d","name":"没有摘要"},{"id":"1a1b1c1d","digest":"0011223344556677","tool":"zz_new"}]}]}
+         "templates":[{"id":"0a0b0c0d","name":"没有摘要"},{"id":"1a1b1c1d","digest":"0011223344556677","tool":"zz_new"}],
+         "accounts":[{"tool":"claude","name":"没有编号"},{"id":"b1b2b3b4b5b6b7b8","tool":"zz_new","name":"新工具的"},{"id":"c1c2c3c4c5c6c7c8","name":"没有工具"},
+          {"id":"d1d2d3d4d5d6d7d8","tool":"claude","name":"x"}]}]}
         """#.utf8))
+    let oddA = oddL?.peerLaunchers.first
     check("没有编号、配对的启动器丢掉；没有摘要的模板丢掉；不认识的状态、工具留着（不算连着）；more 不是负的",
-          oddL?.peerLaunchers.count == 1 && oddL?.peerLaunchers.first?.online == false && oddL?.peerLaunchers.first?.more == 0
-          && oddL?.peerLaunchers.first?.templates.map(\.id) == ["1a1b1c1d"] && oddL?.peerLaunchers.first?.templates.first?.tool?.isKnown == false
-          && oddL?.peerLaunchers.first?.templates.first?.line == false)
+          oddL?.peerLaunchers.count == 1 && oddA?.online == false && oddA?.more == 0
+          && oddA?.templates.map(\.id) == ["1a1b1c1d"] && oddA?.templates.first?.tool?.isKnown == false && oddA?.templates.first?.line == false)
+    check("能挑的账号：没有编号的丢掉；没有那台机器上的名字时就是名字；没有工具的哪个模板都挑不了，不认识的工具只给同一个工具的模板",
+          oddA?.accounts?.map(\.id) == ["b1b2b3b4b5b6b7b8", "c1c2c3c4c5c6c7c8", "d1d2d3d4d5d6d7d8"] && oddA?.accounts?.first?.hostName == "新工具的"
+          && oddA.flatMap { a in a.templates.first.flatMap { a.accounts(for: $0) } }?.map(\.id) == ["b1b2b3b4b5b6b7b8"])
     let sid = String(repeating: "f7", count: 16)
     let started = try? DocumentDecoder.decode(RemoteLaunchStartDoc.self, from: Data(#"""
         {"version":1,"kind":"remote_launch","id":"\#(sid)","session":{"id":"\#(sid)","short":"f7f7f7f7","where":"peer","peer":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
@@ -141,15 +151,18 @@ func remoteLaunchProtocolTests() {
     check("还没登记好：session 是 null；没有编号的不算", unlisted?.id == sid && unlisted?.session == nil
           && (try? DocumentDecoder.decode(RemoteLaunchStartDoc.self, from: Data(#"{"version":1,"kind":"remote_launch","session":null}"#.utf8))) == nil
           && (try? DocumentDecoder.decode(RemoteLaunchStartDoc.self, from: Data(#"{"version":1,"kind":"remote","id":"\#(sid)"}"#.utf8))) == nil)
-    check("另一台机器上的模板的第二行：账号、文件夹、参数", Texts.remotePeerTemplateDetail(pl[0].templates[0]) == "工作 · ~/srv/api · --model opus"
+    check("另一台机器上的模板的第二行：文件夹、参数；那台机器上的 cca 是旧版时前面还有模板的账号",
+          Texts.remotePeerTemplateDetail(pl[0].templates[0], withAccount: false) == "~/srv/api · --model opus"
           && Texts.remotePeerTemplateDetail(pl[1].templates[0]) == "个人 · ~/notes")
+    check("能挑的账号：这台 Mac 上的名字，和那台机器上叫的不一样时括号里说一声",
+          pl[0].accounts?.map(Texts.remotePeerAccount) == ["工作（那台机器上叫「主力」）", "carol", "dave"], "\(pl[0].accounts?.map(Texts.remotePeerAccount) ?? [])")
 
     // 文字
-    check("模板的第二行：账号（现在叫什么，没了是存着的邮箱）、文件夹、参数（照 shell 的写法）",
-          Texts.remoteTemplateDetail(t[0], dir: "~/projects/site") == "工作 · ~/projects/site · --model opus --append-system-prompt '说中文，改完跑一遍测试'"
-          && Texts.remoteTemplateDetail(t[1], dir: "~/srv/jobs") == "frank@example.com · ~/srv/jobs"
-          && Texts.remoteTemplateDetail(t[2], dir: "~/notes") == "old@example.com · ~/notes · --permission-mode plan", Texts.remoteTemplateDetail(t[0], dir: "~/projects/site"))
-    check("用不了的原因：短的标在名字后面，不认识的也有一句", Texts.remoteTemplateProblem(.noAccount) == "账号不存在" && Texts.remoteTemplateProblem(.noRelay) == "不经中转"
+    check("模板的第二行：文件夹、参数（照 shell 的写法）",
+          Texts.remoteTemplateDetail(t[0], dir: "~/projects/site") == "~/projects/site · --model opus --append-system-prompt '说中文，改完跑一遍测试'"
+          && Texts.remoteTemplateDetail(t[1], dir: "~/srv/jobs") == "~/srv/jobs"
+          && Texts.remoteTemplateDetail(t[2], dir: "~/notes") == "~/notes · --permission-mode plan", Texts.remoteTemplateDetail(t[0], dir: "~/projects/site"))
+    check("用不了的原因：短的标在名字后面，不认识的也有一句", Texts.remoteTemplateProblem(.noAccount) == "没有账号" && Texts.remoteTemplateProblem(.noRelay) == "不经中转"
           && Texts.remoteTemplateProblem(RemoteTemplateProblem(rawValue: "zz_new")) == "暂不可用"
           && RemoteTemplateProblem.allKnown.allSatisfy { !Texts.remoteTemplateProblemHelp($0).isEmpty && Texts.remoteTemplateProblem($0) != "现在用不了" })
 }
@@ -312,16 +325,16 @@ func remoteLaunchProtocolTests() {
         check("新建模板：弹层", false)
         return
     }
-    check("新建：选上现在的工具、它上次用的账号；名字、文件夹空着不能存",
-          draft.original == nil && draft.tool == .claude && draft.account == "工作(bob@example.com)" && draft.name.isEmpty && draft.args.isEmpty
+    check("新建：选上现在的工具（账号不在模板里：起会话时挑）；名字、文件夹空着不能存",
+          draft.original == nil && draft.tool == .claude && draft.name.isEmpty && draft.args.isEmpty
           && !draft.canSave && m.remoteTemplateTools == [.claude, .codex])
     m.setRemoteTemplateTool(draft, .codex)
-    check("换了工具：账号换成这个工具上次用的", draft.tool == .codex && draft.account == "frank@example.com")
+    check("换工具", draft.tool == .codex)
     m.setRemoteTemplateTool(draft, .claude)
     draft.name = "  网站：写文档  "
     m.hooks.chooseTemplateDirectory = { _ in "/Users/me/projects/docs" }
     m.chooseRemoteTemplateDirectory(draft)
-    check("选文件夹", await waitUntil { draft.dir == "/Users/me/projects/docs" } && draft.canSave && draft.account == "工作(bob@example.com)")
+    check("选文件夹", await waitUntil { draft.dir == "/Users/me/projects/docs" } && draft.canSave)
     draft.args = "--model opus --append-system-prompt '说中文"
     box.saveError = "参数里的引号没有配对：拆不开"
     m.saveRemoteTemplate(draft)
@@ -331,7 +344,7 @@ func remoteLaunchProtocolTests() {
     draft.args = "--model opus --append-system-prompt '说中文，别改测试'"
     box.saveError = "已经有叫「网站：写文档」的模板了"
     m.saveRemoteTemplate(draft)
-    let added = ["remote", "template", "add", "--name", "网站：写文档", "--tool", "claude", "--account", "工作(bob@example.com)",
+    let added = ["remote", "template", "add", "--name", "网站：写文档", "--tool", "claude",
                  "--dir", "/Users/me/projects/docs", "--args-line", "--model opus --append-system-prompt '说中文，别改测试'"]
     check("存：名字去掉两头的空白，参数那一行原样放在 --args-line 后面；cca 说不行：原因写在弹层里，接着改",
           await waitUntil { !draft.saving && draft.error == "已经有叫「网站：写文档」的模板了" } && asked().last == added
@@ -353,20 +366,21 @@ func remoteLaunchProtocolTests() {
         check("修改模板：弹层", false)
         return
     }
-    check("修改：填好原来的；账号是 cca 给的键（account_key）；参数是 cca 拼好的那一行（args_line）",
-          e.original?.id == "1a2b3c4d" && e.name == "网站：修 bug" && e.tool == .claude && e.account == "工作(bob@example.com)"
+    check("修改：填好原来的；参数是 cca 拼好的那一行（args_line）",
+          e.original?.id == "1a2b3c4d" && e.name == "网站：修 bug" && e.tool == .claude
           && e.dir == "/Users/me/projects/site" && e.args == "--model opus --append-system-prompt '说中文，改完跑一遍测试'" && e.canSave, e.args)
     e.args += " --verbose"
     m.saveRemoteTemplate(e)
-    let replaced = ["remote", "template", "add", "--name", "网站：修 bug", "--tool", "claude", "--account", "工作(bob@example.com)",
+    let replaced = ["remote", "template", "add", "--name", "网站：修 bug", "--tool", "claude",
                     "--dir", "/Users/me/projects/site", "--replace", "1a2b3c4d", "--args-line",
                     "--model opus --append-system-prompt '说中文，改完跑一遍测试' --verbose"]
     check("存修改：带 --replace <编号>", await waitUntil { m.sheet == nil && !e.saving && settled() } && asked().contains(replaced), "\(asked().suffix(3))")
     m.editRemoteTemplate(gone)
     if case .remoteTemplate(let g)? = m.sheet {
-        check("修改账号没了的模板：账号空着，要重新选才能存", g.account.isEmpty && g.tool == .claude && g.original?.id == "9c0d1e2f" && !g.canSave)
+        check("修改用不了的模板（文件夹不在了）：照样填好原来的，能存（cca 校验，说原因）",
+              g.tool == .claude && g.original?.id == "9c0d1e2f" && g.dir == "/Users/me/notes" && g.args == "--permission-mode plan" && g.canSave)
     } else {
-        check("修改账号没了的模板：弹层", false)
+        check("修改用不了的模板：弹层", false)
     }
     m.dismissSheet()
     let agyDoc = try? DocumentDecoder.decode(RemoteTemplatesDoc.self, from: Data(
@@ -374,7 +388,7 @@ func remoteLaunchProtocolTests() {
     if let agy = agyDoc?.templates.first {
         m.editRemoteTemplate(agy)
         if case .remoteTemplate(let g)? = m.sheet {
-            check("模板的工具没启用：换成能选的，账号重新选", g.tool == .claude && g.account.isEmpty)
+            check("模板的工具没启用：换成能选的", g.tool == .claude && g.dir == "/x")
         } else {
             check("模板的工具没启用：弹层", false)
         }
@@ -451,18 +465,29 @@ private final class StartScript: @unchecked Sendable {
         check("新建会话：弹层", false)
         return
     }
-    check("弹层：那台机器的模板；有两个时不先选，选了才能起", d.launcher == office && d.template == nil && !d.canStart)
-    d.template = "4d4d4d4d"
+    check("弹层：那台机器的模板；有两个时不先选，选了才能起；还没选模板时没有账号可挑", d.launcher == office && d.template == nil && !d.canStart
+          && d.choices?.isEmpty == true && d.account == nil)
+    d.choose(template: "4d4d4d4d")
     d.line = "顺便看看日志"
-    check("选了不能带开场白的模板：写了也不带", d.canStart && d.sentLine == nil)
-    d.template = "2b2b2b2b"
+    check("选了 codex 的模板：那台机器上 codex 的账号只有一个，先选上；不能带开场白的模板：写了也不带",
+          d.choices?.map(\.id) == ["a3a3a3a3a3a3a3a3"] && d.account == "a3a3a3a3a3a3a3a3" && d.sentAccount == "a3a3a3a3a3a3a3a3" && d.canStart && d.sentLine == nil)
+    d.choose(template: "2b2b2b2b")
+    check("换成 claude 的模板：codex 的账号不要了；claude 的账号有两个，不先选，选了才能起",
+          d.choices?.map(\.id) == ["a1a1a1a1a1a1a1a1", "a2a2a2a2a2a2a2a2"] && d.account == nil && !d.canStart)
+    d.account = "a3a3a3a3a3a3a3a3"
+    check("选的不是这个模板能挑的：不能起", !d.canStart)
+    d.account = "a2a2a2a2a2a2a2a2"
+    d.choose(template: "2b2b2b2b")
+    check("选了账号，再选一次同一个模板：账号留着", d.account == "a2a2a2a2a2a2a2a2" && d.canStart)
+    d.account = "a1a1a1a1a1a1a1a1"
     d.line = "  先跑一遍测试 "
-    check("能带开场白的：去掉两头的空白", d.sentLine == "先跑一遍测试")
+    check("能带开场白的：去掉两头的空白", d.sentLine == "先跑一遍测试" && d.sentAccount == "a1a1a1a1a1a1a1a1")
     box.fail = "没起成：模板在那台机器上改过了：刷新一下再起"
     let before = lists()
     m.startRemoteLaunch(d)
-    let want = ["remote", "launch", office.peer, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "120x36", "--line", "先跑一遍测试", "--json"]
-    check("起：带着列表里的摘要、终端的大小（还没开过终端：120x36）、开场白；起不成：cca 说的原因写在弹层里，列表再查一次，不开终端",
+    let want = ["remote", "launch", office.peer, "2b2b2b2b", "--digest", "0a1b2c3d4e5f6a7b", "--size", "120x36", "--account", "a1a1a1a1a1a1a1a1",
+                "--line", "先跑一遍测试", "--json"]
+    check("起：带着列表里的摘要、终端的大小（还没开过终端：120x36）、挑的账号、开场白；起不成：cca 说的原因写在弹层里，列表再查一次，不开终端",
           await waitUntil { !d.starting && d.error != nil && lists() > before && !m.remoteLoading } && launches() == [want]
           && d.error == "没起成：模板在那台机器上改过了：刷新一下再起" && m.sheet == .remoteLaunch(d) && m.remoteTerminals.isEmpty,
           "\(launches()) \(d.error ?? "nil")")
@@ -476,11 +501,12 @@ private final class StartScript: @unchecked Sendable {
     box.unlisted = true
     m.newRemoteSession(on: office)
     if case .remoteLaunch(let d2)? = m.sheet {
-        d2.template = "4d4d4d4d"
+        d2.choose(template: "4d4d4d4d")
         m.startRemoteLaunch(d2)
         check("起好了但还没在服务器上登记好：弹层关上、说一句，不开终端",
               await waitUntil { m.sheet == nil && !d2.starting } && m.remoteTerminals.count == 1 && m.toast?.text.contains("还没在服务器上完成登记") == true
-              && launches().last == ["remote", "launch", office.peer, "4d4d4d4d", "--digest", "1122334455667788", "--size", "120x36", "--json"],
+              && launches().last == ["remote", "launch", office.peer, "4d4d4d4d", "--digest", "1122334455667788", "--size", "120x36",
+                                     "--account", "a3a3a3a3a3a3a3a3", "--json"],
               "\(launches().last ?? []) \(String(describing: m.toast))")
     } else {
         check("再开一次弹层", false)
@@ -489,7 +515,8 @@ private final class StartScript: @unchecked Sendable {
     box.fail = "没起成：那台机器上开着的会话太多了：先结束几个"
     m.newRemoteSession(on: office)
     if case .remoteLaunch(let d3)? = m.sheet {
-        d3.template = "2b2b2b2b"
+        d3.choose(template: "2b2b2b2b")
+        d3.account = "a2a2a2a2a2a2a2a2"
         m.startRemoteLaunch(d3)
         m.dismissSheet()
         check("正在起的时候关掉了弹层：没起成弹一条提示，说 cca 给的原因",
@@ -498,6 +525,19 @@ private final class StartScript: @unchecked Sendable {
               "\(String(describing: m.toast)) \(launches().count)")
     } else {
         check("再开一次弹层（中途关掉的）", false)
+    }
+    // 那台机器上的 cca 是旧版（peer_launchers 里没有 accounts）：模板用它自己的账号，不用挑、不带 --account
+    let oldHost = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(#"""
+        {"version":1,"kind":"remote","sessions":[],"peers":[],"peer_launchers":[{"id":"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6b","peer":"b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+         "machine":"office-linux","state":"ok","more":0,"accounts":null,"templates":[{"id":"2b2b2b2b","digest":"0a1b2c3d4e5f6a7b","name":"API：修 bug","tool":"claude",
+         "account":"工作","host_account":"主力","dir":"~/srv/api","args":"","line":true}]}]}
+        """#.utf8))
+    if let l = oldHost?.peerLaunchers.first {
+        let od = RemoteLaunchDraft(launcher: l, template: "2b2b2b2b")
+        check("那台机器上的 cca 是旧版：不用挑账号（模板用它自己的），选了模板就能起，不带 --account",
+              od.choices == nil && od.account == nil && od.sentAccount == nil && od.canStart)
+    } else {
+        check("旧版的启动器", false)
     }
     m.shutdown()
 }

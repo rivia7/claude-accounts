@@ -1123,8 +1123,8 @@ fn behind_proxy(t: &mut Ctx) {
     let srv = Server::start_with(&d, fx.pubkey("root"), &ServerOpts::new().proxied(true));
     let (st, j) = srv.get("/v1/health");
     assert_eq!((st, j["mode"].str()), (200, "team"));
-    // 服务器按 IP 限流的那个桶（ip_bucket：Buckets(2, 120)）攒得下这么多个
-    let burst = 120;
+    // 服务器按 IP 限流的那个桶（cli/src/server/limits.rs 的 IP_RATE：每秒 2 个，3.7.10 起攒得下 240 个——以前 120 个）攒得下这么多个
+    let burst = 240;
     let flood = |xff: &dyn Fn(usize) -> String| {
         let got: Vec<u16> =
             (0..burst + 5).map(|i| srv.req("POST", "/v1/report", b"{}", None, &[("X-Forwarded-For", &xff(i))]).0).collect();

@@ -84,18 +84,20 @@ enum CcaCommand: Sendable, Hashable {
     case remoteEnd(session: String)
     /// 远程启动用的模板（`cca remote template list --json`，PROTOCOL 9.4）：只读、不联网。要 `hello.remote_launch`。
     case remoteTemplates
-    /// 存一个模板（`cca remote template add --name … --tool … --account … --dir … [--replace <编号>] -- 参数…`）：account 是账号表的键，
-    /// dir 是绝对路径，replace 是改的那一个的编号（新建是 nil）。cca 校验（账号、文件夹在不在，参数能不能起交互的会话），不行时 `fail` 说原因
-    case remoteTemplateSave(name: String, tool: ToolID, account: String, dir: String, argsLine: String, replace: String?)
+    /// 存一个模板（`cca remote template add --name … --tool … --dir … [--replace <编号>] --args-line …`）：dir 是绝对路径，replace 是改的
+    /// 那一个的编号（新建是 nil）。账号不在模板里（3.7.10 起：起会话时挑）。cca 校验（文件夹在不在，参数能不能起交互的会话），不行时
+    /// `fail` 说原因
+    case remoteTemplateSave(name: String, tool: ToolID, dir: String, argsLine: String, replace: String?)
     /// 删掉一个模板（`cca remote template rm <编号>`）。
     case remoteTemplateRemove(id: String)
     /// 这台手机能不能用这台 Mac 上的模板新建会话（`cca remote allow <配对的 id> launch on|off`）：打开时 cca 先发 `consent.remote_launch`
     /// （范围是配对的 id），同意了重跑。
     case remoteLaunch(peer: String, on: Bool)
     /// 用配对过的另一台机器上的模板在那台机器上新建会话（`cca remote launch <配对的 id> <模板的编号> --digest <摘要> --size <列>x<行>
-    /// [--line <开场白>] --json`，PROTOCOL 9.5）：cca 进那台机器的启动器、等它起好、等新会话在服务器上登记好，stdout 是
-    /// `RemoteLaunchStartDoc`；那台机器不起时 `fail` 说原因。要 `hello.remote_launch_machines`。
-    case remoteStart(peer: String, template: String, digest: String, cols: Int, rows: Int, line: String?)
+    /// [--account <账号的编号>] [--line <开场白>] --json`，PROTOCOL 9.5）：cca 进那台机器的启动器、等它起好、等新会话在服务器上登记好，
+    /// stdout 是 `RemoteLaunchStartDoc`；那台机器不起时 `fail` 说原因。account：挑的账号（`peer_launchers[].accounts[].id`；那台机器上的
+    /// cca 是旧版时是 nil）。要 `hello.remote_launch_machines`。
+    case remoteStart(peer: String, template: String, digest: String, cols: Int, rows: Int, line: String?, account: String? = nil)
     /// 一个 Team 的设备和配置（`cca team devices <Team> --json`，PROTOCOL 4.14；只有管理员的设备问得到）：和服务器对一遍，可能发布。
     /// auto：这一页看得见时自己查的（低优先级）
     case teamDevices(team: String, auto: Bool)
@@ -208,14 +210,15 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteUnpair(let peer): return ["remote", "unpair", peer]
         case .remoteEnd(let session): return ["remote", "end", session]
         case .remoteTemplates: return ["remote", "template", "list", "--json"]
-        case .remoteTemplateSave(let name, let tool, let account, let dir, let argsLine, let replace):
+        case .remoteTemplateSave(let name, let tool, let dir, let argsLine, let replace):
             // 参数是弹层里的那一行字，原样交给 cca 拆（照 shell 的写法；拆不开的 cca 说原因）：放在最后，没有参数也写
-            return ["remote", "template", "add", "--name", name, "--tool", tool.rawValue, "--account", account, "--dir", dir]
+            return ["remote", "template", "add", "--name", name, "--tool", tool.rawValue, "--dir", dir]
                 + (replace.map { ["--replace", $0] } ?? []) + ["--args-line", argsLine]
         case .remoteTemplateRemove(let id): return ["remote", "template", "rm", id]
         case .remoteLaunch(let peer, let on): return ["remote", "allow", peer, "launch", on ? "on" : "off"]
-        case .remoteStart(let peer, let template, let digest, let cols, let rows, let line):
-            return ["remote", "launch", peer, template, "--digest", digest, "--size", "\(cols)x\(rows)"] + (line.map { ["--line", $0] } ?? []) + ["--json"]
+        case .remoteStart(let peer, let template, let digest, let cols, let rows, let line, let account):
+            return ["remote", "launch", peer, template, "--digest", digest, "--size", "\(cols)x\(rows)"] + (account.map { ["--account", $0] } ?? [])
+                + (line.map { ["--line", $0] } ?? []) + ["--json"]
         case .teamDevices(let team, _): return ["team", "devices", team, "--json"]
         case .teamSync: return ["team", "sync"]
         case .teamLeave(let team): return ["team", "leave", team]

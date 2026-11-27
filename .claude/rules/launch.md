@@ -35,7 +35,7 @@ paths:
   `server/README.md`「启动器」↔ 辅助程序（`crypto.rs` 的 `launch_seal`、`template.rs` 的 `launch_doc` / `digest`、`launch.rs` 的 `Ask::parse`、`local.rs` 的 `LAUNCH` / `LAUNCHED`）↔
   `tests/kit/spec.rs`（照文档独立写的）↔ `tests/kit/relay.rs` 的 `LAUNCH` / `LAUNCHED` ↔ CcaRemoteKit 的 `Launch.swift`（`tests/ios_kit.rs` 的 `against_the_spec`、`ios/Tests/KitTests`）
 - LAUNCH 只在手机和启动器之间：会话的通道（`link.rs` 的 `bridge`）不转它 ↔ `tests/remote_launch.rs` 里经会话的通道发它的那一句
-- LAUNCHED 的 `code`：`launch.rs` 的 `launch` / `fail_text` ↔ `server/README.md` ↔ CcaRemoteKit 的 `LaunchResult`、iOS App 的 `Texts.launchFailure`（哪几个要刷新列表）↔ `start.rs` 的 `refused_text`
+- LAUNCHED 的 `code`：`launch.rs` 的 `launch` / `pick_account` / `fail_text` ↔ `server/README.md` ↔ CcaRemoteKit 的 `LaunchResult`、iOS App 的 `Texts.launchFailure`（哪几个要刷新列表）↔ `start.rs` 的 `refused_text`
 - 刚起的会话接入时的宽限：CcaRemoteKit `Attachment` 的 `freshFor`、`freshGap`（45 秒、1.5 秒）↔ `start.rs` 的 `FRESH_FOR`、`FRESH_GAP` ↔ docs/dev/launch.md；`launch.rs` 的 `SPAWN_WAIT` 比它短得多
 - 起的会话：`spawn_session` 的参数 ↔ `host.rs` 的 `--headless` 那几个参数、`CCA_HEADLESS_LINGER` / `CCA_HEADLESS_IDLE` ↔ `tests/remote_host.rs` 的 `headless_sessions`；
   环境 `KEEP_ENV` ↔ docs/dev/launch.md ↔ `tests/remote_launch.rs` 核对的那几个；`CCA_REMOTE_HOSTED`：`spawn_session` ↔ bash 的 `remote_prepare` ↔ 回归 3e
@@ -48,6 +48,11 @@ paths:
 - 在别的机器上起（`cca remote launch`，docs/dev/launch.md「在别的机器上起」）：读启动器的说明 `far.rs` 的 `launcher_of` ↔ server/README.md「启动器」↔ 写的那头 `template.rs` 的 `launch_doc`；
   `remote-launch`（`start.rs`：参数、退出码、`--json` 的文档）↔ bash `cmd_remote` 的 `launch)` ↔ PROTOCOL 9.5 ↔ Swift 的 `CcaCommand.remoteStart`（超时比 `ANSWER_WAIT` 加 `FRESH_FOR` 长）、
   `RemoteLaunchStartDoc`；`start.rs` 的 `COLS`、`ROWS`、`LINE_MAX` ↔ `launch.rs` 的 `Ask::parse`、`LINE_MAX`；`peer_launchers`（`manage.rs` 的 `launcher_entry`）↔ PROTOCOL 9.1 ↔
-  Swift 的 `RemotePeerLauncher`、`RemotePeerTemplate` ↔ `macos/Tests/Fixtures/remote_list.json`（`Generic.swift` 查它的不变量）
+  Swift 的 `RemotePeerLauncher`、`RemotePeerTemplate`、`RemotePeerAccount` ↔ `macos/Tests/Fixtures/remote_list.json`（`Generic.swift` 查它的不变量）
+- 起的时候挑账号（docs/dev/launch.md「起的时候挑账号」）：能挑的 `template.rs` 的 `picks`（说明里的 `accounts`）↔ `launch.rs` 的 `pick_account`（同一份）；
+  账号的编号是 `status.rs` 的 `account_tag`，和「账号的状态」里同一个账号的编号一样（iOS 的 `LaunchSheet` 照它找头像、额度：别分开改）；
+  不认 `accounts` 的旧 App、cca 看模板那一行的 `a`、`aid`（`ANY_ACCOUNT`）；`--account`：`start.rs` 的 `pick_for` ↔ PROTOCOL 9.5 ↔ Mac App 的 `RemoteLaunchDraft`
+- 会话的上限：`launch.rs` 的 `sessions_max`（服务器的级别到 3 是 100 个，不到是 7 个）↔ 服务端 `limits.rs` 的 `sessions_dev`（101）↔ `server::LEVEL`、
+  `team::SERVER_NEED`；Mac App 的 `remoteTerminalLimit`（100）
 - 后台进程：bash 的 `REMOTE_LAUNCHER_LABEL` ↔ `launch.rs` 的 `LABEL`；`plist_text` ↔ 回归 11b3c 核对 LaunchAgent 的那一条 ↔ `tests/setup.sh` 假的 launchctl 的用户域（`gui/<uid>`）；
   Linux 的记号 `REMOTE_LAUNCHER_TAG`（crontab 那两行，改了的话旧的那两行也要认得、删得掉）；`cca restore` 先 `remote_launcher_remove`（docs/dev/uninstall.md）

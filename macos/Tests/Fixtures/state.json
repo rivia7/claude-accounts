@@ -59,7 +59,7 @@
       {"id": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "name": "书房组", "role": "admin", "url": "https://team.example.com:18445",
        "host": "team.example.com:18445", "device": "studio-mac", "state": "ok", "error": null, "seq": 4, "accounts": 3,
        "joined_epoch": 1793900000, "coadmin": false,
-       "server_level": 0, "server_update": {"level": 0, "need": 2, "why": "3.7.5 以前的服务器给不了 iPhone 上的 cca App 账号的额度，也推不了额度用完、恢复的通知"}},
+       "server_level": 0, "server_update": {"level": 0, "need": 3, "why": "3.7.10 以前的服务器一台设备最多只能开 8 个远程会话（更新以后能开 100 个）"}},
       {"id": "c7e1a4b2d39f40718e5a6c7d8b9f0a1e", "name": "设计组", "role": "member", "url": "https://design.example.com",
        "host": "design.example.com", "device": "studio-mac", "state": "removed",
        "error": "这台设备被「设计组」的管理员移除了：要再加入，向管理员要一个新的邀请", "seq": 2, "accounts": 0, "joined_epoch": 1793000000},

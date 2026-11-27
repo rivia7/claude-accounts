@@ -329,9 +329,20 @@ fn launcher_entry(l: &far::FarLauncher, all: &[peers::Peer]) -> Dict {
             "args" => t.args.as_str(), "line" => t.line
         });
     }
+    // accounts：起会话时能挑的账号（3.7.10 起）；那台机器上的 cca 是旧版（模板用它自己的账号）时是 null
+    let accounts = l.accounts.as_ref().map_or(V::None, |list| {
+        let rows = List::new();
+        for a in list {
+            rows.push(dict! {
+                "id" => a.id.as_str(), "tool" => a.tool.as_str(), "name" => a.name.as_str(), "host_name" => a.host_name.as_str()
+            });
+        }
+        V::List(rows)
+    });
     dict! {
         "id" => l.sid.as_str(), "peer" => l.pid.as_str(), "machine" => l.peer.as_str(),
-        "state" => if l.online { "ok" } else { "offline" }, "team" => team, "more" => l.more, "templates" => templates
+        "state" => if l.online { "ok" } else { "offline" }, "team" => team, "more" => l.more, "templates" => templates,
+        "accounts" => accounts
     }
 }
 
