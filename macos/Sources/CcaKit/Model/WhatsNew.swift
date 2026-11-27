@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.11", title: "Team 账号的默认别名带上 Team 名，转发中转由 Team 设置", points: [
+            .init(symbol: "person.text.rectangle",
+                  text: "Team 给的账号没起过别名时，默认叫「Team 名-1」「Team 名-2」……（以前是 team-1、team-2），号不变；Team 改了名字，这些别名跟着换。管理员起的别名不变。"),
+            .init(symbol: "envelope.badge.shield.half.filled",
+                  text: "Team 给的 Claude 账号信任哪些转发中转（不安全），改由 Team 的管理员设置：Team 卡片上的「信任的转发中转」（终端里是 cca team forwarder）。没设置的一个都不信。"),
+            .init(symbol: "exclamationmark.triangle",
+                  text: "更新后，这台设备给 Team 账号登记的转发中转不再算数，要用的请管理员在 Team 里设置。Team 里的设备都要更新到这一版，管理员的先更新（旧版发布配置时会丢掉这一项）；Team 的服务器不用更新。"),
+        ]),
         ReleaseNote(version: "3.7.10", title: "远程新建会话时再选账号，会话能拖动排序", points: [
             .init(symbol: "person.crop.circle.badge.checkmark",
                   text: "远程会话的模板不再带账号：在 iPhone 上的 cca App 或另一台 Mac 上照模板新建会话时，再选用这台 Mac 上的哪个账号（终端里是 cca remote launch --account）。放模板的 Mac 要更新到这一版，iPhone 上的 App 也要更新。"),
