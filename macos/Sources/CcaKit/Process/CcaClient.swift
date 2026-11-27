@@ -84,10 +84,10 @@ enum CcaCommand: Sendable, Hashable {
     case remoteEnd(session: String)
     /// 远程启动用的模板（`cca remote template list --json`，PROTOCOL 9.4）：只读、不联网。要 `hello.remote_launch`。
     case remoteTemplates
-    /// 存一个模板（`cca remote template add --name … --tool … --dir … [--replace <编号>] --args-line …`）：dir 是绝对路径，replace 是改的
-    /// 那一个的编号（新建是 nil）。账号不在模板里（3.7.10 起：起会话时挑）。cca 校验（文件夹在不在，参数能不能起交互的会话），不行时
-    /// `fail` 说原因
-    case remoteTemplateSave(name: String, tool: ToolID, dir: String, argsLine: String, replace: String?)
+    /// 存一个模板（`cca remote template add --name … --tool … --dir … [--team <Team 的编号>] [--replace <编号>] --args-line …`）：dir 是绝对路径，
+    /// replace 是改的那一个的编号（新建是 nil），team 是归属的 Team（模板的文档里有 `teams` 时才给：旧版 cca 不认）。账号不在模板里
+    /// （3.7.10 起：起会话时挑）。cca 校验（文件夹在不在，参数能不能起交互的会话，这台 Mac 在不在这个 Team 里），不行时 `fail` 说原因
+    case remoteTemplateSave(name: String, tool: ToolID, dir: String, argsLine: String, replace: String?, team: String? = nil)
     /// 删掉一个模板（`cca remote template rm <编号>`）。
     case remoteTemplateRemove(id: String)
     /// 这台手机能不能用这台 Mac 上的模板新建会话（`cca remote allow <配对的 id> launch on|off`）：打开时 cca 先发 `consent.remote_launch`
@@ -214,10 +214,11 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteUnpair(let peer): return ["remote", "unpair", peer]
         case .remoteEnd(let session): return ["remote", "end", session]
         case .remoteTemplates: return ["remote", "template", "list", "--json"]
-        case .remoteTemplateSave(let name, let tool, let dir, let argsLine, let replace):
-            // 参数是弹层里的那一行字，原样交给 cca 拆（照 shell 的写法；拆不开的 cca 说原因）：放在最后，没有参数也写
+        case .remoteTemplateSave(let name, let tool, let dir, let argsLine, let replace, let team):
+            // 参数是弹层里的那一行字，原样交给 cca 拆（照 shell 的写法；拆不开的 cca 说原因）：放在最后，没有参数也写。归属的 Team 给编号
+            // （旧版 cca 不认 --team：那时 team 是 nil）
             return ["remote", "template", "add", "--name", name, "--tool", tool.rawValue, "--dir", dir]
-                + (replace.map { ["--replace", $0] } ?? []) + ["--args-line", argsLine]
+                + (team.map { ["--team", $0] } ?? []) + (replace.map { ["--replace", $0] } ?? []) + ["--args-line", argsLine]
         case .remoteTemplateRemove(let id): return ["remote", "template", "rm", id]
         case .remoteLaunch(let peer, let on): return ["remote", "allow", peer, "launch", on ? "on" : "off"]
         case .remoteStart(let peer, let template, let digest, let cols, let rows, let line, let account):

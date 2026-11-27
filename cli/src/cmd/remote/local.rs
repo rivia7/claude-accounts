@@ -24,7 +24,8 @@ pub const INPUT: u8 = 0x02;
 pub const RESIZE: u8 = 0x03;
 pub const DETACH: u8 = 0x04;
 pub const STATUS_REQ: u8 = 0x06;
-/// 结束这个会话（`cca remote end`）：只有这台机器上的 socket 上说得了，转接那头不替别的机器转
+/// 结束这个会话（`cca remote end`）：这台机器上的 socket 上说得了；别的机器上的接入方只有能操作、会话又是无头的（远程启动的，
+/// `Meta::headless`）时转接那头才替它转（link.rs 的 `bridge`）。只看的说了不算
 pub const END: u8 = 0x07;
 /// 推一条通知给接着的各处（`cca remote notify`：会话里的钩子说的）。也只有这台机器上的 socket 上说得了，转接那头不转这一种
 pub const NOTIFY_REQ: u8 = 0x08;
@@ -384,14 +385,21 @@ pub struct Meta {
     pub name: String,
     pub cwd: String,
     pub since: f64,
+    /// 无头的（远程启动的：启动器起的，这台机器上没有它的终端）：配对的手机、电脑能操作的话也结束得了它（`END`）。
+    /// 说明里只有是的才写这一项（3.7.11 及以前的宿主写的没有：当它不是）
+    pub headless: bool,
 }
 
 impl Meta {
     pub fn to_dict(&self) -> Dict {
-        dict! {
+        let d = dict! {
             "v" => 1, "sid" => self.sid.as_str(), "pid" => self.pid, "tool" => self.tool.as_str(), "key" => self.key.as_str(),
             "name" => self.name.as_str(), "cwd" => self.cwd.as_str(), "since" => self.since
+        };
+        if self.headless {
+            d.set("headless", true);
         }
+        d
     }
 
     pub fn from_dict(d: &Dict) -> Option<Meta> {
@@ -408,6 +416,7 @@ impl Meta {
             name: s("name")?,
             cwd: s("cwd")?,
             since: d.at("since").as_num()?,
+            headless: d.get("headless").and_then(|v| v.as_bool()).unwrap_or(false),
         })
     }
 
@@ -568,6 +577,7 @@ mod tests {
             name: "工作".into(),
             cwd: "/tmp/项目".into(),
             since: 1794000000.5,
+            headless: false,
         }
     }
 
@@ -620,6 +630,13 @@ mod tests {
         assert_eq!(Meta::from_dict(&m.to_dict()), Some(m.clone()));
         let st = Status { meta: m.clone(), size: Size { cols: 100, rows: 30 }, viewers: 2, local: false, busy: false };
         assert_eq!(Status::from_json(&st.to_json()), Some(st));
+        // 无头的（远程启动的）记一笔，STATUS 里也有（转接进程照它放不放行 END）；不是的不写这一项（和以前的说明一样）
+        assert!(m.to_dict().get("headless").is_none());
+        let h = Meta { headless: true, ..m.clone() };
+        assert_eq!(h.to_dict().at("headless").as_bool(), Some(true));
+        assert_eq!(Meta::from_dict(&h.to_dict()), Some(h.clone()));
+        let st = Status { meta: h.clone(), size: Size { cols: 100, rows: 30 }, viewers: 0, local: false, busy: false };
+        assert_eq!(Status::from_json(&st.to_json()).map(|s| s.meta.headless), Some(true));
         // 编号不是 32 个十六进制字符、版本不对：不认
         let d = m.to_dict();
         d.set("sid", "../../etc");

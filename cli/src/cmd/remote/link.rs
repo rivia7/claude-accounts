@@ -242,8 +242,9 @@ fn bridge(j: &Join, at: &Session) -> io::Result<()> {
         if unsafe { libc::getppid() } != j.parent {
             return far_gone(&mut conn);
         }
-        // 接入方发来的：只让看的，按键、改窗口大小的不转（它的窗口多小都不该影响会话）；问宿主状态的谁都不转；起会话的（LAUNCH：
-        // 只在启动器的通道上有用，launch.rs）也不转
+        // 接入方发来的：只让看的，按键、改窗口大小的不转（它的窗口多小都不该影响会话）；问宿主状态的谁都不转；结束会话的（END）只转
+        // 能操作的、无头的会话的（远程启动的：这台机器上没有它的终端，那一头起的也要结束得了；终端里起的只在这台机器上 cca remote end）；
+        // 起会话的（LAUNCH：只在启动器的通道上有用，launch.rs）也不转
         if fds[0].revents & (libc::POLLIN | BAD) != 0 {
             match tun.recv() {
                 Ok(Some(data)) => from_far.push(&data),
@@ -262,6 +263,7 @@ fn bridge(j: &Join, at: &Session) -> io::Result<()> {
                         conn.send(&local::frame(kind, &p))
                     }
                     Ok(Some((local::DETACH, p))) if greeted => conn.send(&local::frame(local::DETACH, &p)),
+                    Ok(Some((local::END, p))) if greeted && control && at.meta.headless => conn.send(&local::frame(local::END, &p)),
                     Ok(Some(_)) => {}
                     Ok(None) => break,
                     Err(()) => return far_gone(&mut conn),

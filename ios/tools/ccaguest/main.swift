@@ -3,10 +3,12 @@
 //   pair <链接>             配对；stdout：peer 配对编号 名字，没成是 fail 原因（退出码 1）
 //   list                    一行一个 JSON：配对过的机器（没有 sid；served：服务器转不转账号的状态，status：那台机器放上来的账号的状态，
 //                           没有是 null；launcher：那台机器的启动器 {sid, online, machine, more, t: [模板 {i, h, n, k, a, aid, d, x, l}],
-//                           accounts: [能挑的账号 {i, k, n, aid}]（旧版的 cca 没有：null）}，没有是 null）、它上面的会话（有 sid）
-//   attach 配对编号 会话编号 [--view] [--size 列x行] [--fresh]   接入（窗口大小默认 80x24）：stdin 是敲的键（读到头就断开），stdout 是终端的
+//                           accounts: [能挑的账号 {i, k, n, aid}]（旧版的 cca 没有：null）}，没有是 null）、它上面的会话（有 sid；
+//                           end：这台手机结束得了它）
+//   attach 配对编号 会话编号 [--view] [--size 列x行] [--fresh] [--end]   接入（窗口大小默认 80x24）：stdin 是敲的键（读到头就断开），stdout 是终端的
 //                           字节；stderr：state open|retrying、size 会话的列 行（宿主说的）、exit 退出码、note 通知的 JSON、closed 原因。
-//                           detached、ended 退出码 0，别的 1。--fresh：刚远程启动的会话（服务器说没有它时 45 秒里接着问）
+//                           detached、ended 退出码 0，别的 1。--fresh：刚远程启动的会话（服务器说没有它时 45 秒里接着问）。
+//                           --end：头一次接上就请宿主结束会话（不看说明里说没说结束得了：宿主那头不理的照样接着），stderr 说 end sent|end not_sent
 //   launch 配对编号 模板编号 [--size 列x行] [--line 开场白] [--account 账号的编号]   远程启动（大小默认 80x24）：先列一遍找那台机器的
 //                           启动器；--account 原样放进 LAUNCH（不查是不是能挑的）。stdout：launched 新会话的编号，没起是 refused 原因码
 //                           原因、没问到是 fail 原因（退出码 1）
@@ -152,7 +154,8 @@ case "list":
             print(String(decoding: try! JSONSerialization.data(withJSONObject: head, options: [.sortedKeys]), as: UTF8.self))
             for s in row.sessions {
                 let j = base.merging(["sid": s.sid, "machine": s.info.machine, "tool": s.info.tool, "name": s.info.name, "cwd": s.info.cwd,
-                                      "online": s.online, "view": s.info.viewOnly, "viewers": s.viewers, "aid": s.info.aid]) { $1 }
+                                      "online": s.online, "view": s.info.viewOnly, "viewers": s.viewers, "aid": s.info.aid,
+                                      "end": s.info.canEnd]) { $1 }
                 print(String(decoding: try! JSONSerialization.data(withJSONObject: j, options: [.sortedKeys]), as: UTF8.self))
             }
         }
@@ -232,6 +235,7 @@ case "attach":
             say("state open")
             guard !reading else { return }
             reading = true
+            if args.contains("--end") { say(att.end() ? "end sent" : "end not_sent") }
             // 敲的键：stdin 读到什么送什么，读到头就断开
             Thread.detachNewThread {
                 while true {

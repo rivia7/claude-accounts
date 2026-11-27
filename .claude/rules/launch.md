@@ -17,6 +17,7 @@ paths:
   - "ios/CcaRemoteKit/Sources/CcaRemoteKit/Launch.swift"
   - "ios/CcaRemoteKit/Sources/CcaRemoteKit/Attachment.swift"
   - "ios/App/Views/LaunchSheet.swift"
+  - "ios/App/Views/TerminalScreen.swift"
   - "macos/Sources/CcaKit/Model/RemoteLaunch.swift"
   - "macos/Sources/CcaKit/Protocol/Remote.swift"
   - "macos/Sources/CcaApp/RemoteSessionsPage.swift"
@@ -38,10 +39,14 @@ paths:
 - LAUNCHED 的 `code`：`launch.rs` 的 `launch` / `pick_account` / `fail_text` ↔ `server/README.md` ↔ CcaRemoteKit 的 `LaunchResult`、iOS App 的 `Texts.launchFailure`（哪几个要刷新列表）↔ `start.rs` 的 `refused_text`
 - 刚起的会话接入时的宽限：CcaRemoteKit `Attachment` 的 `freshFor`、`freshGap`（45 秒、1.5 秒）↔ `start.rs` 的 `FRESH_FOR`、`FRESH_GAP` ↔ docs/dev/launch.md；`launch.rs` 的 `SPAWN_WAIT` 比它短得多
 - 起的会话：`spawn_session` 的参数 ↔ `host.rs` 的 `--headless` 那几个参数、`CCA_HEADLESS_LINGER` / `CCA_HEADLESS_IDLE` ↔ `tests/remote_host.rs` 的 `headless_sessions`；
-  环境 `KEEP_ENV` ↔ docs/dev/launch.md ↔ `tests/remote_launch.rs` 核对的那几个；`CCA_REMOTE_HOSTED`：`spawn_session` ↔ bash 的 `remote_prepare` ↔ 回归 3e
+  环境 `KEEP_ENV` ↔ docs/dev/launch.md ↔ `tests/remote_launch.rs` 核对的那几个；`CCA_REMOTE_HOSTED`：`spawn_session` ↔ bash 的 `remote_prepare` ↔ 回归 3e；
+  那一头结束它：`Meta.headless` ↔ `far.rs` 的 `dir_doc` 给的 `end` ↔ `link.rs` 的 `bridge` 放行 `END` 的条件 ↔ server/README.md「会话的说明」「两头之间的通道」↔
+  CcaRemoteKit 的 `SessionInfo.canEnd`、`Attachment.end`、`Frame.end` ↔ iOS 的 `TerminalScreen` ↔ `ccaguest attach --end`（`tests/ios_kit.rs`）、`tests/remote_launch.rs`
 - 模板：bash `remote_template` 的参数（`--args-line`）↔ 辅助程序 `remote-template add` ↔ Mac App 的 `CcaCommand`（模板命令）；拆那一行的规矩（`sh_split`）↔ PROTOCOL 9.4；
   `args_line` 的拼法（`sh_quote`）↔ Swift 缺这一项时的 `shellQuoteIfNeeded`；`list --json` ↔ PROTOCOL 9.4 ↔ Swift 的 `RemoteTemplatesDoc` ↔
-  `macos/Tests/Fixtures/remote_templates.json`、回归 11b3c 写的 `guifx3/remote_templates.json`；`problem` 的取值 ↔ Swift 的 `RemoteTemplateProblem`、`Texts`
+  `macos/Tests/Fixtures/remote_templates.json`、回归 11b3c 写的 `guifx3/remote_templates.json`；`problem` 的取值 ↔ Swift 的 `RemoteTemplateProblem`、`Texts`；
+  归属的 Team（`team`）：`Template::for_hub` 在 `LaunchDoc::build`、`launch` 两处都用 ↔ `remote-template teams` / `add --team` / `list --team`、`remote-allow --show` 最后一列 ↔
+  bash `remote_template`、`remote_allow_launch` ↔ PROTOCOL 9.4 的 `teams`、`team`、`team_name`、`no_team` ↔ Swift 的 `RemoteTemplateTeam`、`RemoteTemplateDraft.team`
 - 开关：peers.json 的 `launch`（`peers.rs` 的 `can_launch`：只有 control 的读得出 true；3.7.6 还要是手机）、`remote list --json` 的 `peers[].launch`、`launcher`（`launch::summary`）↔ PROTOCOL 9.1 ↔
   Swift 的 `RemotePeer.launch`、`RemoteLauncher` ↔ `macos/Tests/Fixtures/remote_list.json`；同意项 `remote_launch`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`；
   hello 的 `remote_launch`、`remote_launch_machines`：`cca` ↔ PROTOCOL 2.1 ↔ `HelloDoc.remoteLaunch`、`remoteLaunchMachines` ↔ `macos/Tests/Fixtures/hello.json`

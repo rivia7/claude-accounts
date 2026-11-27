@@ -557,7 +557,8 @@ fn launch(hub: HubKind, a: &Allowed, ask: &Ask, limited: bool, what: &mut String
     if limited {
         return Err("rate");
     }
-    let Some(t) = template::load().into_iter().find(|t| t.id == ask.id) else { return Err("no_template") };
+    // 不是归属这个 Team 的（别的 Team 配对的设备才看得到的）当它没有
+    let Some(t) = template::load().into_iter().find(|t| t.id == ask.id && t.for_hub(hub)) else { return Err("no_template") };
     what.clone_from(&t.name);
     if t.digest() != ask.digest {
         return Err("changed");

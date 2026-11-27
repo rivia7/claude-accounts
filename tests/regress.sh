@@ -1827,20 +1827,31 @@ agy_o1=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-
 agy_o2=$(printf '{"plan_tier": "Pro", "email": "x@example.com"}' | run cca _agy-statusline nobody 2>&1); agy_r2=$?
 ok "cca _agy-statusline：账号目录名不像、目录不在时不记（只往 cca 自己的账号目录里写）；--then 的命令照样运行，它的输出和退出码就是这一次的；没有 --then 时什么都不输出、总是成功（没有会话标记的旧写法也认：换版本以前启动、还开着的会话）" '[ "$agy_o1" = ok ] && [ $agy_r1 -eq 4 ] && [ ! -e "$H/.cca/agy/x/agy-plan.json" ] && [ -z "$agy_o2" ] && [ $agy_r2 -eq 0 ] && [ ! -e "$H/.cca/agy/accounts/nobody" ]'
 rm -rf "$H/.cca/agy/x"; cp "$T/agy_tok.bak" "$AG/antigravity-cli/antigravity-oauth-token"; rm -f "$AGD/agy-plan.json" "$T/agy_plan_tier" "$T/agy_sl.json" "$H/sl.sh"
-# 通知：状态栏的命令带着会话标记（一次启动一个），和这个会话上一次的状态比：干过活回到 idle 推「做完了」（正文是会话的标题）、
-# tool_confirmation_pending 变成 true 推「在等你」（这台 Mac 上弹一个；在会话宿主里时也推给接着它的各处）。状态记在账号目录的
-# agy-turns/<会话标记>（目录 700、文件 600），新的会话头一次记的时候删掉一天以前的
+# 通知：状态栏的命令带着会话标记（一次启动一个），和这个会话上一次的状态比：干过活停下（回到 idle，后台没事）排上「做完了」（正文是会话的标题）、
+# tool_confirmation_pending 变成 true 排上「在等你」；等一会儿（CCA_AGY_NOTE_WAIT 秒，0 是当场推）还是排着的那一条才推（这台 Mac 上弹一个；在会话宿主里时
+# 也推给接着它的各处）。状态记在账号目录的 agy-turns/<会话标记>（目录 700、文件 600），新的会话头一次记的时候删掉一天以前的
 rm -rf "$AGD/agy-turns"; mkdir -m 700 "$AGD/agy-turns"; : > "$AGD/agy-turns/0000000000000000"; touch -t 202001010000 "$AGD/agy-turns/0000000000000000"   # 上面套餐的用例起的会话也各记了一个：从空的开始数
 printf 'working\ntool_use ask\ntool_use ask\nidle\nidle\n' > "$T/agy_states"; printf '**解释** 这段代码' > "$T/agy_title"; : > osascript.log; : > agy.log
-out=$(run CCA_TTY="$(ans)" cca agy @alice 2>&1); rc=$?
+out=$(run CCA_AGY_NOTE_WAIT=0 CCA_TTY="$(ans)" cca agy @alice 2>&1); rc=$?
 agy_run=$(sed -n 's/^AGY-STATUSLINE-CMD .* _agy-statusline [^ ]* \([0-9a-f]\{16\}\)$/\1/p' agy.log | tail -n 1)
 agy_acct=$(alast ENV | sed -n 's/.* CCA_ACCOUNT=\([^ ]*\) .*/\1/p'); agy_sub="${agy_acct%%(*} · $(basename "$PWD")"; waitfor "[Antigravity 在等你]" osascript.log; waitfor "[Antigravity 做完了]" osascript.log
 agy_ask="OSA [-] [Antigravity 在等你] [$agy_sub] [要你确认一个操作] [Ping]"; agy_done="OSA [-] [Antigravity 做完了] [$agy_sub] [解释 这段代码] [Glass]"
-ok "agy 的通知：状态栏的命令带着会话标记，和这个会话上一次的状态比：tool_confirmation_pending 变成 true 弹「Antigravity 在等你」，干过活回到 idle 弹「Antigravity 做完了」（正文是会话的标题），没变的不再弹；状态记在账号目录的 agy-turns/<会话标记>（700 / 600），一天以前的删掉" '[ $rc -eq 3 ] && [ -n "$agy_run" ] && [ "$(grep -c "^AGY-STATUSLINE rc=0 out=$" agy.log)" = 5 ] && grep -qxF -- "$agy_ask" osascript.log && grep -qxF -- "$agy_done" osascript.log && [ "$(grep -c "^OSA " osascript.log)" = 2 ] && [ "$(stat -f %Lp "$AGD/agy-turns/$agy_run")" = 600 ] && [ "$(cat "$AGD/agy-turns/$agy_run")" = "idle 0 0" ] && [ ! -e "$AGD/agy-turns/0000000000000000" ]'
+agy_turn="j[\"state\"] == \"idle\" and j[\"due\"] == \"done\" and j[\"mark\"] == 3 and j[\"worked\"] == False and j[\"topic\"] == \"**解释** 这段代码\""
+ok "agy 的通知（CCA_AGY_NOTE_WAIT=0：不等）：状态栏的命令带着会话标记，和这个会话上一次的状态比：tool_confirmation_pending 变成 true 弹「Antigravity 在等你」，干过活回到 idle 弹「Antigravity 做完了」（正文是会话的标题），没变的不再弹；状态记在账号目录的 agy-turns/<会话标记>（一行 JSON，700 / 600），一天以前的删掉" '[ $rc -eq 3 ] && [ -n "$agy_run" ] && [ "$(grep -c "^AGY-STATUSLINE rc=0 out=$" agy.log)" = 5 ] && grep -qxF -- "$agy_ask" osascript.log && grep -qxF -- "$agy_done" osascript.log && [ "$(grep -c "^OSA " osascript.log)" = 2 ] && [ "$(stat -f %Lp "$AGD/agy-turns/$agy_run")" = 600 ] && "$TESTBIN" check -f "j=$AGD/agy-turns/$agy_run" "$agy_turn" && [ ! -e "$AGD/agy-turns/0000000000000000" ]'
 edit_table 'j["popup"] = False' "$H/.cca/config.json"; : > osascript.log
-run CCA_TTY="$(ans)" cca agy @alice >/dev/null 2>&1; rc=$?
+run CCA_AGY_NOTE_WAIT=0 CCA_TTY="$(ans)" cca agy @alice >/dev/null 2>&1; rc=$?
 edit_table 'j.pop("popup")' "$H/.cca/config.json"
 ok "agy 的通知：config.json 的 popup 是 false 时这台 Mac 上不弹（状态照样记）" '[ $rc -eq 3 ] && [ ! -s osascript.log ] && [ "$(ls "$AGD/agy-turns" | wc -l | tr -d " ")" = 2 ]'
+# 等一会儿再推（CCA_AGY_NOTE_WAIT=1）：状态栏的命令起一个等着推的进程（agy-turn-wait，不等它），醒来时还是排着的那一条才推。停下以后马上又干活了、
+# 停下时后台还有任务（task_count）、子代理（subagents 里在跑的）、排着的消息（pending_input_count）都不推，确认框很快没了也不推：一轮只弹最后那一次
+printf 'working\nidle\nworking\nidle task\nidle sub\nidle queued\ntool_use ask\ntool_use\nidle\n' > "$T/agy_states"; : > osascript.log; : > agy.log
+run CCA_AGY_NOTE_WAIT=1 CCA_TTY="$(ans)" cca agy @alice >/dev/null 2>&1; rc=$?
+agy_w1=$(grep -c "^AGY-STATUSLINE rc=0 out=$" agy.log); waitfor "[Antigravity 做完了]" osascript.log; gone "agy-turn-wait $(basename "$AGD") "
+ok "agy 的通知（等一会儿再推）：停下以后又干活了、停下时后台还有任务 / 子代理 / 排着的消息、确认框很快没了都不推，最后停下的那一次推「做完了」；状态栏的命令不等那个进程" '[ $rc -eq 3 ] && [ "$agy_w1" = 9 ] && grep -qxF -- "$agy_done" osascript.log && [ "$(grep -c "^OSA " osascript.log)" = 1 ] && ! pgrep -f "agy-turn-wait $(basename "$AGD") " >/dev/null'
+printf 'working\ntool_use ask\n' > "$T/agy_states"; : > osascript.log
+run CCA_AGY_NOTE_WAIT=1 CCA_TTY="$(ans)" cca agy @alice >/dev/null 2>&1; rc=$?
+waitfor "[Antigravity 在等你]" osascript.log; gone "agy-turn-wait $(basename "$AGD") "
+ok "agy 的通知（等一会儿再推）：等到时候还在等你确认就推「在等你」" '[ $rc -eq 3 ] && grep -qxF -- "$agy_ask" osascript.log && [ "$(grep -c "^OSA " osascript.log)" = 1 ]'
 rm -rf "$AGD/agy-turns"; rm -f "$T/agy_states" "$T/agy_title"
 ok "agy 的登录 token 从没出现在 cca 写的文件、日志和命令行里（cca 只读里面的邮箱和档位）" '! grep -rqF -e ya29.test -e 1//test --exclude antigravity-oauth-token "$H/.cca" && ! grep -qF -e ya29.test -e 1//test agy.log open.log curl.log "$T/env.log"'
 out=$(run cca help 2>&1)
@@ -3374,17 +3385,19 @@ ok "cca remote template：还没有模板时说怎么加" '[ $rc -eq 0 ] && prin
 mkdir -p "$H/work"
 out=$(run CCA_TTY="$(ans "修 bug" "" "$H/work")" cca remote template add -- --model opus 2>&1); rc=$?
 LT1=$(printf '%s' "$out" | sed -n 's/.*（编号 \([0-9a-f]\{8\}\)）.*/\1/p')
-ok "cca remote template add：没写的在终端里问（名字、工具——默认 claude、文件夹；账号不问：起会话时挑），-- 后面的是模板的参数；说编号，还没有配对的设备能用时说怎么打开；存在 remote/templates.json（600）" '[ $rc -eq 0 ] && [ -n "$LT1" ] && printf "%s" "$out" | grep -q "已存好模板「修 bug」" && printf "%s" "$out" | grep -q "cca remote allow 配对的名字 launch on" && [ "$(stat -f %Lp "$H/.cca/remote/templates.json")" = 600 ]'
-out=$(runev cca remote template add --name 审代码 --tool claude --account alice@example.com --dir "$H/work" -- --permission-mode plan 2>&1); rc=$?
+ok "cca remote template add：没写的在终端里问（名字、工具——默认 claude、文件夹；账号不问：起会话时挑；只在一个 Team 里：归属它，不问），-- 后面的是模板的参数；说编号、归属哪个 Team，还没有配对的设备能用时说怎么打开；存在 remote/templates.json（600）" '[ $rc -eq 0 ] && [ -n "$LT1" ] && printf "%s" "$out" | grep -q "已存好模板「修 bug」（编号 ${LT1}），归属「阁楼组」" && printf "%s" "$out" | grep -q "cca remote allow 配对的名字 launch on" && [ "$(stat -f %Lp "$H/.cca/remote/templates.json")" = 600 ] && "$TESTBIN" check -f "j=$H/.cca/remote/templates.json" "[t[\"team\"] for t in j[\"templates\"]] == [\"$GLTID\"]"'
+out=$(runev cca remote template add --name 审代码 --tool claude --account alice@example.com --dir "$H/work" --team "$GLTID" -- --permission-mode plan 2>&1); rc=$?
 LT2=$(run cca remote template list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- '[t["id"] for t in d["templates"] if t["name"] == "审代码"][0]' 2>/dev/null)
-ok "界面 App 存模板（都给全，不问）：result 事件 remote_updated；3.7.9 及以前的 App 还给 --account：收下、不存（账号起会话时挑）" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"审代码\" in e[\"message\"]" && [ -n "$LT2" ] && [ "$LT2" != "$LT1" ] && ! grep -q "alice" "$H/.cca/remote/templates.json"'
+ok "界面 App 存模板（都给全，不问；归属的 Team 给的是编号）：result 事件 remote_updated；3.7.9 及以前的 App 还给 --account：收下、不存（账号起会话时挑）" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"审代码\" in e[\"message\"]" && [ -n "$LT2" ] && [ "$LT2" != "$LT1" ] && ! grep -q "alice" "$H/.cca/remote/templates.json"'
+out=$(runev cca remote template add --name 别的组 --tool claude --dir "$H/work" --team 没有这个组 -- 2>&1); rc=$?
+ok "--team 只能是这台机器在的 Team（编号或者名字）：不是的说原因，什么都不存" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这台机器不在叫「没有这个组」的 Team 里" && [ "$(run cca remote template list 2>/dev/null | grep -c .)" = 2 ]'
 out=$(runev cca remote template add --name 打印 --tool claude --dir "$H/work" -- -p hi 2>&1); rc=$?
 out2=$(runev cca remote template add --name 别的 --tool vim --dir "$H/work" -- 2>&1); rc2=$?
 out3=$(runev cca remote template add --name 别的 --tool claude --dir "$H/no-such-dir" -- 2>&1); rc3=$?
 ok "模板只能起交互的会话（-p 这类跑完就退出的不行）、工具只能是 claude / codex / agy、文件夹要已经在：说原因，什么都不存" '[ $rc -ne 0 ] && [ $rc2 -ne 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "模板只能起交互的会话" && printf "%s" "$out2" | grep -q "工具只能是 claude、codex、agy" && printf "%s" "$out3" | grep -q "没有这个文件夹" && [ "$(run cca remote template list 2>/dev/null | grep -c .)" = 2 ]'
 out=$(runev cca remote template add --name 审代码 --tool claude --dir "$H/work" --replace "$LT2" -- --permission-mode plan --model sonnet 2>&1); rc=$?
 out2=$(run cca remote template 2>&1)
-ok "--replace 编号：改那一个（编号、位置不变）；cca remote template 一行一个（编号、名字、工具、文件夹、参数），还没有配对的设备能用时说怎么打开" '[ $rc -eq 0 ] && printf "%s" "$out2" | sed -n 1p | grep -q "^$LT1  修 bug  Claude  ~/work  --model opus$" && printf "%s" "$out2" | sed -n 2p | grep -q "^$LT2  审代码  Claude  ~/work  --permission-mode plan --model sonnet$" && printf "%s" "$out2" | grep -q "还没有配对的设备能用它们"'
+ok "--replace 编号：改那一个（编号、位置不变；没说归属哪个 Team：不变）；cca remote template 一行一个（编号、名字、工具、归属的 Team、文件夹、参数），还没有配对的设备能用时说怎么打开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "归属「阁楼组」" && printf "%s" "$out2" | sed -n 1p | grep -q "^${LT1}  修 bug  Claude  阁楼组  ~/work  --model opus$" && printf "%s" "$out2" | sed -n 2p | grep -q "^${LT2}  审代码  Claude  阁楼组  ~/work  --permission-mode plan --model sonnet$" && printf "%s" "$out2" | grep -q "还没有配对的设备能用它们"'
 want="--model opus --append-system-prompt '说中文，别改测试' ''"
 out=$(runev cca remote template add --name 一行 --tool claude --dir "$H/work" --args-line "$want" 2>&1); rc=$?
 LT3=$(run cca remote template list --json 2>/dev/null </dev/null | "$TESTBIN" val -f d=- '[t["id"] for t in d["templates"] if t["name"] == "一行"][0]' 2>/dev/null)
@@ -3394,7 +3407,7 @@ out3=$(runev cca remote template add --name 一行三 --tool claude --dir "$H/wo
 ok "--args-line（界面 App 用它）：照 shell 的写法写成的一行，cca 拆成一项一项（单引号里的原样，'' 也是一项）；list --json 的 args_line 是同一种写法，拆回去是原样；拆不开说原因，和 -- 只能用一种：都不存" '[ $rc -eq 0 ] && [ -n "$LT3" ] && [ "$la_line" = "$want" ] && run cca remote template list --json 2>/dev/null </dev/null | jok "[t[\"args\"] for t in d[\"templates\"] if t[\"name\"] == \"一行\"] == [[\"--model\", \"opus\", \"--append-system-prompt\", \"说中文，别改测试\", \"\"]] and [t[\"name\"] for t in d[\"templates\"]] == [\"修 bug\", \"审代码\", \"一行\"]" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "参数里的引号没有配对" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "用法：cca remote template"'
 run cca remote template rm "$LT3" >/dev/null 2>&1
 out=$(run cca remote template list --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/remote_templates.json"
-ok "cca remote template list --json（给界面 App，PROTOCOL 9.4）：模板的编号、名字、工具、文件夹（绝对路径）、参数（一项一项的、拼成的那一行）、能不能带开场白、摘要、用得了；账号不在模板里（account 是空的、account_key / account_name 是 null：给 3.7.9 及以前的 App）；还没有配对的设备能用：后台进程没在跑、0 台" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"remote_templates\" and [t[\"id\"] for t in d[\"templates\"]] == [\"$LT1\", \"$LT2\"] and (lambda a, b: a[\"name\"] == \"修 bug\" and a[\"tool\"] == \"claude\" and a[\"account\"] == \"\" and a[\"account_key\"] is None and a[\"account_name\"] is None and a[\"dir\"] == \"$H/work\" and a[\"args\"] == [\"--model\", \"opus\"] and a[\"args_line\"] == \"--model opus\" and a[\"line\"] is True and a[\"problem\"] is None and len(a[\"digest\"]) == 16 and b[\"args\"] == [\"--permission-mode\", \"plan\", \"--model\", \"sonnet\"] and b[\"args_line\"] == \"--permission-mode plan --model sonnet\" and b[\"digest\"] != a[\"digest\"])(d[\"templates\"][0], d[\"templates\"][1]) and d[\"launcher\"] == {\"running\": False, \"templates\": 2, \"peers\": 0}"'
+ok "cca remote template list --json（给界面 App，PROTOCOL 9.4）：模板的编号、名字、工具、文件夹（绝对路径）、参数（一项一项的、拼成的那一行）、能不能带开场白、摘要、用得了、归属的 Team（编号、名字）；账号不在模板里（account 是空的、account_key / account_name 是 null：给 3.7.9 及以前的 App）；能归属的 Team（default：没说归属哪个时用的）；还没有配对的设备能用：后台进程没在跑、0 台" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"remote_templates\" and [t[\"id\"] for t in d[\"templates\"]] == [\"$LT1\", \"$LT2\"] and (lambda a, b: a[\"name\"] == \"修 bug\" and a[\"tool\"] == \"claude\" and a[\"account\"] == \"\" and a[\"account_key\"] is None and a[\"account_name\"] is None and a[\"dir\"] == \"$H/work\" and a[\"args\"] == [\"--model\", \"opus\"] and a[\"args_line\"] == \"--model opus\" and a[\"line\"] is True and a[\"problem\"] is None and len(a[\"digest\"]) == 16 and b[\"args\"] == [\"--permission-mode\", \"plan\", \"--model\", \"sonnet\"] and b[\"args_line\"] == \"--permission-mode plan --model sonnet\" and b[\"digest\"] != a[\"digest\"] and a[\"team\"] == \"$GLTID\" and b[\"team\"] == \"$GLTID\" and a[\"team_name\"] == \"阁楼组\")(d[\"templates\"][0], d[\"templates\"][1]) and d[\"teams\"] == [{\"id\": \"$GLTID\", \"name\": \"阁楼组\", \"default\": True}] and d[\"launcher\"] == {\"running\": False, \"templates\": 2, \"peers\": 0}"'
 out=$(runev cca remote allow "$DPID" launch on 2>&1); rc=$?
 ok "cca remote allow … launch on：另一台机器（dan-air）也能打开（2026-11-27 起；3.7.6 只给手机）：一样先发同意事件（对着它的配对编号），没同意不打开" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"remote_launch\" and e[\"scope\"] == \"$DPID\" and \"「dan-air」可以用这台机器上的模板新建会话\" in e[\"detail\"] and \"用它挑的账号\" in e[\"detail\"] and \"它起的会话也不问就执行命令\" in e[\"detail\"]" && lal | jok "[p[\"launch\"] for p in d[\"peers\"] if p[\"id\"] == \"$DPID\"] == [False]" && [ ! -e "$LAF" ]'
 out=$(runev cca remote allow "$WPID" launch on 2>&1); rc=$?

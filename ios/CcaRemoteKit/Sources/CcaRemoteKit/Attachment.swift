@@ -230,6 +230,14 @@ final class Link: @unchecked Sendable {
         }
     }
 
+    /// 请宿主结束会话（END）。连接留着：宿主结束了它会发 exit，和会话自己退出一样收场
+    func end() {
+        queue.async { [self] in
+            guard !readOnly else { return }
+            guarded { try write(Frame.make(Frame.end, [])) }
+        }
+    }
+
     /// 当成连接断了（外面看出来的：App 挂起过，好一阵没听到对面）
     func lost() {
         queue.async { self.finish("lost") }
@@ -482,6 +490,17 @@ public final class Attachment: @unchecked Sendable {
             self.cols = cols
             self.rows = rows
             self.link?.resize(cols, rows)
+        }
+    }
+
+    /// 结束会话：只给说明里说了结束得了的（SessionInfo.canEnd：远程启动的、能操作的；别的宿主不理）。回：送出去了没有
+    /// （断着、还没接上、只看时不送）。宿主结束了它以后和会话自己退出一样：onExit，状态是 closed("ended")
+    @discardableResult
+    public func end() -> Bool {
+        queue.sync {
+            guard stateNow == .open, !readOnly, let link else { return false }
+            link.end()
+            return true
         }
     }
 

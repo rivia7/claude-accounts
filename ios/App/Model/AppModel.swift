@@ -455,6 +455,17 @@ final class TerminalSession: Identifiable, Hashable {
 
     var isOpen: Bool { state == .open }
 
+    /// 这台手机结束得了这个会话（远程启动的、能操作的：宿主在会话的说明里说的；旧版的宿主不说）
+    var canEnd: Bool { !readOnly && session.info.canEnd }
+    /// 点了「结束会话」、送出去了：结束时不说退出码（是这台手机让它结束的）
+    private(set) var ending = false
+
+    /// 结束会话：宿主照关掉它的终端那样结束里面的程序，之后和会话自己退出一样（退出码、连接关上）
+    func end() {
+        guard canEnd, isOpen, let link, link.end() else { return }
+        ending = true
+    }
+
     var isClosed: Bool {
         if case .closed = state { return true }
         return false
@@ -518,6 +529,7 @@ final class TerminalSession: Identifiable, Hashable {
         fresh = false
         state = .connecting
         exitCode = nil
+        ending = false
         sized(cols: cols, rows: rows)
     }
 

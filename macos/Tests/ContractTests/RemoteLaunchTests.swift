@@ -87,6 +87,10 @@ func remoteLaunchProtocolTests() {
     check("参数拼成的那一行：cca 给的",
           t.map(\.argsLine) == ["--model opus --append-system-prompt '说中文，改完跑一遍测试'", "", "--permission-mode plan"], "\(t.map(\.argsLine))")
     check("启动器：在跑、几个模板、几台手机", doc.launcher == RemoteLauncher(running: true, templates: 3, peers: 1))
+    check("模板归属的 Team：编号、名字（3.7.11 及以前建的没有归属）；能归属的 Team、默认的那一个",
+          t.map(\.team) == ["0123456789abcdef0123456789abcdef", "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", nil] && t.map(\.teamName) == ["研发组", "书房组", nil]
+          && doc.teams?.map(\.name) == ["研发组", "书房组"] && doc.defaultTeam?.id == "0123456789abcdef0123456789abcdef"
+          && doc.team("5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b")?.name == "书房组" && doc.team(nil) == nil && doc.team("nope") == nil)
     check("按编号找", doc.template("5e6f7a8b")?.name == "任务队列" && doc.template("nope") == nil)
     let odd = try? DocumentDecoder.decode(RemoteTemplatesDoc.self, from: Data(#"""
         {"version":1,"kind":"remote_templates","templates":[{"id":"aa","name":"x","tool":"zz_new","account":"a@example.com","dir":"/x",
@@ -99,8 +103,9 @@ func remoteLaunchProtocolTests() {
         {"version":1,"kind":"remote_templates","templates":[{"id":"0a0b0c0d","name":"x","tool":"claude","account":"a@example.com",
          "account_name":"a","dir":"/x","args":["--append-system-prompt","it's 中文",""]}]}
         """#.utf8))
-    check("3.7.9 及以前的 cca 写的（模板带着账号、缺了 args_line）：照样读；参数照 shell 的写法拼（要引的才引，不然改模板时参数会被清空）",
-          older?.templates.first?.argsLine == #"--append-system-prompt 'it'\''s 中文' ''"# && older?.templates.first?.dir == "/x",
+    check("3.7.9 及以前的 cca 写的（模板带着账号、缺了 args_line；没有 teams、模板没有归属）：照样读；参数照 shell 的写法拼（要引的才引，不然改模板时参数会被清空）",
+          older?.templates.first?.argsLine == #"--append-system-prompt 'it'\''s 中文' ''"# && older?.templates.first?.dir == "/x"
+          && older?.teams == nil && older?.defaultTeam == nil && older?.templates.first?.team == nil,
           older?.templates.first?.argsLine ?? "nil")
 
     // 列表里的：哪台手机能远程启动、启动器
@@ -162,7 +167,14 @@ func remoteLaunchProtocolTests() {
           Texts.remoteTemplateDetail(t[0], dir: "~/projects/site") == "~/projects/site · --model opus --append-system-prompt '说中文，改完跑一遍测试'"
           && Texts.remoteTemplateDetail(t[1], dir: "~/srv/jobs") == "~/srv/jobs"
           && Texts.remoteTemplateDetail(t[2], dir: "~/notes") == "~/notes · --permission-mode plan", Texts.remoteTemplateDetail(t[0], dir: "~/projects/site"))
+    check("归属的 Team：标 Team 的名字，没有归属的是「所有 Team」；弹层里那一句：不在哪个 Team 里时说先加入，改旧版本建的模板时先说一声",
+          Texts.remoteTemplateTeam(t[0]) == "研发组" && Texts.remoteTemplateTeam(t[2]) == "所有 Team"
+          && Texts.remoteTemplateTeamHelp(t[1]).contains("「书房组」") && Texts.remoteTemplateTeamNote(nil, teams: []).contains("先加入")
+          && Texts.remoteTemplateTeamNote(t[2], teams: doc.teams ?? []).hasPrefix("这个模板建于旧版本")
+          && Texts.remoteTemplateTeamNote(t[0], teams: doc.teams ?? []).hasPrefix("只有通过这个 Team 配对的设备")
+          && Texts.remoteTemplateProblemHelp(.noRelay, team: "研发组").contains("「研发组」"))
     check("用不了的原因：短的标在名字后面，不认识的也有一句", Texts.remoteTemplateProblem(.noAccount) == "没有账号" && Texts.remoteTemplateProblem(.noRelay) == "不经中转"
+          && Texts.remoteTemplateProblem(.noTeam) == "Team 已退出"
           && Texts.remoteTemplateProblem(RemoteTemplateProblem(rawValue: "zz_new")) == "暂不可用"
           && RemoteTemplateProblem.allKnown.allSatisfy { !Texts.remoteTemplateProblemHelp($0).isEmpty && Texts.remoteTemplateProblem($0) != "现在用不了" })
 }
@@ -325,12 +337,19 @@ func remoteLaunchProtocolTests() {
         check("新建模板：弹层", false)
         return
     }
-    check("新建：选上现在的工具（账号不在模板里：起会话时挑）；名字、文件夹空着不能存",
+    check("新建：选上现在的工具（账号不在模板里：起会话时挑）、cca 默认的那个 Team；名字、文件夹空着不能存",
           draft.original == nil && draft.tool == .claude && draft.name.isEmpty && draft.args.isEmpty
+          && draft.team == "0123456789abcdef0123456789abcdef" && draft.teams?.count == 2
           && !draft.canSave && m.remoteTemplateTools == [.claude, .codex])
     m.setRemoteTemplateTool(draft, .codex)
     check("换工具", draft.tool == .codex)
     m.setRemoteTemplateTool(draft, .claude)
+    m.setRemoteTemplateTeam(draft, "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b")
+    m.setRemoteTemplateTeam(draft, "ffffffffffffffffffffffffffffffff")
+    check("换归属的 Team：只能是能选的那几个", draft.team == "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b")
+    let lonely = RemoteTemplateDraft(original: nil, name: "x", tool: .claude, dir: "/x", args: "", team: nil, teams: [])
+    let olderCca = RemoteTemplateDraft(original: nil, name: "x", tool: .claude, dir: "/x", args: "")
+    check("这台 Mac 不在哪个 Team 里：存不了；cca 是旧版（没有 teams）：不用选", !lonely.canSave && olderCca.canSave)
     draft.name = "  网站：写文档  "
     m.hooks.chooseTemplateDirectory = { _ in "/Users/me/projects/docs" }
     m.chooseRemoteTemplateDirectory(draft)
@@ -345,8 +364,9 @@ func remoteLaunchProtocolTests() {
     box.saveError = "已经有叫「网站：写文档」的模板了"
     m.saveRemoteTemplate(draft)
     let added = ["remote", "template", "add", "--name", "网站：写文档", "--tool", "claude",
-                 "--dir", "/Users/me/projects/docs", "--args-line", "--model opus --append-system-prompt '说中文，别改测试'"]
-    check("存：名字去掉两头的空白，参数那一行原样放在 --args-line 后面；cca 说不行：原因写在弹层里，接着改",
+                 "--dir", "/Users/me/projects/docs", "--team", "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
+                 "--args-line", "--model opus --append-system-prompt '说中文，别改测试'"]
+    check("存：名字去掉两头的空白，归属的 Team 给编号，参数那一行原样放在 --args-line 后面；cca 说不行：原因写在弹层里，接着改",
           await waitUntil { !draft.saving && draft.error == "已经有叫「网站：写文档」的模板了" } && asked().last == added
           && m.sheet == .remoteTemplate(draft), "\(asked().suffix(2)) \(draft.error ?? "nil")")
     box.saveError = nil
@@ -366,19 +386,20 @@ func remoteLaunchProtocolTests() {
         check("修改模板：弹层", false)
         return
     }
-    check("修改：填好原来的；参数是 cca 拼好的那一行（args_line）",
-          e.original?.id == "1a2b3c4d" && e.name == "网站：修 bug" && e.tool == .claude
+    check("修改：填好原来的（归属的 Team 也是）；参数是 cca 拼好的那一行（args_line）",
+          e.original?.id == "1a2b3c4d" && e.name == "网站：修 bug" && e.tool == .claude && e.team == "0123456789abcdef0123456789abcdef"
           && e.dir == "/Users/me/projects/site" && e.args == "--model opus --append-system-prompt '说中文，改完跑一遍测试'" && e.canSave, e.args)
     e.args += " --verbose"
     m.saveRemoteTemplate(e)
     let replaced = ["remote", "template", "add", "--name", "网站：修 bug", "--tool", "claude",
-                    "--dir", "/Users/me/projects/site", "--replace", "1a2b3c4d", "--args-line",
+                    "--dir", "/Users/me/projects/site", "--team", "0123456789abcdef0123456789abcdef", "--replace", "1a2b3c4d", "--args-line",
                     "--model opus --append-system-prompt '说中文，改完跑一遍测试' --verbose"]
     check("存修改：带 --replace <编号>", await waitUntil { m.sheet == nil && !e.saving && settled() } && asked().contains(replaced), "\(asked().suffix(3))")
     m.editRemoteTemplate(gone)
     if case .remoteTemplate(let g)? = m.sheet {
-        check("修改用不了的模板（文件夹不在了）：照样填好原来的，能存（cca 校验，说原因）",
-              g.tool == .claude && g.original?.id == "9c0d1e2f" && g.dir == "/Users/me/notes" && g.args == "--permission-mode plan" && g.canSave)
+        check("修改用不了的模板（文件夹不在了；旧版本建的，没有归属：先选上 cca 默认的那个 Team）：照样填好原来的，能存（cca 校验，说原因）",
+              g.tool == .claude && g.original?.id == "9c0d1e2f" && g.dir == "/Users/me/notes" && g.args == "--permission-mode plan" && g.canSave
+              && g.team == "0123456789abcdef0123456789abcdef")
     } else {
         check("修改用不了的模板：弹层", false)
     }

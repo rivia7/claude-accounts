@@ -574,16 +574,19 @@ private struct RemoteLaunchSection: View {
                     if doc.templates.isEmpty {
                         Text("还没有模板。").font(.callout).foregroundStyle(.secondary)
                     } else {
+                        // 这台 Mac 在不止一个 Team 里：每个模板标出归属哪一个
+                        let showTeam = (doc.teams?.count ?? 0) > 1
                         ForEach(doc.templates) { t in
-                            RemoteTemplateLine(template: t) { deleting.wrappedValue = t }
+                            RemoteTemplateLine(template: t, showTeam: showTeam) { deleting.wrappedValue = t }
                         }
                     }
                 } else if model.remoteTemplatesLoading {
                     ProgressView().controlSize(.small)
                 }
-                Text(model.remoteLaunchMachinesAvailable
-                     ? "在「已配对的机器」中为一台手机或电脑打开「允许远程启动」后，它就能选择一个模板和这台 Mac 上这个工具的一个账号，在这台 Mac 上新建会话并接入：文件夹、参数都按模板设置，对方无法修改，只能附带一句开场白。"
-                     : "在「已配对的机器」中为一台手机打开「允许远程启动」后，它就能选择一个模板和这台 Mac 上这个工具的一个账号，在这台 Mac 上新建会话并接入：文件夹、参数都按模板设置，手机上无法修改，只能附带一句开场白。")
+                Text((model.remoteLaunchMachinesAvailable
+                      ? "在「已配对的机器」中为一台手机或电脑打开「允许远程启动」后，它就能选择一个模板和这台 Mac 上这个工具的一个账号，在这台 Mac 上新建会话并接入：文件夹、参数都按模板设置，对方无法修改，只能附带一句开场白。"
+                      : "在「已配对的机器」中为一台手机打开「允许远程启动」后，它就能选择一个模板和这台 Mac 上这个工具的一个账号，在这台 Mac 上新建会话并接入：文件夹、参数都按模板设置，手机上无法修改，只能附带一句开场白。")
+                     + (snap.doc?.teams == nil ? "" : "每个模板归属一个 Team：只有通过这个 Team 配对的设备能看到它。"))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 4)
@@ -615,10 +618,11 @@ private struct RemoteLaunchSection: View {
     }
 }
 
-/// 一个模板：名字、工具，用不了时标出原因；第二行是文件夹、参数。右边「修改…」「删除…」
+/// 一个模板：名字、工具（这台 Mac 在不止一个 Team 里时还有归属的 Team），用不了时标出原因；第二行是文件夹、参数。右边「修改…」「删除…」
 private struct RemoteTemplateLine: View {
     @Environment(AppModel.self) private var model
     let template: RemoteTemplate
+    let showTeam: Bool
     let remove: () -> Void
 
     var body: some View {
@@ -631,8 +635,11 @@ private struct RemoteTemplateLine: View {
                 HStack(spacing: 8) {
                     Text(nonEmpty(t.name) ?? t.id).fontWeight(.medium).lineLimit(1)
                     if let tool = t.tool { Tag(text: Texts.cliProduct(tool)) }
+                    if showTeam, let team = Texts.remoteTemplateTeam(t) {
+                        Tag(text: team).help(Texts.remoteTemplateTeamHelp(t))
+                    }
                     if let p = t.problem {
-                        Tag(text: Texts.remoteTemplateProblem(p), color: .orange).help(Texts.remoteTemplateProblemHelp(p))
+                        Tag(text: Texts.remoteTemplateProblem(p), color: .orange).help(Texts.remoteTemplateProblemHelp(p, team: t.teamName))
                     }
                 }
                 if !detail.isEmpty {
@@ -643,7 +650,7 @@ private struct RemoteTemplateLine: View {
             Spacer(minLength: 8)
             RowAction("修改…", systemImage: "pencil") { model.editRemoteTemplate(t) }
                 .disabled(model.remoteBusy)
-                .help("改这个模板的名字、工具、文件夹、参数")
+                .help("改这个模板的名字、工具、归属的 Team、文件夹、参数")
             RowAction("删除…", systemImage: "trash") { remove() }
                 .disabled(model.remoteBusy)
                 .help("删除这个模板：已配对的设备将不再看到它")
@@ -654,7 +661,7 @@ private struct RemoteTemplateLine: View {
     }
 }
 
-/// 新建、修改一个模板（弹层）：名字、工具、文件夹、参数（账号在起会话时挑）。存的时候 cca 校验，不行的原因写在下面，接着改。
+/// 新建、修改一个模板（弹层）：名字、工具、归属的 Team、文件夹、参数（账号在起会话时挑）。存的时候 cca 校验，不行的原因写在下面，接着改。
 struct RemoteTemplateSheet: View {
     @Environment(AppModel.self) private var model
     let draft: RemoteTemplateDraft
@@ -684,6 +691,7 @@ struct RemoteTemplateSheet: View {
             } else if let note = toolNote {
                 Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            if let teams = d.teams { teamField(teams) }
             field("文件夹") {
                 HStack(spacing: 10) {
                     Text(d.dir.isEmpty ? "未选择" : model.displayPath(d.dir))
@@ -720,6 +728,25 @@ struct RemoteTemplateSheet: View {
         }
         .padding(22)
         .frame(width: 520)
+    }
+
+    /// 归属的 Team：能选的不止一个时是下拉菜单，只有一个时直接写出来；这台 Mac 不在哪个 Team 里时说先加入一个（存不了）
+    @ViewBuilder private func teamField(_ teams: [RemoteTemplateTeam]) -> some View {
+        let d = draft
+        field("Team", note: Texts.remoteTemplateTeamNote(d.original, teams: teams)) {
+            if teams.count > 1 {
+                Picker("Team", selection: Binding(get: { d.team ?? "" }, set: { model.setRemoteTemplateTeam(d, $0) })) {
+                    ForEach(teams) { t in Text(t.name).tag(t.id) }
+                }
+                .labelsHidden()
+                .fixedSize()
+            } else if let only = teams.first {
+                Text(only.name)
+            } else {
+                Label("这台 Mac 还没有加入 Team", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 
     /// 工具下面那一句：这个工具还没有账号时，模板存得了、用不了（起会话时没有账号可挑）

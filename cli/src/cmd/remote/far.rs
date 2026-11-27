@@ -170,6 +170,10 @@ pub fn dir_doc(meta: &Meta, access: Incoming, salt: Option<&str>) -> Dict {
     if let Some(aid) = salt.and_then(|s| aid_of(s, &meta.tool, &meta.key)) {
         d.set("aid", aid);
     }
+    // 那一头结束得了它（END）：无头的会话（远程启动的）、能操作的配对；别的会话只在这台机器上结束得了（转接进程不替别的机器转）
+    if meta.headless && access == Incoming::Control {
+        d.set("end", true);
+    }
     d
 }
 
@@ -528,7 +532,13 @@ mod tests {
             name: "工作".into(),
             cwd: format!("{}/proj", crate::core::base::HOME.as_str()),
             since: 1794000000.0,
+            headless: false,
         };
+        // 那一头结束不结束得了它：只有无头的会话（远程启动的）、能操作的配对
+        assert!(dir_doc(&meta, Incoming::Control, None).get("end").is_none(), "终端里起的会话只在这台机器上结束得了");
+        let launched = Meta { headless: true, ..meta.clone() };
+        assert_eq!(dir_doc(&launched, Incoming::Control, None).at("end").as_bool(), Some(true));
+        assert!(dir_doc(&launched, Incoming::View, None).get("end").is_none(), "只让看的结束不了");
         let d = dir_doc(&meta, Incoming::View, None);
         assert_eq!(d.str("cwd").as_deref(), Some("~/proj"));
         assert!(d.get("aid").is_none(), "没有 Team 的盐：不给摘要");

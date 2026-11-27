@@ -18,22 +18,28 @@ final class RemoteTemplateDraft: Identifiable {
     var dir: String
     /// 参数：一行字，照 shell 的写法（cca 拆）
     var args: String
+    /// 归属的 Team 的编号（存的时候带 `--team`）：只有在这个 Team 的服务器上配对的设备看得到、用得了这个模板
+    var team: String?
+    /// 能选的 Team（模板的文档里的 `teams`）。nil：cca 是旧版，模板没有归属，弹层里没有这一项、存的时候不带 `--team`
+    let teams: [RemoteTemplateTeam]?
     /// 没存成的原因（写在弹层里）
     var error: String?
     /// 正在存（按钮先停用）
     var saving = false
 
-    init(original: RemoteTemplate?, name: String, tool: ToolID, dir: String, args: String) {
+    init(original: RemoteTemplate?, name: String, tool: ToolID, dir: String, args: String, team: String? = nil, teams: [RemoteTemplateTeam]? = nil) {
         self.original = original
         self.name = name
         self.tool = tool
         self.dir = dir
         self.args = args
+        self.team = team
+        self.teams = teams
     }
 
-    /// 名字、文件夹都有了才能存（别的交给 cca 校验）
+    /// 名字、文件夹都有了，cca 够新时还选了归属的 Team，才能存（别的交给 cca 校验）。这台 Mac 不在哪个 Team 里时存不了
     var canSave: Bool {
-        !saving && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !dir.isEmpty
+        !saving && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !dir.isEmpty && (teams == nil || team != nil)
     }
 }
 

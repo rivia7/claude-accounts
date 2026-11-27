@@ -937,6 +937,7 @@ fn the_other_implementation_and_what_the_host_enforces(t: &mut Ctx) {
         (true, list!["claude", "alice", "~/work", "control"])
     );
     assert!(!json::dumps(s, &Style::default()).contains("example.com"), "账号只给短名字");
+    assert!(s.get("end").is_none(), "终端里起的会话：那一头结束不了（只在这台机器上 cca remote end）");
     let sid = s["sid"].str();
     let hello = frame(HELLO, &[1, 0, 0, 80, 0, 24]);
 

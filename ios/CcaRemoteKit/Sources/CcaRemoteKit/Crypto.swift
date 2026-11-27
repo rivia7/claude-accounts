@@ -235,8 +235,10 @@ public struct SessionInfo: Sendable, Equatable {
     /// 会话用的是哪个账号（账号摘要，和账号的状态里的 AccountStatus.aid 一样：「账号」页照它把会话放到账号下面）；
     /// 那台电脑不在 Team 里、旧版的宿主没给是空的
     public let aid: String
+    /// 这台手机结束得了它（宿主说的 end：远程启动的会话、能操作的配对；终端里起的只在那台电脑上结束得了，旧版的宿主不说）
+    public let canEnd: Bool
 
-    public init(machine: String, tool: String, name: String, cwd: String, since: Double, viewOnly: Bool, aid: String = "") {
+    public init(machine: String, tool: String, name: String, cwd: String, since: Double, viewOnly: Bool, aid: String = "", canEnd: Bool = false) {
         self.machine = machine
         self.tool = tool
         self.name = name
@@ -244,6 +246,7 @@ public struct SessionInfo: Sendable, Equatable {
         self.since = since
         self.viewOnly = viewOnly
         self.aid = aid
+        self.canEnd = canEnd && !viewOnly
     }
 }
 
@@ -257,5 +260,5 @@ func dirOpen(_ keys: SealKeys, pid: String, sid: String, _ blob: Any?) -> Sessio
     let since = jsonNumber(j["since"]).flatMap { $0.isFinite ? $0 : nil } ?? 0
     let aid = (j["aid"] as? String).flatMap { lowerHex($0, 32) ? $0 : nil } ?? ""
     return SessionInfo(machine: clean(j["machine"], 48), tool: clean(j["tool"], 16), name: clean(j["name"], 48), cwd: clean(j["cwd"], 200),
-                       since: since, viewOnly: j["access"] as? String == "view", aid: aid)
+                       since: since, viewOnly: j["access"] as? String == "view", aid: aid, canEnd: jsonBool(j["end"]) == true)
 }

@@ -19,6 +19,8 @@
       "args_line": "--model opus --append-system-prompt '说中文，改完跑一遍测试'",
       "line": true,
       "digest": "3f9a0c1d2e4b5a69",
+      "team": "0123456789abcdef0123456789abcdef",
+      "team_name": "研发组",
       "problem": null
     },
     {
@@ -33,6 +35,8 @@
       "args_line": "",
       "line": true,
       "digest": "a1b2c3d4e5f60718",
+      "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
+      "team_name": "书房组",
       "problem": null
     },
     {
@@ -50,7 +54,21 @@
       "args_line": "--permission-mode plan",
       "line": true,
       "digest": "0f1e2d3c4b5a6978",
+      "team": null,
+      "team_name": null,
       "problem": "no_dir"
+    }
+  ],
+  "teams": [
+    {
+      "id": "0123456789abcdef0123456789abcdef",
+      "name": "研发组",
+      "default": true
+    },
+    {
+      "id": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
+      "name": "书房组",
+      "default": false
     }
   ],
   "launcher": {

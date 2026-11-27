@@ -319,19 +319,60 @@ struct RemoteTemplatesDoc: CcaDocument, Equatable {
     var version: Int?
     var kind: String?
     var templates: [RemoteTemplate]
+    /// 模板能归属的 Team（这台 Mac 在的，照加入的先后）：弹层里挑。nil：cca 是旧版（3.7.11 及以前），模板没有归属，存的时候不给 `--team`；
+    /// 空的：这台 Mac 不在哪个 Team 里，存不了
+    var teams: [RemoteTemplateTeam]?
     var launcher: RemoteLauncher?
 
-    enum CodingKeys: String, CodingKey { case version, kind, templates, launcher }
+    enum CodingKeys: String, CodingKey { case version, kind, templates, teams, launcher }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = c.int(.version)
         kind = c.string(.kind)
         templates = c.lossyArray(RemoteTemplate.self, .templates) ?? []
+        teams = c.lossyArray(RemoteTemplateTeam.self, .teams)
         launcher = c.lossy(RemoteLauncher.self, .launcher)
     }
 
     func template(_ id: String) -> RemoteTemplate? { templates.first { $0.id == id } }
+
+    /// 能归属的 Team 里编号是 id 的那一个（这台 Mac 已经退出了的、没有归属的是 nil）
+    func team(_ id: String?) -> RemoteTemplateTeam? { id.flatMap { id in teams?.first { $0.id == id } } }
+
+    /// 新建模板时先选上的 Team：cca 标着 `default` 的（没说归属哪个时它用的）
+    var defaultTeam: RemoteTemplateTeam? { teams?.first(where: \.isDefault) ?? teams?.first }
+}
+
+/// 模板能归属的一个 Team（`teams[]`，PROTOCOL 9.4）：只有在这个 Team 的服务器上配对的设备看得到、用得了归属它的模板。
+struct RemoteTemplateTeam: Decodable, Sendable, Equatable, Identifiable {
+    /// Team 的编号：`cca remote template add --team` 的参数
+    var id: String
+    /// 名字（这台 Mac 记着的）
+    var name: String
+    /// 没说归属哪个时 cca 用的就是它（这台 Mac 加入的第一个、用得了它的服务器的）
+    var isDefault: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case isDefault = "default"
+    }
+
+    init(id: String, name: String, isDefault: Bool = false) {
+        self.id = id
+        self.name = name
+        self.isDefault = isDefault
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = nonEmpty(c.string(.id)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "template team without id"))
+        }
+        self.id = id
+        name = nonEmpty(c.string(.name)) ?? "Team \(id.prefix(8))"
+        isDefault = c.bool(.isDefault) ?? false
+    }
 }
 
 /// 一个模板：用哪个工具、在哪个文件夹、带哪些参数起会话。账号不在模板里（3.7.10 起）：起会话的那一头挑（手机、另一台机器）；
@@ -352,12 +393,18 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
     var argsLine: String
     /// 手机起会话时能带一句开场白
     var line: Bool
+    /// 归属的 Team 的编号：只有在这个 Team 的服务器上配对的设备看得到、用得了它。nil：3.7.11 及以前建的（没有归属，每个 Team 配对的
+    /// 设备都看得到），或者 cca 是旧版
+    var team: String?
+    /// 归属的 Team 的名字；这台 Mac 已经退出了那个 Team 时是 nil（`problem` 是 `no_team`）
+    var teamName: String?
     /// 现在用不了的原因；用得了是 nil
     var problem: RemoteTemplateProblem?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, tool, dir, args, line, problem
+        case id, name, tool, dir, args, line, team, problem
         case argsLine = "args_line"
+        case teamName = "team_name"
     }
 
     init(from decoder: Decoder) throws {
@@ -372,21 +419,24 @@ struct RemoteTemplate: Decodable, Sendable, Equatable, Identifiable {
         args = c.lossyArray(String.self, .args) ?? []
         argsLine = c.string(.argsLine) ?? args.map(shellQuoteIfNeeded).joined(separator: " ")
         line = c.bool(.line) ?? false
+        team = nonEmpty(c.string(.team))
+        teamName = nonEmpty(c.string(.teamName))
         problem = c.lossy(RemoteTemplateProblem.self, .problem)
     }
 }
 
-/// 模板现在用不了的原因（`templates[].problem`）：`no_account` 模板的工具还没有账号（3.7.9 及以前是模板存着的账号在账号表里没有了）；
-/// `no_dir` 文件夹不在了；`bad_args` 参数用不了（不是交互的会话，或者启动前的检查过不了）；`no_relay` 这个工具的账号的会话都不经中转
-/// （这台 Mac 不在哪个 Team 里）。
+/// 模板现在用不了的原因（`templates[].problem`）：`no_team` 这台 Mac 已经退出了模板归属的 Team；`no_account` 模板的工具还没有账号
+/// （3.7.9 及以前是模板存着的账号在账号表里没有了）；`no_dir` 文件夹不在了；`bad_args` 参数用不了（不是交互的会话，或者启动前的检查过不了）；
+/// `no_relay` 这个工具没有会话经模板归属的 Team 的服务器中转的账号（没有归属的模板：都不经中转，这台 Mac 不在哪个 Team 里）。
 struct RemoteTemplateProblem: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
+    static let noTeam = RemoteTemplateProblem(rawValue: "no_team")
     static let noAccount = RemoteTemplateProblem(rawValue: "no_account")
     static let noDir = RemoteTemplateProblem(rawValue: "no_dir")
     static let badArgs = RemoteTemplateProblem(rawValue: "bad_args")
     static let noRelay = RemoteTemplateProblem(rawValue: "no_relay")
-    static let allKnown: [RemoteTemplateProblem] = [.noAccount, .noDir, .badArgs, .noRelay]
+    static let allKnown: [RemoteTemplateProblem] = [.noTeam, .noAccount, .noDir, .badArgs, .noRelay]
 }
 
 /// App 里记着的模板（只在内存里）：最近一次查到的，和最近一次没查成的原因。

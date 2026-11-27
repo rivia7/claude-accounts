@@ -78,6 +78,10 @@ if let d = v["dir"] as? [String: Any] {
     check(dirOpen(keys, pid: pid, sid: sid, d["forged"]) == nil, "别的密钥封的不认")
     let control = dirOpen(keys, pid: pid, sid: sid, d["control"])
     check(control?.viewOnly == false && control?.since == 0, "没写 access 是能操作；since 不是数是 0")
+    check(dirOpen(keys, pid: pid, sid: sid, d["ends"])?.canEnd == true && info?.canEnd == false && control?.canEnd == false,
+          "说明里 end 是 true（远程启动的会话、能操作的配对）才结束得了")
+    check(["ends_view", "ends_odd", "ends_one"].allSatisfy { dirOpen(keys, pid: pid, sid: sid, d[$0])?.canEnd == false },
+          "只让看的、end 不是 true 的：结束不了")
 }
 
 // 握手和记录：kit::spec 扮演宿主

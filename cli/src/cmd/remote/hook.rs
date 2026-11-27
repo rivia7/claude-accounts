@@ -224,6 +224,20 @@ pub fn deliver(n: &Note) {
     }
 }
 
+/// 和 `deliver` 一样，只是会话宿主是给的（agy.rs 的 `agy-turn-wait`：等着推的那个进程不在宿主下面，起它的状态栏命令替它找好）：
+/// 给了宿主、宿主已经不在了（会话结束了）时都不推，这台 Mac 上也不弹
+pub fn deliver_to(n: &Note, host: Option<&str>) {
+    let Some(n) = Note::parse(&n.to_json()) else { return };
+    if let Some(sid) = host {
+        if notify_host(sid, &n) == Err(65) {
+            return;
+        }
+    }
+    if popup::on() {
+        let _ = popup::show(&n);
+    }
+}
+
 /// Codex 一轮做完了（notify 的 JSON：`{"type": "agent-turn-complete", "cwd", "last-assistant-message", …}`）：正文照 Claude Code 的
 /// 做完了（最后一条回复的第一行）。别的种类不推
 fn codex_done(d: &Dict) -> Option<Note> {

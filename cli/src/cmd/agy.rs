@@ -13,7 +13,7 @@
 //! 这台 Mac 上弹一个）。
 
 use super::login::sys::{interrupted, trap};
-use super::remote::{agy_note, notify_deliver, AgyEvent};
+use super::remote::{agy_note, host_of_me, notify_deliver, notify_deliver_to, AgyEvent};
 use super::settings::AGY_VALUES;
 use super::usage::{ago, cols_of, dicts, float_arg, parse_ts, py_round, reset_short, usage_why, Row, WhyTable, AGY_STALE};
 use super::{arity, Cmd};
@@ -36,7 +36,7 @@ use std::io::Read;
 use std::os::fd::{AsRawFd, RawFd};
 
 /// 这个模块的子命令
-pub const CMDS: &[Cmd] = &[Cmd::all("agy-statusline", cmd_agy_statusline)];
+pub const CMDS: &[Cmd] = &[Cmd::all("agy-statusline", cmd_agy_statusline), Cmd::all("agy-turn-wait", cmd_agy_turn_wait)];
 
 /// 没登录、登录失效（刷新不了）时 agy 在 stderr 上打出 Google 的登录网址（OAuth 授权的那一个），然后等 60 秒（没有终端也等，
 /// 1.5.16 实测）：看到它就停下，说登录失效。只认授权网址的开头：额度的说明里带个 Google 账号的链接不算
@@ -730,7 +730,9 @@ fn cmd_agy_statusline(args: &[String]) -> R<()> {
         if let Some((dir, d)) = statusline_input(id, &raw) {
             plan_note(&dir, &d);
             if let Some(run) = run {
-                agy_turn(&dir, run, &d);
+                if let Some(t) = agy_turn(&dir, run, &d) {
+                    agy_queue(&dir, run, &t);
+                }
             }
         }
     }
@@ -743,14 +745,21 @@ fn cmd_agy_statusline(args: &[String]) -> R<()> {
     }
 }
 
-/// 状态栏的命令收到的：账号目录（id 要像账号目录名、目录要在：只往 cca 自己的账号目录里写）和状态栏的 JSON（最多 256 KB）
+/// 状态栏的命令收到的：账号目录（`agy_dir`）和状态栏的 JSON（最多 256 KB）
 fn statusline_input(id: &str, raw: &[u8]) -> Option<(String, Dict)> {
-    if raw.len() > 256 << 10 || re!(r"[a-z0-9][a-z0-9-]{0,63}").fullmatch(id).is_none() {
+    if raw.len() > 256 << 10 {
         return None;
     }
-    let dir = path::join_all(&[&agy().sroot, "accounts", id]);
+    let dir = agy_dir(id)?;
     let d = json::loads_file_bytes(raw).ok()?.as_dict()?;
-    path::isdir(&dir).then_some((dir, d))
+    Some((dir, d))
+}
+
+/// 账号目录名对应的账号目录：名字要像账号目录名、目录要在（只碰 cca 自己的账号目录）
+fn agy_dir(id: &str) -> Option<String> {
+    re!(r"[a-z0-9][a-z0-9-]{0,63}").fullmatch(id)?;
+    let dir = path::join_all(&[&agy().sroot, "accounts", id]);
+    path::isdir(&dir).then_some(dir)
 }
 
 /// 记下状态栏 JSON 里的套餐：plan_tier 是不空的字符串（最多 64 个字），email 像个邮箱（读的时候拿它和登录的邮箱比）。和记着的
@@ -780,72 +789,198 @@ fn plan_note(dir: &str, d: &Dict) {
 const AGY_TURNS: &str = "agy-turns";
 /// agent_state 是这几种时在干活（1.5.18 的文档：idle、working、tool_use、reviewing、authenticating、initializing、error）
 const AGY_BUSY: &[&str] = &["working", "tool_use", "reviewing"];
+/// 停下（回到 idle、到了 error）以后等这么久（秒）再推「做完了 / 出错了」，这中间又干活了就不推：agy 一轮里会停下好几次（两步之间、
+/// 等后台的命令和子代理），状态栏那时也说 idle。2026-11-27 一天推出去的 65 条「做完了」有 49 条推在一轮的中途，其中 38 条不到 30 秒
+/// 就接着干了（停得更久的多半在等后台的事：`agy_bg`）
+const AGY_DONE_WAIT: f64 = 30.0;
+/// tool_confirmation_pending 变成 true 以后等这么久（秒）再推「在等你」：这中间确认过了（人就在终端前面）就不推
+const AGY_ASK_WAIT: f64 = 6.0;
+/// 会话的标题最多记这么多个字（推的时候还要截短）
+const AGY_TOPIC_MAX: usize = 400;
 
-/// 一个会话上一次的状态：agent_state、在不在等你确认（tool_confirmation_pending）、上次推了以后干过活没有
+/// 一个会话上一次的状态：agent_state、在不在等你确认（tool_confirmation_pending）、上次排上通知以后干过活没有；排着等推的那一条
+/// （`due`，没有是 None）和它的编号（`mark`：每排上、撤掉一次加一，等着推的进程醒来时编号没变才推）；会话的标题、agy 启动的文件夹
+/// （推的时候用最新记下的）
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Turn {
     state: String,
     ask: bool,
     worked: bool,
+    due: Option<AgyEvent>,
+    mark: u64,
+    topic: String,
+    cwd: String,
 }
 
 impl Turn {
-    /// 文件里是一行「状态 0|1 0|1」
+    /// 文件里是一行 JSON；3.7.11 及以前写的是一行「状态 0|1 0|1」（换版本以前启动、还开着的会话留下的）：那样的没有排着的
     fn parse(s: &str) -> Option<Turn> {
+        if let Some(d) = json::loads(s).ok().and_then(|v| v.as_dict()) {
+            let text = |k: &str| d.str(k).map(|s| s.to_string()).unwrap_or_default();
+            let flag = |k: &str| d.get(k).and_then(|v| v.as_bool()) == Some(true);
+            let state = text("state");
+            return (!state.is_empty()).then(|| Turn {
+                state,
+                ask: flag("ask"),
+                worked: flag("worked"),
+                due: d.str("due").and_then(|w| due_of(&w)),
+                mark: d.get("mark").and_then(|v| v.as_int()).and_then(|n| u64::try_from(n).ok()).unwrap_or(0),
+                topic: text("topic"),
+                cwd: text("cwd"),
+            });
+        }
         let mut w = s.split_whitespace();
         let (state, ask, worked) = (w.next()?, w.next()?, w.next()?);
-        Some(Turn { state: state.to_string(), ask: ask == "1", worked: worked == "1" })
+        Some(Turn { state: state.to_string(), ask: ask == "1", worked: worked == "1", ..Turn::default() })
     }
 
     fn line(&self) -> String {
-        format!("{} {} {}\n", self.state, u8::from(self.ask), u8::from(self.worked))
+        let d = dict! {
+            "state" => self.state.as_str(), "ask" => self.ask, "worked" => self.worked,
+            "due" => self.due.map_or(V::None, |e| V::from(due_word(e))), "mark" => i64::try_from(self.mark).unwrap_or(i64::MAX),
+            "topic" => self.topic.as_str(), "cwd" => self.cwd.as_str()
+        };
+        json::dumps(&V::Dict(d), json::LINE) + "\n"
+    }
+
+    /// 换掉排着的那一条（排上、撤掉）：编号加一，之前起的等着推的进程醒来时就不推了
+    fn queue(&mut self, due: Option<AgyEvent>) {
+        self.due = due;
+        self.mark += 1;
     }
 }
 
-/// 和上一次比该推的：干过活以后回到 idle 是做完了、到了 error 是出错停下；tool_confirmation_pending 变成 true 是在等你确认。
-/// 这个会话头一次（还没有上一次）只记下
-fn turn_step(prev: Option<&Turn>, d: &Dict) -> (Turn, Vec<AgyEvent>) {
+fn due_word(e: AgyEvent) -> &'static str {
+    match e {
+        AgyEvent::Done => "done",
+        AgyEvent::Failed => "failed",
+        AgyEvent::Ask => "ask",
+    }
+}
+
+fn due_of(w: &str) -> Option<AgyEvent> {
+    match w {
+        "done" => Some(AgyEvent::Done),
+        "failed" => Some(AgyEvent::Failed),
+        "ask" => Some(AgyEvent::Ask),
+        _ => None,
+    }
+}
+
+/// 后台还有事：在跑的后台任务（task_count）、子代理（subagents 里 status 是 running 的）、排着的消息（pending_input_count）。
+/// agy 等它们的时候停下（状态栏说 idle），它们完了接着干：这时停下不算做完
+fn agy_bg(d: &Dict) -> bool {
+    let some = |k: &str| d.get(k).and_then(|v| v.as_num()).is_some_and(|n| n > 0.0);
+    let running = d
+        .get("subagents")
+        .and_then(|v| v.as_list())
+        .is_some_and(|l| l.items().iter().any(|s| s.as_dict().is_some_and(|s| s.str("status").as_deref() == Some("running"))));
+    some("task_count") || some("pending_input_count") || running
+}
+
+/// 和上一次比，该排上的通知排上、排着的该撤的撤掉（排上的等一会儿再推：`agy_queue`）。干过活以后停下（idle、error），后台没事
+/// （`agy_bg`）、也不在等你确认：排上做完了 / 出错了；tool_confirmation_pending 变成 true：排上在等你。排着的做完了 / 出错了，
+/// 又干活了、后台有事了、要你确认了就撤掉（干的活留着：再停下时再排）；排着的在等你，确认框没了就撤掉。这个会话头一次（还没有
+/// 上一次）只记下
+fn turn_step(prev: Option<&Turn>, d: &Dict) -> Turn {
     let state: String =
         d.str("agent_state").map(|s| s.chars().filter(|c| c.is_ascii_graphic()).take(32).collect()).unwrap_or_default();
     let ask = d.get("tool_confirmation_pending").is_some_and(|v| v.as_bool() == Some(true));
     let busy = AGY_BUSY.contains(&state.as_str());
-    let mut worked = busy || prev.is_some_and(|p| p.worked);
-    let mut events = Vec::new();
-    if let Some(p) = prev {
-        if p.worked && (state == "idle" || state == "error") {
-            events.push(if state == "idle" { AgyEvent::Done } else { AgyEvent::Failed });
-            worked = false;
+    let bg = agy_bg(d);
+    let topic = d.str("conversation_title").map(|t| t.chars().take(AGY_TOPIC_MAX).collect()).unwrap_or_default();
+    let cwd = d.str("cwd").map(|c| c.to_string()).unwrap_or_default();
+    let Some(p) = prev else { return Turn { state, ask, worked: busy, topic, cwd, ..Turn::default() } };
+    let mut t = Turn { state, ask, worked: p.worked || busy, due: p.due, mark: p.mark, topic, cwd };
+    match t.due {
+        Some(AgyEvent::Done | AgyEvent::Failed) if busy || bg || ask => {
+            t.queue(None);
+            t.worked = true;
         }
-        if ask && !p.ask {
-            events.push(AgyEvent::Ask);
-        }
+        Some(AgyEvent::Ask) if !ask => t.queue(None),
+        _ => {}
     }
-    (Turn { state, ask, worked }, events)
+    if ask && !p.ask {
+        t.queue(Some(AgyEvent::Ask));
+    } else if t.worked && !busy && !bg && !ask && (t.state == "idle" || t.state == "error") {
+        t.queue(Some(if t.state == "idle" { AgyEvent::Done } else { AgyEvent::Failed }));
+        t.worked = false;
+    }
+    t
 }
 
-/// 这个会话（会话标记 run：一次启动一个）这一次的状态：和上一次比该推的推出去（remote 的 `notify_deliver`），状态记进账号目录的
-/// agy-turns/<会话标记>（目录 700、文件 600，原子写；新的会话头一次记的时候顺手删掉一天以前的）。JSON 里没有 agent_state 的
-/// （旧版的 agy）看不出来，什么都不记、不推（不然记下的那一行读不回来，每一次都当头一次）。写不了也不说
-fn agy_turn(dir: &str, run: &str, d: &Dict) {
-    if re!(r"[0-9a-f]{16}").fullmatch(run).is_none() {
-        return;
+/// 这个会话（会话标记 run：一次启动一个）这一次的状态：和上一次比（`turn_step`），记进账号目录的 agy-turns/<会话标记>（目录 700、
+/// 文件 600，原子写；新的会话头一次记的时候顺手删掉一天以前的）。这一次新排上了通知时给出记下的这一份（`agy_queue` 接着办）。
+/// JSON 里没有 agent_state 的（旧版的 agy）看不出来，什么都不记、不推（不然记下的那一份读不回来，每一次都当头一次）。写不了也不说
+fn agy_turn(dir: &str, run: &str, d: &Dict) -> Option<Turn> {
+    if !hex_of(run, 16) {
+        return None;
     }
     let turns = path::join(dir, AGY_TURNS);
     let file = path::join(&turns, run);
     let prev = std::fs::read_to_string(&file).ok().and_then(|s| Turn::parse(&s));
-    let (now, events) = turn_step(prev.as_ref(), d);
+    let now = turn_step(prev.as_ref(), d);
     if now.state.is_empty() {
-        return;
+        return None;
     }
     if prev.as_ref() != Some(&now) {
         // 新会话头一次记时删掉一天以前的（早就结束了的会话留下的）
         crate::py::fs::note_file(&turns, &file, &now.line(), prev.is_none());
     }
-    let cwd = d.str("cwd").map(|c| c.to_string()).unwrap_or_default();
-    let topic = d.str("conversation_title").map(|t| t.to_string()).unwrap_or_default();
-    for e in events {
-        notify_deliver(&agy_note(e, &topic, &cwd));
+    let queued = prev.is_some_and(|p| p.mark != now.mark) && now.due.is_some();
+    queued.then_some(now)
+}
+
+/// 排上了一条通知：等一会儿再推（起 `agy-turn-wait`）；不用等（`wait_for` 是 0）、起不来时当场推（remote 的 `notify_deliver`）
+fn agy_queue(dir: &str, run: &str, t: &Turn) {
+    let Some(due) = t.due else { return };
+    if wait_for(due) <= 0.0 || !spawn_waiter(dir, run, t.mark, due) {
+        notify_deliver(&agy_note(due, &t.topic, &t.cwd));
     }
+}
+
+/// 排上的通知等多久再推（秒）。`CCA_AGY_NOTE_WAIT` 是测试用的：两种都等这么久，0 是不等、当场推
+fn wait_for(due: AgyEvent) -> f64 {
+    let given = proc::getenv("CCA_AGY_NOTE_WAIT").and_then(|s| s.trim().parse::<f64>().ok()).filter(|w| w.is_finite() && *w >= 0.0);
+    given.map_or(if due == AgyEvent::Ask { AGY_ASK_WAIT } else { AGY_DONE_WAIT }, |w| w.min(600.0))
+}
+
+/// 起等着推的那个进程（`agy-turn-wait`）：自己一个会话（agy 杀状态栏的命令时轮不到它）、不接 agy 的管道（状态栏的命令照样马上
+/// 返回）、不等它。它醒来时已经不在会话宿主下面了：宿主在这里先找好交给它。起不来是 false
+fn spawn_waiter(dir: &str, run: &str, mark: u64, due: AgyEvent) -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let mut argv = vec![exe.to_string_lossy().into_owned(), "agy-turn-wait".to_string(), path::basename(dir).to_string()];
+    argv.extend([run.to_string(), mark.to_string(), due_word(due).to_string()]);
+    argv.extend(host_of_me());
+    Proc::new(argv).stdin(In::Null).stdout(Out::Null).stderr(Out::Null).new_session().spawn().is_ok()
+}
+
+/// `agy-turn-wait 账号目录名 会话标记 编号 done|failed|ask [会话宿主的编号]`：状态栏的命令排上一条通知以后起的（`spawn_waiter`）。
+/// 等一会儿（`wait_for`）再看这个会话的状态：排着的还是这一条（`still_due`）才推——给了会话宿主时推给接着它的各处，宿主已经不在了
+/// （会话结束了）就都不推（remote 的 `notify_deliver_to`）；这台 Mac 上弹一个。什么都不说
+fn cmd_agy_turn_wait(args: &[String]) -> R<()> {
+    arity("cmd_agy_turn_wait", args, 4, 5)?;
+    let host = args.get(4).filter(|s| hex_of(s, 32)).map(String::as_str);
+    let (Some(dir), Ok(mark), Some(due)) = (agy_dir(&args[0]), args[2].parse::<u64>(), due_of(&args[3])) else { return Ok(()) };
+    if !hex_of(&args[1], 16) {
+        return Ok(());
+    }
+    crate::py::time::sleep(wait_for(due));
+    if let Some(t) = still_due(&dir, &args[1], mark, due) {
+        notify_deliver_to(&agy_note(due, &t.topic, &t.cwd), host);
+    }
+    Ok(())
+}
+
+/// 醒来时这个会话排着的还是不是这一条（编号、种类都对得上：这中间没又干活、没确认过）：是的话给出记下的这一份（标题、文件夹是最新的）
+fn still_due(dir: &str, run: &str, mark: u64, due: AgyEvent) -> Option<Turn> {
+    let t = std::fs::read_to_string(path::join_all(&[dir, AGY_TURNS, run])).ok().and_then(|s| Turn::parse(&s))?;
+    (t.mark == mark && t.due == Some(due)).then_some(t)
+}
+
+/// n 个小写十六进制字符（会话标记 16 个，会话宿主的编号 32 个）
+fn hex_of(s: &str, n: usize) -> bool {
+    s.len() == n && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
@@ -1083,29 +1218,92 @@ mod tests {
     #[test]
     fn turns() {
         let step = |prev: Option<&Turn>, j: &str| turn_step(prev, &json::loads(j).unwrap().as_dict().unwrap());
-        let (t, e) = step(None, r#"{"agent_state": "working"}"#);
-        assert_eq!((&t, e), (&Turn { state: "working".into(), ask: false, worked: true }, vec![]), "头一次只记下");
-        let (t, e) = step(Some(&t), r#"{"agent_state": "tool_use", "tool_confirmation_pending": true}"#);
-        assert_eq!(e, [AgyEvent::Ask]);
-        let (t, e) = step(Some(&t), r#"{"agent_state": "tool_use", "tool_confirmation_pending": true}"#);
-        assert_eq!(e, [], "还在等：不再推");
-        let (t, e) = step(Some(&t), r#"{"agent_state": "idle"}"#);
-        assert_eq!((e, t.worked), (vec![AgyEvent::Done], false));
-        let (t, e) = step(Some(&t), r#"{"agent_state": "idle", "context_window": {}}"#);
-        assert_eq!(e, [], "别的变了、状态没变：推过了");
-        let (t, _) = step(Some(&t), r#"{"agent_state": "working"}"#);
-        let (t, e) = step(Some(&t), r#"{"agent_state": "error"}"#);
-        assert_eq!(e, [AgyEvent::Failed]);
-        let (_, e) = step(Some(&t), r#"{"agent_state": "idle"}"#);
-        assert_eq!(e, [], "出错停下已经推过了");
-        let (t, e) = step(None, r#"{"agent_state": "idle"}"#);
-        assert_eq!((e, t.worked), (vec![], false), "刚启动");
-        let (_, e) = step(Some(&t), r#"{"agent_state": "authenticating"}"#);
-        assert_eq!(e, []);
-        let t = Turn { state: "tool_use".into(), ask: true, worked: true };
-        assert_eq!(Turn::parse(&t.line()), Some(t));
-        assert_eq!(Turn::parse("garbage"), None);
-        assert_eq!(step(None, r#"{"agent_state": "a b\nc"}"#).0.state, "abc", "写进文件的只有看得见的 ASCII");
+        let t = step(None, r#"{"agent_state": "working", "conversation_title": "修 bug", "cwd": "/a/w"}"#);
+        let first = Turn { state: "working".into(), worked: true, topic: "修 bug".into(), cwd: "/a/w".into(), ..Turn::default() };
+        assert_eq!(t, first, "头一次只记下");
+        let t = step(Some(&t), r#"{"agent_state": "tool_use", "tool_confirmation_pending": true}"#);
+        assert_eq!((t.due, t.mark, t.topic.as_str()), (Some(AgyEvent::Ask), 1, ""), "要你确认：排上在等你；标题照这一次的");
+        let t = step(Some(&t), r#"{"agent_state": "tool_use", "tool_confirmation_pending": true}"#);
+        assert_eq!((t.due, t.mark), (Some(AgyEvent::Ask), 1), "还在等：不再排");
+        let t = step(Some(&t), r#"{"agent_state": "tool_use"}"#);
+        assert_eq!((t.due, t.mark), (None, 2), "确认过了：撤掉");
+        let t = step(Some(&t), r#"{"agent_state": "idle"}"#);
+        assert_eq!((t.due, t.mark, t.worked), (Some(AgyEvent::Done), 3, false), "干完活停下：排上做完了");
+        let t = step(Some(&t), r#"{"agent_state": "idle", "context_window": {}}"#);
+        assert_eq!((t.due, t.mark), (Some(AgyEvent::Done), 3), "别的变了、状态没变：还是排着的那一条");
+        let t = step(Some(&t), r#"{"agent_state": "working"}"#);
+        assert_eq!((t.due, t.mark, t.worked), (None, 4, true), "又干活了：撤掉");
+        // 停下时后台还有事：不排，干的活留着；都完了再停下才排
+        let sub = |s: &str| {
+            format!(
+                r#""subagents": [{{"name": "a", "role": "r", "status": "completed"}}, {{"name": "b", "role": "r", "status": "{s}"}}]"#
+            )
+        };
+        for bg in [r#""task_count": 1"#.to_string(), r#""pending_input_count": 2"#.to_string(), sub("running")] {
+            let held = step(Some(&t), &format!(r#"{{"agent_state": "idle", {bg}}}"#));
+            assert_eq!((held.due, held.mark, held.worked), (None, 4, true), "{bg}");
+        }
+        let done = step(Some(&t), &format!(r#"{{"agent_state": "idle", "task_count": 0, {}}}"#, sub("completed")));
+        assert_eq!((done.due, done.mark), (Some(AgyEvent::Done), 5), "子代理都做完了");
+        // 排着的做完了：后台又有事了、要你确认了也撤掉，干的活留着
+        let held = step(Some(&done), r#"{"agent_state": "idle", "task_count": 1}"#);
+        assert_eq!((held.due, held.mark, held.worked), (None, 6, true));
+        assert_eq!(step(Some(&held), r#"{"agent_state": "idle"}"#).due, Some(AgyEvent::Done));
+        let asked = step(Some(&done), r#"{"agent_state": "idle", "tool_confirmation_pending": true}"#);
+        assert_eq!((asked.due, asked.mark, asked.worked), (Some(AgyEvent::Ask), 7, true), "撤掉做完了、排上在等你");
+        let t = step(Some(&t), r#"{"agent_state": "error"}"#);
+        assert_eq!((t.due, t.mark), (Some(AgyEvent::Failed), 5));
+        let t2 = step(Some(&t), r#"{"agent_state": "idle"}"#);
+        assert_eq!((t2.due, t2.mark), (Some(AgyEvent::Failed), 5), "出错停下已经排过了");
+        let t = step(None, r#"{"agent_state": "idle"}"#);
+        assert_eq!((t.due, t.worked), (None, false), "刚启动");
+        assert_eq!(step(Some(&t), r#"{"agent_state": "authenticating"}"#).due, None);
+        assert_eq!(step(None, r#"{"agent_state": "a b\nc"}"#).state, "abc", "写进文件的只有看得见的 ASCII");
+        let long = "长".repeat(AGY_TOPIC_MAX + 5);
+        let t = step(None, &format!(r#"{{"agent_state": "idle", "conversation_title": "{long}"}}"#));
+        assert_eq!(t.topic.chars().count(), AGY_TOPIC_MAX);
+        // 文件里是一行 JSON；3.7.11 及以前写的「状态 0|1 0|1」也认（没有排着的）
+        let t = Turn {
+            state: "tool_use".into(),
+            ask: true,
+            worked: true,
+            due: Some(AgyEvent::Ask),
+            mark: 7,
+            topic: "a \"b\"\n".into(),
+            cwd: "/x y".into(),
+        };
+        assert_eq!(Turn::parse(&t.line()), Some(t.clone()));
+        assert!(t.line().ends_with("}\n") && t.line().matches('\n').count() == 1, "一行");
+        assert_eq!(Turn::parse("idle 0 1\n"), Some(Turn { state: "idle".into(), worked: true, ..Turn::default() }));
+        for bad in ["garbage", "{}", r#"{"state": ""}"#, "[1, 2]"] {
+            assert_eq!(Turn::parse(bad), None, "{bad}");
+        }
+        assert_eq!(Turn::parse(r#"{"state": "idle", "due": "later", "mark": -3}"#).map(|t| (t.due, t.mark)), Some((None, 0)));
+        assert_eq!(wait_for(AgyEvent::Ask), AGY_ASK_WAIT);
+        assert_eq!(wait_for(AgyEvent::Failed), AGY_DONE_WAIT);
+    }
+
+    #[test]
+    fn queued_and_still_due() {
+        let tmp = TemporaryDirectory::new("cca-agy-due.", &crate::py::fs::gettempdir()).unwrap();
+        let dir = tmp.name.clone();
+        let run = "0123456789abcdef";
+        let d = |j: &str| json::loads(j).unwrap().as_dict().unwrap();
+        // 换版本以前起的、还开着的会话：文件里是旧的一行，接着认
+        crate::py::fs::note_file(&path::join(&dir, AGY_TURNS), &path::join_all(&[&dir, AGY_TURNS, run]), "working 0 1\n", false);
+        let q =
+            agy_turn(&dir, run, &d(r#"{"agent_state": "idle", "conversation_title": "修 bug", "cwd": "/a/w"}"#)).expect("排上了");
+        assert_eq!((q.due, q.mark), (Some(AgyEvent::Done), 1));
+        assert_eq!(still_due(&dir, run, 1, AgyEvent::Done).map(|t| t.topic), Some("修 bug".into()), "醒来时还是它：推");
+        assert_eq!(still_due(&dir, run, 1, AgyEvent::Ask), None, "种类不对");
+        assert_eq!(still_due(&dir, "fedcba9876543210", 1, AgyEvent::Done), None, "别的会话");
+        assert!(agy_turn(&dir, run, &d(r#"{"agent_state": "idle", "conversation_title": "修好了"}"#)).is_none(), "没新排上");
+        assert_eq!(still_due(&dir, run, 1, AgyEvent::Done).map(|t| t.topic), Some("修好了".into()), "推的时候用最新的标题");
+        assert!(agy_turn(&dir, run, &d(r#"{"agent_state": "working"}"#)).is_none(), "撤掉不用推");
+        assert_eq!(still_due(&dir, run, 1, AgyEvent::Done), None, "这中间又干活了：不推");
+        let again = agy_turn(&dir, run, &d(r#"{"agent_state": "idle"}"#)).expect("再停下：再排上");
+        assert_eq!((again.mark, still_due(&dir, run, 3, AgyEvent::Done).is_some()), (3, true));
+        assert!(hex_of(run, 16) && !hex_of("0123456789ABCDEF", 16) && !hex_of(run, 32));
     }
 
     #[test]
@@ -1122,7 +1320,8 @@ mod tests {
         assert!(!path::exists(&turns), "会话标记不对：不记");
         agy_turn(&dir, "0123456789abcdef", &d(r#"{"agent_state": "working"}"#));
         let file = path::join(&turns, "0123456789abcdef");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "working 0 1\n");
+        let got = Turn::parse(&std::fs::read_to_string(&file).unwrap());
+        assert_eq!(got, Some(Turn { state: "working".into(), worked: true, ..Turn::default() }));
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(&turns).unwrap().permissions().mode() & 0o777, 0o700);

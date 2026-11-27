@@ -91,6 +91,9 @@ enum Frame {
     static let sessionSize: UInt8 = 0x17
     /// 远程启动（Launch.swift）：接入方 → 启动器，要起哪个模板（握手以后的头一帧，不发 HELLO）；启动器 → 接入方，起没起成（回完就断开）
     static let launch: UInt8 = 0x09, launched: UInt8 = 0x18
+    /// 结束会话（接入方 → 宿主，没有内容）：只在说明里说了这台手机结束得了的会话上发（SessionInfo.canEnd：远程启动的、能操作的）；
+    /// 宿主那头的转接进程只替这样的转。结束了和会话自己退出一样：宿主发 exit、关上
+    static let end: UInt8 = 0x07
     /// HELLO 的标志：只看；能缩放（会话和这块屏幕不一样大时缩小了画、拖着看：新的宿主一接上、这台手机打了字时照它排，别处打了字
     /// 照别处排，会话多大经 `sessionSize` 告诉它。旧的宿主不认，照旧算进去；3.7.4～3.7.6 开的会话等它打了字才照它排）
     static let readOnly: UInt8 = 1, zoom: UInt8 = 4

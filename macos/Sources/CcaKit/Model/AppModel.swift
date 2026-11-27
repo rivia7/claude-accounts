@@ -2109,21 +2109,32 @@ final class AppModel {
     /// 模板可以选的工具（启用了的）
     var remoteTemplateTools: [ToolID] { visibleTools }
 
-    /// 新建一个模板（不给）、改一个模板：弹层里填名字、工具、文件夹、参数，存的时候 cca 校验。账号不在模板里（3.7.10 起）：
+    /// 新建一个模板（不给）、改一个模板：弹层里填名字、工具、归属的 Team、文件夹、参数，存的时候 cca 校验。账号不在模板里（3.7.10 起）：
     /// 起会话的那一头（手机、另一台机器）挑这台 Mac 上这个工具的一个账号
     func editRemoteTemplate(_ t: RemoteTemplate? = nil) {
         guard phase == .ready, remoteLaunchAvailable else { return }
         let tools = remoteTemplateTools
+        let doc = remoteTemplates.doc
+        // 归属的 Team：原来的；新建的、原来的已经退出了、3.7.11 及以前建的没有归属：先选上 cca 默认的那一个。cca 是旧版（文档里没有 teams）：不选
+        let team = doc?.teams == nil ? nil : (doc?.team(t?.team) ?? doc?.defaultTeam)?.id
         let d: RemoteTemplateDraft
         if let t {
             // 工具没启用了：换成能选的
             let tool = t.tool.flatMap { tools.contains($0) ? $0 : nil }
-            d = RemoteTemplateDraft(original: t, name: t.name, tool: tool ?? tools.first ?? .claude, dir: t.dir, args: t.argsLine)
+            d = RemoteTemplateDraft(original: t, name: t.name, tool: tool ?? tools.first ?? .claude, dir: t.dir, args: t.argsLine,
+                                    team: team, teams: doc?.teams)
         } else {
             let tool = tools.contains(self.tool) ? self.tool : tools.first ?? .claude
-            d = RemoteTemplateDraft(original: nil, name: "", tool: tool, dir: sessionDirectories.first ?? "", args: "")
+            d = RemoteTemplateDraft(original: nil, name: "", tool: tool, dir: sessionDirectories.first ?? "", args: "", team: team, teams: doc?.teams)
         }
         present(.remoteTemplate(d))
+    }
+
+    /// 弹层里换了归属的 Team（只能是能选的那几个）
+    func setRemoteTemplateTeam(_ d: RemoteTemplateDraft, _ team: String) {
+        guard d.team != team, d.teams?.contains(where: { $0.id == team }) == true else { return }
+        d.team = team
+        d.error = nil
     }
 
     /// 弹层里换了工具
@@ -2141,14 +2152,14 @@ final class AppModel {
         }
     }
 
-    /// 存好弹层里的模板（`cca remote template add … [--replace <编号>] --args-line <参数那一行>`）。参数那一行原样交给 cca 拆；
+    /// 存好弹层里的模板（`cca remote template add … [--team <Team 的编号>] [--replace <编号>] --args-line <参数那一行>`）。参数那一行原样交给 cca 拆；
     /// cca 说不行（拆不开、校验不过）时把原因写在弹层里，接着改；存好了关掉弹层、说一句、再查一次列表和模板
     func saveRemoteTemplate(_ d: RemoteTemplateDraft) {
         guard phase == .ready, remoteLaunchAvailable, let client, d.canSave else { return }
         d.error = nil
         d.saving = true
         let command = CcaCommand.remoteTemplateSave(name: d.name.trimmingCharacters(in: .whitespacesAndNewlines), tool: d.tool,
-                                                    dir: d.dir, argsLine: d.args, replace: d.original?.id)
+                                                    dir: d.dir, argsLine: d.args, replace: d.original?.id, team: d.teams == nil ? nil : d.team)
         let prompter = hooks.prompter
         Task { [weak self] in
             let r = await client.execute(command, prompter: prompter)

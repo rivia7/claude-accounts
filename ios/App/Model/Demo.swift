@@ -9,6 +9,8 @@ final class DemoBackend: Backend {
     private let started = Date().timeIntervalSince1970
     /// 「新建会话」起的会话：在哪台电脑上、开场白（接入时那一屏照它放）
     private var launched: [(pid: String, session: RemoteSession, line: String?)] = []
+    /// 在终端页点了「结束会话」的：不再列出来
+    private var ended: Set<String> = []
 
     init() {
         let server = ServerRef(url: "https://demo.example.com", pins: [])!
@@ -32,9 +34,10 @@ final class DemoBackend: Backend {
             switch p.pid.prefix(2) {
             case "a1":
                 sessions = [
+                    // 照模板远程启动的（这台手机结束得了）
                     RemoteSession(sid: String(repeating: "1", count: 32),
                                   info: SessionInfo(machine: p.name, tool: "claude", name: "工作", cwd: "~/srv/api", since: t - 2 * 3600 - 640, viewOnly: false,
-                                                    aid: DemoAccounts.aid(1)),
+                                                    aid: DemoAccounts.aid(1), canEnd: true),
                                   online: true, viewers: 0),
                     RemoteSession(sid: String(repeating: "2", count: 32),
                                   info: SessionInfo(machine: p.name, tool: "codex", name: "个人", cwd: "~/notes", since: t - 25 * 60, viewOnly: true,
@@ -51,7 +54,8 @@ final class DemoBackend: Backend {
             default:
                 sessions = []
             }
-            return PeerListing(peer: p, gone: false, sessions: sessions + launched.filter { $0.pid == p.pid }.map(\.session), failure: nil,
+            let listed = sessions + launched.filter { $0.pid == p.pid }.map(\.session)
+            return PeerListing(peer: p, gone: false, sessions: listed.filter { !ended.contains($0.sid) }, failure: nil,
                                status: DemoAccounts.status(p.pid, machine: p.name, now: Date().timeIntervalSince1970), statusServed: true,
                                launcher: DemoLaunch.launcher(p))
         }
@@ -63,7 +67,7 @@ final class DemoBackend: Backend {
         guard launcher.online else { return .failed(RemoteFailure("nohost")) }
         let sid = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
         let info = SessionInfo(machine: peer.name, tool: template.tool, name: account?.name ?? template.account, cwd: template.dir,
-                               since: Date().timeIntervalSince1970, viewOnly: false, aid: account?.aid ?? template.aid)
+                               since: Date().timeIntervalSince1970, viewOnly: false, aid: account?.aid ?? template.aid, canEnd: true)
         launched.append((peer.pid, RemoteSession(sid: sid, info: info, online: true, viewers: 0), line))
         return .launched(sid: sid)
     }
@@ -89,7 +93,10 @@ final class DemoBackend: Backend {
 
     func link(peer: Peer, session: RemoteSession, cols: Int, rows: Int, readOnly: Bool, fresh: Bool) -> TerminalLink {
         let mine = launched.first { $0.session.sid == session.sid }
-        return DemoLink(session: session, readOnly: readOnly || session.info.viewOnly, launched: mine != nil, line: mine?.line)
+        let l = DemoLink(session: session, readOnly: readOnly || session.info.viewOnly, launched: mine != nil, line: mine?.line)
+        let sid = session.sid
+        l.ended = { [weak self] in self?.ended.insert(sid) }
+        return l
     }
 
     func fingerprint(on server: ServerRef) -> String? { "SHA256:demo" }
@@ -362,6 +369,8 @@ final class DemoLink: TerminalLink {
     private var line = ""
     private var closed = false
     private var opened = false
+    /// 结束了（点了「结束会话」）：演示的那一头不再列它
+    var ended: () -> Void = {}
 
     init(session: RemoteSession, readOnly: Bool, launched: Bool = false, line: String? = nil) {
         self.session = session
@@ -462,5 +471,20 @@ final class DemoLink: TerminalLink {
         guard !closed else { return }
         closed = true
         onState(.closed("detached"))
+    }
+
+    /// 结束会话：和真的一样，里面的程序收到 SIGHUP 退出（128 + 1），一会儿以后连接关上
+    func end() -> Bool {
+        guard opened, !closed, !readOnly, session.info.canEnd else { return false }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !closed else { return }
+            closed = true
+            say("\r\n")
+            ended()
+            onExit(129)
+            onState(.closed("ended"))
+        }
+        return true
     }
 }

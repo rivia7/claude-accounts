@@ -1177,6 +1177,23 @@ func genericRemoteTemplates(_ name: String, _ d: Data) -> RemoteTemplatesDoc? {
             check("\(name) \(t.id) 的摘要是 16 个十六进制字符", (h as? String).map { $0.count == 16 && $0.allSatisfy(\.isHexDigit) } == true)
         }
     }
+    // 归属的 Team（旧版 cca 没有 teams）：teams 是这台 Mac 在的 Team（编号 32 个十六进制字符、不重复，有 Team 时正好一个 default）；
+    // 模板的 team 是 null 或 32 个十六进制字符，有名字的就是 teams 里那一个的名字，没有名字的（这台 Mac 退出了）说 no_team
+    if let teamRows = raw["teams"] as? [[String: Any]] {
+        let teams = doc.teams ?? []
+        check("\(name) teams 都解码了，编号是 32 个十六进制字符、不重复，名字不空，default 是布尔",
+              teamRows.count == teams.count && teams.allSatisfy { $0.id.count == 32 && $0.id.allSatisfy(\.isHexDigit) && !$0.name.isEmpty }
+              && Set(teams.map(\.id)).count == teams.count && teamRows.allSatisfy { isBool($0["default"]) })
+        check("\(name) 有 Team 时正好一个是 default", teams.isEmpty || teams.filter(\.isDefault).count == 1)
+        for (i, t) in doc.templates.enumerated() {
+            let r = i < rows.count ? rows[i] : [:]
+            check("\(name) \(t.id) 的 team 是 null 或 32 个十六进制字符，team_name 是 null 或字符串",
+                  (isNull(r["team"]) || (r["team"] as? String).map { $0.count == 32 && $0.allSatisfy(\.isHexDigit) } == true)
+                  && (isNull(r["team_name"]) || r["team_name"] is String))
+            check("\(name) \(t.id) 有名字的 Team 就是 teams 里的那一个；有编号没名字的（退出了）说 no_team",
+                  t.team == nil || (t.teamName != nil ? doc.team(t.team)?.name == t.teamName : t.problem == .noTeam && doc.team(t.team) == nil))
+        }
+    }
     if let l = raw["launcher"] as? [String: Any] {
         check("\(name) launcher：running 是布尔，模板个数就是列出来的这几个，手机的台数是数字",
               isBool(l["running"]) && (l["templates"] == nil || doc.launcher?.templates == doc.templates.count) && wholeCount(l["peers"]))

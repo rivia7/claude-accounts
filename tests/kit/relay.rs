@@ -65,6 +65,8 @@ pub const HELLO: u8 = 0x01;
 pub const INPUT: u8 = 0x02;
 pub const RESIZE: u8 = 0x03;
 pub const DETACH: u8 = 0x04;
+/// 结束会话（`cca remote end`）：别的机器上只有能操作的、会话又是远程启动的（无头的）时转接那头才转
+pub const END: u8 = 0x07;
 pub const WELCOME: u8 = 0x11;
 pub const OUTPUT: u8 = 0x12;
 pub const EXIT: u8 = 0x13;

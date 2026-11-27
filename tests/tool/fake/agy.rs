@@ -105,8 +105,9 @@ pub fn run(a: &[String]) -> R<i32> {
 /// 像 agy 画状态栏：交互的会话（不是 --version、打印模式、帮助、子命令）里，--settings（两种写法，最后一个算）里的 statusLine，
 /// 没有就用数据目录 settings.json 里的；它的 command（enabled 不是 false）用 sh -c 跑（开头的 ~ 换成 HOME，像 agy），stdin 是
 /// 1.5.18 给的那种 JSON（email 取 token 里的 id_token_email；plan_tier 取 $CCA_T/agy_plan_tier，conversation_title 取 $CCA_T/agy_title，
-/// 没有这个文件就不给）。状态变了 agy 就画一次：$CCA_T/agy_states 一行画一次（「状态」或者「状态 ask」：tool_confirmation_pending
-/// 是 true），没有这个文件画一次 idle。agy.log 里记 AGY-STATUSLINE-CMD 命令（一次），每画一次记 AGY-STATUSLINE rc=退出码 out=输出
+/// 没有这个文件就不给）。状态变了 agy 就画一次：$CCA_T/agy_states 一行画一次（「状态 [ask] [task] [sub] [queued]」：ask 是
+/// tool_confirmation_pending 为 true，task 是 task_count 1，sub 是 subagents 里有一个在跑的，queued 是 pending_input_count 1），
+/// 没有这个文件画一次 idle。agy.log 里记 AGY-STATUSLINE-CMD 命令（一次），每画一次记 AGY-STATUSLINE rc=退出码 out=输出
 /// （换行写成 \n）
 fn statusline(t: &str, cli: &str, args: &[String], log: &dyn Fn(&str) -> R<()>) -> R<()> {
     const ONE_SHOT: &[&str] = &["--version", "-p", "--print", "--prompt", "--help", "-h"];
@@ -147,8 +148,21 @@ fn statusline(t: &str, cli: &str, args: &[String], log: &dyn Fn(&str) -> R<()>) 
     log(&format!("AGY-STATUSLINE-CMD {cmd}"))?;
     for line in states.lines().filter(|l| !l.trim().is_empty()) {
         let mut words = line.split_whitespace();
-        let (state, ask) = (words.next().unwrap_or("idle"), words.next() == Some("ask"));
+        let state = words.next().unwrap_or("idle");
+        let flags: Vec<&str> = words.collect();
+        let ask = flags.contains(&"ask");
         let mut p = obj! { "cwd" => getcwd()?, "session_id" => "", "version" => "1.5.18", "product" => "antigravity", "agent_state" => state, "tool_confirmation_pending" => ask, "terminal_width" => 100 };
+        if flags.contains(&"task") {
+            set_item(&mut p, "task_count", Value::from(1))?;
+        }
+        if flags.contains(&"queued") {
+            set_item(&mut p, "pending_input_count", Value::from(1))?;
+        }
+        if flags.contains(&"sub") {
+            let sub = json::parse(r#"[{"name": "helper", "role": "research", "status": "running"}]"#)
+                .or_else(|_| fail("agy: subagents"))?;
+            set_item(&mut p, "subagents", sub)?;
+        }
         if let Some(e) = token.as_obj().and_then(|o| o.get("id_token_email")) {
             set_item(&mut p, "email", e.clone())?;
         }

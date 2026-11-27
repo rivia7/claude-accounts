@@ -482,7 +482,7 @@ const ALLOW_USAGE: &str = "用法：remote-allow 名字 control|view|none | remo
 /// `remote-allow 名字 control|view|none`：对方能对这台机器的会话做什么。开着的会话几秒钟内照新的来
 /// （不让了的、改成只看的，正接着的那一处会被断开；不再是看和操作都让的，远程启动也一起关上）。stdout 一行：对方的名字。
 /// `remote-allow 名字 launch on|off`：能不能用这台机器上的模板新建会话（launch.rs）：只给看和操作都让的，手机、配对过的电脑都行（同意 bash 问过）。
-/// `remote-allow --show 名字`：只是找出是哪一个（bash 照它问同意）：一行 `配对编号<TAB>名字<TAB>手机 1|0<TAB>control|view|none<TAB>远程启动 1|0`
+/// `remote-allow --show 名字`：只是找出是哪一个（bash 照它问同意）：一行 `配对编号<TAB>名字<TAB>手机 1|0<TAB>control|view|none<TAB>远程启动 1|0<TAB>在哪个 Team 的服务器上配的（Team 的编号）`
 pub fn cmd_remote_allow(args: &[String]) -> R<()> {
     arity("cmd_remote_allow", args, 2, 3)?;
     if args[0] == "--show" {
@@ -491,7 +491,7 @@ pub fn cmd_remote_allow(args: &[String]) -> R<()> {
         }
         let all = peers::load();
         let p = pick(&all, &args[1])?;
-        crate::out!("{}\t{}\t{}\t{}\t{}", p.pid, p.name, u8::from(p.web), p.incoming.word(), u8::from(p.launch));
+        crate::out!("{}\t{}\t{}\t{}\t{}\t{}", p.pid, p.name, u8::from(p.web), p.incoming.word(), u8::from(p.launch), p.hub.team());
         return Ok(());
     }
     let _lock = Lock::acquire()?;

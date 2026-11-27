@@ -41,6 +41,8 @@ protocol TerminalLink: AnyObject {
     @discardableResult func input(_ data: Bytes) -> Bool
     func resize(cols: Int, rows: Int)
     func detach()
+    /// 结束会话（只给 SessionInfo.canEnd 的会话用）。回：送出去了没有；结束了照会话自己退出那样来 onExit、closed("ended")
+    @discardableResult func end() -> Bool
 }
 
 extension Attachment: TerminalLink {}

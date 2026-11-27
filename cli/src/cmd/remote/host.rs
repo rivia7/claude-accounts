@@ -240,6 +240,7 @@ impl Host {
             name: name.to_string(),
             cwd: std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
             since: time(),
+            headless: headless.is_some(),
         };
         let listener = local::listen(&dir, &format!("{}.sock", local::short(&meta.sid)))?;
         // 先装好信号再起客户端：它一起来就退出的话，SIGCHLD 也不会漏
@@ -549,7 +550,7 @@ impl Host {
         }
     }
 
-    /// 这台机器上有人要结束这个会话（`cca remote end`）：照终端被关掉那样给里面的程序发 SIGHUP（停着的让它接着跑，
+    /// 有人要结束这个会话（`cca remote end`；无头的会话也可能是别的机器上能操作的那一头）：照终端被关掉那样给里面的程序发 SIGHUP（停着的让它接着跑，
     /// 不然收不到），`END_GRACE` 秒以后还没退出就强行结束（`run` 里看 `kill_at`）。之后和客户端自己退出一样收场
     fn end(&mut self) {
         if self.ended.is_some() || self.kill_at.is_some() {
@@ -711,8 +712,9 @@ impl Host {
                     let st = local::frame(local::STATUS, self.status().to_json().as_bytes());
                     push(&mut self.viewers[i].out, &st);
                 }
-                // 这条 socket 上都是这台机器上的同一个用户（别的机器经转接进程来，它不转这一种）
-                local::END => self.end(),
+                // 这条 socket 上都是这台机器上的同一个用户；别的机器经转接进程来，它只替能操作的配对转、只转无头的会话的（link.rs 的 `bridge`）。
+                // 只看的说了不算（转接那头给别的机器上只让看的加了只看的标志）
+                local::END if !self.viewers[i].read_only => self.end(),
                 // 会话里的钩子推一条通知（`cca remote notify`、cca 自己带的钩子、Codex 的 notify、agy 的状态栏命令）：推给接着
                 // 这个会话的各处（`emit_note`）。启动它的终端不给、宿主也不弹：这台机器上的钩子自己会弹（hook.rs 的 `deliver`）
                 local::NOTIFY_REQ => {

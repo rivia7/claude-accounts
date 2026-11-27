@@ -421,6 +421,7 @@ enum Texts {
     /// 远程启动的模板用不了的原因（PROTOCOL 9.4 的 `problem`）：标在那一行的名字后面
     static func remoteTemplateProblem(_ p: RemoteTemplateProblem) -> String {
         switch p {
+        case .noTeam: return "Team 已退出"
         case .noAccount: return "没有账号"
         case .noDir: return "文件夹不存在"
         case .badArgs: return "参数不可用"
@@ -429,15 +430,42 @@ enum Texts {
         }
     }
 
-    /// 同上，长一点（鼠标停在上面时）：怎么了、怎么办
-    static func remoteTemplateProblemHelp(_ p: RemoteTemplateProblem) -> String {
+    /// 同上，长一点（鼠标停在上面时）：怎么了、怎么办。team：模板归属的 Team 的名字（没有归属的、已经退出了的是 nil）
+    static func remoteTemplateProblemHelp(_ p: RemoteTemplateProblem, team: String? = nil) -> String {
         switch p {
+        case .noTeam: return "这台 Mac 已退出这个模板所属的 Team：请修改模板，换一个 Team"
         case .noAccount: return "这台 Mac 上还没有这个工具的账号：先添加一个，模板才能用（账号在启动会话时选择）"
         case .noDir: return "文件夹不存在：请修改模板，换一个文件夹"
         case .badArgs: return "参数不可用（例如打印模式这类运行完就退出的，或未通过启动前的检查）：请修改参数"
-        case .noRelay: return "这个工具的账号的会话都不经中转（这台 Mac 未加入 Team）：手机上看不到这个模板"
+        case .noRelay:
+            if let team { return "这台 Mac 上这个工具的账号的会话都不经「\(team)」的服务器中转：这个 Team 配对的设备看不到这个模板" }
+            return "这个工具的账号的会话都不经中转（这台 Mac 未加入 Team）：手机上看不到这个模板"
         default: return "这个模板暂不可用"
         }
+    }
+
+    /// 模板归属的 Team，标在名字后面（这台 Mac 在不止一个 Team 里时）：Team 的名字；旧版本建的、没有归属的是「所有 Team」；
+    /// 已经退出了的不标（`problem` 是 `no_team`，那里说）
+    static func remoteTemplateTeam(_ t: RemoteTemplate) -> String? {
+        if let name = t.teamName { return name }
+        return t.team == nil ? "所有 Team" : nil
+    }
+
+    /// 同上，鼠标停在上面时
+    static func remoteTemplateTeamHelp(_ t: RemoteTemplate) -> String {
+        if let name = t.teamName { return "只有通过「\(name)」配对的设备能看到、使用这个模板" }
+        return "这个模板建于旧版本，还没有所属的 Team：通过每个 Team 配对的设备都能看到它。修改时可以选一个 Team"
+    }
+
+    /// 弹层里「Team」下面那一句：只有这个 Team 配对的设备看得到；改的是旧版本建的（没有归属）、归属的 Team 已经退出了的模板时先说一声；
+    /// 这台 Mac 不在哪个 Team 里时说先加入一个
+    static func remoteTemplateTeamNote(_ original: RemoteTemplate?, teams: [RemoteTemplateTeam]) -> String {
+        if teams.isEmpty { return "模板需要归属一个 Team：请先加入或新建一个 Team" }
+        let what = "只有通过这个 Team 配对的设备能看到并使用这个模板，启动时也只能选通过这个 Team 中转的账号"
+        guard let o = original else { return what }
+        if o.team == nil { return "这个模板建于旧版本，还没有所属的 Team（通过每个 Team 配对的设备都能看到它）。" + what }
+        if !teams.contains(where: { $0.id == o.team }) { return "这台 Mac 已退出这个模板原来所属的 Team，请换一个。" + what }
+        return what
     }
 
     /// 模板的第二行：「~/projects/site · --model opus」（dir 是给人看的那样；账号不在模板里：起会话时挑）

@@ -2,10 +2,11 @@ import CcaRemoteKit
 import SwiftUI
 
 /// 一个会话的终端：整页黑底的终端，顶上是哪个会话、在哪台电脑；断了、结束了在终端上面说一句，可以重新接入。
-/// 返回就是断开（会话在电脑上照常运行）
+/// 返回就是断开（会话在电脑上照常运行）；远程启动的会话右上角另有「结束会话」（先问一句）
 struct TerminalScreen: View {
     @Environment(AppModel.self) private var model
     let session: TerminalSession
+    @State private var confirmingEnd = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,6 +41,19 @@ struct TerminalScreen: View {
                         .accessibilityLabel("收起键盘")
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                if session.canEnd, session.isOpen, !session.ending {
+                    Button { confirmingEnd = true } label: { Image(systemName: "stop.circle") }
+                        .accessibilityLabel("结束会话")
+                        .accessibilityHint("关掉电脑上的这个会话")
+                }
+            }
+        }
+        .confirmationDialog("结束这个会话？", isPresented: $confirmingEnd, titleVisibility: .visible) {
+            Button("结束会话", role: .destructive) { session.end() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(Texts.endSessionWarning(session.session))
         }
         .onDisappear {
             // 返回（不是推到别的页）：断开
@@ -88,8 +102,9 @@ struct TerminalScreen: View {
         }
     }
 
+    /// 会话自己退出、退出码不是 0 的说退出码；这台手机让它结束的（退出码是被 SIGHUP 结束的 129）不说
     private var exitText: String? {
-        guard case .closed("ended") = session.state, let c = session.exitCode, c != 0 else { return nil }
+        guard case .closed("ended") = session.state, !session.ending, let c = session.exitCode, c != 0 else { return nil }
         return "会话已结束（退出码 \(c)）"
     }
 

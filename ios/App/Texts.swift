@@ -270,6 +270,12 @@ enum Texts {
         }
     }
 
+    /// 结束会话之前问的那一句的说明
+    static func endSessionWarning(_ s: RemoteSession) -> String {
+        let what = cliProduct(s.info.tool).map { "电脑上的 \($0) 会被关掉" } ?? "电脑上的这个程序会被关掉"
+        return what + "，和关掉它的终端一样；没有保存的内容会丢失。"
+    }
+
     /// 终端那一页顶上的那句话：连接的状态
     static func linkState(_ s: Attachment.State) -> String? {
         switch s {

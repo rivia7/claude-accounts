@@ -2,24 +2,27 @@
 //! （配对表的 `launch`）挑一个模板、挑一个账号起会话，再加一句开场白（launch.rs）：文件夹、参数都改不了，账号只能挑这个工具的账号表里
 //! 会话走那台服务器的。
 //!
-//! - 存在 `~/.cca/remote/templates.json`（600，改之前拿 `Lock`）：`{"v":1,"templates":[{"id","name","tool","dir","args","at"}]}`。
+//! - 存在 `~/.cca/remote/templates.json`（600，改之前拿 `Lock`）：`{"v":1,"templates":[{"id","name","tool","dir","args","at","team"}]}`。
 //!   3.7.9 及以前的模板还带着账号（`account`）：读的时候不理，存的时候不再写
+//! - 归属的 Team（`team`，Team 的编号）：只有在这个 Team 的服务器上配对的设备看得到、起得了它（给手机的说明按服务器各算各的：
+//!   `LaunchDoc::build`；起会话时 launch.rs 再查一遍），能挑的账号也只有会话走这台服务器的。新建时要选（没说是 `default_team`：
+//!   这台机器的家）；3.7.11 及以前存的没有这一项：哪个 Team 配对的设备都看得到（和以前一样），改的时候再选
 //! - 摘要（`digest`）：工具、文件夹、参数算出来的，放在给手机的说明里；手机起会话时带回来，和现在的对不上（模板改过了）就不起：
 //!   手机上看到的参数就是要运行的
 //! - 起会话时挑的账号（`Pick`）：给手机的说明里列出模板用到的工具的账号（会话走这台服务器的），各带一个按配对算的编号（和手机上
 //!   「账号」页里同一个账号的编号一样：status.rs 的 `account_tag`），手机起会话时说用哪个（LAUNCH 的 `a`）
-//! - `remote-template list [--json]`、`add`、`rm`：bash 的 `cca remote template`（PROTOCOL 9.4）
+//! - `remote-template list [--json | --team 编号]`、`teams`、`add`、`rm`：bash 的 `cca remote template`（PROTOCOL 9.4）
 
 use super::far::{aid_of, clean, short_name, team_salt};
 use super::status::account_tag;
 use super::{launch, local, peers, relay};
 use crate::cmd::agy::agy_interactive;
 use crate::cmd::codex::codex_interactive;
-use crate::cmd::hub::HubKind;
+use crate::cmd::hub::{HubKind, TeamTag};
 use crate::cmd::settings::{home_tilde, launch_settings_problems_in, CLAUDE_VALUES, CODEX_VALUES};
 use crate::core::base::Lock;
 use crate::core::model::{acct_id, name_of};
-use crate::core::team::{index_path, team_path, teams};
+use crate::core::team::{index_path, team_path, teams, tid_ok, Team};
 use crate::core::tool::{tools, Tool, Using};
 use crate::dict;
 use crate::py::fs;
@@ -45,8 +48,7 @@ const ARGS_MAX: usize = 64;
 const ARGS_BYTES: usize = 4096;
 /// 给手机的说明（明文）最多这么大：服务器收的密文最长 4096 个字符（base64），正好是 3072 个字节
 pub const DOC_MAX: usize = 3072;
-const USAGE: &str =
-    "用法：remote-template list [--json] | add 名字 工具 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数) | rm 名字或编号";
+const USAGE: &str = "用法：remote-template list [--json | --team 编号] | teams | add 名字 工具 文件夹 [--replace 编号] [--team Team] (-- 参数… | --args-line 一行参数) | rm 名字或编号";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template {
@@ -58,6 +60,8 @@ pub struct Template {
     pub dir: String,
     pub args: Vec<String>,
     pub at: f64,
+    /// 归属的 Team 的编号（32 个小写十六进制字符）；3.7.11 及以前存的没有（None）：哪个 Team 配对的设备都看得到
+    pub team: Option<String>,
 }
 
 fn file() -> String {
@@ -85,6 +89,11 @@ fn row_of(d: &Dict) -> Option<Template> {
         dir: d.str("dir")?.to_string(),
         args: args?,
         at: d.get("at").and_then(|v| v.as_num()).unwrap_or(0.0),
+        // 写坏了的不当它没有归属（那样哪个 Team 都看得到）：这一项不认
+        team: match d.get("team") {
+            None | Some(V::None) => None,
+            Some(v) => Some(v.as_str().filter(|s| tid_ok(s))?.to_string()),
+        },
     };
     let ok = peers::lower_hex(&t.id, 8) && !t.name.is_empty() && tool_named(&t.tool).is_some() && t.dir.starts_with('/');
     ok.then_some(t)
@@ -111,10 +120,14 @@ fn save(all: &[Template]) -> R<()> {
     local::ensure_dir()?;
     let list = List::new();
     for t in all {
-        list.push(dict! {
+        let row = dict! {
             "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "dir" => t.dir.as_str(),
             "args" => t.args_v(), "at" => t.at
-        });
+        };
+        if let Some(team) = &t.team {
+            row.set("team", team.as_str());
+        }
+        list.push(row);
     }
     fs::save_json(&file(), &V::Dict(dict! { "v" => 1, "templates" => list }), Some(0o600), true)?;
     Ok(())
@@ -127,6 +140,12 @@ fn tool_named(name: &str) -> Option<&'static Tool> {
 impl Template {
     pub fn tool(&self) -> &'static Tool {
         tool_named(&self.tool).expect("读的时候核对过")
+    }
+
+    /// 在 hub 这台服务器上配对的设备看不看得到它（给它的说明里有没有、能不能起）：归属这个 Team 的；没有归属的（3.7.11 及以前存的）
+    /// 哪台都看得到
+    pub fn for_hub(&self, hub: HubKind) -> bool {
+        self.team.as_deref().is_none_or(|t| t == hub.team())
     }
 
     /// 参数（JSON 的数组）
@@ -152,10 +171,14 @@ impl Template {
         }
     }
 
-    /// 现在用得了用不了（picks：这个工具的账号，[`picks`]）：`no_account`（这个工具一个账号都没有）、`no_dir`（文件夹没了）、
-    /// `bad_args`（参数有问题，或者不是交互的会话）、`no_relay`（这个工具的账号的会话都不经中转：这台机器不在哪个 Team 里）；
+    /// 现在用得了用不了（picks：这个工具的账号，[`picks`]；joined：这台机器在的 Team 的编号）：`no_team`（归属的 Team 这台机器
+    /// 已经退出了）、`no_account`（这个工具一个账号都没有）、`no_dir`（文件夹没了）、`bad_args`（参数有问题，或者不是交互的会话）、
+    /// `no_relay`（这个工具没有会话走归属的 Team 的服务器的账号；没有归属的：没有会话经中转的账号——这台机器不在哪个 Team 里）；
     /// 用得了是 None
-    pub fn problem(&self, picks: &[Pick]) -> R<Option<&'static str>> {
+    pub fn problem(&self, picks: &[Pick], joined: &[String]) -> R<Option<&'static str>> {
+        if self.team.as_ref().is_some_and(|t| !joined.contains(t)) {
+            return Ok(Some("no_team"));
+        }
         if picks.is_empty() {
             return Ok(Some("no_account"));
         }
@@ -165,7 +188,7 @@ impl Template {
         if !args_problems(self.tool(), &self.args, &self.dir)?.is_empty() {
             return Ok(Some("bad_args"));
         }
-        if picks.iter().all(|p| p.hub.is_none()) {
+        if !picks.iter().any(|p| p.hub.is_some_and(|h| self.for_hub(h))) {
             return Ok(Some("no_relay"));
         }
         Ok(None)
@@ -267,7 +290,8 @@ pub fn args_problems(tool: &'static Tool, args: &[String], dir: &str) -> R<Vec<S
     Ok(with.into_iter().filter(|p| !without.contains(p)).collect())
 }
 
-/// 给手机的说明（server/README.md「启动器」）：现在用得了的模板（文件夹还在、这个工具有会话走 hub 这台服务器的账号），最多 MAX 个；
+/// 给手机的说明（server/README.md「启动器」）：现在用得了的模板（在 hub 这台服务器上配对的设备看得到的：归属这个 Team 的、没有归属的；
+/// 文件夹还在、这个工具有会话走这台服务器的账号），最多 MAX 个；
 /// 明文放不下 DOC_MAX 的不放、记在 `more` 里。起会话时能挑的账号（`accounts`）：模板用到的工具的、会话走 hub 的，一个工具最多
 /// PICKS_MAX 个，各带按配对算的编号——封给每台手机之前各算各的（`for_peer`）。参数有没有问题这里不看（共享的设置变了它也跟着变）：
 /// 起的时候再查
@@ -287,7 +311,7 @@ impl LaunchDoc {
         // 各个工具会话走 hub 的账号（一个工具只查一次）
         let mut here: HashMap<&'static str, Vec<Pick>> = HashMap::new();
         for t in load() {
-            if !path::isdir(&t.dir) {
+            if !t.for_hub(hub) || !path::isdir(&t.dir) {
                 continue;
             }
             let tool = t.tool();
@@ -352,71 +376,151 @@ impl LaunchDoc {
     }
 }
 
-fn problem_text(code: &str) -> &'static str {
+fn problem_text(code: &str, team: bool) -> &'static str {
     match code {
+        "no_team" => "这台机器已经退出了它归属的 Team：改一下，换一个 Team",
         "no_account" => "这个工具还没有账号",
         "no_dir" => "文件夹不在了",
         "bad_args" => "参数用不了",
+        "no_relay" if team => "这个工具没有会话经这个 Team 的服务器中转的账号",
         "no_relay" => "这个工具的账号的会话都不经中转（先加入一个 Team）",
         _ => "用不了",
     }
 }
 
-/// `remote-template list [--json] | add … | rm …`
+/// 新建模板时没说归属哪个 Team 就用的：这台机器的家（relay.rs 的 `home_hub`：加入的第一个、用得了它的服务器的），一台都用不了时是
+/// 加入的第一个；不在哪个 Team 里是 None（建不了）
+fn default_team(joined: &[Team]) -> Option<String> {
+    let home = relay::home_hub().map(|h| h.team()).filter(|h| joined.iter().any(|t| t.id == *h));
+    home.or_else(|| joined.first().map(|t| t.id.clone()))
+}
+
+/// 不在哪个 Team 里时建不了模板
+const NO_TEAM_WHY: &str = "这台机器还不在哪个 Team 里：模板要归属一个 Team（只有在这个 Team 的服务器上配对的设备看得到它），先加入或者新建一个 Team（cca team）";
+
+/// `--team` 的值是这台机器在的哪个 Team：编号或者名字
+fn team_named(joined: &[Team], want: &str) -> R<String> {
+    let hit: Vec<&Team> = joined.iter().filter(|t| t.id == want || t.name == want).collect();
+    match hit.as_slice() {
+        [t] => Ok(t.id.clone()),
+        [] => die(format!("这台机器不在叫「{want}」的 Team 里（cca team 看在哪些 Team 里）")),
+        _ => die(format!("有好几个 Team 都叫「{want}」：写它的编号（cca team 看得到）")),
+    }
+}
+
+/// 给人看的 Team 的名字：这台机器记着的；没有名字的是 `Team 编号的前 8 位`（和 relay.rs 的 `team_name` 一样）。已经退出了的是 None
+fn team_label(joined: &[Team], id: &str) -> Option<String> {
+    let t = joined.iter().find(|t| t.id == id)?;
+    Some(if t.name.is_empty() { format!("Team {}", &t.id[..8]) } else { t.name.clone() })
+}
+
+/// `remote-template list [--json | --team 编号] | teams | add … | rm …`
 pub fn cmd_remote_template(args: &[String]) -> R<()> {
     match args.first().map(String::as_str) {
         Some("list") => list(&args[1..]),
+        Some("teams") if args.len() == 1 => list_teams(),
         Some("add") => add(&args[1..]),
         Some("rm") => rm(&args[1..]),
         _ => die(USAGE),
     }
 }
 
-/// 列出来：一行一个（`编号  名字  工具  文件夹  参数`，用不了的后面说原因）；--json 是给界面 App 的（PROTOCOL 9.4）
+/// `teams`：模板能归属的 Team（这台机器在的，照加入的先后），一行一个 `编号<TAB>名字`；新建时没说就用的那一个后面多一列 `default`
+/// （bash 在终端里问归属哪个时列出来）
+fn list_teams() -> R<()> {
+    let joined = teams();
+    let def = default_team(&joined);
+    for t in &joined {
+        let mark = if def.as_deref() == Some(t.id.as_str()) { "\tdefault" } else { "" };
+        let name = team_label(&joined, &t.id).unwrap_or_default();
+        crate::out!("{}\t{}{mark}", t.id, clean(&name, 64));
+    }
+    Ok(())
+}
+
+/// 列出来：一行一个（`编号  名字  工具  归属的 Team  文件夹  参数`，用不了的后面说原因）；`--team 编号`：只列在这个 Team 的服务器上配对的设备
+/// 看得到的（bash 打开远程启动之前说它能用几个）；--json 是给界面 App 的（PROTOCOL 9.4）
 fn list(args: &[String]) -> R<()> {
-    let as_json = match args {
-        [] => false,
-        [a] if a == "--json" => true,
+    let (as_json, only) = match args {
+        [] => (false, None),
+        [a] if a == "--json" => (true, None),
+        [a, t] if a == "--team" && tid_ok(t) => match TeamTag::new(t) {
+            Some(tag) => (false, Some(HubKind::Team(tag))),
+            None => return die(USAGE),
+        },
         _ => return die(USAGE),
     };
-    let all = load();
+    let all: Vec<Template> = load().into_iter().filter(|t| only.is_none_or(|h| t.for_hub(h))).collect();
+    let joined = teams();
+    let ids: Vec<String> = joined.iter().map(|t| t.id.clone()).collect();
     // 各个工具的账号（一个工具只查一次）
     let mut seen: HashMap<&'static str, Vec<Pick>> = HashMap::new();
-    let mut problem = |t: &Template| t.problem(seen.entry(t.tool().name).or_insert_with(|| picks(t.tool())));
+    let mut problem = |t: &Template| t.problem(seen.entry(t.tool().name).or_insert_with(|| picks(t.tool())), &ids);
     if as_json {
         let rows = List::new();
         for t in &all {
             let problem = problem(t)?;
+            let team_name = t.team.as_deref().and_then(|id| team_label(&joined, id));
             // account、account_key、account_name：3.7.9 及以前模板带着账号，旧版的 App 读它们；现在总是空的
             rows.push(dict! {
                 "id" => t.id.as_str(), "name" => t.name.as_str(), "tool" => t.tool.as_str(), "account" => "",
                 "account_key" => V::None, "account_name" => V::None, "dir" => t.dir.as_str(),
                 "args" => t.args_v(), "args_line" => t.args_line(), "line" => t.line_ok(), "digest" => t.digest(),
+                "team" => t.team.as_deref().map_or(V::None, V::from), "team_name" => team_name.map_or(V::None, V::from),
                 "problem" => problem.map_or(V::None, V::from)
             });
         }
-        let doc = dict! { "version" => 1, "kind" => "remote_templates", "templates" => rows, "launcher" => launch::summary() };
+        // 模板能归属的 Team（App 的弹层里挑）：default 是新建时没说就用的那一个
+        let def = default_team(&joined);
+        let choices = List::new();
+        for t in &joined {
+            choices.push(dict! {
+                "id" => t.id.as_str(), "name" => team_label(&joined, &t.id).unwrap_or_default(),
+                "default" => def.as_deref() == Some(t.id.as_str())
+            });
+        }
+        let doc = dict! {
+            "version" => 1, "kind" => "remote_templates", "templates" => rows, "teams" => choices, "launcher" => launch::summary()
+        };
         crate::out!("{}", json::dumps(&V::Dict(doc), json::LINE));
         return Ok(());
     }
     for t in &all {
-        let note = problem(t)?.map(|p| format!("  （{}）", problem_text(p))).unwrap_or_default();
+        let note = problem(t)?.map(|p| format!("  （{}）", problem_text(p, t.team.is_some()))).unwrap_or_default();
         let args = if t.args.is_empty() { String::new() } else { format!("  {}", t.args_text(200)) };
-        crate::out!("{}  {}  {}  {}{}{}", t.id, clean(&t.name, NAME_MAX), t.tool().label, home_tilde(&t.dir), args, note);
+        let team = match &t.team {
+            Some(id) => team_label(&joined, id).unwrap_or_else(|| format!("Team {}", &id[..8])),
+            None => "所有 Team".to_string(),
+        };
+        crate::out!(
+            "{}  {}  {}  {}  {}{}{}",
+            t.id,
+            clean(&t.name, NAME_MAX),
+            t.tool().label,
+            clean(&team, 64),
+            home_tilde(&t.dir),
+            args,
+            note
+        );
     }
     Ok(())
 }
 
-/// `add 名字 工具 文件夹 [--replace 编号] (-- 参数… | --args-line 一行参数)`：文件夹相对当前目录、可以带 ~，要已经在。--replace：改那一个
-/// （编号、位置不变）。参数是一项一项的（`--` 后面），或者照 shell 的写法写成的一行（`--args-line`：App 给的，这里拆，不展开 ~、$ 这些）。
-/// 账号不存在模板里：起会话时挑。stdout：`编号<TAB>名字`
+/// `add 名字 工具 文件夹 [--replace 编号] [--team Team] (-- 参数… | --args-line 一行参数)`：文件夹相对当前目录、可以带 ~，要已经在。
+/// --replace：改那一个（编号、位置不变）。--team：归属哪个 Team（这台机器在的，编号或者名字）；没说的新建时是 `default_team`，改的时候
+/// 不变。参数是一项一项的（`--` 后面），或者照 shell 的写法写成的一行（`--args-line`：App 给的，这里拆，不展开 ~、$ 这些）。
+/// 账号不存在模板里：起会话时挑。stdout：`编号<TAB>名字<TAB>归属的 Team 的名字`（没有归属的是空的）
 fn add(args: &[String]) -> R<()> {
-    // 照位置认（名字、文件夹、参数那一行本身是 `--` 也不会认错）
+    // 照位置认（名字、文件夹、参数那一行本身是 `--` 也不会认错）；--replace、--team 在参数前面，先后都行
     let [name, tool, dir, rest @ ..] = args else { return die(USAGE) };
-    let (replace, rest) = match rest {
-        [flag, id, rest @ ..] if flag == "--replace" => (Some(id.as_str()), rest),
-        _ => (None, rest),
-    };
+    let (mut replace, mut team, mut rest) = (None, None, rest);
+    loop {
+        match rest {
+            [flag, v, more @ ..] if flag == "--replace" && replace.is_none() => (replace, rest) = (Some(v.as_str()), more),
+            [flag, v, more @ ..] if flag == "--team" && team.is_none() => (team, rest) = (Some(v.as_str()), more),
+            _ => break,
+        }
+    }
     let argv = match rest {
         [sep, argv @ ..] if sep == "--" => argv.to_vec(),
         [flag, line] if flag == "--args-line" => split_line(line)?,
@@ -428,6 +532,16 @@ fn add(args: &[String]) -> R<()> {
         return die(format!("模板的名字要有，最长 {NAME_MAX} 个字"));
     }
     let Some(tool) = tool_named(tool) else { return die("工具只能是 claude、codex、agy") };
+    let joined = teams();
+    // 改的时候没说归属哪个：不变（拿到锁以后照原来的）
+    let team = match (team, replace) {
+        (Some(want), _) => Some(team_named(&joined, want)?),
+        (None, Some(_)) => None,
+        (None, None) => match default_team(&joined) {
+            Some(t) => Some(t),
+            None => return die(NO_TEAM_WHY),
+        },
+    };
     let dir = path::abspath(&path::join(&std::env::current_dir()?.to_string_lossy(), &path::expanduser(dir)));
     if !path::isdir(&dir) {
         return die(format!("没有这个文件夹：{dir}"));
@@ -468,8 +582,10 @@ fn add(args: &[String]) -> R<()> {
             }
         },
     };
-    let t = Template { id, name, tool: tool.name.to_string(), dir, args: argv.to_vec(), at: time() };
-    let said = format!("{}\t{}", t.id, t.name);
+    let team = team.or_else(|| at.and_then(|i| all[i].team.clone()));
+    let shown = team.as_deref().map(|t| team_label(&joined, t).unwrap_or_else(|| format!("Team {}", &t[..8]))).unwrap_or_default();
+    let t = Template { id, name, tool: tool.name.to_string(), dir, args: argv.to_vec(), at: time(), team };
+    let said = format!("{}\t{}\t{}", t.id, t.name, clean(&shown, 64));
     match at {
         Some(i) => all[i] = t,
         None => all.push(t),
@@ -518,6 +634,7 @@ mod tests {
             dir: "/srv/项目".into(),
             args: args.iter().map(|a| a.to_string()).collect(),
             at: 1.0,
+            team: None,
         }
     }
 
@@ -614,6 +731,43 @@ mod tests {
             e.set(k, bad);
             assert!(row_of(&e).is_none(), "{k}");
         }
+    }
+
+    #[test]
+    fn belongs_to_a_team() {
+        let (a, b) = ("aa".repeat(16), "bb".repeat(16));
+        let hub = |t: &str| HubKind::Team(TeamTag::new(t).unwrap());
+        let base = || {
+            dict! { "id" => "0123abcd", "name" => "x", "tool" => "claude", "dir" => "/tmp", "args" => crate::list!["-c"], "at" => 2.0 }
+        };
+        // 3.7.11 及以前存的没有归属：哪个 Team 配对的设备都看得到（和以前一样）
+        let old = row_of(&base()).unwrap();
+        assert_eq!(old.team, None);
+        assert!(old.for_hub(hub(&a)) && old.for_hub(hub(&b)));
+        let d = base();
+        d.set("team", a.as_str());
+        let t = row_of(&d).unwrap();
+        assert_eq!(t.team.as_deref(), Some(a.as_str()));
+        assert!(t.for_hub(hub(&a)) && !t.for_hub(hub(&b)), "只给归属的那个 Team");
+        // 存回去再读是原样
+        let row = dict! { "team" => a.as_str() };
+        assert_eq!(row.str("team").as_deref(), Some(a.as_str()));
+        // null 当没有；写坏了的（大写、长度不对、不是字符串）整条不认：不能当它没有归属（那样哪个 Team 都看得到）
+        let d = base();
+        d.set("team", V::None);
+        assert_eq!(row_of(&d).map(|t| t.team), Some(None));
+        for bad in [V::from("AA".repeat(16)), V::from("aa"), crate::list![1].into()] {
+            let d = base();
+            d.set("team", bad);
+            assert!(row_of(&d).is_none());
+        }
+        // 这台机器退出了归属的 Team：no_team，先于别的原因说
+        let claude = tool_named("claude").unwrap();
+        let picks = [Pick { tool: claude, key: "a@example.com".into(), name: "a".into(), hub: Some(hub(&a)) }];
+        assert_eq!(t.problem(&picks, std::slice::from_ref(&b)).unwrap(), Some("no_team"));
+        assert_eq!(t.problem(&[], std::slice::from_ref(&b)).unwrap(), Some("no_team"));
+        assert_eq!(t.problem(&[], &[a.clone(), b.clone()]).unwrap(), Some("no_account"));
+        assert_eq!(old.problem(&[], &[]).unwrap(), Some("no_account"), "没有归属的不说 no_team");
     }
 
     #[test]

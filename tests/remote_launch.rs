@@ -11,7 +11,9 @@ use kit::fleet::{Device, Team};
 use kit::fsx::{self, wait_for};
 use kit::harness::{Ctx, Module};
 use kit::json::Value;
-use kit::relay::{self, cols, frame, has, parsed, secs, Base, Popen, Reader, SpecPeer, EXIT, HELLO, INPUT, LAUNCH, OUTPUT};
+use kit::relay::{
+    self, cols, frame, has, parsed, secs, Base, Popen, Reader, SpecPeer, DETACH, END, EXIT, HELLO, INPUT, LAUNCH, OUTPUT,
+};
 use kit::{case, list, obj};
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -47,13 +49,23 @@ fn phone<'a>(fx: &'a Base, a: &Device, b: &'a Device) -> SpecPeer<'a> {
     peer
 }
 
-/// a 上加一个 Claude Code 的模板（在 dir 里，带着 args；账号不在模板里：起的时候挑）。返回 (编号, 摘要)
+/// a 上加一个 Claude Code 的模板（在 dir 里，带着 args；账号不在模板里：起的时候挑；归属的 Team 没说：加入的第一个）。返回 (编号, 摘要)
 fn template(a: &Device, name: &str, dir: &str, args: &[&str]) -> (String, String) {
-    let mut argv = vec!["remote-template", "add", name, "claude", dir, "--"];
+    template_in(a, name, dir, args, None)
+}
+
+/// 同 [`template`]，归属 team 这个 Team（名字或者编号）
+fn template_in(a: &Device, name: &str, dir: &str, args: &[&str], team: Option<&str>) -> (String, String) {
+    let mut argv = vec!["remote-template", "add", name, "claude", dir];
+    if let Some(t) = team {
+        argv.extend(["--team", t]);
+    }
+    argv.push("--");
     argv.extend(args);
     let out = a.ok(&argv);
-    let (id, got) = out.trim_end().split_once('\t').expect("编号<TAB>名字");
-    assert_eq!(got, name);
+    let f: Vec<&str> = out.trim_end_matches('\n').split('\t').collect();
+    assert!(f.len() == 3 && f[1] == name && !f[2].is_empty(), "编号<TAB>名字<TAB>归属的 Team：{out:?}");
+    let id = f[0];
     let doc = parsed(&a.ok(&["remote-template", "list", "--json"]));
     let row = doc["templates"].list().iter().find(|t| t["id"].str() == id).expect("列出来了").clone();
     (id.to_string(), row["digest"].str().to_string())
@@ -122,8 +134,9 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
     a.ok(&["remote-allow", &pid, "control"]);
     assert_eq!(a.ok(&["remote-allow", &pid, "launch", "on"]), "phone\n");
     assert_eq!(a.run(&["remote-launcher", "wanted"]).code, 0);
+    // 最后一列：在哪个 Team 的服务器上配的（bash 打开远程启动前照它数这台手机能用几个模板）
     let show = a.ok(&["remote-allow", "--show", "phone"]);
-    assert_eq!(show, format!("{pid}\tphone\t1\tcontrol\t1\n"));
+    assert_eq!(show, format!("{pid}\tphone\t1\tcontrol\t1\t{}\n", fx.team.id));
 
     let mut l = launcher(&a);
     let (lsid, doc) = wait_for("启动器的说明", secs(30), || peer.launcher());
@@ -159,6 +172,7 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
     assert!(sid.len() == 32 && sid.bytes().all(|c| c.is_ascii_hexdigit()), "{sid}");
     let found = wait_for("新会话", secs(30), || peer.sessions().into_iter().find(|s| s["sid"].str() == sid));
     assert_eq!(cols(&found, &["tool", "name", "cwd", "access"]), list!["claude", "alice", "~/work", "control"]);
+    assert_eq!(found["end"], Value::Bool(true), "远程启动的会话：能操作的手机结束得了");
     let (s, ch) = peer.attach(&sid);
     let mut r = Reader::new(s, ch.expect("握手：宿主的证明对得上"));
     r.send(&frame(HELLO, &[1, 0, 0, 200, 0, 30]));
@@ -196,6 +210,14 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
     assert!(has(r.until(|out| has(out, "<EXIT")), "<EXIT 3>"));
     assert!(r.kinds.contains(&EXIT));
     wait_for("会话从列表里没了", secs(30), || !a.ok(&["remote-list", "--local"]).contains(&sid[..8]));
+    // 再起一个（最后在手机上结束它）
+    std::thread::sleep(GAP);
+    let got = peer.launch(&lsid, &ask_as(&id, &digest, None, &alice));
+    assert_eq!(got["ok"].as_bool(), Some(true), "{got}");
+    let sid2 = got["sid"].str().to_string();
+    wait_for("第二个会话", secs(30), || {
+        peer.sessions().into_iter().find(|s| s["sid"].str() == sid2 && s["end"] == Value::Bool(true))
+    });
 
     // 启动器重启：还是原来那个编号（手机上不用重新找）
     l.signal(libc::SIGTERM);
@@ -209,11 +231,37 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
     assert_eq!(l.wait(secs(20)), 0);
     wait_for("启动器的说明没了", secs(30), || peer.launcher().is_none());
     assert_eq!(a.run(&["remote-launcher", "wanted"]).code, 1);
-    // 改成只看也关掉远程启动（再改回能操作时不自己打开）
+    // 改成只看也关掉远程启动（再改回能操作时不自己打开）。只看的结束不了远程启动的会话：说明里不说结束得了，硬发 END 宿主那头也不转
+    // （同一条连接上后面的 DETACH 宿主收到了，前面的 END 要转的话早到了；会话一直在，下面又能操作时还看得到它）
     a.ok(&["remote-allow", &pid, "launch", "on"]);
     a.ok(&["remote-allow", &pid, "view"]);
+    let viewers = |sid: &str| {
+        let doc = parsed(&a.ok(&["remote-list", "--local", "--json"]));
+        doc["sessions"].list().iter().find(|s| s["id"].str() == sid).map(|s| s["viewers"].i64())
+    };
+    let ends = |access: &str, end: bool| {
+        peer.sessions().into_iter().find(|s| s["sid"].str() == sid2 && s["access"].str() == access && s.get("end").is_some() == end)
+    };
+    wait_for("说明里改成只看", secs(30), || ends("view", false));
+    let (s, ch) = peer.attach(&sid2);
+    let mut r = Reader::new(s, ch.expect("握手：宿主的证明对得上"));
+    r.send(&frame(HELLO, &[1, 0, 0, 80, 0, 24]));
+    wait_for("只看的接上了", secs(20), || viewers(&sid2) == Some(1));
+    r.send(&frame(END, b""));
+    r.send(&frame(DETACH, b""));
+    wait_for("只看的断开了", secs(20), || viewers(&sid2) == Some(0));
+    drop(r);
     a.ok(&["remote-allow", &pid, "control"]);
     assert_eq!(a.run(&["remote-launcher", "wanted"]).code, 1);
+    // 能操作的手机结束它：里面的程序收到 SIGHUP（128 + 1），手机收到退出码，会话没了
+    wait_for("说明里又结束得了", secs(30), || ends("control", true));
+    let (s, ch) = peer.attach(&sid2);
+    let mut r = Reader::new(s, ch.expect("握手：宿主的证明对得上"));
+    r.send(&frame(HELLO, &[1, 0, 0, 80, 0, 24]));
+    wait_for("接上了", secs(20), || viewers(&sid2) == Some(1));
+    r.send(&frame(END, b""));
+    assert!(has(r.until(|out| has(out, "<EXIT")), "<EXIT 129>"), "{:?}", String::from_utf8_lossy(&r.out));
+    wait_for("会话从列表里没了", secs(30), || viewers(&sid2).is_none().then_some(()));
 }
 
 fn what_the_launcher_refuses(t: &mut Ctx) {
@@ -246,7 +294,7 @@ fn what_the_launcher_refuses(t: &mut Ctx) {
             "--model",
             "fable",
         ]);
-        assert_eq!(out, format!("{id}\t工作\n"));
+        assert_eq!(out, format!("{id}\t工作\t{}\n", fx.team.name), "没说归属哪个：不变");
         let doc = parsed(&a.ok(&["remote-template", "list", "--json"]));
         (id.clone(), doc["templates"].list()[0]["digest"].str().to_string())
     };
@@ -291,8 +339,8 @@ fn what_the_launcher_refuses(t: &mut Ctx) {
     assert_eq!(l.wait(secs(15)), 0);
 }
 
-/// 模板加好以后这台机器上变了的，和起会话时挑的账号：能挑的是会话走这台服务器的（另一个 Team 给的 bob 不在里面），不说挑哪个（旧版的
-/// App）而能挑的不止一个时不起；挑的账号后来走别的 Team 的服务器了、参数现在过不了检查、会话已经太多（旧的服务器给一台设备 8 个）；
+/// 模板加好以后这台机器上变了的，和起会话时挑的账号：能挑的是会话走这台服务器的（另一个 Team 给的 bob 不在里面），归属另一个 Team 的
+/// 模板这两台手机看不到、照它也起不了，不说挑哪个（旧版的 App）而能挑的不止一个时不起；挑的账号后来走别的 Team 的服务器了、参数现在过不了检查、会话已经太多（旧的服务器给一台设备 8 个）；
 /// 参数里已经有一句话的模板不能带开场白；关掉一台手机的远程启动（另一台还开着、启动器接着跑）以后它接不进启动器
 fn what_changed_on_the_host(t: &mut Ctx) {
     let fx = Base::new(t);
@@ -327,6 +375,19 @@ fn what_changed_on_the_host(t: &mut Ctx) {
     let (wid, wdigest) = template(&a, "工作", dir, &[]);
     let (sid, sdigest) = template(&a, "带设置", dir, &["--settings", "extra.json"]);
     let (lid, ldigest) = template(&a, "带话", dir, &["--model", "opus", "说中文"]);
+    // 模板能归属的 Team：这台机器在的两个（照加入的先后），没说归属哪个时用的是加入的第一个（就是这两台手机配对的这一台服务器的）
+    let teams = a.ok(&["remote-template", "teams"]);
+    assert_eq!(teams, format!("{}\t{}\tdefault\n{}\t另一个组\n", fx.team.id, fx.team.name, other.id));
+    let (oid, odigest) = template_in(&a, "另一个组的", dir, &[], Some("另一个组"));
+    let doc = parsed(&a.ok(&["remote-template", "list", "--json"]));
+    let tpl_team = |id: &str| {
+        let row = doc["templates"].list().iter().find(|t| t["id"].str() == id).expect("列出来了").clone();
+        relay::cols(&row, &["team", "team_name", "problem"])
+    };
+    assert_eq!(tpl_team(&wid), list![fx.team.id.as_str(), fx.team.name.as_str(), Value::Null]);
+    assert_eq!(tpl_team(&oid), list![other.id.as_str(), "另一个组", Value::Null], "bob 的会话走那个 Team 的服务器：用得了");
+    let choices = relay::rows_of(&doc["teams"], &["id", "name", "default"]);
+    assert_eq!(choices, [list![fx.team.id.as_str(), fx.team.name.as_str(), true], list![other.id.as_str(), "另一个组", false]]);
     for p in [&peer.pid, &peer2.pid] {
         a.ok(&["remote-allow", p, "launch", "on"]);
     }
@@ -346,14 +407,15 @@ fn what_changed_on_the_host(t: &mut Ctx) {
     let (alice, dave, dave2) = (account_id(&doc, "alice"), account_id(&doc, "dave"), account_id(&doc2, "dave"));
     assert_ne!(dave, dave2, "编号按配对算的");
     // 两台手机轮流来（同一台两次接进来要隔 3 秒）：参数里有话的模板带开场白；旧版的 App 不说挑哪个（能挑的有两个）；
-    // 挑了另一台手机看到的编号（这台手机的配对算不出来：这台机器上没有这个账号）
-    let tries: [(&SpecPeer, Value, &str); 3] = [
+    // 挑了另一台手机看到的编号（这台手机的配对算不出来：这台机器上没有这个账号）；归属另一个 Team 的模板（编号、摘要都对）当它没有
+    let tries: [(&SpecPeer, Value, &str); 4] = [
         (&peer, ask_as(&lid, &ldigest, Some("再说一句"), &alice), "bad"),
         (&peer2, ask(&wid, &wdigest, None), "need_account"),
         (&peer, ask_as(&wid, &wdigest, None, &dave2), "no_account"),
+        (&peer, ask(&oid, &odigest, None), "no_template"),
     ];
     for (i, (p, ask, code)) in tries.into_iter().enumerate() {
-        if i == 2 {
+        if i >= 2 {
             std::thread::sleep(GAP);
         }
         assert_eq!(refused(&p.launch(&lsid, &ask)), (code.to_string(), true));
@@ -392,7 +454,7 @@ fn what_changed_on_the_host(t: &mut Ctx) {
     r.until(|out| has(out, "<EXIT"));
     drop(busy);
     let log = log_of(&a);
-    for code in ["bad", "need_account", "no_account", "other_hub", "bad_args", "busy"] {
+    for code in ["bad", "need_account", "no_account", "no_template", "other_hub", "bad_args", "busy"] {
         assert!(log.contains(&format!("没起（{code}）")), "{code}：{log}");
     }
     assert!(log.contains(&format!("起了会话 {}", &nsid[..8])), "{log}");
@@ -442,7 +504,7 @@ fn a_machine_launches_a_session(t: &mut Ctx) {
     let (id, digest) = template(&a, "修 bug", work.to_str().expect("UTF-8"), &["--model", "opus"]);
     // 不是手机也能打开（要能看和操作：显示配对码的这一头默认就是）
     assert_eq!(a.ok(&["remote-allow", &pid, "launch", "on"]), "mac\n");
-    assert_eq!(a.ok(&["remote-allow", "--show", "mac"]), format!("{pid}\tmac\t0\tcontrol\t1\n"));
+    assert_eq!(a.ok(&["remote-allow", "--show", "mac"]), format!("{pid}\tmac\t0\tcontrol\t1\t{}\n", fx.team.id));
     let mut l = launcher(&a);
 
     // mac 上列出来的：box 的启动器（不算会话）和它的模板；账号是 mac 上的名字

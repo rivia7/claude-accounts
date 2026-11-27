@@ -35,9 +35,9 @@ mod status;
 mod template;
 mod vt;
 
-pub use hook::{agy_note, deliver as notify_deliver, hooks as notify_hooks, AgyEvent};
+pub use hook::{agy_note, deliver as notify_deliver, deliver_to as notify_deliver_to, hooks as notify_hooks, AgyEvent};
 pub use local::activity as hosted_activity;
-pub use manage::{hooks_on as notify_hooks_on, remote_on};
+pub use manage::{hooks_on as notify_hooks_on, host_of_me, remote_on};
 pub use popup::on as popup_on;
 pub use pty::restore_on_panic;
 pub use status::status_kick;

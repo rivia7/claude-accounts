@@ -6,7 +6,11 @@
 2026-11-27 维护者又定了 Mac 上的 App 也要能远程启动（「macOS 客户端也需要支持远程启动会话」）：配对过的电脑也能打开远程启动，装着 cca 的机器用
 `cca remote launch`、Mac 上的 cca App 用「新建会话…」照那台机器上的模板起（下面「在别的机器上起」）；随 3.7.7 发布（2026-11-27）：真的辅助程序、真的服务器端到端测过（`a_machine_launches_a_session`），App 有契约测试和截图，两台真的电脑之间、App 里点「新建会话…」还没试。
 同一天维护者又定了模板里不放账号（「远程会话模板中不需要指定账号，应该是在使用模版要启用远程会话时选择账号」）：起会话时那一头挑（下面「起的时候挑账号」）；
-一起定的「同时至多 100 个会话」见 remote.md「一台设备 100 个会话」。还没发布：真的辅助程序、真的服务器端到端测过，两个 App 有测试和截图，真机、两台真的电脑之间还没试。
+一起定的「同时至多 100 个会话」见 remote.md「一台设备 100 个会话」。随 3.7.10 发布（2026-11-27）：真的辅助程序、真的服务器端到端测过，两个 App 有测试和截图，真机、两台真的电脑之间还没试。
+同一天维护者又定了新建模板要选归属的 Team（「新建模版需要选择归属的Team组」）：只有在这个 Team 的服务器上配对的设备看得到、起得了它（下面「归属的 Team」）。
+随 3.7.12 发布（2026-11-28）：真的辅助程序、真的服务器端到端测过（`what_changed_on_the_host`），Mac 上的 App 有契约测试，没人在 App 里点过。
+同一天维护者又说手机上结束不了照模板起的会话（「iOS端按照模版新建的远程会话，无法在iOS上结束」）：能操作的配对结束得了远程启动的会话（下面「起的会话」），
+iPhone 上的 App 在终端页给「结束会话」；随 3.7.12 发布（2026-11-28）：真的辅助程序、真的服务器端到端测过，App 在演示模式里截图看过、模拟器里端到端测过，真机上还没试。
 
 定下来的（别重新讨论）：
 - 只能照模板起：那一头（手机、配对过的电脑）只挑模板、挑账号、给窗口大小和一句开场白，文件夹、参数都在这台机器上定好（`cca remote template`）；账号只能挑这台机器的
@@ -20,6 +24,8 @@
 - 服务器不为它改：启动器在每台走得到的 Team 服务器上登记成一个“会话”（`relay_host`，占这台设备的一个会话名额：3.7.10 起的服务器 101 个，以前的 8 个）；
   那一头和它握手、说要起哪个，跟接入会话一样
 - 模板的摘要（`h`）：那一头列出来以后这台机器上改了模板，拿旧的摘要来起是 `changed`，不照改过的起
+- 模板归属这台机器在的一个 Team：只有在这个 Team 的服务器上配对的设备看得到、起得了它；3.7.11 及以前存的没有归属，哪个 Team 配对的设备都看得到（和以前一样），
+  改的时候再选（下面「归属的 Team」）
 - 新会话的大小是那一头说的（列 20～500、行 5～300）：iPhone 上的 App 记着在会话里打字那一刻的窗口（新的宿主就是那时照手机排会话）；从没打过字照屏幕算、高只算一半（键盘会弹出来）。
   `cca remote launch` 用这个终端的大小；Mac 上的 App 用上一次在「远程会话」页开的终端的大小，还没开过是 120x36
 - 刚起的会话服务器可能还不知道：手机接入时服务器说 `no_session` 不算会话结束，45 秒内每 1.5 秒再问（CcaRemoteKit `Attachment` 的 `fresh`）；
@@ -29,21 +35,37 @@
 
 ## 模板（`cca remote template`）
 
-- 存在 `~/.cca/remote/templates.json`（600，改之前拿 `Lock`）：`{"v":1,"templates":[{"id","name","tool","dir","args","at"}]}`。
-  `id` 是 8 个小写十六进制字符；`dir` 是绝对路径，要已经在。账号不在模板里（起的时候挑）：3.7.9 及以前的模板带着的 `account` 读的时候不理、存的时候不再写
-- 辅助程序 `cli/src/cmd/remote/template.rs`（`remote-template list [--json] | add 名字 工具 文件夹 [--replace 编号] (-- 参数… | --args-line 一行) | rm 名字或编号`，
-  照位置认：名字、参数那一行本身是 `--` 也认得对）；bash 的 `remote_template`：`cca remote template [list [--json]]`、
-  `add [--name][--tool][--dir][--replace 编号] [-- 参数… | --args-line 一行参数]`（没写的在终端里 `ask`，界面 App 都给全；3.7.9 及以前的 App 还会给 `--account`：认得、不理）、`rm 名字或编号`。
-  `add` 的 stdout 是 `编号<TAB>名字`（存好以后才说）
+- 存在 `~/.cca/remote/templates.json`（600，改之前拿 `Lock`）：`{"v":1,"templates":[{"id","name","tool","dir","args","at","team"}]}`。
+  `id` 是 8 个小写十六进制字符；`dir` 是绝对路径，要已经在；`team` 是归属的 Team 的编号（下面「归属的 Team」）。账号不在模板里（起的时候挑）：3.7.9 及以前的模板带着的 `account` 读的时候不理、存的时候不再写
+- 辅助程序 `cli/src/cmd/remote/template.rs`（`remote-template list [--json | --team 编号] | teams | add 名字 工具 文件夹 [--replace 编号] [--team Team] (-- 参数… | --args-line 一行) | rm 名字或编号`，
+  照位置认：名字、参数那一行本身是 `--` 也认得对；`--replace`、`--team` 在参数前面，先后都行）；bash 的 `remote_template`：`cca remote template [list [--json]]`、
+  `add [--name][--tool][--dir][--team Team 的名字][--replace 编号] [-- 参数… | --args-line 一行参数]`（没写的在终端里 `ask`，界面 App 都给全；3.7.9 及以前的 App 还会给 `--account`：认得、不理）、`rm 名字或编号`。
+  `add` 的 stdout 是 `编号<TAB>名字<TAB>归属的 Team 的名字`（存好以后才说；没有归属的最后一项是空的）；终端里的 `list` 一行是 `编号  名字  工具  归属的 Team  文件夹  参数`
 - 参数两种给法，只能用一种：一项一项放在 `--` 后面（终端里），或者照 shell 的写法写成的一行（`--args-line`：界面 App 一律用它，弹层里的那一行原样给），
   辅助程序 `sh_split` 拆（`shlex.split` 的 POSIX 规则：不展开 `~`、`$`、通配符；拆不开说「参数里的引号没有配对」「参数最后多了一个 \」）。
   反过来 `args_line`（`list --json`）是 `sh_quote` 一项项拼的（要引的才用单引号），拆回去是原样：App 显示、修改都用它，不自己拆、拼
 - 存之前查：名字 1～40 个字、不重复；最多 16 个（`MAX`）；参数最多 64 个、合起来 4096 字节；只能起交互的会话（`-p`、子命令这类跑完就退出的不行：
   `claude_interactive` / `codex_interactive` / `agy_interactive`）；参数过得了启动前的检查（`args_problems`：带着参数的 launch-check 比不带的多出来的问题）
-- 用不了的（`problem`）：`no_account`（这个工具一个账号都没有）、`no_dir`、`bad_args`（共享的设置变了也会这样）、`no_relay`（这个工具的账号的会话都不经哪个 Team 的服务器）。
-  `list --json` 给界面 App（PROTOCOL 9.4）：`templates[]` 多 `args_line`、`line`、`digest`、`problem`，`launcher` 是 `{running, templates, peers}`；
+- 用不了的（`problem`，先后照这个）：`no_team`（这台机器退出了归属的 Team）、`no_account`（这个工具一个账号都没有）、`no_dir`、`bad_args`（共享的设置变了也会这样）、
+  `no_relay`（这个工具没有会话走归属的 Team 的服务器的账号；没有归属的：这个工具的账号的会话都不经哪个 Team 的服务器）。
+  `list --json` 给界面 App（PROTOCOL 9.4）：`templates[]` 多 `args_line`、`line`、`digest`、`team`、`team_name`、`problem`，`teams` 是能归属的 Team（`{id, name, default}`），`launcher` 是 `{running, templates, peers}`；
   给 3.7.9 及以前的 App 的 `account` 是空字符串、`account_key`、`account_name` 是 null（它当这个模板的账号没了：改模板时要先选一个账号才存得了，选的 cca 不理）
 - 摘要 `digest`：`hex(SHA256(紧凑 JSON [工具, 文件夹, 参数数组]))` 的前 16 个字符（名字不算：改名不算改过；3.7.9 及以前账号也算在里面）
+
+## 归属的 Team
+
+2026-11-27 维护者定的（「新建模版需要选择归属的Team组」）：每个模板归属这台机器在的一个 Team（`team`：Team 的编号）。
+
+- 看得到、起得了的：只有在这个 Team 的服务器上配对的设备（`Template::for_hub`）。给那一头的说明本来就按服务器各算各的（`LaunchDoc::build`）：别的 Team 的服务器上配对的设备
+  收到的说明里没有它；起会话时 `launch` 再查一遍，不是这个 Team 的当它没有（`no_template`：编号、摘要都对也一样，不说它在别的 Team 里）。能挑的账号照旧是会话走这台服务器的
+  （下面「起的时候挑账号」）
+- 新建时选：`--team 编号或名字`（这台机器在的；名字重了要写编号，`team_named`）；没说的用 `default_team`：这台机器的家（`relay.rs` 的 `home_hub`：加入的第一个、用得了它的服务器的），
+  一台都用不了时是加入的第一个；不在哪个 Team 里建不了（`NO_TEAM_WHY`）。终端里这台机器在好几个 Team 里、没写 `--team` 时 bash 问一句（`remote-template teams`：一行 `编号<TAB>名字`，
+  默认的那一个后面多一列 `default`；直接回车是它）；界面 App 一律给编号（弹层里选，`list --json` 的 `teams`）。改模板（`--replace`）没说就不变
+- 3.7.11 及以前存的没有 `team`：哪个 Team 配对的设备都看得到（和以前一样）；终端里写「所有 Team」，App 改它时先选上默认的那一个，存了就有归属。
+  `team` 写坏了的（不是 32 个小写十六进制字符）整条不认：不能当它没有归属，那样哪个 Team 都看得到
+- 这台机器退出了归属的 Team：`problem` 是 `no_team`（先于别的原因说），改的时候换一个
+- 打开远程启动之前说那台设备能用几个模板：`remote-allow --show` 最后多一列这个配对在哪个 Team 的服务器上，bash 照它 `remote-template list --team 编号` 数（只列它看得到的）
 
 ## 起的时候挑账号
 
@@ -91,7 +113,7 @@
   同一个配对两次接进来不到 3 秒（`JOIN_GAP`）：照样接、回 `rate`（不理的话那一头要等到服务器说启动器不在，说的原因就错了；这一次不算进间隔）
 - 配对的密钥读不出来（钥匙串一时读不了：登录以后还没解锁之类）的配对先不接，30 秒（`link.rs` 的 `SECRET_RETRY`）后再读，不用等配对表变；
   启动器在 `launch.log` 里记一句（每个配对一次，读出来以前不再记）
-- 查的先后（`launch`）：这个配对还让不让（`denied`）、一分钟里起成了 4 个没有（`rate`）、有没有这个模板（`no_template`）、摘要对不对（`changed`）、用哪个账号
+- 查的先后（`launch`）：这个配对还让不让（`denied`）、一分钟里起成了 4 个没有（`rate`）、有没有这个模板（`no_template`：归属别的 Team 的也算没有）、摘要对不对（`changed`）、用哪个账号
   （`pick_account`：`no_account`、`other_hub`、`need_account`，上面「起的时候挑账号」）、文件夹（`no_dir`）、参数（`bad_args`）、带了开场白模板却不让带（`bad`）、
   这台机器走这台服务器的会话到上限没有（`busy`：`sessions_max`，同步配置时记下的服务器级别——sync.json 的 `level`——到 3 是 100 个，不到、没问到过是 7 个：
   3.7.10 起的服务器给一台设备 101 个、以前的 8 个，启动器自己占一个）、起没起来（`spawn`：4 秒内等不到新会话的 socket）。给那一头看的话在 `fail_text`（`cca remote launch` 不用它：照 `code` 自己说，`start.rs` 的 `refused_text`）
@@ -107,6 +129,9 @@
 - bash 的 `remote_prepare`：`CCA_REMOTE_HOSTED` 有值时不再套一层宿主（已经在无头的宿主里了），但算在宿主里（Codex 的 `--hosted`）；这个变量只认这一次，unset 掉、不传给客户端
 - 无头的宿主（`host.rs` 的 `--headless`）：没有启动它的终端，大小先照 `--size`，之后照接进来的（remote.md 的「几个终端接着同一个会话」）。客户端退出时还没人接入过：
   留着等人接上来看它最后说了什么（`CCA_HEADLESS_LINGER`，默认 600 秒），接上的那一处收到退出码；一直没人接入：`CCA_HEADLESS_IDLE`（默认 900 秒）后照 `cca remote end` 那样结束
+- 那一头结束得了它（2026-11-27 维护者说的「iOS端按照模版新建的远程会话，无法在iOS上结束」）：说明文件里记着 `headless`（`Meta.headless`），给能操作的配对的会话的说明里
+  多一项 `"end": true`，转接进程只替这样的配对转 `END`（remote.md「结束一个会话」）：宿主照 `cca remote end` 那样结束它，那一头收到退出码（被 SIGHUP 结束的是 129）。
+  iPhone 上的 App 在终端页右上角给「结束会话」（先问一句，ios.md「App」）；终端里起的会话照旧只在这台机器上结束得了
 
 ## 在别的机器上起（`cca remote launch`）
 
@@ -155,9 +180,11 @@
   独立实现的那一头（`kit::relay::SpecPeer`）：没有允许的手机时启动器马上退出；只让看的打不开；起一个（说明里能挑的账号、挑了的账号，参数、开场白、大小、环境、
   当前目录照模板和手机说的）、马上接进去、退出码；经会话的通道发的 LAUNCH 不理；日志；SIGTERM 重启以后同一个编号；关掉以后启动器自己退出、说明没了。`what_the_launcher_refuses`：
   模板改过了、没有这个模板、接得太勤、请求不对（账号的编号不是那个样子也是）、没有这个账号、文件夹没了；`what_changed_on_the_host`：参数里已经有一句话的不能带开场白（说明里的 `l`、带了是 `bad`）、
-  能挑的账号（另一个 Team 给的不在里面；编号按配对算的，两台手机看到的不一样）、不说挑哪个而能挑的不止一个（`need_account`）、拿另一台手机的编号（`no_account`）、
+  能挑的账号（另一个 Team 给的不在里面；编号按配对算的，两台手机看到的不一样）、模板能归属的 Team（`remote-template teams`、`list --json` 的 `teams`、`team`、`team_name`）、
+  归属另一个 Team 的模板（说明里没有它，照它起是 `no_template`）、不说挑哪个而能挑的不止一个（`need_account`）、拿另一台手机的编号（`no_account`）、
   挑的账号后来归另一个 Team 了（`other_hub`：常驻的启动器重读 Team 的配置）、参数后来过不了检查（`bad_args`）、会话已经有 7 个（服务器的级别不到 3 时 `busy`，到 3 照起）、
-  关掉一台手机的远程启动以后它收不到说明、要不来票据（另一台照旧）。`denied` 只在配对表改了、转接进程还没看到的那 3 秒里出得来，没有单独测
+  关掉一台手机的远程启动以后它收不到说明、要不来票据（另一台照旧）。`denied` 只在配对表改了、转接进程还没看到的那 3 秒里出得来，没有单独测。
+  `a_phone_launches_a_session` 的最后：手机结束远程启动的会话（说明里的 `end`；改成只看以后说明里没有它，硬发 `END` 也不转；改回能操作以后发 `END`：`<EXIT 129>`、会话没了）
 - `tests/remote_launch.rs` 的 `a_machine_launches_a_session`：两台真的设备配对，盒子上的启动器允许 mac（不是手机）：`remote-list --json` 的 `peer_launchers`（模板的各项、
   账号的名字）、不写模板时列出来、起之前就停的（不在终端里 69、开场白里有控制字符 64、没有这台机器 / 这个模板 65，启动器的日志是空的）、
   能挑的账号（`peer_launchers[].accounts`）、`--account` 写了没有的账号是 65、`--json --size --line --digest --account` 起一个（文档、会话那一项、没有事件；日志里不记开场白）再接进去（大小、参数）、终端里起一个马上接进去（能挑的只有一个：不写 `--account`；退出码）、
@@ -166,11 +193,11 @@
 - `tests/remote_host.rs` 的 `headless_sessions`：无头的宿主（参数不对、接入、没人接入时留多久、多久结束）
 - `tests/ios_kit.rs`：`against_the_spec` 的 `launch`（启动器的说明解开、清理——能挑的账号也是，旧版的说明没有 `accounts`——，拼 LAUNCH（带 `a`）、读 LAUNCHED，和 `kit::spec` 对）；`a_phone_launches_a_session`：ccaguest
   对着真的启动器列模板和能挑的账号、挑 alice 起会话、`--fresh` 接进去
-- 回归：3e（`CCA_REMOTE_HOSTED` 不再套一层）；11b3c 在和手机配好以后（阁楼组的服务器）：模板的增删改、`--args-line`、`--json`（给 App 的测试数据 `remote_templates.json`、
+- 回归：3e（`CCA_REMOTE_HOSTED` 不再套一层）；11b3c 在和手机配好以后（阁楼组的服务器）：模板的增删改（只在阁楼组里：不问、归属它；`--team` 写了这台机器不在的 Team）、`--args-line`、`--json`（给 App 的测试数据 `remote_templates.json`、
   `remote_list_launch.json`）、打开要同意（终端、App；配对过的电脑也问，同意的范围是它的配对编号）、LaunchAgent 的内容和装卸（假的 launchctl 的用户域：照 `ProgramArguments` 真的起后台进程，`bootout` 停掉）、
   改别的配对时不重写 LaunchAgent（keep）、打开时内容变了才换、改成只看 / 取消配对时卸掉；12：`cca restore` 卸掉 LaunchAgent（确认清单里说一句）。
   `-- 开场白` 里提到 `--settings` 不算（3 节第三方 API 账号那几条）。Linux 的 crontab 那一支只在代码里（`tests/linux.sh` 没测）
-- App：`macos/Tests/ContractTests/RemoteLaunchTests.swift`（`remoteLaunchGuestTests`：「新建会话…」的弹层、挑账号、起不成、起好了接入、还没登记好、旧版的那台机器不挑账号；3.7.6 的 cca 没有 `remote_launch_machines`）；iOS：`ios/Tests/KitTests` 的 `launch`、模拟器里的演示模式（`-screen launch`：挑账号的那一节）
+- App：`macos/Tests/ContractTests/RemoteLaunchTests.swift`（模板的弹层：归属的 Team 先选上默认的、只能换成能选的、存的时候带 `--team`、改旧版本建的没有归属的模板；`remoteLaunchGuestTests`：「新建会话…」的弹层、挑账号、起不成、起好了接入、还没登记好、旧版的那台机器不挑账号；3.7.6 的 cca 没有 `remote_launch_machines`）；iOS：`ios/Tests/KitTests` 的 `launch`、模拟器里的演示模式（`-screen launch`：挑账号的那一节）
 
 ## 没验证的
 
@@ -178,4 +205,6 @@
 - 真机上起会话；TestFlight 还没传带这一页的构建
 - 两台真的电脑之间（真的 Team 服务器、真的 LaunchAgent）用 `cca remote launch`、Mac 上的 App 起会话；App 里「新建会话…」的弹层只在契约测试里走过，没人点过
 - 挑账号：真机上的「用哪个账号」、两台真的电脑之间 `--account`；新的 App 对着 3.7.9 及以前的那台机器（不挑账号）只在契约测试、ccaguest 里走过
+- 手机上结束会话：真机上点「结束会话」（模拟器里演示模式走过、ccaguest 对着真的 cca 走过）；网页端不给结束（`server/web/core.js` 不认 `end`）
+- 归属的 Team：终端里在好几个 Team 里时问归属哪个（回归里这台 Mac 同时只在一个 Team 里）只手动在临时的 HOME 里走过；App 弹层里的「Team」只在契约测试里走过，没人点过
 - Linux 上的 crontab 两行、开机以后起来

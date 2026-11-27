@@ -176,6 +176,11 @@ fn against_the_spec(t: &mut Ctx) {
             "p" => hx(&p), "pid" => &pid, "sid" => &sid, "blob" => spec::dir_seal(&p, &pid, &sid, &doc),
             "forged" => spec::dir_seal(&crypto::random(32), &pid, &sid, &doc),
             "control" => spec::dir_seal(&p, &pid, &sid, &obj! { "v" => 1, "machine" => "m", "since" => true }),
+            // 那一头结束得了它（远程启动的会话、能操作的配对）；只让看的写了也不算，不是 true 的（字、数）不算
+            "ends" => spec::dir_seal(&p, &pid, &sid, &obj! { "v" => 1, "machine" => "m", "access" => "control", "end" => true }),
+            "ends_view" => spec::dir_seal(&p, &pid, &sid, &obj! { "v" => 1, "machine" => "m", "access" => "view", "end" => true }),
+            "ends_odd" => spec::dir_seal(&p, &pid, &sid, &obj! { "v" => 1, "machine" => "m", "end" => "yes" }),
+            "ends_one" => spec::dir_seal(&p, &pid, &sid, &obj! { "v" => 1, "machine" => "m", "end" => 1 }),
             "want" => obj! {
                 "machine" => "box", "tool" => "claude", "name" => "账号 1", "cwd" => &cwd[..200], "since" => 1763800000.5, "view" => true
             }
@@ -850,9 +855,14 @@ fn session_ends(t: &mut Ctx) {
     let pid = out.split_whitespace().nth(1).expect("peer 后面是配对编号").to_string();
     let _h = relay::session(&a, Device::KEY, "alice", &[]);
     let r = one_session(&g);
+    assert_eq!(r["end"], Value::Bool(false), "终端里起的会话：手机结束不了（只在那台电脑上 cca remote end）");
     let sid = r["sid"].str().to_string();
-    let mut p = g.attach(&pid, &sid, &[]);
+    // 硬要结束（END）：宿主那头的转接进程不替手机转，会话照常——同一条连接上接着敲的键还到得了
+    let mut p = g.attach(&pid, &sid, &["--end"]);
     p.wait_open();
+    wait_for("请宿主结束", secs(10), || has(&p.err(), "end sent"));
+    p.type_in(b"say still-here\r");
+    wait_for("会话还在", secs(20), || has(&p.out(), "<still-here>"));
     p.type_in(b"exit 3\r"); // 会话程序退出（退出码 3）
     let rc = p.wait();
     assert!(has(&p.err(), "exit 3\nclosed ended"), "{}", String::from_utf8_lossy(&p.err()));
@@ -903,6 +913,22 @@ fn a_phone_launches_a_session(t: &mut Ctx) {
     p.type_in(b"exit 0\r");
     assert_eq!(p.wait(), 0, "{}", String::from_utf8_lossy(&p.err()));
     assert!(has(&p.err(), "closed ended"), "{}", String::from_utf8_lossy(&p.err()));
+    // 再起一个，在手机上结束它：说明里说这台手机结束得了（远程启动的、能操作的配对）；接上就请宿主结束（END），
+    // 里面的程序收到 SIGHUP（128 + 1），手机收到退出码，会话没了
+    std::thread::sleep(Duration::from_millis(3200)); // 同一台手机两次接进启动器要隔 3 秒（launch.rs 的 JOIN_GAP）
+    let r = g.run(&["launch", &pid, &tid, "--account", &acct]);
+    assert_eq!(r.code, 0, "{} {}", r.out, r.err);
+    let sid2 = r.out.trim().strip_prefix("launched ").unwrap_or_else(|| panic!("{:?}", r.out)).to_string();
+    let row2 = wait_for("手机看到新会话", secs(30), || {
+        g.rows().into_iter().find(|r| r.get("sid").is_some_and(|s| s.str() == sid2))
+    });
+    assert_eq!(row2["end"], Value::Bool(true), "{row2}");
+    let mut p = g.attach(&pid, &sid2, &["--end"]);
+    assert_eq!(p.wait(), 0, "{}", String::from_utf8_lossy(&p.err()));
+    let said = String::from_utf8_lossy(&p.err()).to_string();
+    assert!(said.contains("end sent\n") && said.contains("exit 129\nclosed ended"), "{said}");
+    let again = g.run_with(&["attach", &pid, &sid2], "");
+    assert!(again.err.contains("closed gone"), "{}", again.err);
     // 关掉远程启动：启动器自己退出，手机上看不到它了
     a.ok(&["remote-allow", &pid, "launch", "off"]);
     assert_eq!(l.wait(secs(20)), 0);
