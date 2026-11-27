@@ -18,8 +18,6 @@
 //!                    Login failed: timed out。拿到了就“换 token”：记一行 EXCHANGE code=… https_proxy=…（环境里没有是 unset），
 //!                    code 不是 good 开头的失败（Login failed: Request failed with status code 400），是的写 oauthAccount、
 //!                    把 {"claudeAiOauth": {}} 写进旁边 600 的 .credentials.json，打印 Login successful.
-//!   打印模式         -p、--print（-cp 这样几个短选项写在一起的也算；-- 后面的不算）：cca 不用，也不让经 cca 用。记一行
-//!                    PRINT-MODE 参数… 进 $D/print-mode.log（linux.sh 最后查它是空的），stderr 上说一句，退出码 1
 //!   别的             当作一次会话：--settings 后面的 JSON 里有 apiKeyHelper 时像 Claude Code 一样执行它（/bin/sh -c，标准输入是
 //!                    /dev/null），取到的 key 写进 $D/claude.key；记一行 SESSION https_proxy=… args=…（--settings 和它的 JSON
 //!                    不记）；$D/hold 在时一直开着（0.1 秒看一次）；最后打印 fake claude session
@@ -105,22 +103,6 @@ pub fn run(a: &[String]) -> R<i32> {
     }
     if (word(0), word(1)) == (Some("auth"), Some("login")) {
         return login(d, &p, args);
-    }
-    let print_mode = |a: &String| {
-        a == "-p"
-            || a == "--print"
-            || a.starts_with("--print=")
-            || (a.len() > 2
-                && !a.starts_with("--")
-                && a.starts_with('-')
-                && a[1..].chars().all(|c| c.is_ascii_alphabetic())
-                && a.contains('p'))
-    };
-    if args.iter().take_while(|a| *a != "--").any(print_mode) {
-        append_text(&join(&[d, "print-mode.log"]), &format!("PRINT-MODE {}\n", args.join(" ")))?;
-        flush();
-        eprintln!("fake claude: cca 不该用打印模式");
-        return Ok(1);
     }
     if let Some(i) = args.iter().position(|x| x == "--settings") {
         let s = json::parse(arg(args, i + 1)?).map_err(|e| Fail(format!("json.decoder.JSONDecodeError: {e}")))?;
@@ -229,7 +211,7 @@ mod tests {
     // ' '.join(a for a in args if not a.startswith('--settings') and not a.startswith('{'))
     #[test]
     fn session_line_leaves_the_settings_out() {
-        assert_eq!(session_args(&strs(&["--add-dir", "/x", "--settings", "{\"a\": 1}", "hi"])), "--add-dir /x hi");
+        assert_eq!(session_args(&strs(&["--add-dir", "/x", "--settings", "{\"a\": 1}", "-p", "hi"])), "--add-dir /x -p hi");
         assert_eq!(session_args(&strs(&["--settings={}", "{x", "a {b}"])), "a {b}");
         assert_eq!(session_args(&[]), "");
     }

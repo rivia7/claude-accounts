@@ -1,37 +1,232 @@
-//! Antigravity（agy）的额度（`cca agy usage`）：cca 不查（不用打印模式：以前的 `agy -p /usage` 去掉了），用 cca 启动的交互会话里
-//! 状态栏的命令记下的（`cmd_agy_statusline` → `quota_note`）：状态栏的 JSON 里有 quota（以桶的 id 为键：remaining_fraction 或
-//! remaining_amount、reset_time、reset_in_seconds、disabled），cca 换成打印模式的 /usage 给过的样子（`{groups: [{name, buckets:
-//! [{id, name, window, disabled, remaining_fraction, remaining_amount, reset_time}]}]}`，`agy_quota_rl`）记进 usage.json。
-//! 这里有 `--json` 里的 quota_groups（macos/PROTOCOL.md 3.1）、表格和菜单里那一格，显示的时候再算用了多少、过没过重置时间。
+//! Antigravity（agy）的额度（`cca agy usage`）：agy 1.1.11 起，打印模式里的 /usage 不经模型、直接回额度：
+//! `agy --gemini_dir=账号目录 -p /usage --output-format json`，回的 JSON 里 `command.data` 是 RetrieveUserQuotaSummary
+//! 的结果（1.5.16 的 printmode.quotaJSON：`{description, groups: [{name, description, buckets: [{id, name, description, window,
+//! disabled, remaining_fraction, remaining_amount, reset_time}]}]}`，reset_time 是 UTC 的 RFC 3339）。登录 token 由 agy 自己读取
+//! 和刷新，cca 不碰。这里有查询（agy 账号的 usage-query 走到这里）、`--json` 里的 quota_groups（macos/PROTOCOL.md 3.1）、表格和菜单里
+//! 那一格。查到的原样存进 usage.json（usage_save），显示的时候再算用了多少、过没过重置时间。
 //!
 //! 套餐也在这里：agy 1.5 的登录 token 里没有档位了，只有交互会话的状态栏 JSON 里有（plan_tier）。cca 启动交互的会话时经
 //! `--settings` 带上自己的状态栏命令（`agy_launch_args`），它（agy-statusline）把套餐记进账号目录（`agy_plan_seen` 读），
 //! 用户自己的状态栏命令接在后面照样运行。状态栏每次状态变了 agy 都起一次这个命令：它顺带看出这一轮做完了、在等你确认，
 //! 推一条通知（`agy_turn`，和 Claude Code、Codex 的一样：在会话宿主里时推给接着它的各处，这台 Mac 上弹一个）。
 
+use super::login::sys::{interrupted, trap};
 use super::remote::{agy_note, notify_deliver, AgyEvent};
 use super::settings::AGY_VALUES;
-use super::statusline::{run_then, statusline_input, statusline_stdin};
-use super::usage::{
-    age_note, ago, cols_of, dicts, fresh, iso, parse_ts, py_round, reset_short, usage_note, usage_why, Row, WhyTable, AGY_STALE,
-};
+use super::usage::{ago, cols_of, dicts, float_arg, parse_ts, py_round, reset_short, usage_why, Row, WhyTable, AGY_STALE};
 use super::{arity, Cmd};
 use crate::core::base::{EMAIL_RE, SELF_PATH};
-use crate::core::model::{acct_id, adir};
-use crate::core::tool::agy;
+use crate::core::model::{acct_id, adir, cdir};
+use crate::core::tool::{agy, AGY_FILE_ENV};
 use crate::py::fs::{load_quiet, save_json};
 use crate::py::json;
 use crate::py::obj::{Dict, V};
 use crate::py::path;
+use crate::py::proc::{self, Cmd as Proc, In, Out, ProcError};
 use crate::py::rand::token_hex;
+use crate::py::shutil::TemporaryDirectory;
 use crate::py::text::{self, fit, sh_quote};
-use crate::py::time::time;
+use crate::py::time::{monotonic, time};
 use crate::py::uni;
-use crate::py::{die, R};
-use crate::{dict, re};
+use crate::py::{die, exit, R};
+use crate::{dict, out, re};
+use std::io::Read;
+use std::os::fd::{AsRawFd, RawFd};
 
 /// 这个模块的子命令
 pub const CMDS: &[Cmd] = &[Cmd::all("agy-statusline", cmd_agy_statusline)];
+
+/// 没登录、登录失效（刷新不了）时 agy 在 stderr 上打出 Google 的登录网址（OAuth 授权的那一个），然后等 60 秒（没有终端也等，
+/// 1.5.16 实测）：看到它就停下，说登录失效。只认授权网址的开头：额度的说明里带个 Google 账号的链接不算
+const AGY_LOGIN_SAID: &str = "https://accounts.google.com/o/oauth2/";
+/// agy 退出以后 stdout、stderr 还有人开着（它起的进程拿着）时最多再读这么久
+const AGY_DRAIN: f64 = 1.0;
+
+/// 在账号的环境里（bash 的 child_env 设好了出口和 CCA_ACCOUNT）无界面地问 agy 的额度。stdout 打印一行 JSON：
+/// {ok: true, usage: {rate_limits_available: true, rate_limits: 额度}}（额度是 agy 给的 command.data 原样），
+/// 或 {ok: false, why: auth|unsupported|timeout|error, msg: 说明}
+pub fn agy_usage_query(bin_: &str, timeout: &str) -> R<()> {
+    let Some(key) = proc::getenv("CCA_ACCOUNT").filter(|k| !k.is_empty()) else {
+        return die("cca(py): 没有账号");
+    };
+    let secs = float_arg(timeout)?;
+    let said = agy_ask(bin_, &key, secs)?;
+    out!("{}", json::dumps(&V::Dict(said), json::LINE));
+    Ok(())
+}
+
+fn fail(why: &str, msg: &str) -> Dict {
+    dict! { "ok" => false, "why" => why, "msg" => text::head(text::strip(msg), 200) }
+}
+
+/// 停掉 agy 和它起的进程（新会话里的整个进程组）：先 TERM，一秒内没退出再 KILL
+fn stop_group(child: &mut std::process::Child) {
+    let pid = child.id() as libc::pid_t;
+    // SAFETY: 发给自己起的、自成一组（setsid）的进程组
+    unsafe { libc::kill(-pid, libc::SIGTERM) };
+    let end = monotonic() + 1.0;
+    while monotonic() < end {
+        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            break;
+        }
+        crate::py::time::sleep(0.02);
+    }
+    // SAFETY: 同上；组里已经没有进程时只是返回 ESRCH
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
+    let _ = child.wait();
+}
+
+/// 读一次能读的（poll 说有东西时才来）：读到头是 false
+fn read_some(fd: RawFd, into: &mut Vec<u8>) -> bool {
+    let mut buf = [0u8; 65536];
+    loop {
+        // SAFETY: buf 是有效的可写内存，长度如实给出
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        if n > 0 {
+            into.extend_from_slice(&buf[..n as usize]);
+            return true;
+        }
+        if n == 0 {
+            return false;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted || interrupted() {
+            return false;
+        }
+    }
+}
+
+/// 起 agy 问额度：agy 在新的会话里（setsid）跑，没有控制终端——要授权码时不会去读用户在终端里敲的字；
+/// stdin 是空的；工作目录是一个空的临时目录（用完删掉）：agy 把工作目录当成项目，别让它去看账号目录（里面有浏览器的资料）。
+/// 看到登录网址、到点、cca 被叫停（Ctrl-C、cca usage 停后台查询的 SIGTERM）时整组停掉
+fn agy_ask(bin_: &str, key: &str, secs: f64) -> R<Dict> {
+    let mut env = proc::environ();
+    for (k, v) in AGY_FILE_ENV {
+        proc::env_set(&mut env, k, v); // 不管 bash 那边设没设：查用量的 agy 绝不能读钥匙串里那一份（别的账号的登录）
+    }
+    // 查一下额度不该顺带换掉装好的 agy（它平时自己在后台更新；cca 启动 agy 时照旧）
+    proc::env_set(&mut env, "AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+    let gemini = format!("--gemini_dir={}", cdir(key));
+    let work = match TemporaryDirectory::new("cca-agy-usage.", &crate::py::fs::gettempdir()) {
+        Ok(work) => work,
+        Err(e) => return Ok(fail("error", &e.to_string())),
+    };
+    let cmd = Proc::new([bin_, gemini.as_str(), "-p", "/usage", "--output-format", "json"])
+        .stdin(In::Null)
+        .stdout(Out::Capture)
+        .stderr(Out::Capture)
+        .env(env)
+        .cwd(work.name.as_str())
+        .new_session();
+    trap(libc::SIGTERM, false);
+    trap(libc::SIGINT, true);
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(ProcError::Os(e)) => return Ok(fail("error", &e.to_string())),
+        Err(ProcError::Timeout { .. } | ProcError::Interrupted) => unreachable!("spawn 不限时，也不会被信号打断"),
+    };
+    let out_pipe = child.stdout.take().expect("stdout 接的是管道");
+    let err_pipe = child.stderr.take().expect("stderr 接的是管道");
+    let (out_fd, err_fd) = (out_pipe.as_raw_fd(), err_pipe.as_raw_fd());
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let (mut out_open, mut err_open) = (true, true);
+    let end = monotonic() + secs;
+    let mut exited_at: Option<f64> = None;
+    loop {
+        if interrupted() {
+            stop_group(&mut child);
+            return exit(130);
+        }
+        let mut fds: Vec<libc::pollfd> = [(out_open, out_fd), (err_open, err_fd)]
+            .iter()
+            .filter(|(open, _)| *open)
+            .map(|(_, fd)| libc::pollfd { fd: *fd, events: libc::POLLIN, revents: 0 })
+            .collect();
+        if fds.is_empty() {
+            crate::py::time::sleep(0.05);
+        } else {
+            // SAFETY: fds 是有效的 pollfd 数组，长度如实给出
+            unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 50) };
+        }
+        for p in &fds {
+            if p.revents == 0 {
+                continue;
+            }
+            if p.fd == out_fd {
+                out_open = read_some(out_fd, &mut out);
+            } else {
+                err_open = read_some(err_fd, &mut err);
+            }
+        }
+        if asks_login(&out, &err) {
+            stop_group(&mut child);
+            return Ok(fail("auth", ""));
+        }
+        let now = monotonic();
+        if exited_at.is_none() && matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            exited_at = Some(now);
+        }
+        match exited_at {
+            Some(at) if (!out_open && !err_open) || now - at > AGY_DRAIN => break,
+            Some(_) => {}
+            None if now > end => {
+                stop_group(&mut child);
+                return Ok(fail("timeout", ""));
+            }
+            None => {}
+        }
+    }
+    let rc = child.wait().ok().and_then(|s| s.code());
+    let said_err = String::from_utf8_lossy(&err).into_owned();
+    Ok(agy_answer(&String::from_utf8_lossy(&out), &said_err, rc))
+}
+
+/// agy 打出了登录网址、在等人去登录：stderr 上（1.5.16 实测在这里），stdout 上的也算
+fn asks_login(out: &[u8], err: &[u8]) -> bool {
+    [err, out].iter().any(|b| String::from_utf8_lossy(b).contains(AGY_LOGIN_SAID))
+}
+
+/// agy 的 stdout（--output-format json 的那一份）→ 查询的结果。rc 是退出码（被信号结束是 None），err 是它在 stderr 上说的
+pub(super) fn agy_answer(said: &str, err: &str, rc: Option<i32>) -> Dict {
+    let last_err = text::splitlines(text::strip(err)).last().map(|s| s.to_string()).unwrap_or_default();
+    let Some(doc) = json_doc(said) else {
+        let msg = if last_err.is_empty() {
+            format!("没有回应就退出了（退出码 {}）", rc.map_or_else(|| "None".to_string(), |rc| rc.to_string()))
+        } else {
+            last_err
+        };
+        return fail("error", &msg);
+    };
+    let status = doc.str("status").map(|s| s.to_ascii_uppercase()).unwrap_or_default();
+    if status != "SUCCESS" {
+        let e = doc.str("error").map(|e| e.to_string()).filter(|e| !text::strip(e).is_empty()).unwrap_or(last_err);
+        // 打印模式不认 /usage 的版本：说这个命令在这里用不了
+        let old = crate::re!(r"(?i)not (available|supported) in print mode|unknown (slash )?command").found(&e);
+        return fail(if old { "unsupported" } else { "error" }, if e.is_empty() { "agy 说查询失败，没给原因" } else { &e });
+    }
+    // 没有 command：这个版本把 /usage 当成了一句话交给模型（1.1.11 以前），不是额度
+    let Some(cmd) = doc.dict("command") else { return fail("unsupported", "") };
+    let Some(data) = cmd.dict("data").filter(|d| d.list("groups").is_some()) else {
+        return fail("error", "agy 回的额度认不出（格式变了）");
+    };
+    if !has_buckets(&data) {
+        return fail("error", "agy 没给这个账号的额度");
+    }
+    dict! { "ok" => true, "usage" => dict! { "rate_limits_available" => true, "rate_limits" => data } }
+}
+
+/// stdout 里的 JSON 文档：整个是一份（现在是一行），或者最后一份从行首的 { 开始的
+fn json_doc(said: &str) -> Option<Dict> {
+    if let Ok(V::Dict(d)) = json::loads(text::strip(said)) {
+        return Some(d);
+    }
+    let lines = text::splitlines(said);
+    (0..lines.len()).rev().filter(|i| lines[*i].starts_with('{')).find_map(|i| {
+        match json::loads(text::strip(&lines[i..].join("\n"))) {
+            Ok(V::Dict(d)) => Some(d),
+            _ => None,
+        }
+    })
+}
 
 /// 额度里至少有一个桶
 pub fn has_buckets(rl: &Dict) -> bool {
@@ -213,7 +408,9 @@ pub(super) fn agy_table_lines(rows: &[Row], now: f64, cols: &str, color: bool) -
         if r.source == "none" || r.why.truthy() {
             notes.push(usage_why(r, WhyTable::Usage)?);
         }
-        notes.extend(age_note(r, now)?); // 查不到用了缓存的、记下的旧了：说是多久以前的
+        if r.source == "cache" {
+            notes.push(format!("缓存（{}前）", ago(now - r.at.unwrap_or(now))?));
+        }
         let items = if r.source == "none" { Vec::new() } else { items(&r.rl, now)? };
         data.push(Acct { r, items, notes });
     }
@@ -283,7 +480,7 @@ pub(super) fn agy_table_lines(rows: &[Row], now: f64, cols: &str, color: bool) -
     }
     lines.push(paint(&fit(text::rstrip(&head), wide, false), "2"));
     for d in &data {
-        let dim = if fresh(d.r, now) { "" } else { "2" };
+        let dim = if d.r.source == "live" { "" } else { "2" };
         if d.items.is_empty() {
             let first = lead(true, d.r);
             let start = uni::width(&first) + 2;
@@ -478,9 +675,9 @@ pub fn agy_launch_args(key: &str, args: &[String]) -> Vec<String> {
 
 /// `cca _agy-statusline 账号目录名 会话标记 [--then 命令]`：cca 启动的 agy 交互会话里状态栏的命令（`agy_launch_args` 经 --settings
 /// 交给 agy）。状态变了 agy 就用 sh -c 起它，JSON 从 stdin 进（1.5.18：最多 300 毫秒一次，5 秒不完就杀掉，连着 30 次失败就不再起）：
-/// 里面的 plan_tier（套餐的叫法）连同 email 记进账号目录（`plan_note`），额度记进 usage.json（`quota_note`），和这个会话上一次的
-/// 状态比、该推的通知推出去（`agy_turn`），自己什么都不输出。--then 是用户自己的状态栏命令：用同一份 JSON 接着运行它，它的输出和
-/// 退出码就是这一次的（agy 照它画状态栏；statusline.rs 的 `run_then`）。也认没有会话标记的（换版本以前启动、还开着的会话）：不推通知
+/// 里面的 plan_tier（套餐的叫法）连同 email 记进账号目录（`plan_note`），和这个会话上一次的状态比、该推的通知推出去（`agy_turn`），
+/// 自己什么都不输出。--then 是用户自己的状态栏命令：用同一份 JSON 接着运行它，它的输出和退出码就是这一次的（agy 照它画状态栏）。
+/// 也认没有会话标记的（换版本以前启动、还开着的会话）：只记套餐
 fn cmd_agy_statusline(args: &[String]) -> R<()> {
     arity("cmd_agy_statusline", args, 1, 4)?;
     let (id, run, then) = match args {
@@ -490,93 +687,35 @@ fn cmd_agy_statusline(args: &[String]) -> R<()> {
         [id, run, flag, cmd] if flag == "--then" => (id, Some(run), Some(cmd)),
         _ => return die("用法：cca _agy-statusline 账号目录名 会话标记 [--then 命令]"),
     };
-    let (raw, tty) = statusline_stdin();
-    if let Some((dir, d)) = statusline_input(agy(), id, &raw) {
-        plan_note(&dir, &d);
-        quota_note(id, &dir, run.map(String::as_str), &d);
-        if let Some(run) = run {
-            agy_turn(&dir, run, &d);
-        }
-    }
-    run_then(then, "sh", raw, tty)
-}
-
-/// 状态栏 JSON 里 quota 的桶 id 的前缀 → 组名：打印模式的 /usage 给过的组名（真实账号上 gemini-5h、gemini-weekly 在 Gemini Models 里，
-/// 3p-5h、3p-weekly 在 Claude and GPT models 里），App 把它们译成「Gemini 模型」「Claude、GPT 模型」。别的前缀拿前缀当组名
-const AGY_GROUPS: &[(&str, &str)] = &[("gemini", "Gemini Models"), ("3p", "Claude and GPT models")];
-
-/// 状态栏 JSON 里的 quota（以桶的 id 为键的对象，文档 cli/statusline：remaining_fraction 或 remaining_amount、reset_time、
-/// reset_in_seconds、disabled）→ 打印模式的 /usage 给过的样子（`{groups: [{name, buckets: [{id, name, window, …}]}]}`：quota_groups、
-/// 表格、菜单、App 照旧认）。没有组名和窗口：照 id 认，后缀是 5h、weekly 的是这两个窗口（WINDOWS），前缀按 AGY_GROUPS 认组。
-/// 只有 reset_in_seconds 时重置时间按现在算（取整到分钟：每次差一两秒不算变了）。一组里 5 小时的排在本周的前面（和 Claude 的一样），
-/// 别的照原来的先后接在后面。一个桶也没有是 None
-pub fn agy_quota_rl(d: &Dict, now: f64) -> Option<Dict> {
-    let q = d.dict("quota")?;
-    let mut groups: Vec<(String, Vec<V>)> = Vec::new();
-    for (id, b) in q.items() {
-        let Some(b) = b.as_dict() else { continue };
-        let (prefix, window) = match id.rsplit_once('-') {
-            Some((p, w @ ("5h" | "weekly"))) if !p.is_empty() => (p.to_string(), Some(w)),
-            _ => (id.to_string(), None),
-        };
-        let name = AGY_GROUPS.iter().find(|(p, _)| *p == prefix).map_or(prefix, |(_, n)| n.to_string());
-        let out = dict! { "id" => &*id, "name" => &*id };
-        if let Some(w) = window {
-            out.set("window", w);
-        }
-        if let Some(f) = finite(&b.get("remaining_fraction")) {
-            out.set("remaining_fraction", f);
-        }
-        if let Some(n) = b.get("remaining_amount").filter(|x| x.is_int()) {
-            out.set("remaining_amount", n);
-        }
-        match b.str("reset_time").filter(|s| !text::strip(s).is_empty()) {
-            Some(s) => out.set("reset_time", s),
-            None => {
-                if let Some(at) = finite(&b.get("reset_in_seconds")).and_then(|s| iso(((now + s) / 60.0).round() * 60.0).ok()) {
-                    out.set("reset_time", at);
-                }
+    // SAFETY: 只是问 fd 0 是不是终端（手动运行时不等输入）
+    let tty = unsafe { libc::isatty(0) } == 1;
+    let mut raw = Vec::new();
+    if !tty {
+        let _ = std::io::stdin().lock().read_to_end(&mut raw);
+        if let Some((dir, d)) = statusline_input(id, &raw) {
+            plan_note(&dir, &d);
+            if let Some(run) = run {
+                agy_turn(&dir, run, &d);
             }
         }
-        if b.get("disabled").and_then(|x| x.as_bool()) == Some(true) {
-            out.set("disabled", true);
-        }
-        match groups.iter_mut().find(|(n, _)| *n == name) {
-            Some((_, list)) => list.push(V::Dict(out)),
-            None => groups.push((name, vec![V::Dict(out)])),
-        }
     }
-    if groups.is_empty() {
-        return None;
+    let Some(cmd) = then else { return Ok(()) };
+    let p = Proc::new(["sh", "-c", cmd.as_str()]);
+    match if tty { p } else { p.input(raw) }.run() {
+        Ok(d) if d.rc == 0 => Ok(()),
+        Ok(d) => exit(if d.rc < 0 { 128 - d.rc } else { d.rc }),
+        Err(_) => exit(127),
     }
-    let rank = |b: &V| match b.as_dict().and_then(|b| b.str("window")).as_deref() {
-        Some("5h") => 0,
-        Some("weekly") => 1,
-        _ => 2,
-    };
-    for (_, buckets) in groups.iter_mut() {
-        buckets.sort_by_key(|b| rank(b)); // 稳定的排序：同一档的照原来的先后
-    }
-    let list: Vec<V> = groups.into_iter().map(|(name, buckets)| V::Dict(dict! { "name" => name, "buckets" => buckets })).collect();
-    Some(dict! { "groups" => list })
 }
 
-/// 状态栏 JSON 里的额度（`agy_quota_rl`）经 usage.rs 的 `usage_note` 记进 usage.json：要有邮箱（登录了，拿它和登录的比）。会话按
-/// cca 的会话标记认（一次启动一个；没有标记的旧写法用 agy 的 session_id，第一次对话以前是空的），请求计数是用掉的 token 和花费
-/// （context_window、cost：有了新的回应才变）；额度没变时不刷新取到的时间（不知道 agy 多久取一次额度）
-fn quota_note(id: &str, dir: &str, run: Option<&str>, d: &Dict) {
-    let Some(email) = d.str("email").filter(|e| EMAIL_RE.matches(e)) else { return };
-    let Some(rl) = agy_quota_rl(d, time()) else { return };
-    let cw = d.dict("context_window").unwrap_or_default();
-    let n = |v: Option<V>| v.map_or_else(|| "-".to_string(), |v| v.py_str());
-    let mark = format!(
-        "{} {} {}",
-        n(cw.get("total_input_tokens")),
-        n(cw.get("total_output_tokens")),
-        n(d.dict("cost").and_then(|c| c.get("total_usd")))
-    );
-    let session = run.map_or_else(|| d.str("session_id").map(|s| s.to_string()).unwrap_or_default(), str::to_string);
-    usage_note(id, dir, &rl, Some((&session, &mark)), Some(&email), false);
+/// 状态栏的命令收到的：账号目录（id 要像账号目录名、目录要在：只往 cca 自己的账号目录里写）和状态栏的 JSON（最多 256 KB）
+fn statusline_input(id: &str, raw: &[u8]) -> Option<(String, Dict)> {
+    if raw.len() > 256 << 10 || re!(r"[a-z0-9][a-z0-9-]{0,63}").fullmatch(id).is_none() {
+        return None;
+    }
+    let dir = path::join_all(&[&agy().sroot, "accounts", id]);
+    let d = json::loads_file_bytes(raw).ok()?.as_dict()?;
+    path::isdir(&dir).then_some((dir, d))
 }
 
 /// 记下状态栏 JSON 里的套餐：plan_tier 是不空的字符串（最多 64 个字），email 像个邮箱（读的时候拿它和登录的邮箱比）。和记着的
@@ -671,7 +810,6 @@ fn agy_turn(dir: &str, run: &str, d: &Dict) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::py::shutil::TemporaryDirectory;
 
     fn quota() -> Dict {
         json::loads(
@@ -690,37 +828,53 @@ mod tests {
     }
 
     #[test]
-    fn quota_from_statusline() {
-        let now = 1795508400.0; // 2026-11-24T08:20:00Z
-        let d = json::loads(
-            r#"{"quota": {"gemini-weekly": {"remaining_fraction": 0.9378, "reset_time": "2026-11-28T00:00:00Z", "reset_in_seconds": 315600},
-                          "gemini-5h": {"remaining_fraction": 0.5, "reset_in_seconds": 5410},
-                          "3p-weekly": {"remaining_fraction": 1, "disabled": true},
-                          "3p-5h": {"remaining_amount": 12, "remaining_fraction": "x"},
-                          "imagen-daily": {"remaining_fraction": 0.2}, "bad": 1}}"#,
-        )
-        .unwrap()
-        .as_dict()
-        .unwrap();
-        let rl = agy_quota_rl(&d, now).unwrap();
-        let groups = dicts(&rl, "groups");
-        let names: Vec<String> = groups.iter().map(|g| g.at("name").py_str()).collect();
-        assert_eq!(names, ["Gemini Models", "Claude and GPT models", "imagen-daily"]);
-        // 一组里 5 小时的排在本周的前面（状态栏的 JSON 里本周的在前）
-        let g = dicts(&groups[0], "buckets");
-        assert_eq!((g[0].at("id").py_str(), g[0].at("window").py_str()), ("gemini-5h".into(), "5h".into()));
-        assert_eq!(g[0].at("reset_time").as_str(), Some("2026-11-24T09:50:00Z"), "只有 reset_in_seconds：按现在算、取整到分钟");
-        assert_eq!((g[1].at("id").py_str(), g[1].at("window").py_str()), ("gemini-weekly".into(), "weekly".into()));
-        assert_eq!(g[1].at("reset_time").as_str(), Some("2026-11-28T00:00:00Z"), "有 reset_time 就用它");
-        let p = dicts(&groups[1], "buckets");
-        assert!(p[1].truthy("disabled") && p[0].at("remaining_amount").as_num() == Some(12.0) && !p[0].has("remaining_fraction"));
-        assert!(!dicts(&groups[2], "buckets")[0].has("window"), "认不出的窗口");
-        // 换成 quota_groups 以后和打印模式给的一样能显示：窗口认得出、用了多少
-        let view = quota_groups(&rl, now).unwrap().as_list().unwrap().items();
-        let b = view[0].as_dict().unwrap().list("buckets").unwrap().items()[0].as_dict().unwrap();
-        assert_eq!((b.at("slot").py_str(), b.at("utilization").as_num()), ("five_hour".into(), Some(50.0)));
-        assert!(agy_quota_rl(&json::loads(r#"{"quota": {}}"#).unwrap().as_dict().unwrap(), now).is_none());
-        assert!(agy_quota_rl(&Dict::new(), now).is_none());
+    fn login_prompt() {
+        let said = "Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=x\n";
+        assert!(asks_login(b"", said.as_bytes()));
+        assert!(asks_login(said.as_bytes(), b""));
+        // 额度的说明里带个 Google 账号的链接、刷新 token 的地址：不是在等人登录
+        let doc = r#"{"status":"SUCCESS","command":{"data":{"description":"see https://accounts.google.com/ for details"}}}"#;
+        assert!(!asks_login(doc.as_bytes(), b""));
+        assert!(!asks_login(b"", b"refreshing via https://oauth2.googleapis.com/token\n"));
+    }
+
+    #[test]
+    fn answers() {
+        let ok = format!(
+            r#"{{"conversation_id":"c-1","status":"SUCCESS","response":"","error":"","command":{{"name":"usage","data":{}}}}}"#,
+            json::dumps(&V::Dict(quota()), json::LINE)
+        );
+        let r = agy_answer(&ok, "", Some(0));
+        assert!(r.truthy("ok"));
+        assert!(r.dict("usage").unwrap().truthy("rate_limits_available"));
+        assert_eq!(dicts(&r.dict("usage").unwrap().dict("rate_limits").unwrap(), "groups").len(), 2);
+        // 前面多几行别的、整份分成几行也认
+        let pretty = format!("warning: x\n{}\n", json::dumps(&json::loads(&ok).unwrap(), json::Fmt::new().indent(2)));
+        assert!(agy_answer(&pretty, "", Some(0)).truthy("ok"));
+        let why = |said: &str, err: &str, rc: Option<i32>| {
+            let r = agy_answer(said, err, rc);
+            (r.str("why").unwrap_or_default().to_string(), r.str("msg").unwrap_or_default().to_string())
+        };
+        // 1.5.16 实测：没登录、等到超时
+        let auth = r#"{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"finished_reason":"error"}"#;
+        assert_eq!(
+            why(auth, "Error: authentication timed out.\n", Some(1)),
+            ("error".into(), "authentication failed or timed out".into())
+        );
+        assert_eq!(why(r#"{"status":"SUCCESS","response":"I can't check that."}"#, "", Some(0)).0, "unsupported");
+        assert_eq!(why(r#"{"status":"ERROR","error":"/usage is not available in print mode"}"#, "", Some(1)).0, "unsupported");
+        assert_eq!(
+            why(r#"{"status":"SUCCESS","command":{"name":"usage","data":{"x":1}}}"#, "", Some(0)).1,
+            "agy 回的额度认不出（格式变了）"
+        );
+        assert_eq!(
+            why(r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"x","buckets":[]}]}}}"#, "", Some(0)).1,
+            "agy 没给这个账号的额度"
+        );
+        assert_eq!(why("", "boom\nError: no network\n", Some(1)), ("error".into(), "Error: no network".into()));
+        assert_eq!(why("", "", Some(2)), ("error".into(), "没有回应就退出了（退出码 2）".into()));
+        assert_eq!(why("", "", None), ("error".into(), "没有回应就退出了（退出码 None）".into()));
+        assert_eq!(why(r#"{"status":"ERROR","error":""}"#, "", Some(1)).1, "agy 说查询失败，没给原因");
     }
 
     #[test]

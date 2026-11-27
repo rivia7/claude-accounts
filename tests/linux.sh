@@ -377,8 +377,8 @@ if printf '%s' "$out" | grep -qF "cca login-page alice@example.com --alias alice
 	printf '%s' "$out" | grep -q 'state 对不上' && grep -q 'EXCHANGE code=good-linux https_proxy=http://127.0.0.1:7901' "$D/claude.log" 2>/dev/null &&
 	printf '%s' "$out" | grep -q '已重新登录'; then ok "cca login：给出在 Mac 上运行的一行（带别名、节点和节点摘要）；state 对不上的不转，对的转给本机的回调，经账号的端口换 token"
 else no "cca login：$(printf '%s' "$out" | grep -F 'login-page' | head -n 1)$(printf '%s' "$out" | tail -n 3)"; fi
-out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice hi 2>&1); rc=$?
-if [ $rc -eq 0 ] && grep -q 'SESSION https_proxy=http://127.0.0.1:7901 args=.* hi$' "$D/claude.log" 2>/dev/null; then ok "cca @alice：启动账号，claude 拿到的代理是账号的端口"
+out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice -p hi 2>&1); rc=$?
+if [ $rc -eq 0 ] && grep -q 'SESSION https_proxy=http://127.0.0.1:7901 args=.*-p hi' "$D/claude.log" 2>/dev/null; then ok "cca @alice：启动账号，claude 拿到的代理是账号的端口"
 else no "cca @alice（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
 cred=$(ls "$H"/.cca/accounts/alice-example-com-*/claude/.credentials.json 2>/dev/null)
 out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans '') "$C" login alice 2>&1)
@@ -397,7 +397,7 @@ if [ -n "$f" ] && [ "$(stat -c %a "$H/.cca/secrets")" = 700 ] && [ "$(stat -c %a
 else no "cca key：${f:-没有文件} $(stat -c %a "$f" 2>/dev/null)"; fi
 out=$(CCA_TTY=$(ans kf http://127.0.0.1:18081/v1 "$K2" '' '') "$C" add api 2>&1)
 rm -f "$D/claude.key"
-out2=$(CCA_TTY=$(ans) "$C" @kf hi 2>&1); rc=$?
+out2=$(CCA_TTY=$(ans) "$C" @kf -p hi 2>&1); rc=$?
 if [ $rc -eq 0 ] && [ "$(cat "$D/claude.key" 2>/dev/null)" = "$K2" ]; then ok "第三方 API 账号：key 在 600 的文件里，启动时 apiKeyHelper 回调 cca 取到"
 else no "第三方 API 账号（退出码 $rc）：$(printf '%s\n%s' "$out" "$out2" | tail -n 4)"; fi
 CCA_TTY=$(ans y) "$C" rm kf >/dev/null 2>&1
@@ -451,7 +451,7 @@ if [ -n "$TID" ]; then
 	dstate() { "$C" devices alice@example.com --json 2>/dev/null | kt val -f d=- '",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"])' 2>/dev/null; }
 	AD=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)
 	touch "$D/hold"
-	CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice hi >/dev/null 2>&1 & S1=$!
+	CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice -p hi >/dev/null 2>&1 & S1=$!
 	for i in $(seq 1 40); do [ -f "$AD/cli-$S1.json" ] && break; sleep 0.25; done
 	mk=$(kt val -f j="$AD/cli-$S1.json" '"%s:%s" % (j["pid"], j["tool"])' 2>/dev/null)
 	# 一秒左右问一次：服务器给每台设备限了流（每秒 0.5 个请求、最多攒 30 个），问得太勤上报进程就报不上去了
@@ -524,7 +524,7 @@ fi
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)
 # alice 登录的身份（accountUuid）记进账号的 .claude.json；共享的会话记录里放一份它的会话：1 小时前 claude-opus-5-5 进 1000 出 100（fx linux-costlog）
 kt edit j="$AD/claude/.claude.json" 'j.setdefault("oauthAccount", {})["accountUuid"] = "u-linux-alice-01"' && kt fx linux-costlog "$H"
-CCA_COST= CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice hi >/dev/null 2>&1
+CCA_COST= CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice -p hi >/dev/null 2>&1
 for i in $(seq 1 40); do [ -f "$H/.cca/cost/local.json" ] && break; sleep 0.25; done
 kicked=$([ -f "$H/.cca/cost/last" ] && [ -f "$H/.cca/cost/local.json" ] && echo yes)
 out=$("$C" cost sync --json 2>/dev/null); rc=$?
@@ -547,11 +547,11 @@ if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qF "cca codex login-page carol@ex
 	grep -q "EXCHANGE code=good-codex https_proxy=http://127.0.0.1:$CP" "$D/codex.log" 2>/dev/null && printf '%s' "$out" | grep -q '已重新登录'; then
 	ok "cca codex login：给出 cca codex login-page 那一行，验证码核对 state 后转给 app-server 的回调，经账号的端口换 token"
 else no "cca codex login（退出码 $rc）：$(printf '%s' "$out" | grep -F 'login-page' | head -n 1)$(printf '%s' "$out" | tail -n 3)"; fi
-out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" codex @carol hi 2>&1); rc=$?
+out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" codex @carol exec hi 2>&1); rc=$?
 l=$(grep '^SESSION ' "$D/codex.log" 2>/dev/null | tail -n 1)
 if [ $rc -eq 0 ] && printf '%s' "$l" | grep -qF "https_proxy=http://127.0.0.1:$CP home=$H/.cca/codex/accounts/carol-example-com-" &&
 	printf '%s' "$l" | grep -qF -- '--no-daemon' && printf '%s' "$l" | grep -qF -- '--disable system_proxy_fallback' &&
-	printf '%s' "$l" | grep -qF -- '--disable respect_system_proxy' && printf '%s' "$l" | grep -q ' hi$'; then
+	printf '%s' "$l" | grep -qF -- '--disable respect_system_proxy' && printf '%s' "$l" | grep -q 'exec hi$'; then
 	ok "cca codex @carol：经账号的端口启动，CODEX_HOME 是账号自己的，关掉 system_proxy_fallback、respect_system_proxy，不起后台服务"
 else no "cca codex @carol（退出码 $rc）：${l:-没启动}；$(printf '%s' "$out" | tail -n 2)"; fi
 out=$(CCA_SKIP_CHECK=1 COLUMNS=160 "$C" codex usage 2>&1); rc=$?
@@ -817,7 +817,7 @@ S
 	else no "cca router status：$(printf '%s' "$out" | head -n 8 | tr '\n' '|')"; fi
 	# 这个 HOME 里 alice 还没登录：启动时先登录（服务器上的那一套，验证码贴回来），再启动
 	: > "$D/claude.log"
-	out=$(rr env CCA_SKIP_CHECK=1 CCA_TTY="$(ans 'good-home#st-linux')" "$C" @alice hi 2>&1); rc=$?
+	out=$(rr env CCA_SKIP_CHECK=1 CCA_TTY="$(ans 'good-home#st-linux')" "$C" @alice -p hi 2>&1); rc=$?
 	l=$(grep '^SESSION ' "$D/claude.log" | tail -n 1)
 	for i in $(seq 1 60); do [ -s "$RH/.cca/core/nodes.json" ] && break; sleep 0.25; done
 	if [ $rc -eq 0 ] && grep -q 'EXCHANGE code=good-home https_proxy=http://127.0.0.2:7901$' "$D/claude.log" && printf '%s' "$l" | grep -q 'https_proxy=http://127.0.0.2:7901 '; then
@@ -849,6 +849,5 @@ else
 fi
 # 小工具遇到过不认识的写法（退出码 2 的那种：上面哪一条用例里的判断其实没做成）：算失败，说出是哪一句
 [ ! -s "$D/trap" ] || no "cca-test 遇到了不认识的写法：$(head -n 3 "$D/trap" | tr '\n\t' '| ')"
-[ ! -s "$D/print-mode.log" ] || no "cca 用了打印模式或者非交互模式（claude -p、codex exec 这些：cca 不用，也不让经 cca 用）：$(head -n 2 "$D/print-mode.log" | tr '\n' '|')"
 echo "  结果：$pass 通过，$fail 失败"
 [ $fail -eq 0 ]

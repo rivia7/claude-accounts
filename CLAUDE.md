@@ -37,7 +37,6 @@
 - 仓库里没有 Python 的程序，cca、辅助程序、服务端、测试也都不靠机器上的 python3：要算的写进辅助程序（`cli/src`），测试用的写进 `tests/`（Rust 的 `kit`、`cca-test`、`suite`）或者 sh。回归守着两道：`cca-test lint nopython` 查文件（`.py` 这类、第一行是 python 的脚本），沙箱 PATH 最前面那个记账的假 python3 记下谁调了它（见 tests/CLAUDE.md）
 
 ### 安全和隔离
-- cca 不用打印模式（`claude -p`、`agy -p`、`codex exec` 这些，有封号的风险）：Claude、agy 的用量只在 cca 启动的交互会话里由状态栏的命令记下，别改回去查；`launch-check` 也不让经 cca 用，回归查 `print-mode.log`。见 docs/dev/usage.md
 - 密钥绝不进任何进程的命令行和环境变量：存钥匙串、交给 Claude Code / Codex 的做法见 docs/dev/secrets.md
 - `child_env` 一律不带继承来的 `ANTHROPIC_*`、`CLAUDE_CODE_OAUTH_TOKEN`、云厂商 / 网关的开关（`INHERITED_RE`）：shell 里的 `ANTHROPIC_BASE_URL` 会把官方账号的登录 token 发到别的地址。Codex、agy 各有自己的名单。见 docs/dev/isolation.md
 - 历史、记忆、配置和跨账号续接是硬性要求：共享的由 `CLAUDE_SHARED` / `CODEX_SHARED` / `AGY_SHARED` 明确列出，未知的新状态默认独立；不要用隔离这些数据来实现设备隔离。设备标识（账号目录的 `device.json`）的 `prepare_device` 必须在 `Lock` 内调用，重新登录、改别名不重置。见 docs/dev/isolation.md
@@ -68,10 +67,9 @@
 ## 要一起改的
 - `INHERITED_RE`（bash）↔ `CRED_ENV`（辅助程序，`cli/src/core/base.rs`）：同一份名单的两种写法。Claude Code 新增 provider 开关时补上（`strings` 二进制里的 `CLAUDE_CODE_USE_` 能查到）；`CRED_ENV` 加了名字时看看 `SETTINGS_KINDS` 要不要补
 - `CODEX_INHERITED_RE` ↔ `codex_settings_problems`：Codex 新增会改地址、换凭证的设置或环境变量时两边一起补
-- 让 agy 把登录存成文件的环境变量：bash 的 `agy_env` ↔ 辅助程序的 `AGY_FILE_ENV`（`cli/src/core/tool.rs`，探测用它）↔ `login/agy.rs` 的 `AGY_FILE_TOKENS`（探测时认的日志那几句）；探测的做法变了要换缓存的文件名 `PROBE_FILE`：旧版的 cca 还读原来那一份、只核对程序文件，新的结果写进去它会以为可以启动
+- 让 agy 把登录存成文件的环境变量：bash 的 `agy_env` ↔ 辅助程序的 `AGY_FILE_ENV`（`cli/src/core/tool.rs`，探测和查额度用它）↔ `login/agy.rs` 的 `AGY_FILE_TOKENS`（探测时认的日志那几句）；探测的做法变了要换缓存的文件名 `PROBE_FILE`：旧版的 cca 还读原来那一份、只核对程序文件，新的结果写进去它会以为可以启动
 - `install.sh` 下载前查的 ↔ `cca install` 的 `need_deps`；两份 `pkg_hint`
 - 辅助程序的 `fill_plan` ↔ `router_rb` 的 `--fill-source`（Team 的配置带的节点（参考节点）的同一套规则）
-- 状态栏的命令收到的 JSON（Claude Code 的 `rate_limits`、agy 的 `quota`）：`statusline.rs` 的 `claude_rate_limits`、`agy.rs` 的 `agy_quota_rl` ↔ 假 claude、agy 画状态栏的那一段（`tests/tool/fake/`）；它们升级后对着真的核对字段
 - `VIRTUAL_IFACE_RE`：bash ↔ 辅助程序（`cli/src/cmd/corenet/bind.rs`；回归 lint 核对）
 - 版本的先后：bash 的 `ver_gt` ↔ 辅助程序的 `ver_key` ↔ Swift 的 `AppVersion`
 - `CORE_VERSION` 和四个 `CORE_SHA256_*` 一起换（macOS 的两行后面别加注释：mkver 的 sed 按整行换）

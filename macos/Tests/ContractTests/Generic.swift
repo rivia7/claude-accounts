@@ -833,7 +833,7 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
         if t.id == .codex { check("\(name) codex 的 cli_prefix 是 [codex]", t.cliPrefix == ["codex"]) }
         if let f = rt["features"] as? [String: Any] {   // 旧版 cca 没有 features
             check("\(name) \(t.id.rawValue) features 都是布尔", ["app", "api", "usage"].allSatisfy { isBool(f[$0]) }
-                  && ["cost", "usage_passive"].allSatisfy { f[$0] == nil || isBool(f[$0]) })
+                  && (f["cost"] == nil || isBool(f["cost"])))
         }
         if t.id == .agy {
             check("\(name) agy 的 cli_prefix 是 [agy]", t.cliPrefix == ["agy"])

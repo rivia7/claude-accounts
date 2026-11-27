@@ -177,7 +177,7 @@ struct TutorialCard {
             ("exclamationmark.triangle", "快用完时变橙、变红；到了重置时间自动恢复。"),
             ("hourglass", "本周额度快重置了、还剩不少的账号，名字旁边有个沙漏：建议先用它，别浪费。"),
             ("arrow.counterclockwise", "ChatGPT 账号还有重置次数时，点「重置额度…」能把用量清零（会先问你）。"),
-            ("arrow.clockwise", "Claude、Antigravity 的额度是 cca 开的会话里记下的（cca 不另外去查）：用一次就更新，好久没用的账号显示上次记下的。ChatGPT 账号点「刷新用量」，经它的出口查一次最新的。"),
+            ("arrow.clockwise", "点「刷新用量」，经这个账号的出口查一次最新的。"),
         ], art: .quota),
         TutorialCard(title: "看网络出口", points: [
             ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),

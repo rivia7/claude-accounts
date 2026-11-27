@@ -25,7 +25,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   Team 给这台设备的 Codex 账号随即被自动加进来、分走端口。`cca agy …`（Antigravity）同理，只在 `hello.tools.agy.enabled` 为真时调用。
 - 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App、第三方 API 账号
   和控制台账单页（`tools[].features`，2.2）：`app`、`billing`、`limit-resets`、`reset`、`add api` 这些它都没有，App 不调（调了 cca 也只回
-  `fail` 的 `unsupported`）。它的用量（`cca agy usage`，3.7.6 起是会话里记下的）格式和别的工具不一样：几组额度（3.1 的 `quota_groups`），没有 5 小时、本周这些窗口，
+  `fail` 的 `unsupported`）。它的用量（`cca agy usage`）格式和别的工具不一样：几组额度（3.1 的 `quota_groups`），没有 5 小时、本周这些窗口，
   也没有每周用量的统计（`usage_weeks`）。3.6.10 及以前的 cca 给它的 `features.usage` 是 false（App 不显示、不调），更早的 `cca agy usage` 只回 `unsupported`。
 - 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `mail open` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live|mail-list`、`update --check --json`
@@ -162,9 +162,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 工具（`tools[]`，顺序固定：claude、codex、agy；`codex.json`、`agy.json` 不存在时 `enabled` 为 false、`accounts` 是空的）：
 
 - `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`：5 小时、本周这些窗口，3.1）、
-  折合金额（`cost`），用量是不是只在会话里记下（`usage_passive`，3.7.6 起：Claude、Antigravity 是 true，Codex 是 false。cca 不主动查
-  这个工具的用量（不用打印模式），账号的 `usage` 和 `cca [agy] usage` 都是 cca 启动的会话里记下的，所以 App 不定时跑 `usage`、不放
-  「刷新用量」，usage.json 变了重读 state 就有；没有这个键当作 false，照旧查）。Claude、Codex 都是 true；Antigravity 有 `usage`（几组额度，3.1 的 `quota_groups`，账号的 `usage` 是缓存里的这些；
+  折合金额（`cost`）。Claude、Codex 都是 true；Antigravity 有 `usage`（几组额度，3.1 的 `quota_groups`，账号的 `usage` 是缓存里的这些；
   没有每周用量的统计，用量统计页不算它）和 `cost`（3.7.2 起；以前是 false）。3.6.10 及以前的 cca 给 Antigravity 的 `usage` 是 false：账号的 `usage` 一直是 null，`can_why.usage`
   是 `unsupported`，App 不显示、不调 `cca agy usage`。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有（`cost` 除外：没有这个键当作没有）。
 
@@ -619,8 +617,6 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 ### 3.1 `cca [codex] usage [账号…] --json`
 
 不写账号查全部；写了就只查这几个（App 自动刷新时只查到期的账号，带 `CCA_USAGE_JOBS=2`：最多同时查两个，默认 4）。
-3.7.6 起 Claude、Antigravity 不查（`features.usage_passive`，2.2）：`cca [agy] usage --json` 不经出口、不起进程，只把 cca 启动的会话里
-记下的整理成同样的格式（`source` 是 `cache`；还没记下是 `none`，`error_code` 是 null，不算出错），有一个账号登录着退出码就是 0。
 
 格式和以前一样，文档另加 `"kind": "usage"` 和 `generated_epoch`，每个账号的条目**新增**：
 
@@ -641,22 +637,22 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 }
 ```
 
-- `source`：`live`（这次查到的）| `cache`（没查到，用上次的；不查的工具是会话里记下的）| `none`（没有数据）。
+- `source`：`live`（这次查到的）| `cache`（没查到，用上次的）| `none`（没有数据）。
 - `error_code`（`error` 是给人看的文字）：`login` | `mismatch` | `route` | `port` | `region` | `trace` | `unsupported` | `timeout` | `nolimits` | `auth` | `error`，没出错为 null。
   `auth`：登录凭证失效了（Codex 说 token 刷新不了、服务器回 401；改过密码、在别处退出过都会这样），本地的登录信息还在，所以 `_gui state` 的 `login` 还是 `logged_in`，要重新登录（`cca [codex] login 账号`）。
-  3.7.5 及以前的 cca 查 Claude 时，登录失效 Claude Code 只回“没有用量”，分不清原因，是 `nolimits`（3.7.6 起不查 Claude，不会再有）。
-- `stale`：数据超过 10 分钟（Antigravity 是 30 分钟）。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
+  Claude 登录失效时 Claude Code 只回“没有用量”，分不清原因，是 `nolimits`。
+- `stale`：数据超过 10 分钟（Antigravity 是 30 分钟：查一次要经账号的出口起 agy、十几秒，App 查得比别的工具慢）。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
 - 窗口：Claude 有 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_oauth_apps`；Codex 只有 `five_hour`、`seven_day`，
   另有 `credits`（`{"hasCredits": true, "unlimited": false, "balance": "12.5"}`）和 `reset_credits`（`{"availableCount": 2, "next_expires_epoch": …, …}`）。
 - Antigravity（`cca agy usage --json`，文档带 `"tool": "agy"`）没有固定的几个窗口：条目里没有 `five_hour`、`seven_day` 这些字段，额度在
-  `quota_groups`（没有数据时为 null）：agy 的几组额度（3.7.6 起是 cca 启动的 agy 会话里状态栏 JSON 的 `quota`，换成以前打印模式的 `/usage` 给的样子），`[{"name", "description", "buckets": [...]}]`，每个额度
+  `quota_groups`（没有数据时为 null）：agy 自己查到的几组额度（打印模式的 `/usage`），`[{"name", "description", "buckets": [...]}]`，每个额度
   agy 给的几项原样：`id`、`name`、`description`、`window`（agy 的叫法，比如 `5h`、`weekly`）、`slot`（cca 认出的窗口：`five_hour` | `seven_day`，
   认不出为 null；App 照它摆、叫法和别的工具一样，不认 agy 的叫法；3.6.10 及以前的 cca 没有这一项）、`disabled`（停用了，不显示百分比）、
   `remaining_fraction`、`remaining_amount`（没有百分比时可能有：还剩几次）；cca 另加和用量窗口一样的四项：`utilization`（用了百分之几，
   `100 × (1 − remaining_fraction)`，两位小数；没有百分比为 null）、`resets_at`（agy 给的 UTC 时间，原样）、`resets_epoch`（认不出为 null）、
-  `reset`。agy 没给的几项为 null。`quota_description` 是 agy 对这些额度的说明（没有为 null）。3.7.5 及以前的 cca 查 agy 时，agy 账号的 `error_code` 另有这几种意思：
+  `reset`。agy 没给的几项为 null。`quota_description` 是 agy 对这些额度的说明（没有为 null）。agy 账号的 `error_code` 另有这几种意思：
   `auth`（agy 要重新登录：它打出了登录网址，cca 马上停掉它）、`unsupported`（打印模式还不认 `/usage` 的旧版 agy，`agy update` 升级后再试）、
-  `error`（`error_detail` 是 agy 的原话）。`_gui state` 里 agy 账号的 `usage` 是记下的这些（3.6.10 及以前的 cca 一直是 null）。
+  `error`（`error_detail` 是 agy 的原话）。`_gui state` 里 agy 账号的 `usage` 是缓存里的这些（3.6.10 及以前的 cca 一直是 null）。
   App 怎么显示：账号页一组一块，每组照 Claude 的样子画 5 小时、本周；侧栏、菜单栏面板、总览卡片的小条写各组里同一个窗口用得最多的那个；
   算不算额度用完（总览、账号页那句话、菜单栏图标的标记）看用得最少的那个：一组一般是一类模型，一组用完了别的组的模型照样能用。
   App 里不放 agy 给的英文：组名的 `… models` 写成“… 模型”、` and ` 写成顿号（`QuotaGroup.displayName`），组和额度的 `description`、
@@ -668,7 +664,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `allowance_percent_of_weekly`（最多能用本周总额度的百分之几，例如 50）、`used_percent_of_weekly`（已经用掉本周总额度的百分之几）；认不出时
   没有这两个字段。`utilization` 是这个模型自己那份额度用了多少。
   用量取的是 Claude Code 自己那份更新的缓存时（它没有这一项），cca 照上次查到的有哪几个模型从缓存的 `limits` 里补上（取不到照搬上次的）：
-  查用量的那几秒里条目不会少几行，App 不用自己留着旧的。3.7.6 起会话里记下的用量没有这一项（状态栏里没有），只有以前查到、还没被记下的盖掉的有。
+  查用量的那几秒里条目不会少几行，App 不用自己留着旧的。
 - `reset_credits`（Codex，还能重置几次额度，codex 原样给的）：`availableCount` 次数；`credits[]` 每一次的明细（可能比次数少，codex 只给了次数时
   没有），`id`、`title`（没有为 null，界面上叫“完整重置”）、`status`（`available` 才能用）、`expiresAt` / `grantedAt`（codex 原样给的）。cca 另加：
   每一次的 `expires_epoch`（Unix 秒，不过期为 null），和还能用的里面最早过期的那次的 `next_expires_epoch`（都不过期、没有明细时为 null；

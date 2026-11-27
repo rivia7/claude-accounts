@@ -543,7 +543,7 @@ pub fn project_settings_problems(cwd: &str) -> Vec<String> {
     }
 }
 
-// 必填参数值可能恰好是 -- 或 --settings，必须先消费，才能认出真正的选项边界。statusline.rs 的 claude_takes_statusline、remote/template.rs 也用
+// 必填参数值可能恰好是 -- 或 --settings，必须先消费，才能认出真正的选项边界。remote/template.rs 也用
 pub(super) const CLAUDE_VALUES: &[&str] = &[
     "--agent",
     "--agents",
@@ -614,7 +614,6 @@ pub(super) const CODEX_VALUES: &[&str] = &[
     "--profile",
     "-C",
     "--cd",
-    "--add-dir",
     "--enable",
     "--disable",
     "-m",
@@ -633,29 +632,7 @@ pub(super) const CODEX_VALUES: &[&str] = &[
     "--output-last-message",
 ];
 
-/// Claude Code 几个短选项写在一起（-cp）里有 -p：打印模式
-fn claude_short_print(arg: &str) -> bool {
-    arg.len() > 2
-        && !arg.starts_with("--")
-        && arg.starts_with('-')
-        && arg[1..].chars().all(|c| c.is_ascii_alphabetic())
-        && arg.contains('p')
-}
-
-/// Codex 不开界面、跑一次就退出的子命令（codex 0.172.0 的 `codex --help` 里写着 non-interactively 的两个；e 是 exec 的别名）。
-/// `codex cloud exec`（不开界面、在 Codex Cloud 上起一个任务）也算：cloud 后面的 exec
-const CODEX_ONESHOT: &[&str] = &["exec", "e", "review"];
-
-/// codex 的别的子命令（不在 CODEX_ONESHOT 里，也不是 cloud）：它后面的都是这个子命令的参数（resume 的会话名、mcp add 的名字……）
-fn codex_other_subcommand(arg: &str) -> bool {
-    arg != "cloud"
-        && !CODEX_ONESHOT.contains(&arg)
-        && (super::codex::CODEX_BATCH.contains(&arg) || matches!(arg, "resume" | "fork" | "agents"))
-}
-
-/// 启动参数、共享的设置、这个目录和上层目录的项目设置里的问题。打印模式（Claude Code 的 -p、--print，agy 的 -p、--print、--prompt）
-/// 和 Codex 的非交互模式（exec、e、review、cloud exec）不能经 cca 用（print_mode）：cca 只开交互的会话，自己也不用它们（用量是
-/// 会话里记下的，statusline.rs）
+/// 启动参数、共享的设置、这个目录和上层目录的项目设置里的问题
 pub fn launch_settings_problems(args: &[String]) -> R<Vec<String>> {
     launch_settings_problems_in(args, &std::env::current_dir()?.to_string_lossy())
 }
@@ -672,7 +649,7 @@ pub(crate) fn launch_settings_problems_in(args: &[String], dir: &str) -> R<Vec<S
         Kind::Agy => AGY_VALUES,
         Kind::Claude => CLAUDE_VALUES,
     };
-    let (mut i, mut positional_seen, mut sub_args) = (0, false, false);
+    let (mut i, mut positional_seen) = (0, false);
     while i < args.len() {
         let arg = args[i].as_str();
         i += 1;
@@ -703,10 +680,6 @@ pub(crate) fn launch_settings_problems_in(args: &[String], dir: &str) -> R<Vec<S
                     settings.extend(value);
                 } else if option == "--desktop" {
                     bad.push("--desktop:use_cca_app".into());
-                } else if option == "-p" || option == "--print" {
-                    bad.push(format!("{option}:print_mode"));
-                } else if claude_short_print(arg) {
-                    bad.push(format!("{arg}:print_mode")); // 几个短选项写在一起（-cp）
                 }
                 continue;
             }
@@ -715,8 +688,6 @@ pub(crate) fn launch_settings_problems_in(args: &[String], dir: &str) -> R<Vec<S
                     bad.push(format!("{option}:account_override")); // 换掉数据目录就换掉了登录和设备标识
                 } else if let ("--settings", Some(value)) = (option, value) {
                     bad.extend(agy_session_settings_problems(value, &cwd));
-                } else if option.starts_with('-') && matches!(option.trim_start_matches('-'), "p" | "print" | "prompt") {
-                    bad.push(format!("{option}:print_mode")); // Go 的 flag：-p、--p、-print、--print 都一样
                 }
                 continue;
             }
@@ -726,21 +697,13 @@ pub(crate) fn launch_settings_problems_in(args: &[String], dir: &str) -> R<Vec<S
             if !positional_seen && arg == "app" {
                 bad.push("app:use_cca_codex_app".into());
             }
-            // 非交互模式：codex（clap）在开场白、选项后面也认子命令（`codex 修一下 exec hi` 跑的是 exec），所以还没遇到别的子命令时，
-            // 不是选项的值的每一个都看，cloud 后面的 exec 也是这样看到的；遇到了别的子命令，后面的是它的参数
-            if !sub_args {
-                if CODEX_ONESHOT.contains(&arg) {
-                    bad.push(format!("{arg}:print_mode"));
-                }
-                sub_args = CODEX_ONESHOT.contains(&arg) || codex_other_subcommand(arg);
-            }
             positional_seen = true;
         }
         match (option, value) {
             ("--remote" | "--remote-auth-token-env" | "--oss" | "--local-provider", _) => {
                 bad.push(format!("{option}:account_override"))
             }
-            // root 和子命令（resume 这些）各自的 --cd 可同时出现；后者覆盖前者，均相对初始目录解析。
+            // root/exec 各自的 --cd 可同时出现；后者覆盖前者，均相对初始目录解析。
             ("-C" | "--cd", Some(value)) => cwd = path::abspath(&path::join(&original_cwd, &expanduser(value))),
             ("-p" | "--profile", Some(value)) => {
                 if !codex_profile_name(value) {
@@ -963,9 +926,6 @@ pub fn settings_explain(bad: &[String]) -> Vec<String> {
                 rest.push(match *name {
                     "missing_value" => format!("启动参数 {src} 后面少了值。"),
                     "use_cca_app" => format!("启动参数里有 {src}：要打开这个账号的 Claude App，用 {cmd} app。"),
-                    "print_mode" => format!(
-                        "启动参数 {src} 是打印模式（不开界面、跑一次就退出）：cca 不用打印模式，也不让经 cca 用；直接开会话。"
-                    ),
                     "" => format!("启动参数 {src} 不能经 cca 用。"),
                     name => format!("启动参数 {src} 不能经 cca 用（{name}）。"),
                 });
@@ -1123,8 +1083,7 @@ pub fn tool_settings_explain(tool: &Tool, bad: &[String]) -> Vec<String> {
     for (src, names, broken) in &by_src {
         let src = src.as_str();
         let file_src = src.starts_with('/') || src.starts_with("~/");
-        // 不是选项的启动参数（app、非交互模式的子命令）也不是文件
-        let is_shared = !file_src && !src.starts_with('-') && src != "app" && !CODEX_ONESHOT.contains(&src);
+        let is_shared = !file_src && !src.starts_with('-') && src != "app";
         if is_shared || src == "~/.codex" {
             // 共享的 ~/.codex/config.toml、profile、.env；~/.gemini/antigravity-cli/settings.json
             let file = if src.starts_with("~/") { src.to_string() } else { home_tilde(&path::join(&master, src)) };
@@ -1154,7 +1113,7 @@ pub fn tool_settings_explain(tool: &Tool, bad: &[String]) -> Vec<String> {
             let override_names: Vec<&String> = names.iter().filter(|n| n.as_str() == "account_override").collect();
             let setting: Vec<String> = names
                 .iter()
-                .filter(|n| !matches!(n.as_str(), "account_override" | "missing_value" | "use_cca_codex_app" | "print_mode"))
+                .filter(|n| !matches!(n.as_str(), "account_override" | "missing_value" | "use_cca_codex_app"))
                 .cloned()
                 .collect();
             if names.iter().any(|n| n == "missing_value") {
@@ -1165,13 +1124,6 @@ pub fn tool_settings_explain(tool: &Tool, bad: &[String]) -> Vec<String> {
             }
             if !override_names.is_empty() {
                 rest.push(format!("启动参数 {src} 会换掉账号的登录、接口或数据目录，不能经 cca 用。"));
-            }
-            if names.iter().any(|n| n == "print_mode") {
-                // Codex 自己管 exec、review 叫非交互（non-interactively），Claude Code、agy 的 -p 是打印模式
-                let mode = if tool.kind == Kind::Codex { "非交互模式" } else { "打印模式" };
-                rest.push(format!(
-                    "启动参数 {src} 是{mode}（不开界面、跑一次就退出）：cca 不用{mode}，也不让经 cca 用；直接开会话。"
-                ));
             }
             if *broken {
                 rest.push(format!("启动参数 {src} 给的设置读不了，所以 cca 没有继续。"));
@@ -1545,13 +1497,7 @@ mod tests {
         assert!(lines[1].starts_with("在这个目录下启动时 Codex 也会读它"), "{lines:?}");
         let lines = tool_settings_explain(
             cx,
-            &s(&[
-                "-c:forced_login_method",
-                "--remote:account_override",
-                "app:use_cca_codex_app",
-                "-p:missing_value",
-                "exec:print_mode",
-            ]),
+            &s(&["-c:forced_login_method", "--remote:account_override", "app:use_cca_codex_app", "-p:missing_value"]),
         );
         assert_eq!(
             lines,
@@ -1561,7 +1507,6 @@ mod tests {
                 "启动参数 --remote 会换掉账号的登录、接口或数据目录，不能经 cca 用。",
                 "启动参数里有 app：要打开这个账号的 ChatGPT App，用 cca codex app。",
                 "启动参数 -p 后面少了值。",
-                "启动参数 exec 是非交互模式（不开界面、跑一次就退出）：cca 不用非交互模式，也不让经 cca 用；直接开会话。",
             ]
         );
         // agy：Google Cloud 项目、读不了、换数据目录

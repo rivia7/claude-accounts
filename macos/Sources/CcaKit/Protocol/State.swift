@@ -332,26 +332,22 @@ struct NodeUse: Decodable, Sendable, Equatable, Identifiable {
 }
 
 /// 一个工具（Claude / Codex）。
-/// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`）、折合金额（`cost`），
-/// 用量是不是只在会话里记下（`usage_passive`：cca 不主动查，`cca usage` 只读记下的，App 不定时跑它、不放「刷新用量」）。
-/// 旧版 cca 没有这个字段：那时只有 Claude 和 Codex，都有（折合金额、usage_passive 除外：没有这个键当作没有）。
+/// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`）、折合金额（`cost`）。
+/// 旧版 cca 没有这个字段：那时只有 Claude 和 Codex，都有（折合金额除外：没有这个键当作没有）。
 struct ToolFeatures: Decodable, Sendable, Equatable {
     var app: Bool
     var api: Bool
     var usage: Bool
     /// 折合金额（PROTOCOL 2.2）：旧版 cca 没有这个键，当作没有
     var cost: Bool
-    /// 用量只在 cca 启动的会话里记下（PROTOCOL 2.2：Claude、Antigravity）：旧版 cca 没有这个键，当作会查
-    var usagePassive: Bool
 
-    enum CodingKeys: String, CodingKey { case app, api, usage, cost, usagePassive = "usage_passive" }
+    enum CodingKeys: String, CodingKey { case app, api, usage, cost }
 
-    init(app: Bool, api: Bool, usage: Bool, cost: Bool = false, usagePassive: Bool = false) {
+    init(app: Bool, api: Bool, usage: Bool, cost: Bool = false) {
         self.app = app
         self.api = api
         self.usage = usage
         self.cost = cost
-        self.usagePassive = usagePassive
     }
 
     init(from decoder: Decoder) throws {
@@ -360,7 +356,6 @@ struct ToolFeatures: Decodable, Sendable, Equatable {
         api = c.bool(.api) ?? true
         usage = c.bool(.usage) ?? true
         cost = c.bool(.cost) ?? false
-        usagePassive = c.bool(.usagePassive) ?? false
     }
 
     /// cca 没给 features 时：Antigravity 什么都没有，别的都有（折合金额都没有）

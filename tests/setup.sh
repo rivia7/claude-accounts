@@ -849,39 +849,22 @@ cat > "$T/bin/scutil" <<'S'
 [ "${1:-}" = --proxy ] || exit 1
 if [ -f "$CCA_T/scutil.txt" ]; then cat "$CCA_T/scutil.txt"; else printf '<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n  ProxyAutoConfigEnable : 0\n  SOCKSEnable : 0\n}\n'; fi
 S
-# 假的 claude：记下参数和环境（claude.log）。打印模式（-p、--print，几个短选项写在一起的 -cp 也算）cca 一律不用：记进 $CCA_T/print-mode.log
-# （回归中途会清空 claude.log，这个文件不清）、退出码 1，回归最后查这个文件不在
+# 假的 get_usage（cca-test fake-usage，用 exec -a 起：回归按 $CCA_T/fake_usage 找进程）：按账号目录里登录的邮箱回 $CCA_T/usage/<邮箱>.json
+# （没有这个文件就当没有订阅用量）；usage/unsupported：回"不支持"；usage/hang：卡住不回
 cat > "$T/bin/claude" <<'S'
 #!/bin/bash
 LOG="$CCA_T/claude.log"
 echo "ARGS: $*" >> "$LOG"
 echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed) CCA_PROXY=${CCA_PROXY-unset} CCA_REMOTE_HOSTED=${CCA_REMOTE_HOSTED-unset} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL-unset} ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN-unset} ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset} CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} CLAUDECODE=${CLAUDECODE-unset} CLAUDE_CODE_USE_MANTLE=${CLAUDE_CODE_USE_MANTLE-unset} CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST-unset} CLAUDE_CODE_REMOTE_MEMORY_DIR=${CLAUDE_CODE_REMOTE_MEMORY_DIR-unset}" >> "$LOG"
-for a in "$@"; do
-	case "$a" in
-		--) break ;;
-		-p|--print|--print=*|-[!-]*p*) echo "PRINT-MODE claude $*" >> "$CCA_T/print-mode.log"; echo "fake claude: cca 不该用打印模式" >&2; exit 1 ;;
-	esac
-done
 # 第三方 API 账号：cca 经 --settings 传地址、模型和 apiKeyHelper。记下 env；像 Claude Code 一样执行 apiKeyHelper 取 key
-# （取到的 key 写进 claude.key，不进日志）。交互的会话（不是 --version、--help，头一个不是选项的参数不是子命令）像 Claude Code 一样
-# 跑 SessionStart 的 hook（cca 带的记下会话的那个：stdin 是 hook 的输入，记下退出码、打印了多少、会话 id），再画状态栏：
-# statusLine 的命令（cca 的 _claude-statusline）用 bash 起，画两次，第二次的 JSON 带着 rate_limits（按登录的邮箱取
-# $CCA_T/rate/<邮箱>.json，没有这个文件就不带），记下 STATUSLINE rc=… out=…（cca-test claude-settings）
-prev=""; settings=""; session=1; first=""
-for a in "$@"; do
-	if [ "$prev" = --settings ]; then settings="$a"; prev=""; continue; fi
-	case "$a" in
-		--) break ;;
-		--version|-v|--help|-h) session=0 ;;
-		-*) ;;
-		*) [ -n "$first" ] || first="$a" ;;
-	esac
-	prev="$a"
-done
-case "$first" in agents|auth|auto-mode|doctor|gateway|import|install|mcp|plugin|plugins|remote-control|sandbox|setup-token|ultrareview|update|upgrade) session=0 ;; esac
+# （取到的 key 写进 claude.key，不进日志）。-p（开始一次会话）时像 Claude Code 一样跑 SessionStart 的 hook（cca 带的记下会话的那个）：
+# stdin 是 hook 的输入，记下退出码、打印了多少、会话 id
+prev=""; settings=""; session=0
+for a in "$@"; do [ "$prev" = --settings ] && settings="$a"; [ "$a" = -p ] && session=1; prev="$a"; done
 if [ -n "$settings" ]; then
 	"$CCA_T/cca-test" claude-settings "$settings" "$CCA_T" "$session" >> "$LOG"
 fi
+case " $* " in *" --input-format stream-json "*) exec -a "$CCA_T/fake_usage" "$CCA_T/cca-test" fake-usage ;; esac
 P="$CLAUDE_CONFIG_DIR/.claude.json"
 if [ "$1" = auth ]; then
 	case "$2" in
@@ -922,19 +905,12 @@ S
 # 像真的 codex 那样写 CODEX_HOME 里的文件和会话库，退出码 3。codex_noflags：这个版本不认识 cca 要关的两个开关；codex_nocfg：
 # 不认识 -c tui.notification_method 的值（像以前的版本：配置读不了，报错退出）；codex_notify：会话结束时像一轮做完了，起
 # -c notify=[…]（最后一个算，像 codex）的命令，最后一个参数是这个文件里的 JSON（cca-test codex-notify 起、等它结束，codex.log 里记 NOTIFY rc=…）；
-# codex_osc：会话里像 tui.notifications 设成 osc9 时在等你，往终端里写一条通知（OSC 9，字是这个文件的内容）。非交互模式（exec、它的别名 e、
-# review；-- 前面有就算，比 launch-check 粗：resume review 这样会话名正好是它们的也算）cca 一律不用：记进 $CCA_T/print-mode.log、退出码 1
+# codex_osc：会话里像 tui.notifications 设成 osc9 时在等你，往终端里写一条通知（OSC 9，字是这个文件的内容）
 cat > "$T/bin/codex" <<'S'
 #!/bin/bash
 LOG="$CCA_T/codex.log"
 echo "ARGS: $*" >> "$LOG"
 echo "ENV: CODEX_HOME=${CODEX_HOME-unset} CODEX_SQLITE_HOME=${CODEX_SQLITE_HOME-unset} https_proxy=${https_proxy-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} NO_PROXY=${NO_PROXY-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} OPENAI_API_KEY=${OPENAI_API_KEY-unset} OPENAI_BASE_URL=${OPENAI_BASE_URL-unset} CODEX_ACCESS_TOKEN=${CODEX_ACCESS_TOKEN-unset} CODEX_API_KEY=${CODEX_API_KEY-unset} CODEX_CA_CERTIFICATE=${CODEX_CA_CERTIFICATE-unset} ALL_PROXY=${ALL_PROXY-unset} BROWSER=${BROWSER-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
-for a in "$@"; do   # 非交互模式：cca 不用，也不让经 cca 用（-- 后面的是开场白）
-	case "$a" in
-		--) break ;;
-		exec|e|review) echo "PRINT-MODE codex $*" >> "$CCA_T/print-mode.log"; echo "fake codex: cca 不该用非交互模式" >&2; exit 1 ;;
-	esac
-done
 args=("$@"); i=0
 while [ $i -lt ${#args[@]} ]; do   # 跳过 cca 加在前面的全局参数
 	case "${args[$i]}" in
@@ -990,11 +966,13 @@ S
 # 读到头说 login cancelled、退出码 1；授权码（或整个网址里的 code）以 good 开头算成功（不是就报错再问），token 写进
 # antigravity-cli/antigravity-oauth-token（id_token_email 取 CCA_ACCOUNT 里的邮箱，一次性的 $CCA_T/agy_login_as 模拟登错号，
 # $CCA_T/agy_noemail 时不写邮箱，档位取 $CCA_T/agy_tier），说 Logged in as 邮箱.；换 token 时的代理记进 agy.log。
-# 打印模式（-p、--print、--prompt，Go 的 flag：一个横杠、两个横杠都算）cca 一律不用：记进 $CCA_T/print-mode.log、退出码 1。
+# -p /usage --output-format json 照 1.5.16 回额度（一行 JSON，额度在 command.data；按 token 里的邮箱取 $CCA_T/agy_usage/<邮箱>.json，
+# 没有就用一份默认的，重置时间按现在算），agy.log 里记 AGY-USAGE（有没有控制终端、自动更新关没关、工作目录）；没有 token 或者 $CCA_T/agy_usage_auth 时
+# 像没登录一样在 stderr 上打出登录网址、等 60 秒；$CCA_T/agy_usage_error（内容是原因）回 ERROR；$CCA_T/agy_usage_old 像不认 /usage
+# 的旧版本，当成一句话回答（没有 command）；$CCA_T/agy_usage_hang 一直不回
 # 其余（包括 cca 带着 --gemini_dir 传进来的 --version）当作一次会话：装机标识不是正好 36 个字符就重新生成（像真的），写共享的会话、历史、技能，设置用临时文件 + 改名保存；
-# 交互的会话（不是 --version、子命令）像 agy 画状态栏：--settings 或 settings.json 里的 statusLine.command 用 sh -c 跑（stdin 是状态栏的 JSON，
-# plan_tier 取 $CCA_T/agy_plan_tier，额度 quota 按邮箱取 $CCA_T/agy_quota/<邮箱>.json、没有就用一份默认的），agy.log 里记 AGY-STATUSLINE-CMD
-# 和 AGY-STATUSLINE rc=… out=…；退出码 3
+# 交互的会话（不是 --version、打印模式、子命令）像 agy 画一次状态栏：--settings 或 settings.json 里的 statusLine.command 用 sh -c 跑（stdin 是状态栏的 JSON，
+# plan_tier 取 $CCA_T/agy_plan_tier），agy.log 里记 AGY-STATUSLINE-CMD 和 AGY-STATUSLINE rc=… out=…；退出码 3
 cat > "$T/bin/agy" <<'S'
 #!/bin/bash
 LOG="$CCA_T/agy.log"

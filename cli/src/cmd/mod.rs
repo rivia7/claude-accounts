@@ -26,7 +26,6 @@ pub mod secrets;
 pub mod session;
 pub mod settings;
 pub mod shell;
-pub mod statusline;
 pub mod table;
 pub mod team;
 pub mod usage;
@@ -61,7 +60,6 @@ const MODULES: &[&[Cmd]] = &[
     settings::CMDS,
     leak::CMDS,
     usage::CMDS,
-    statusline::CMDS,
     agy::CMDS,
     codex::CMDS,
     gui::CMDS,
@@ -277,8 +275,7 @@ mod tests {
 
     /// 切换以后新加的子命令（`sh-…`、`remote-…` 之外的）。policy-retire：升级到 3.6.0 时去掉 config.json 里映射的那几项；
     /// pack：把辅助程序接到 cca 后面（原来是 cli/pack.py，不在 PY_SRC 里）
-    const ADDED: &[&str] =
-        &["unpark", "policy-retire", "cost-hook", "agy-session-end", "pack", "launch-args", "agy-statusline", "claude-statusline"];
+    const ADDED: &[&str] = &["unpark", "policy-retire", "cost-hook", "agy-session-end", "pack", "launch-args", "agy-statusline"];
     /// 切换以后去掉的：共享默认关以后终端里启动时不再引导配置映射（policy-ask 是问不问）；3.6.0 去掉了维护者的映射和维护者的服务器，
     /// 只给它们用的几个也去掉了
     const REMOVED: &[&str] = &[

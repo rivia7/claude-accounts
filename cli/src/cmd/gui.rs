@@ -687,7 +687,7 @@ pub fn gui_snapshot(stdin: bool) -> R<Dict> {
         let entry = dict! {
             "id" => tool.name, "label" => tool.label, "app_label" => tool.app_label,
             "cli_prefix" => text::split_ws(tool.cmd).into_iter().skip(1).map(V::from).collect::<Vec<V>>(),
-            "features" => dict! { "app" => tool.has_app, "api" => tool.has_api, "usage" => tool.has_usage, "cost" => tool.has_cost, "usage_passive" => tool.usage_passive() },
+            "features" => dict! { "app" => tool.has_app, "api" => tool.has_api, "usage" => tool.has_usage, "cost" => tool.has_cost },
             "enabled" => enabled, "bin" => env.bin.clone(), "app" => dict! { "installed" => env.app.is_some(), "path" => env.app.clone() },
             "chrome" => env.chrome, "settings_problems" => List::new(), "errors" => List::new(), "last" => V::None, "accounts" => List::new(),
         };
