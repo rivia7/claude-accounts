@@ -25,9 +25,11 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// 底下的两页：账号（各台电脑上的账号的状态、用量）、会话（可以接入的远程会话）
+/// 底下的几页（和 Mac App 侧栏的先后、叫法一样）：总览（各台电脑上的账号，一个账号一张卡片）、用量统计、折合金额、
+/// 远程会话（可以接入的会话）、共享与同步（这些电脑所在的 Team）。总览以前叫「账号」，记着的还是原来的那个值
 enum AppTab: String {
-    case accounts, sessions
+    case overview = "accounts"
+    case stats, cost, sessions, sharing
 }
 
 /// 配对的那一页现在到哪了
@@ -83,8 +85,14 @@ final class AppModel {
     var tab: AppTab {
         didSet { UserDefaults.standard.set(tab.rawValue, forKey: "tab") }
     }
-    /// 「账号」页推进去的账号
+    /// 「总览」「用量统计」「折合金额」各自推进去的账号
     var accountPath: [AccountRef] = []
+    var statsPath: [AccountRef] = []
+    var costPath: [AccountRef] = []
+    /// 折合金额按天看（不然按周）：账号页的「折合金额」、折合金额页共用（Mac App 的 costGranularity），记着
+    var costDays: Bool {
+        didSet { UserDefaults.standard.set(costDays, forKey: "costDays") }
+    }
     /// 「账号」页看哪个工具的账号（claude、codex、agy）、只看哪种套餐（cca 给的原名，如 Pro、Max、Plus，空的是全部）：记着，
     /// 下次打开还是它们。记着的已经没有账号了时照默认的看（AccountShelf）
     var accountTool: String {
@@ -117,6 +125,7 @@ final class AppModel {
         tab = AppTab(rawValue: d.string(forKey: "tab") ?? "") ?? .sessions
         accountTool = d.string(forKey: "accountTool") ?? "claude"
         accountPlan = d.string(forKey: "accountPlan") ?? ""
+        costDays = d.bool(forKey: "costDays")
         let name = Texts.nonEmpty(d.string(forKey: "deviceName")) ?? Self.defaultName
         deviceName = name
         backend = demo ? DemoBackend() : LiveBackend(deviceName: name)
@@ -148,6 +157,8 @@ final class AppModel {
         peers = b.peers()
         listings = [:]
         accountPath = []
+        statsPath = []
+        costPath = []
         fetchedAt = nil
         loading = false   // 前一个那头还没查完的，回来时看到换了就不管了（fetch 里的 b === backend）
         refresh()
@@ -209,10 +220,10 @@ final class AppModel {
         return (p, a)
     }
 
-    /// 打开一个账号的那一页（点了额度的通知）：关掉开着的终端，换到「账号」页
+    /// 打开一个账号的那一页（点了额度的通知）：关掉开着的终端，换到「总览」
     func openAccount(peer pid: String, account id: String) {
         closeTerminal()
-        tab = .accounts
+        tab = .overview
         let ref = AccountRef(pid: pid, id: id)
         accountPath = [ref]
         // 返回时列表里要有它：换到它的工具，筛着的套餐不是它的就不筛了（还没查到它的照上次的选择）

@@ -1,5 +1,5 @@
-// 电脑上账号的状态（手机上的「账号」页）：宿主（cli/src/cmd/remote/status.rs）把那台电脑上各个账号的状态（登录、套餐、用量、每周用量、
-// 在不在用）封给这个配对，放到配对所在的服务器上（status_put）；这里查会话列表时一起拿（relay_list 的 have / status，Client.swift）。
+// 电脑上账号的状态（手机上的「总览」「用量统计」「折合金额」「共享与同步」几页）：宿主（cli/src/cmd/remote/status.rs）把那台电脑上各个账号的
+// 状态（登录、套餐、用量、每周用量、折合金额、在不在用）和这个配对所在的 Team（Cost.swift）封给这个配对，放到配对所在的服务器上（status_put）；这里查会话列表时一起拿（relay_list 的 have / status，Client.swift）。
 // 格式见 docs/dev/remote.md「手机上的账号」。密文和会话的说明一样（标签 cca-remote-status，密钥 HMAC(P, "cca-remote/v1/status")），
 // 和 crypto.rs 的 status_seal、tests/kit/spec.rs 的 status_seal 是同一套。用量的几样和 Mac App 的 Protocol/Usage.swift 同名、同样的规矩
 import Foundation
@@ -303,6 +303,12 @@ public struct AccountStatus: Sendable, Equatable, Identifiable {
     public let badge: String
     public let usage: AccountUsage?
     public let weeks: UsageWeeks?
+    /// 在用什么（busy 时才有，旧版的宿主不给）：桌面 App 开着、命令行里几个会话、最早那个从什么时候开始的
+    public let appOpen: Bool
+    public let cliSessions: Int
+    public let cliSince: Double?
+    /// 折合金额（那台电脑上的 cca 关了折合金额、还没有记录、账号太多没带时是 nil）
+    public let cost: AccountCost?
 
     init?(json x: Any?) {
         guard let j = x as? [String: Any], let id = j["id"] as? String, lowerHex(id, 16) else { return nil }
@@ -321,6 +327,10 @@ public struct AccountStatus: Sendable, Equatable, Identifiable {
         badge = clean(j["badge"], 8)
         usage = AccountUsage(json: j["usage"])
         weeks = UsageWeeks(json: j["weeks"])
+        appOpen = jsonBool(j["app"]) ?? false
+        cliSessions = min(max(roundedInt(j["cli"]) ?? 0, 0), 999)
+        cliSince = finiteNumber(j["since"])
+        cost = AccountCost(json: j["cost"])
     }
 
     /// 第三方 API 账号（没有订阅的用量）
@@ -381,6 +391,12 @@ public struct HostStatus: Sendable, Equatable {
     public let off: Bool
     /// 账号太多、放不下，没带每周用量（各个账号的 weeks 都是 nil）
     public let weeksLeftOut: Bool
+    /// 那台电脑的折合金额那几样（价格表的日期、上次统计的时间……）：cca 关了折合金额、旧版的宿主不给时是 nil
+    public let cost: HostCost?
+    /// 账号太多、放不下，没带折合金额（各个账号的 cost 都是 nil）
+    public let costLeftOut: Bool
+    /// 这个配对所在的 Team（那台电脑上这个 Team 的状态）；旧版的宿主不给是 nil
+    public let team: HostTeam?
     /// 那台电脑封它的时间（那台电脑的钟）
     public let at: Double
     /// 查到时它在服务器上放了多久（服务器的钟，秒）
@@ -394,6 +410,9 @@ public struct HostStatus: Sendable, Equatable {
         machine = clean(j["machine"], 48)
         off = jsonBool(j["off"]) ?? false
         weeksLeftOut = jsonBool(j["weeks"]) == false
+        cost = HostCost(json: j["cost"])
+        costLeftOut = jsonBool(j["cost"]) == false
+        team = HostTeam(json: j["team"])
         var seen = Set<String>()
         accounts = (j["accounts"] as? [Any] ?? []).prefix(Self.maxAccounts).compactMap { AccountStatus(json: $0) }.filter { seen.insert($0.id).inserted }
         more = max(jsonInt(j["more"]) ?? 0, 0)

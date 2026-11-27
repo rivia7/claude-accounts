@@ -54,6 +54,18 @@ func say(_ s: String) {
     FileHandle.standardError.write(Data((s + "\n").utf8))
 }
 
+/// 一个账号的折合金额：读成模型以后的样子（按周、按天的每一项是 [开始, 结束, 美分, 是不是这一项, 开始时还没有记录]）
+func costJSON(_ c: AccountCost?) -> Any {
+    guard let c else { return NSNull() }
+    func periods(_ l: [CostPeriod]) -> [[Any]] { l.map { [$0.startEpoch, $0.endEpoch, $0.cents, $0.current, $0.partial] } }
+    let models: Any = c.models.map { $0.map { m -> [Any] in [m.name ?? NSNull(), m.weeks, m.days, m.pricedAs ?? NSNull()] } } ?? NSNull()
+    return ["since": c.sinceEpoch ?? NSNull(), "weeks": periods(c.weeks), "days": periods(c.days), "sum": [c.weeksTotal, c.daysTotal],
+            "average": [c.averageWeek ?? NSNull(), c.averageDay ?? NSNull()] as [Any], "average_n": [c.averageWeeks, c.averageDays],
+            "cache_hit": [c.cacheHitWeeks ?? NSNull(), c.cacheHitDays ?? NSNull()] as [Any], "sync": c.sync, "missing": c.missing,
+            "models": models, "devices": c.devices.map { d -> [Any] in [d.name, d.me, d.weeks, d.days, d.stale, d.syncedEpoch ?? NSNull()] }]
+        as [String: Any]
+}
+
 /// list 里一台机器放上来的账号的状态：解开、读成模型以后的样子（测试照它核对）
 func statusJSON(_ s: HostStatus, now: Double) -> [String: Any] {
     let accounts: [[String: Any]] = s.accounts.map { a in
@@ -65,9 +77,17 @@ func statusJSON(_ s: HostStatus, now: Double) -> [String: Any] {
         return ["id": a.id, "aid": a.aid, "tool": a.tool, "name": a.name, "kind": a.kind, "login": a.login, "plan": a.plan, "tier": a.tier,
                 "busy": a.busy, "color": a.color ?? NSNull(), "badge": a.badge, "source": a.usage?.source ?? NSNull(),
                 "five_hour": win(a.usage?.fiveHour), "seven_day": win(a.usage?.sevenDay), "weeks": a.weeks?.weeks.count ?? NSNull(),
-                "exhausted": used]
+                "exhausted": used, "app": a.appOpen, "cli": a.cliSessions, "since": a.cliSince ?? NSNull(), "cost": costJSON(a.cost)]
     }
-    return ["machine": s.machine, "off": s.off, "more": s.more, "at": s.at, "age": s.age, "accounts": accounts]
+    let cost: Any = s.cost.map { c -> [String: Any] in
+        ["prices_date": c.pricesDate, "updated": c.updatedEpoch ?? NSNull(), "scanning": c.scanning, "unattributed": c.unattributed, "brief": c.brief]
+    } ?? NSNull()
+    let team: Any = s.team.map { t -> [String: Any] in
+        ["name": t.name, "role": t.role, "coadmin": t.coadmin, "state": t.state, "error": t.error, "seq": t.seq, "accounts": t.accounts,
+         "device": t.device, "host": t.host, "joined": t.joinedEpoch ?? NSNull(), "update": t.update ?? NSNull()]
+    } ?? NSNull()
+    return ["machine": s.machine, "off": s.off, "more": s.more, "at": s.at, "age": s.age, "accounts": accounts, "weeks_left_out": s.weeksLeftOut,
+            "cost": cost, "cost_left_out": s.costLeftOut, "team": team]
 }
 
 var args = Array(CommandLine.arguments.dropFirst())

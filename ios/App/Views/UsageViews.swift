@@ -333,82 +333,40 @@ struct WeeklySection: View {
 }
 
 /// 每周用量的图（Mac App 的 WeeklyChart）：一周一根竖着的用量条，底槽是这一周的额度（100%），按用了多少上色（和额度的条同一套），
-/// 结束前一天没查到的填灰色；超过 100% 的（中间重置过）整根高出底槽。横轴是时间：最右边是这一周的重置时间和现在里晚的那个，往左 13 周
+/// 结束前一天没查到的填灰色；超过 100% 的（中间重置过）整根高出底槽。横轴是时间：最右边是这一周的重置时间和现在里晚的那个，往左 13 周。
+/// compact 是用量统计页的小图：条细一点，不写日期，不能点；横轴的范围、纵轴的高由用的地方给（统计页所有行同一个，上下对得齐、高低能比）
 struct WeeklyChart: View {
     let weeks: [UsageWeek]
+    var domain: ClosedRange<Double>?
     let now: Double
-    @Binding var picked: Double?
+    var compact = false
+    /// 纵轴最高到多少（百分比，至少 100）；不给就按这几周自己的
+    var top: Double?
+    /// 点选的那一周（它的 endEpoch）；给了才能点
+    var picked: Binding<Double?>?
 
     static let week: Double = 7 * 86400
 
-    private struct Slot {
-        let week: UsageWeek
-        let index: Int
-        let mid: CGFloat
-        let width: CGFloat
-        let x0: CGFloat
-        let x1: CGFloat
+    /// 横轴的范围：最右边是最晚结束的那一周（还没过完的这一周的重置时间）和现在里晚的那个，往左 13 周
+    static func domain(_ lists: [[UsageWeek]], now: Double) -> ClosedRange<Double> {
+        let right = max(now, lists.joined().map(\.endEpoch).max() ?? now)
+        return (right - 13 * week)...right
+    }
+
+    /// 纵轴最高到多少：100%，有超过 100% 的（中间重置过）就到最高的那一周
+    static func scaleTop(_ lists: [[UsageWeek]]) -> Double {
+        max(100, lists.joined().map(\.usedPercent).max() ?? 0)
     }
 
     var body: some View {
-        let right = max(now, weeks.map(\.endEpoch).max() ?? now)
-        let left = right - 13 * Self.week
-        let top = max(100, weeks.map(\.usedPercent).max() ?? 0)
-        GeometryReader { geo in
-            let size = geo.size
-            let dateRow: CGFloat = 18, inset: CGFloat = 6
-            let plot = max(size.height - dateRow - inset, 1)
-            let slots = Self.slots(weeks, left: left, right: right, width: size.width)
-            // 窄的时候（一周不到 34 点）日期隔一根写一个，从这一周往前数
-            let every = (slots.map(\.width).min() ?? 40) < 34 ? 2 : 1
-            ZStack(alignment: .topLeading) {
-                ForEach(slots, id: \.week.endEpoch) { s in
-                    let on = s.week.endEpoch == picked
-                    if on {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.primary.opacity(0.06))
-                            .frame(width: max(s.width - 4, 0), height: size.height)
-                            .position(x: s.mid, y: size.height / 2)
-                    }
-                    WeekBar(percent: s.week.usedPercent, top: top,
-                            color: s.week.partial ? Meter.dimColor : Palette.usage(percent: s.week.usedPercent))
-                        .frame(width: min(10, max(s.width * 0.6, 2)), height: plot)
-                        .position(x: s.mid, y: inset + plot / 2)
-                        .accessibilityElement()
-                        .accessibilityLabel(Texts.weekLabel(s.week))
-                        .accessibilityValue(Texts.weekDetail(s.week, now: now))
-                    if (slots.count - 1 - s.index) % every == 0, s.width >= 16 {
-                        Text(Texts.weekLabel(s.week))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(on ? .primary : .secondary)
-                            .fixedSize()
-                            .position(x: s.mid, y: size.height - dateRow / 2)
-                            .accessibilityHidden(true)
-                    }
-                }
-            }
-            .frame(width: size.width, height: size.height)
-            .contentShape(Rectangle())
-            .onTapGesture(coordinateSpace: .local) { p in
-                let hit = slots.first { $0.x0 <= p.x && p.x < $0.x1 }?.week.endEpoch
-                picked = hit == picked ? nil : hit
-            }
+        let top = self.top ?? Self.scaleTop([weeks])
+        SlotChart(items: weeks, domain: domain ?? Self.domain([weeks], now: now), barWidth: compact ? 5 : 10, topInset: compact ? 0 : 6,
+                  dateRow: compact ? 0 : 18, picked: picked, label: { w, p in CostChart.weekLabel(Texts.weekLabel(w), p) },
+                  accessibility: { w in (Texts.weekLabel(w), Texts.weekDetail(w, now: now)) }) { w in
+            WeekBar(percent: w.usedPercent, top: top, color: w.partial ? Meter.dimColor : Palette.usage(percent: w.usedPercent))
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("每周用量")
-    }
-
-    /// 每一周在横轴上占哪一段（截到图的范围里）
-    private static func slots(_ weeks: [UsageWeek], left: Double, right: Double, width: CGFloat) -> [Slot] {
-        let span = max(right - left, 1)
-        var out: [Slot] = []
-        for w in weeks {
-            let a = max(w.startEpoch, left), b = min(w.endEpoch, right)
-            guard b > a else { continue }
-            let x0 = CGFloat((a - left) / span) * width, x1 = CGFloat((b - left) / span) * width
-            out.append(Slot(week: w, index: out.count, mid: (x0 + x1) / 2, width: x1 - x0, x0: x0, x1: x1))
-        }
-        return out
     }
 }
 

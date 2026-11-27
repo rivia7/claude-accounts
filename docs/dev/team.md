@@ -640,6 +640,9 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `(hub, team)` 认（`DevicesDoc.hub(for:)`）。
 - 截图场景：`teams`（卡片，展开着管理员的 Team）、`team-filter`（总览筛出一个 Team）；屏幕睡着时系统不给截屏，`Snapshot.capture` 退一步
   让窗口自己画进位图（没有玻璃效果，侧栏画不出来；版面和文字看得到）。
+- **手机上**（iOS 的 cca App 的「共享与同步」页，只看；3.7.9 起）：配对过的每台电脑把它在这个配对所在的 Team 里的状态（`config.teams` 里那一项的名字、角色、
+  状态和原因、分给它几个账号、设备名、服务器的地址、要不要更新）封给配对的手机（remote.md「手机上的账号」的 `team`；一个配对只给它那台服务器的 Team），手机照 Team 分组、
+  照 Mac 的说法写（和 Mac 一样不说配置第几版）；加入、新建、管理都还在电脑上。
 
 ## 本机的状态和命令（M2）
 

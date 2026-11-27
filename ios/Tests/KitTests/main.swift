@@ -222,6 +222,40 @@ if let st = v["status"] as? [String: Any] {
     let gem = s?.accounts.first { $0.tool == "agy" }
     check(gem?.usage?.quotaGroups.map(\.displayName) == w["groups"] as? [String] && gem?.usage?.hasQuota == true
           && gem?.usage?.quotaMost(.fiveHour, now: now)?.group == "Gemini 模型", "Antigravity 的几组：\(gem?.usage?.quotaGroups.map(\.displayName) ?? [])")
+    // 在用什么、折合金额（status.rs 的 row_of、cost_of）：按周、按天的起止照最后一项结束的时间和各项的小时数首尾相接推出来
+    let wc = w["cost"] as? [String: Any] ?? [:]
+    let we = jsonNumber(wc["week_end"]) ?? 0, de = jsonNumber(wc["day_end"]) ?? 0
+    let first = s?.accounts.first
+    check(first?.appOpen == true && first?.cliSessions == 2 && first?.cliSince == jsonNumber(wc["cli_since"]), "在用什么：\(String(describing: first))")
+    if let c = first?.cost {
+        check(c.weeks.map(\.cents) == [0, 1250, 4800, 483] && c.weeks.map(\.partial) == [true, true, false, false]
+              && c.weeks.map(\.current) == [false, false, false, true] && c.weeks.last?.endEpoch == we && c.weeks[2].startEpoch == we - 288 * 3600
+              && c.weeks[2].endEpoch == we - 168 * 3600 && c.weeks[0].startEpoch == we - 624 * 3600, "按周的几项（有一项是 120 小时）：\(c.weeks)")
+        check(c.days.map(\.cents) == [120, 0, 377] && c.days.first?.startEpoch == de - 72 * 3600 && c.days.last?.current == true
+              && !c.days.contains(where: \.partial), "按天的几项：\(c.days)")
+        check(c.weeksTotal == 6533 && c.daysTotal == 497 && c.averageWeek == 4800 && c.averageDay == nil && c.averageWeeks == 1 && c.averageDays == 0
+              && c.cacheHitWeeks == 0.973 && c.cacheHitDays == nil && c.current(days: false) == 483 && c.current(days: true) == 377,
+              "合计、平均、缓存命中：\(c)")
+        check(c.sync == "error" && c.missing == 2, "同步的状态、没算进来的设备")
+        check(c.models?.map(\.name) == ["claude-opus-5-5", nil, "claude-haiku-5-6"] && c.models?.map(\.pricedAs) == [nil, nil, "claude-haiku-5-5"]
+              && c.models?.first?.weeks == 5000 && c.models?.first?.days == 400, "按模型的：\(String(describing: c.models))")
+        check(c.devices.map(\.name) == ["studio-mac", "office-imac"] && c.devices.map(\.me) == [true, false] && c.devices.map(\.stale) == [false, true]
+              && c.devices.first?.syncedEpoch == now - 60 && c.devices.last?.syncedEpoch == nil, "按设备的（少几项的不要，名字清理过）：\(c.devices)")
+    } else {
+        check(false, "第一个账号带着折合金额")
+    }
+    let bob = s?.accounts.first { $0.name == "bob" }
+    check(bob != nil && bob?.cost == nil && bob?.appOpen == false && bob?.cliSessions == 0 && bob?.cliSince == nil, "没有折合金额、没在用的账号")
+    // 那台电脑的折合金额那几样（cost_meta）、这个配对所在的 Team（team_of）；放不下时不带的
+    check(s?.cost?.pricesDate == "2026-11-01" && s?.cost?.updatedEpoch == now - 240 && s?.cost?.unattributed == 312 && s?.cost?.brief == true
+          && s?.cost?.scanning == false && s?.costLeftOut == false && s?.weeksLeftOut == false, "折合金额那几样：\(String(describing: s?.cost))")
+    let team = s?.team
+    check(team?.name == "示例 Team" && team?.isAdmin == true && team?.isOwner == false && team?.state == "error" && team?.error == "连不上服务器"
+          && team?.seq == 12 && team?.accounts == 3 && team?.device == "studio-mac" && team?.host == "team.example.com:18445"
+          && team?.joinedEpoch == now - 86400 && team?.update == "服务器不认 status_put", "Team：\(String(describing: team))")
+    let lean = statusOpen(statusKeys(p), pid: pid, st["lean"], age: 0, received: now)
+    check(lean != nil && lean?.cost == nil && lean?.costLeftOut == true && lean?.weeksLeftOut == true && lean?.team == nil,
+          "放不下时不带折合金额、每周用量：\(String(describing: lean?.costLeftOut))")
     check(statusOpen(statusKeys(p), pid: st["other_pid"] as? String ?? "", st["blob"], age: 0, received: now) == nil, "配对编号不对解不开")
     for bad in ["forged", "dir", "note", "v2"] {
         check(statusOpen(statusKeys(p), pid: pid, st[bad], age: 0, received: now) == nil, "账号的状态不认：\(bad)")

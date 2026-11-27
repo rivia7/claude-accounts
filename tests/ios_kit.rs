@@ -264,9 +264,32 @@ fn against_the_spec(t: &mut Ctx) {
             "partial" => false
         }
     };
+    // 折合金额（status.rs 的 cost_of 给的样子）：按周的有一项是 120 小时（中间换过切法），开始有记录的时间在第二项里面；按模型、
+    // 按设备的各有一项特别的（没名字的是没按模型记下的那一部分，暂按别的模型的价格估算的带第四项；少几项的设备不要）
+    let (week_end, day_end) = (now + 3.0 * 86400.0, now + 2.0 * 3600.0);
+    let cost = obj! {
+        "since" => week_end - 432.0 * 3600.0, "weeks" => list![0, 1250, 4800, 483], "week_end" => week_end,
+        "week_hours" => list![168, 168, 120, 168], "days" => list![120, 0, 377], "day_end" => day_end, "sum" => list![6533, 497],
+        "average" => list![4800, Value::Null], "average_n" => list![1, 0], "cache_hit" => list![0.973, Value::Null], "sync" => "error",
+        "missing" => 2,
+        "models" => list![
+            list!["claude-opus-5-5", 5000, 400],
+            list![Value::Null, 1533, 97],
+            list!["claude-haiku-5-6", 0, 0, "claude-haiku-5-5"]
+        ],
+        "devices" => list![
+            list!["studio-mac", 1, 5000, 400, 0, now - 60.0],
+            list!["office-imac\u{202e}", 0, 1533, 97, 1, Value::Null],
+            list!["short", 1]
+        ]
+    };
     let alice = patched(
         row('a', "alice", "claude", "logged_in", alice_usage),
         &[
+            ("app", Value::from(true)),
+            ("cli", Value::from(2)),
+            ("since", Value::from(now - 7200.5)),
+            ("cost", cost),
             ("aid", Value::from("ab".repeat(16))),
             ("color", Value::from("#7C3AED")),
             ("badge", Value::from("AL")),
@@ -311,10 +334,19 @@ fn against_the_spec(t: &mut Ctx) {
     let ivy =
         row('3', "ivy", "claude", "logged_in", patched(usage(win(95.0, now + 60.0), Value::Null), &[("stale", Value::from(true))]));
     let bad = patched(row('9', "bad", "claude", "logged_in", Value::Null), &[("id", Value::from("XYZ"))]);
+    // 那台电脑的折合金额那几样（cost_meta，账号太多时带 brief）、这个配对所在的 Team（team_of）
     let sdoc = obj! {
         "v" => 1, "machine" => "box\u{202e}", "more" => 3, "at" => now - 30.0,
-        "accounts" => list![alice, bob, carol, dave, gem, bad, fay, gus, hal, ivy]
+        "accounts" => list![alice, bob, carol, dave, gem, bad, fay, gus, hal, ivy],
+        "cost" => obj! { "prices_date" => "2026-11-01", "updated" => now - 240.0, "unattributed" => 312, "brief" => true },
+        "team" => obj! {
+            "name" => "示例 Team\u{202e}", "role" => "admin", "coadmin" => true, "state" => "error", "error" => "连不上服务器", "seq" => 12,
+            "accounts" => 3, "device" => "studio-mac", "host" => "team.example.com:18445", "joined" => now - 86400.0,
+            "update" => "服务器不认 status_put"
+        }
     };
+    // 放不下时：不带折合金额、每周用量（"cost": false、"weeks": false），旧版的宿主不给 Team
+    let lean = patched(sdoc.clone(), &[("cost", Value::from(false)), ("weeks", Value::from(false)), ("team", Value::Null)]);
     let id = |c: char| c.to_string().repeat(16);
     v.insert(
         "status",
@@ -326,8 +358,10 @@ fn against_the_spec(t: &mut Ctx) {
             "dir" => spec::dir_seal(&p, &pid, &nsid, &sdoc),
             "note" => spec::note_seal(&p, &pid, &sdoc),
             "v2" => spec::status_seal(&p, &pid, &patched(sdoc.clone(), &[("v", Value::from(2))])),
+            "lean" => spec::status_seal(&p, &pid, &lean),
             "want" => obj! {
                 "machine" => "box", "more" => 3, "at" => now - 30.0,
+                "cost" => obj! { "week_end" => week_end, "day_end" => day_end, "cli_since" => now - 7200.5 },
                 "names" => list!["alice", "bob", "carol", "dave", "gem", "fay", "gus", "hal", "ivy"],
                 "exhausted" => obj! {
                     id('a') => list![list!["five_hour", now + 3600.0]], id('d') => list![list!["five_hour", now + 600.0]],
@@ -974,6 +1008,11 @@ fn accounts_reach_the_phone(t: &mut Ctx) {
     assert_eq!(head["peer"].str(), "box", "{head}");
     let acct = relay::only(&st["accounts"]);
     assert_eq!(relay::cols(acct, &["tool", "name", "kind", "login"]), list!["claude", "alice", "oauth", "logged_in"]);
+    // 这个配对所在的 Team（team_of）：box 是 Team 里的成员，分给它 alice 一个账号；alice 没在用（没有会话、没开 App）
+    let team = &st["team"];
+    assert_eq!((team["role"].str(), team["accounts"].f64(), team["coadmin"].clone()), ("member", 1.0, Value::Bool(false)), "{st}");
+    assert!(!team["name"].str().is_empty() && !team["host"].str().is_empty() && !team["state"].str().is_empty(), "{team}");
+    assert_eq!((acct["app"].clone(), acct["cli"].f64(), acct["since"].is_null()), (Value::Bool(false), 0.0, true), "{acct}");
     assert_eq!((acct["five_hour"]["utilization"].f64(), acct["seven_day"]["utilization"].f64()), (100.0, 41.0));
     let used = &acct["exhausted"];
     assert_eq!((used.list().len(), used[0][0].str(), used[0][1].f64()), (1, "five_hour", resets), "{acct}");

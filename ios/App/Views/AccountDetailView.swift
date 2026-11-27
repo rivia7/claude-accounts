@@ -2,31 +2,50 @@ import CcaRemoteKit
 import SwiftUI
 
 /// 一个账号的那一页（照 Mac App 的账号页，只能看）：头像、名字、套餐、在哪台电脑、现在怎么样；用量（5 小时、本周、分模型的，
-/// Antigravity 的几组）；每周用量的图；这个账号在那台电脑上的会话，点一个接入
+/// Antigravity 的几组）；每周用量的图；折合金额；这个账号在那台电脑上的会话，点一个接入。从折合金额页点进来的（focus 是 cost）
+/// 打开时滚到「折合金额」那一节
 struct AccountDetailView: View {
+    enum Focus { case cost }
+
     @Environment(AppModel.self) private var model
     let ref: AccountRef
+    var focus: Focus?
+    /// 滚过了（只在头一次打开时滚：从终端返回时不再滚）
+    @State private var focused = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = context.date.timeIntervalSince1970
             if let found = model.account(ref) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 26) {
-                        AccountHeader(peer: found.peer, account: found.account, now: now)
-                        UsageSection(account: found.account, now: now)
-                        // Antigravity 没有每周用量的统计（cca 按 5 小时、本周的窗口记，agy 没有这两个窗口：和 Mac App 一样）
-                        if !found.account.isAPI, found.account.tool != "agy" {
-                            WeeklySection(weeks: found.account.weeks, leftOut: model.status(found.peer)?.weeksLeftOut ?? false, now: now)
+                let host = model.status(found.peer)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 26) {
+                            AccountHeader(peer: found.peer, account: found.account, now: now)
+                            UsageSection(account: found.account, now: now)
+                            // Antigravity 没有每周用量的统计（cca 按 5 小时、本周的窗口记，agy 没有这两个窗口：和 Mac App 一样）
+                            if !found.account.isAPI, found.account.tool != "agy" {
+                                WeeklySection(weeks: found.account.weeks, leftOut: host?.weeksLeftOut ?? false, now: now)
+                            }
+                            if CostSection.shows(found.account, host: host) {
+                                CostSection(account: found.account, host: host, now: now).id(Focus.cost)
+                            }
+                            AccountSessions(peer: found.peer, account: found.account, now: now)
                         }
-                        AccountSessions(peer: found.peer, account: found.account, now: now)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .padding(.bottom, 30)
+                        .pageColumn()
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 30)
-                    .pageColumn()
+                    .task {
+                        guard focus == .cost, !focused, CostSection.shows(found.account, host: host) else { return }
+                        focused = true
+                        try? await Task.sleep(for: .milliseconds(250))
+                        withAnimation { proxy.scrollTo(Focus.cost, anchor: .top) }
+                    }
                 }
-                .navigationTitle(Texts.nonEmpty(found.account.name) ?? "账号")            } else if let p = model.peers.first(where: { $0.pid == ref.pid }), model.listing(p) == nil {
+                .navigationTitle(Texts.nonEmpty(found.account.name) ?? "账号")
+            } else if let p = model.peers.first(where: { $0.pid == ref.pid }), model.listing(p) == nil {
                 ProgressView("正在查询…")
             } else {
                 ContentUnavailableView("找不到这个账号", systemImage: "person.crop.circle.badge.questionmark",
@@ -64,7 +83,7 @@ private struct AccountHeader: View {
             }
             .accessibilityElement(children: .combine)
             Label {
-                Text(MoodLine.text(m, now: now) + Self.hint(m, a))
+                Text(MoodLine.text(m, now: now) + Self.working(m, a, now: now) + Self.hint(m, a))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: Self.icon(m))
@@ -86,6 +105,11 @@ private struct AccountHeader: View {
         case .loggedOut?, .wrongAccount?, .expired?: return "exclamationmark.circle.fill"
         case nil: return m.busy ? "bolt.circle.fill" : m.nearLimit ? "gauge.with.dots.needle.67percent" : "checkmark.circle"
         }
+    }
+
+    /// 在用时电脑上开着什么：「 · Claude App 开着 · 终端里 2 个会话，已 2 小时」（旧版的宿主不说时不写）
+    static func working(_ m: AccountMood, _ a: AccountStatus, now: Double) -> String {
+        m.busy && (a.appOpen || a.cliSessions > 0) ? " · " + Texts.working(a, now: now) : ""
     }
 
     /// 要人动手的：在哪做（手机上做不了）

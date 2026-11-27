@@ -1,7 +1,8 @@
 import CcaRemoteKit
 import SwiftUI
 
-/// 最外面一层：没配对过时是欢迎页；配对过是底下两页，会话（可以接入的远程会话）和账号（各台电脑上账号的状态、用量）。
+/// 最外面一层：没配对过时是欢迎页；配对过是底下五页，和 Mac App 侧栏的先后、叫法一样：总览（各台电脑上的账号，一个一张卡片）、
+/// 用量统计、折合金额、远程会话（可以接入的会话）、共享与同步（电脑所在的 Team）。前三页点一个账号推进它的那一页；
 /// 终端推进当时那一页的导航里（开着终端时底下那一排收起来），配对、设置、新建会话是弹出的一页
 struct RootView: View {
     @Environment(AppModel.self) private var model
@@ -15,17 +16,37 @@ struct RootView: View {
                 }
             } else {
                 TabView(selection: $model.tab) {
-                    Tab("会话", systemImage: "terminal", value: AppTab.sessions) {
+                    Tab("总览", systemImage: "square.grid.2x2", value: AppTab.overview) {
+                        NavigationStack(path: $model.accountPath) {
+                            AccountsView()
+                                .navigationDestination(for: AccountRef.self) { AccountDetailView(ref: $0) }
+                                .modifier(TerminalDestination(tab: .overview))
+                        }
+                    }
+                    Tab("用量统计", systemImage: "chart.bar", value: AppTab.stats) {
+                        NavigationStack(path: $model.statsPath) {
+                            UsageStatsView()
+                                .navigationDestination(for: AccountRef.self) { AccountDetailView(ref: $0) }
+                                .modifier(TerminalDestination(tab: .stats))
+                        }
+                    }
+                    Tab("折合金额", systemImage: "dollarsign.circle", value: AppTab.cost) {
+                        NavigationStack(path: $model.costPath) {
+                            CostStatsView()
+                                .navigationDestination(for: AccountRef.self) { AccountDetailView(ref: $0, focus: .cost) }
+                                .modifier(TerminalDestination(tab: .cost))
+                        }
+                    }
+                    Tab("远程会话", systemImage: "terminal", value: AppTab.sessions) {
                         NavigationStack {
                             SessionsView()
                                 .modifier(TerminalDestination(tab: .sessions))
                         }
                     }
-                    Tab("账号", systemImage: "person.2", value: AppTab.accounts) {
-                        NavigationStack(path: $model.accountPath) {
-                            AccountsView()
-                                .navigationDestination(for: AccountRef.self) { AccountDetailView(ref: $0) }
-                                .modifier(TerminalDestination(tab: .accounts))
+                    Tab("共享与同步", systemImage: "person.3", value: AppTab.sharing) {
+                        NavigationStack {
+                            SharingView()
+                                .modifier(TerminalDestination(tab: .sharing))
                         }
                     }
                 }

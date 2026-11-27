@@ -116,14 +116,18 @@ shot() {   # 文件名 启动参数…（都在演示模式里）
 	sleep "$([ "$1" = terminal ] && echo 7 || echo 3)"
 	xcrun simctl io "$UDID" screenshot "$SHOTS/$1-$mode.png" >/dev/null 2>&1
 }
+# 装好后头一次启动慢（3 秒时还在淡入）：先空跑一次
+xcrun simctl launch "$UDID" "$BUNDLE" -demo >/dev/null
+sleep 6
 for mode in light dark; do
 	xcrun simctl ui "$UDID" appearance "$mode"
-	for screen in list accounts account terminal pair settings launch; do
+	for screen in list accounts account stats cost account-cost sharing terminal pair settings launch; do
 		shot "$screen" -screen "$screen"
 	done
-	# 「账号」页换到 ChatGPT、只看 Pro 套餐的样子
+	# 总览换到 ChatGPT、只看 Pro 套餐的样子；折合金额按天看
 	shot accounts-codex -screen accounts -tool codex
 	shot accounts-pro -screen accounts -plan Pro
+	shot cost-days -screen cost -days
 done
 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
 xcrun simctl ui "$UDID" appearance light

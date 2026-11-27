@@ -77,6 +77,8 @@ struct Meter: View {
 struct AccountAvatar: View {
     let account: AccountStatus
     var size: CGFloat = 34
+    /// 在用时画绿点（总览的插画里的脸不画）
+    var dot = true
 
     var body: some View {
         ZStack {
@@ -97,7 +99,7 @@ struct AccountAvatar: View {
         .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
         .frame(width: size, height: size)
         .overlay(alignment: .bottomTrailing) {
-            if account.busy {
+            if dot, account.busy {
                 Circle().fill(.green)
                     .frame(width: max(size * 0.28, 8), height: max(size * 0.28, 8))
                     .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 1.5))
@@ -202,6 +204,99 @@ struct RemoteMark: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+}
+
+/// 「总览」的图标（Mac App 的 OverviewMark）：同一套颜色的 2×2 圆角方块（每块一个颜色，从浅到深）
+struct OverviewMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        Canvas { ctx, s in
+            let w = s.width, gap = w * 0.12, b = (w - gap) / 2
+            let colors = [Brand.blue, Brand.rose, Brand.teal, Brand.amber]
+            for (i, c) in colors.enumerated() {
+                let r = CGRect(x: CGFloat(i % 2) * (b + gap), y: CGFloat(i / 2) * (b + gap), width: b, height: b)
+                ctx.fill(Path(roundedRect: r, cornerRadius: b * 0.32, style: .continuous),
+                         with: .linearGradient(Gradient(colors: [c.mix(with: .white, by: 0.25), c]), startPoint: r.origin,
+                                               endPoint: CGPoint(x: r.maxX, y: r.maxY)))
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 「用量统计」「折合金额」「共享与同步」的图标（Mac App 的 StatsMark、CostMark、SharingMark）：粗圆的线（线宽是边长的 0.15，和 Logo
+/// 一样）、不带底，Logo 的两种颜色渐变过去（左上角先掺一点白）
+private struct StrokeMark: View {
+    let size: CGFloat
+    let from: Color
+    let to: Color
+    let path: (CGFloat) -> Path
+
+    var body: some View {
+        Canvas { ctx, s in
+            let w = s.width
+            let shade = Gradient(stops: [.init(color: from.mix(with: .white, by: 0.25), location: 0), .init(color: from, location: 0.35),
+                                         .init(color: to, location: 1)])
+            ctx.stroke(path(w), with: .linearGradient(shade, startPoint: CGPoint(x: 0.15 * w, y: 0), endPoint: CGPoint(x: 0.85 * w, y: w)),
+                       style: StrokeStyle(lineWidth: w * 0.15, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 三根高低不同的柱子，蓝渐变到紫
+struct StatsMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        StrokeMark(size: size, from: Brand.blue, to: Brand.violet) { w in
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * w, y: y * w) }
+            var g = Path()
+            g.move(to: p(0.20, 0.84)); g.addLine(to: p(0.20, 0.56))
+            g.move(to: p(0.50, 0.84)); g.addLine(to: p(0.50, 0.16))
+            g.move(to: p(0.80, 0.84)); g.addLine(to: p(0.80, 0.40))
+            return g
+        }
+    }
+}
+
+/// 美元符号（一笔 S，上下各露出一小截竖线），琥珀渐变到玫红
+struct CostMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        StrokeMark(size: size, from: Brand.amber, to: Brand.rose) { w in
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * w, y: y * w) }
+            var g = Path()
+            g.move(to: p(0.71, 0.30))
+            g.addCurve(to: p(0.50, 0.21), control1: p(0.68, 0.24), control2: p(0.60, 0.21))
+            g.addCurve(to: p(0.29, 0.355), control1: p(0.39, 0.21), control2: p(0.29, 0.27))
+            g.addCurve(to: p(0.50, 0.50), control1: p(0.29, 0.44), control2: p(0.40, 0.475))
+            g.addCurve(to: p(0.71, 0.645), control1: p(0.60, 0.525), control2: p(0.71, 0.56))
+            g.addCurve(to: p(0.50, 0.79), control1: p(0.71, 0.73), control2: p(0.61, 0.79))
+            g.addCurve(to: p(0.29, 0.70), control1: p(0.40, 0.79), control2: p(0.32, 0.76))
+            g.move(to: p(0.50, 0.08)); g.addLine(to: p(0.50, 0.21))
+            g.move(to: p(0.50, 0.79)); g.addLine(to: p(0.50, 0.92))
+            return g
+        }
+    }
+}
+
+/// 扣在一起的两个环，青绿渐变到紫
+struct SharingMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        StrokeMark(size: size, from: Brand.teal, to: Brand.violet) { w in
+            var g = Path()
+            g.addEllipse(in: CGRect(x: 0.10 * w, y: 0.27 * w, width: 0.46 * w, height: 0.46 * w))
+            g.addEllipse(in: CGRect(x: 0.44 * w, y: 0.27 * w, width: 0.46 * w, height: 0.46 * w))
+            return g
+        }
     }
 }
 

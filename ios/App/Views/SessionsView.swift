@@ -31,17 +31,7 @@ struct SessionsView: View {
         }
         .navigationTitle("远程会话")
         .refreshable { await model.fetch() }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                RemoteMark(size: 22).accessibilityHidden(true)
-            }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { model.startPairing() } label: { Image(systemName: "qrcode.viewfinder") }
-                    .accessibilityLabel("和另一台电脑配对")
-                Button { model.showSettings = true } label: { Image(systemName: "gearshape") }
-                    .accessibilityLabel("设置")
-            }
-        }
+        .toolbar { PageToolbar(mark: { RemoteMark(size: 22) }) }
     }
 
     private func footer(now: Double) -> some View {

@@ -11,7 +11,7 @@
 | M5 | 网页端：手机不装 cca，在浏览器里（iPhone 上添加到主屏幕）接入会话 | 做完了，随 3.5.3 发布（2026-11-23）。本机测过：真的服务器、真的 cca 会话，页面在无界面的 Chrome 里（iPhone 的屏幕大小、触摸）走了一遍；2026-11-22 维护者的 iPhone 在真的 Team 服务器上（Let's Encrypt 签的 IP 地址的证书）经它配上了，真机上别的没记下试过的结果（下面「网页端」的「还没做的」）；服务器要带着网页端部署（要一张浏览器信得过的证书）才用得了。3.7.0 起和手机配对的二维码给 iOS 上的 cca App（M7），不再打开网页端；网页端留给以前配好的手机，App 上了 App Store 就去掉 |
 | M6 | 每个 Team 的会话走这个 Team 自己的服务器中转；网页端的证书用 Let's Encrypt 给 IP 地址签的短期证书 | 中转这一半做完了（辅助程序、命令行、App、Team 服务器的安装脚本），3.5.3-beta.2 发布了。证书助手写好了、对着照规范核对的假证书机构测过，2026-11-22 在维护者的服务器上对着真的 Let's Encrypt（先测试环境、再正式的）
 签到了一张 IP 地址的短期证书（那时用的 `./policy.sh presence deploy --web-acme` 3.6.0 跟着维护者的服务器删掉了）；Team 的安装脚本带上了网页端和证书助手（3.5.3-beta.3 发布，那时每个 Team 自己一个 `<服务名>-acme`，一台服务器上只有一个 Team 开得了网页端；3.5.3-beta.5 起几个 Team 共用一个 `cca-team-acme`，team.md「部署」） |
-| M7 | iOS 上的 cca App：扫 Mac 上的二维码配对、像 cca 的设备一样连服务器（钉住证书、TCP 进数据端口）；做好以后去掉网页端（M5）和它的证书（M6 的证书那一半） | 在做，见 ios.md 的阶段表。3.7.0 起服务器认手机不再要网页端、`cca remote pair --web` 的二维码改成给 App 的链接（带配对码）；协议核心（`ios/CcaRemoteKit`）和真的服务器、真的 cca 对着测过，App 在模拟器里端到端测过。还没上 App Store。3.7.5（2026-11-26 发布，两个 Team 的服务器部署成了 3.7.5）：手机上的「账号」页、额度用完 / 恢复的通知（下面「手机上的账号」） |
+| M7 | iOS 上的 cca App：扫 Mac 上的二维码配对、像 cca 的设备一样连服务器（钉住证书、TCP 进数据端口）；做好以后去掉网页端（M5）和它的证书（M6 的证书那一半） | 在做，见 ios.md 的阶段表。3.7.0 起服务器认手机不再要网页端、`cca remote pair --web` 的二维码改成给 App 的链接（带配对码）；协议核心（`ios/CcaRemoteKit`）和真的服务器、真的 cca 对着测过，App 在模拟器里端到端测过。还没上 App Store。3.7.5（2026-11-26 发布，两个 Team 的服务器部署成了 3.7.5）：手机上的「账号」页、额度用完 / 恢复的通知（下面「手机上的账号」）。3.7.9（2026-11-27 发布）：照 Mac App 的侧栏补上「总览」「用量统计」「折合金额」「共享与同步」 |
 | M8 | 远程启动：手机照这台机器上的模板新建会话（模板、后台的启动器、无头的会话宿主），见 launch.md | 做完了，随 3.7.6 发布（2026-11-27），iPhone 上的 App 在第六个 TestFlight 构建里：协议核心、App 和真的 cca、真的服务器端到端测过；真机、真的 LaunchAgent 还没试。2026-11-27 起配对过的电脑也能远程启动（`cca remote launch`、Mac 上的 App 的「新建会话…」），随 3.7.7 发布 |
 
 定下来的（M2 以后照它做，别重新讨论）：经服务器中转、不走 SSH；只有打开了开关的会话能接入，只接入已经开着的会话、不能远程新建（例外：配对的手机、电脑照这台机器上的模板新建，M8，见 launch.md）；两台机器要先配对（一次性配对码），默认单向：显示配对码的那台是被接入的；端到端加密只用辅助程序已有的库（HMAC-SHA256），服务器只转发密文；数据另走一个只传密文的端口（Team 的服务器上默认是 HTTPS 那个端口的下一个空着的），凭现有的签名 HTTPS 换一次性的票据接入；App 里的终端用 SwiftTerm（`v1.20.0`，源码放进仓库，单独编成一个模块）。
@@ -434,10 +434,15 @@
 
 ## 手机上的账号（3.7.5）
 
-iPhone 上的 cca App 除了接入会话，还有一页「账号」：配对过的每台电脑上的账号现在怎样（在用 / 额度已用完 · 几点恢复 / 未登录 / 账号不符 / 登录失效 / 建议先用）、
-套餐、5 小时 / 本周 / 按模型的额度、Codex 还能重置几次、Antigravity 的几组额度；点进去是这个账号的每周用量和它的会话（点一下接入）。页上照 Mac App 侧栏那样按工具分开、能按套餐筛（套餐照 cca 给的原名，ios.md「App」的 `AccountsView`）。
+iPhone 上的 cca App 除了接入会话，还照 Mac App 的侧栏有「总览」「用量统计」「折合金额」「共享与同步」几页（ios.md「App」）。总览：配对过的每台电脑上的账号现在怎样
+（在用 / 额度已用完 · 几点恢复 / 未登录 / 账号不符 / 登录失效 / 建议先用）、在用什么（桌面 App、命令行里几个会话）、套餐、5 小时 / 本周 / 按模型的额度、
+Codex 还能重置几次、Antigravity 的几组额度，一个账号一张带插画的卡片；点进去是这个账号的每周用量、折合金额和它的会话（点一下接入）。页上照 Mac App
+侧栏那样按工具分开、能按套餐筛（套餐照 cca 给的原名，ios.md「App」的 `AccountsView`）。用量统计、折合金额把各台电脑上的官方账号放在一起比；
+共享与同步说每台电脑在这个配对所在的 Team 里怎样（配置同步了没有、是不是管理员、分给它几个账号）。
 额度用完了、到了重置的时候推一条通知（push.md「额度的通知」）。只看，不在手机上操作（登录、切换、重置额度都还在电脑上做）；只给手机
-（`peer.web`），cca 的设备之间不给。用户要的（2026-11-26）：像 Mac App 那样补全 iOS App，加上额度用完、到了新周期重置的通知。线上的格式
+（`peer.web`），cca 的设备之间不给。用户要的（2026-11-26）：像 Mac App 那样补全 iOS App，加上额度用完、到了新周期重置的通知；2026-11-27：总览、
+用量统计、折合金额、远程会话、共享与同步都放到 iOS 上，设计语言和 Mac 一致（折合金额、Team、在用什么是这时加进明文的：线上的格式、上限没变，
+Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
 （密文、`status_put`、`relay_list` 的 `have` / `status`）在 server/README.md「账号的状态」，App 那一头在 ios.md「App」。Team 的服务器要 3.7.5
 （级别 2，team.md「服务器要更新」）：旧的不认 `status_put`，手机上那台电脑一栏说要管理员更新服务器。
 
@@ -454,9 +459,9 @@ iPhone 上的 cca App 除了接入会话，还有一页「账号」：配对过�
 - 记着的在 `~/.cca/remote/status.json`（600）：`{"v":1,"pids":{配对编号:{"sum","put","old","noted"}}}`，`noted` 是推过的“用完了”
   （`{账号编号/窗口: 这一轮的时间}`）；没有邮箱、名字。配对表里没有了的配对下一轮忘掉
 
-**明文**（v1，紧凑的 JSON；手机不认的项不管，样子不对的账号丢掉）：`{"v":1,"machine","accounts":[…],"more"?,"weeks"?,"off"?,"at"}`
+**明文**（v1，紧凑的 JSON；手机不认的项不管，样子不对的账号丢掉）：`{"v":1,"machine","accounts":[…],"more"?,"weeks"?,"cost"?,"team"?,"off"?,"at"}`
 - `machine`：和会话的说明里的一样（短主机名，`peers::machine_name`）；`at`：放的时间；`off`：不让接入了（`accounts` 是空的）
-- 一个账号：`{"id","aid"?,"tool","name","kind","login","plan","tier","busy","color"?,"badge"?,"usage","weeks"}`
+- 一个账号：`{"id","aid"?,"tool","name","kind","login","plan","tier","busy","app"?,"cli"?,"since"?,"color"?,"badge"?,"usage","weeks","cost"?}`
   - `id`：这个配对里的账号编号，`usage_tag(P, "acct\0" 工具 "\0" 账号目录名)`（`usage_tag(P, x)` 是 `hex(HMAC(P, "cca-remote/v1/usage\0" x))` 的前 16 个字符）：
     换别名不变，别的配对、服务器认不出是哪个账号。`aid`：会话的说明里的同一个账号摘要（这个 Team 的盐、账号表的键，`far::aid_of`），手机照它把会话
     放到账号下面
@@ -465,8 +470,22 @@ iPhone 上的 cca App 除了接入会话，还有一页「账号」：配对过�
   - `usage`（没有是 null）：用量条目（PROTOCOL 3.1）里手机要的：`source`、`fetched_epoch`、`stale`、`error_code`（只给原因码：说明里有端口号这些）、
     `five_hour`、`seven_day`（`{utilization, resets_epoch, reset}`）、`model_scoped`、`use_first`、`reset_credits`（Codex）、`quota_groups`（Antigravity）
   - `weeks`（没有是 null）：每周用量（PROTOCOL 2.2 的 `usage_weeks`）：`{since_epoch, weeks:[{start_epoch, end_epoch, used_percent, resets, current, partial}], summary}`
-- 太大（密文超过 `STATUS_BLOB`）：先不带每周用量（各账号的 `weeks` 是 null，外面写 `"weeks": false`：手机照它说那台电脑上的账号太多、每周用量没放上来，
-  不说成还没有记录），还放不下再一个个少放账号（`more` 是少放了几个）
+  - `app`、`cli`、`since`（只在在用时有，`row_of`）：桌面 App 开着（true）、命令行里经 cca 启动的会话有几个、最早那个从什么时候开始（总览的卡片、账号页那一句）
+  - `cost`（还没有记录、折合金额关着时没有，`cost_of`）：账号的折合金额（PROTOCOL 2.2 的 `cost`），金额都是美分的整数：
+    `{"since","weeks":[…],"week_end","week_hours":[…],"days":[…],"day_end","sum":[按周, 按天],"average":[…],"average_n":[…],"cache_hit":[…],"sync"?,"missing"?,"models"?,"devices"?}`。
+    按周的（最多 13 项，最后一项是这一周）、按天的（30 项，最后一项是今天）只给金额，起止由手机照 `week_end` / `day_end` 和 `week_hours`（各项几个小时，
+    换了切法的那一项不是 168）首尾相接往前推；哪几项开始时还没有记录由手机照 `since` 算（晚于这一项开始，和 cca 的 `partial` 一样）；合计照 cca 算好的给
+    （各项四舍五入到分再加会差一两分）。`sync`：同步没成时 cca 给的状态（只给状态，不给说明：说明里有服务器地址）；`missing`：还有几台设备没算进来；
+    `models`：前 3 个，`[模型名或 null（没按模型记下的那一部分）, 近 12 周, 近 30 天, 暂按哪个同系列模型的价格（cca 的价格表里还没有它时才有）]`；
+    `devices`：用过它的设备有两台以上、或者有很久没同步上来的时才有，最多 6 台，`[名字, 这台是 1, 近 12 周, 近 30 天, 很久没同步上来是 1, 上次同步的时间或 null]`
+- `cost`：这台电脑的折合金额那几样（PROTOCOL 2.2 的 `cost_total`，`cost_meta`）：`{"prices_date","updated","scanning"?,"unattributed"?,"brief"?}`
+  （`unattributed`：这台电脑近 30 天认不出是哪个账号的，美分，只算它自己的，几台电脑的加起来不重复；`brief`：各账号的 `cost` 没带 `models`、`devices`）；
+  折合金额关着（`cost_total` 是 null）时没有这一项，手机的折合金额页不列这台电脑的账号
+- `team`：这个配对所在的 Team（PROTOCOL 4.14 的 `config.teams` 里编号是这台服务器的那一项，`team_of`）：
+  `{"name","role","state","seq","accounts","device","host","coadmin"?,"error"?,"joined"?,"update"?}`（`error` 最多 160 个字，`update` 是服务器要更新的原因）
+- 太大（密文超过 `STATUS_BLOB`）：一级一级少放（`seal_doc`）：先不带折合金额里按模型、按设备的（外面的 `cost` 写 `"brief": true`），再不带每周用量
+  （各账号的 `weeks` 是 null，外面写 `"weeks": false`：手机照它说那台电脑上的账号太多、每周用量没放上来，不说成还没有记录），再不带折合金额（各账号没有
+  `cost`，外面的 `cost` 是 `false`，手机同样照实说），还放不下再一个个少放账号（`more` 是少放了几个）
 
 **额度用完了。** 规则（`status.rs` 的 `exhausted`；和 Mac App 的 `Diagnosis.quotaPressure` 里用完了的那些、CcaRemoteKit 的 `AccountStatus.exhausted` 是同一条）：
 登录着、有用量（`source` 不是 none）、不是登录失效（`error_code` 不是 auth）；5 小时、本周两个窗口（Antigravity 是各组里这个窗口用得最少的那个：
@@ -479,8 +498,10 @@ iPhone 上的 cca App 除了接入会话，还有一页「账号」：配对过�
 - 通知的明文、字：push.md「额度的通知」
 
 **手机那一头**（CcaRemoteKit）：`RemoteClient.list` 查会话时带着 `have`（手里每个配对那一份的 `n`），回 `same` 的照用手里那一份、换上新的 `age`；
-`PeerListing.status`（`Status.swift` 的 `HostStatus`：解开、核对样子）、`statusServed`（回的里面有没有 `status`：没有是旧的服务器）。没问到服务器时
-照手里那一份（界面上写着是多久以前的）。
+`PeerListing.status`（`Status.swift` 的 `HostStatus`，折合金额、Team 在 `Cost.swift`：解开、核对样子）、`statusServed`（回的里面有没有 `status`：没有是旧的服务器）。没问到服务器时
+照手里那一份（界面上写着是多久以前的）。几台电脑上的同一个账号：总览照电脑各列各的；用量统计、折合金额照 `aid`（同一个 Team 的盐算的，几台电脑给的一样）
+只列一次，留有数据的、放得晚的那一份（iOS 的 `Pages.distinct`），没有 `aid` 的照列。折合金额页合计里「无法识别属于哪个账号」的是各台电脑的
+`unattributed` 加起来；按天的合计柱子照最晚结束的那一份的日子把各个账号的加到一起（几台电脑的时区不一样也对得上，`CostChart.sumDays`）。
 
 ## 测试
 
