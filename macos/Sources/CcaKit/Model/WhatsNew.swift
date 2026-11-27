@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.10", title: "远程新建会话时再选账号，会话能拖动排序", points: [
+            .init(symbol: "person.crop.circle.badge.checkmark",
+                  text: "远程会话的模板不再带账号：在 iPhone 上的 cca App 或另一台 Mac 上照模板新建会话时，再选用这台 Mac 上的哪个账号（终端里是 cca remote launch --account）。放模板的 Mac 要更新到这一版，iPhone 上的 App 也要更新。"),
+            .init(symbol: "arrow.up.arrow.down",
+                  text: "「远程会话」页里，一台电脑的会话可以拖动调整先后；iPhone 上点「排序」再拖。排好的先后记在这台设备上。"),
+            .init(symbol: "server.rack",
+                  text: "一台 Mac 最多可以同时开 100 个远程会话（以前是 8 个），App 里也能同时开 100 个终端。Team 的服务器要更新到这一版（建 Team 的设备点「更新服务器…」）才放开。"),
+        ]),
         ReleaseNote(version: "3.7.9", title: "手机上也能看总览、用量统计和折合金额", points: [
             .init(symbol: "iphone",
                   text: "iPhone 上的 cca App 照 Mac 的侧栏分成五页：总览、用量统计、折合金额、远程会话、共享与同步。总览里每个账号一张卡片，和 Mac 上的一样。"),
