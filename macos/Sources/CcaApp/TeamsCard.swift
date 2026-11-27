@@ -374,7 +374,7 @@ private struct TeamAccountLine: View {
                 Spacer(minLength: 8)
                 RowAction("改别名…", systemImage: "pencil") { model.startTeamAlias(team, account) }
                     .disabled(editing || model.teamBusy || model.flow != nil)
-                    .help("这个账号在各台设备上叫什么（没起过的默认是 team-1、team-2……）")
+                    .help("这个账号在各台设备上叫什么（没起过的默认是 Team 的名字加上编号）")
                 Picker("节点", selection: Binding(get: { account.node }, set: { model.mapTeamAccount(team, account, node: $0) })) {
                     ForEach(nodes, id: \.self) { Text($0).tag($0) }
                 }

@@ -4,7 +4,7 @@
 //! admin.json（600，只有管理员的设备有）：
 //! ```text
 //! {"v": 1, "master": 主密钥（64 个十六进制字符）, "salt": 这个 Team 的盐, "next": 下一台设备的序数, "gen": 服务器上这一份记录的编号,
-//!  "alias_n": {工具: 默认的别名编到了 team-几}（各工具各编各的，用过的号不再用；3.5.3-beta.5 是一个数）,
+//!  "alias_n": {工具: 默认的别名编到了第几号（「Team 的名字-N」的 N）}（各工具各编各的，用过的号不再用；3.5.3-beta.5 是一个数）,
 //!  "config": {"accounts": {工具: {邮箱: 节点}}, "tool_aliases": {工具: {邮箱: 别名}}, "aliases": {邮箱: 别名}（照 tool_aliases 算的，
 //!             给旧版本用：每个邮箱用它最前面那个工具里的）, "alias_lock": true（锁定了别名；没锁定时没有）, "install_node": 节点,
 //!             "nodes": {"group", "proxies"} | null},
@@ -33,7 +33,7 @@ use crate::cmd::presence::{key_at, presence_post, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
 use crate::core::model::{is_api, node_of, parse_key};
-use crate::core::policy::{alias_ok, policy_sources};
+use crate::core::policy::{alias_ok, legacy_n, policy_sources, team_default_alias, team_default_n};
 use crate::core::team::{load_team, team_dir, team_path, teams, Role, Team, TEAMS_DIR};
 use crate::core::tool::tools;
 use crate::py::fs::{self, load_quiet, save_json};
@@ -317,11 +317,6 @@ fn find_device(a: &Dict, sel: &str) -> Result<String, String> {
 
 // --- 每台设备的那一份配置 ---------------------------------------------------------------------------------------------------
 
-/// 默认的别名 team-N 的 N；别的样子是 None
-fn default_n(alias: &str) -> Option<i64> {
-    alias.strip_prefix("team-").filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
-}
-
 /// 各工具的别名算出来是什么样（alias_plan）：tool_aliases、按邮箱的 aliases、alias_n
 struct AliasPlan {
     by_tool: Dict,
@@ -329,14 +324,16 @@ struct AliasPlan {
     counters: Dict,
 }
 
-/// 配置里每个账号都有别名，按工具记（{工具: {邮箱: 别名}}）：没有的（不合规的、在这个工具里和前面的账号撞了的）编成 team-1、team-2……——
-/// 各工具（Claude、Codex、Antigravity）各编各的，各自的第一个账号都是 team-1；同一个邮箱在两个工具里是两个账号，各有各的别名。
+/// 配置里每个账号都有别名，按工具记（{工具: {邮箱: 别名}}）：没有的（不合规的、在这个工具里和前面的账号撞了的）编成「Team 的名字-1」
+/// 「Team 的名字-2」……（team_default_alias；书房组-1）——各工具（Claude、Codex、Antigravity）各编各的，各自的第一个账号都是 1 号；
+/// 同一个邮箱在两个工具里是两个账号，各有各的别名。以前（3.7.8 及以前）默认编的 team-N 换成「Team 的名字-N」（号不变；换成的那个被这个
+/// 工具里别的账号占着就留着 team-N）：换过一次以后再算还是一样，所以不用记换没换过，下一次发布时各台设备跟着换（team_alias_follow）。
 /// alias_n（{工具: 编到第几}）记着各工具编到第几了，用过的号不再用（去掉的账号在各台设备上收起来了，再给回来时照原来的键：号给了别的账号
 /// 就撞了）；已经不在 Team 里的账号的别名去掉。照工具的先后、各工具里账号加进来的先后编，别名也照这个先后排（每一次算出来的一样：配置的
 /// 摘要不会白变）。按邮箱、各工具通用的 aliases 照它算：每个邮箱用它最前面那个工具里的（给 3.5.3-beta.5 及以前的 cca：旧版本的设备、
 /// 管理员这台换回旧版本时）。没有 tool_aliases 的（3.5.3-beta.5 及以前的 Team）照 aliases 给它在的每个工具；3.5.3-beta.5 的 alias_n 是
-/// 一个数（那时各工具一起编）：那时编的 team-N 都去掉，照各工具重新编。只算，不改 admin.json
-fn alias_plan(a: &Dict) -> AliasPlan {
+/// 一个数（那时各工具一起编）：那时编的 team-N 都去掉，照各工具重新编。team：这个 Team 现在的名字。只算，不改 admin.json
+fn alias_plan(a: &Dict, team: &str) -> AliasPlan {
     let config = a.dict("config").unwrap_or_default();
     let accounts = config.dict("accounts").unwrap_or_default();
     let legacy = a.get("alias_n").is_some_and(|v| v.as_dict().is_none());
@@ -353,17 +350,26 @@ fn alias_plan(a: &Dict) -> AliasPlan {
         let mut kept: HashMap<&str, String> = HashMap::new();
         for e in &emails {
             let Some(x) = old.get(e).filter(alias_ok).map(|x| x.py_str()) else { continue };
-            if !(have.is_none() && legacy && default_n(&x).is_some()) && used.insert(x.clone()) {
+            if !(have.is_none() && legacy && legacy_n(&x).is_some()) && used.insert(x.clone()) {
                 kept.insert(e, x);
             }
         }
+        for e in &emails {
+            let Some(k) = kept.get(e.as_str()).and_then(|x| legacy_n(x)) else { continue };
+            let y = team_default_alias(team, k);
+            if !used.contains(&y) {
+                used.remove(&kept[e.as_str()]);
+                used.insert(y.clone());
+                kept.insert(e, y);
+            }
+        }
         let mut n = counters.get(tool.name).and_then(|v| v.as_int()).filter(|n| *n >= 0).unwrap_or(0);
-        n = kept.values().filter_map(|x| default_n(x)).fold(n, i64::max);
+        n = kept.values().filter_map(|x| team_default_n(x, team)).fold(n, i64::max);
         let m = Dict::new();
         for e in &emails {
             let x = kept.remove(e.as_str()).unwrap_or_else(|| loop {
                 n += 1;
-                let cand = format!("team-{n}");
+                let cand = team_default_alias(team, n);
                 if used.insert(cand.clone()) {
                     break cand;
                 }
@@ -384,13 +390,34 @@ fn alias_plan(a: &Dict) -> AliasPlan {
 }
 
 /// 照 alias_plan 改 admin.json 里的 config 和 alias_n（没存盘）
-fn default_aliases(a: &Dict) {
-    let plan = alias_plan(a);
+fn default_aliases(a: &Dict, team: &str) {
+    let plan = alias_plan(a, team);
     let config = a.dict("config").unwrap_or_default();
     config.set("tool_aliases", plan.by_tool);
     config.set("aliases", plan.flat);
     a.set("config", config);
     a.set("alias_n", plan.counters);
+}
+
+/// Team 改了名字：照原来的名字默认编的别名（「旧名字-N」）换成「新名字-N」（号不变）；换成的那个被这个工具里别的账号占着就留着原来的
+/// （以后它看起来就像管理员起的，不再跟着改名）。以前的 team-N 不在这里换，之后的 default_aliases 照新名字换：先换「旧名字-N」，原来占着
+/// 第几号的账号改了名字以后还是它占着。只改 tool_aliases（没存盘）：之后要 default_aliases
+fn rename_defaults(a: &Dict, old: &str, new: &str) {
+    let config = a.dict("config").unwrap_or_default();
+    let by_tool = config.dict("tool_aliases").unwrap_or_default();
+    for (tool, names) in by_tool.items() {
+        let Some(names) = names.as_dict() else { continue };
+        for (e, x) in names.items() {
+            let Some(k) = x.as_str().filter(|x| legacy_n(x).is_none()).and_then(|x| team_default_n(x, old)) else { continue };
+            let y = team_default_alias(new, k);
+            if x.as_str() != Some(y.as_str()) && alias_holder(&names, &e, &y).is_none() {
+                names.set(&*e, y.as_str());
+            }
+        }
+        by_tool.set(&*tool, names);
+    }
+    config.set("tool_aliases", by_tool);
+    a.set("config", config);
 }
 
 /// 这个工具（tool_aliases 里的那一节）里叫 alias 的另一个账号的邮箱
@@ -585,7 +612,7 @@ fn publish(t: &Team, a: &Dict, only: Option<&str>) -> R<Result<Published, String
         Ok(c) => c,
         Err(why) => return Ok(Err(why)),
     };
-    default_aliases(a); // 以前加进来、还没有别名的账号（3.5.3-beta.5 以前的 Team）也编上
+    default_aliases(a, &t.name); // 以前加进来、还没有别名的账号（3.5.3-beta.5 以前的 Team）也编上，以前默认的 team-N 换成「Team 的名字-N」
     let devs = a.dict("devices").unwrap_or_default();
     let (master, sign) = (a.at("master").py_str(), signer(t)?);
     let seq_of = |d: &Dict| d.get("seq").and_then(|s| s.as_int()).filter(|s| *s >= 0).unwrap_or(0);
@@ -1053,11 +1080,11 @@ fn team_picks() -> Vec<Pick> {
     out
 }
 
-/// 把这几个账号连同节点、别名放进这个 Team 的配置（admin.json 的 config，没存盘；之后要 default_aliases），同一个账号照这台设备上的换。
-/// 这台设备上起过的别名带进去：Team 里原来是默认的 team-N（或者还没有）、这个工具里也没有别的账号叫它时；默认样子的 team-N 不带（是别的
-/// Team 编的号，这里另编）。别的 Team 给的账号，那个 Team 带着它的节点的定义时一起带过来（别的设备照这一份连：它们不一定有这个节点），
+/// 把这几个账号连同节点、别名放进这个 Team（名字是 team）的配置（admin.json 的 config，没存盘；之后要 default_aliases），同一个账号照这台
+/// 设备上的换。这台设备上起过的别名带进去：Team 里原来是默认编的（或者还没有）、这个工具里也没有别的账号叫它时；默认样子的不带（以前的
+/// team-N、这个 Team 或者给这个账号的那个 Team 编的「名字-N」：是 Team 编的号，这里另编）。别的 Team 给的账号，那个 Team 带着它的节点的定义时一起带过来（别的设备照这一份连：它们不一定有这个节点），
 /// 这个 Team 已经有了同名的节点的不换。节点的定义不合格（fill_problems）时什么都不改，Err 是给人看的原因
-fn put_accounts(a: &Dict, picks: &[Pick]) -> Result<(), String> {
+fn put_accounts(a: &Dict, team: &str, picks: &[Pick]) -> Result<(), String> {
     let config = a.dict("config").unwrap_or_default();
     let nodes = config.dict("nodes");
     let mut px: Vec<Dict> = nodes
@@ -1085,8 +1112,9 @@ fn put_accounts(a: &Dict, picks: &[Pick]) -> Result<(), String> {
     for p in picks {
         let (m, names) = (accounts.dict(p.tool).unwrap_or_default(), by_tool.dict(p.tool).unwrap_or_default());
         m.set(p.email.as_str(), p.node.as_str());
-        let replaceable = names.str(&p.email).is_none_or(|x| default_n(&x).is_some());
-        if default_n(&p.alias).is_none()
+        let replaceable = names.str(&p.email).is_none_or(|x| team_default_n(&x, team).is_some());
+        if team_default_n(&p.alias, team).is_none()
+            && p.from.as_deref().is_none_or(|f| team_default_n(&p.alias, f).is_none())
             && alias_ok(&V::from(p.alias.as_str()))
             && replaceable
             && alias_holder(&names, &p.email, &p.alias).is_none()
@@ -1168,10 +1196,10 @@ pub fn cmd_team_new(args: &[String]) -> R<()> {
         },
     };
     if !chosen.is_empty() {
-        if let Err(why) = put_accounts(&held, &chosen) {
+        if let Err(why) = put_accounts(&held, &name, &chosen) {
             return fail("accounts", &format!("带过来的节点的定义不对：{why}"));
         }
-        default_aliases(&held);
+        default_aliases(&held, &name);
     }
     fs::makedirs_mode(&TEAMS_DIR, 0o700)?;
     // 以前建到一半被打断留下的（里面有根密钥）：过了一个小时的清掉
@@ -1685,7 +1713,7 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
         // 管理页要的都在这一份里：Team 的名字、配置里的账号 → 节点（管理员定的）、别名（按工具的，和按邮箱的：照 alias_plan 算，
         // 还没发布过的旧 Team 也是按工具编好的样子）、带着定义的节点的名字
         let config = a.dict("config").unwrap_or_default();
-        let plan = alias_plan(&a);
+        let plan = alias_plan(&a, &t.name);
         let nodes: Vec<V> = config
             .dict("nodes")
             .and_then(|n| n.list("proxies"))
@@ -1909,8 +1937,8 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
 }
 
 /// py team-import Team --mine：把这台设备上**自己的**官方账号（不是哪个 Team 给的；第三方 API 账号不算）连同现在走的节点、别名加进
-/// 这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换；别名照 put_accounts：这台设备上起过的带进去——Team 里原来是默认的
-/// team-N、也没被别的账号用着时换成它，没起过的编成 team-N），再发布——把自己的几台设备并成一个 Team 时用。stdout：几个账号、
+/// 这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换；别名照 put_accounts：这台设备上起过的带进去——Team 里原来是默认编的、
+/// 也没被别的账号用着时换成它，没起过的编成「Team 的名字-N」），再发布——把自己的几台设备并成一个 Team 时用。stdout：几个账号、
 /// 0（节点各台设备自己有）、存上了几台的配置。原因码：no_team、not_admin、usage、file（没有可加的账号）、publish。
 /// 3.6.0 起没有维护者的映射了：导入映射文件的那一种（team-import Team policy.json [nodes.json]）去掉了，照旧写是 usage
 pub fn cmd_team_import(args: &[String]) -> R<()> {
@@ -1919,16 +1947,16 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
     if args[1] != "--mine" || args.len() != 2 {
         return fail("usage", "用法: cca team import Team --mine");
     }
-    default_aliases(&a); // 原来的先换成按工具记的（3.5.3-beta.5 及以前的 Team）
+    default_aliases(&a, &t.name); // 原来的先换成按工具记的（3.5.3-beta.5 及以前的 Team）
     let mine: Vec<Pick> = team_picks().into_iter().filter(|p| p.from.is_none()).collect();
     let count = mine.len();
     if count == 0 {
         return fail("file", "这台设备上没有自己的官方账号可加（别的 Team 给的、第三方 API 账号都不算）");
     }
-    if let Err(why) = put_accounts(&a, &mine) {
+    if let Err(why) = put_accounts(&a, &t.name, &mine) {
         return fail("file", &why); // 自己的账号不带节点的定义：到不了这里
     }
-    default_aliases(&a);
+    default_aliases(&a, &t.name);
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
     out!("{count}\n0\n{stored}");
@@ -1957,7 +1985,7 @@ pub fn cmd_team_map(args: &[String]) -> R<()> {
     let config = a.dict("config").unwrap_or_default();
     config.set("accounts", accounts);
     a.set("config", config);
-    default_aliases(&a); // 新加的账号编成 team-N；去掉的账号（别的工具里也没有了）的别名去掉
+    default_aliases(&a, &t.name); // 新加的账号编成「Team 的名字-N」；去掉的账号（别的工具里也没有了）的别名去掉
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
     out!("{stored}");
@@ -1966,7 +1994,8 @@ pub fn cmd_team_map(args: &[String]) -> R<()> {
 
 /// py team-alias Team 账号 新别名：改一个账号在这个 Team 里的别名，再发布。别名按工具记：账号写 工具:邮箱 只改这个工具里的，只写邮箱
 /// 改它在的每个工具里的。各台设备上照 Team 给的用着的下次同步配置时跟着改，自己改过的不动（team_alias_follow）；管理员这台设备上的账号表
-/// 不跟着改。同一个工具里别的账号已经叫这个的不行（别的工具里的可以：Claude、Codex 各有各的 team-1）。stdout：原来的别名（几个工具里
+/// 不跟着改。同一个工具里别的账号已经叫这个的不行（别的工具里的可以：Claude、Codex 各有各的 1 号）；team-数字 不行（以前默认编号的
+/// 写法：发布时会换成「Team 的名字-数字」，名字里一个能用的字都没有的 Team 除外）。stdout：原来的别名（几个工具里
 /// 不一样时用「、」连起来）、存上了几台的配置。原因码：no_team、not_admin、alias、no_account、publish
 pub fn cmd_team_alias(args: &[String]) -> R<()> {
     arity("team-alias", args, 3, 3)?;
@@ -1975,12 +2004,16 @@ pub fn cmd_team_alias(args: &[String]) -> R<()> {
         return fail("alias", "别名不能是空的，不能有空格、引号、括号、反斜杠或 @，最多 12 个汉字或 24 个字母");
     }
     let (t, a, _lk) = admin_of(&args[0])?;
+    if let Some(k) = legacy_n(&alias).filter(|k| team_default_alias(&t.name, *k) != alias) {
+        let want = team_default_alias(&t.name, k);
+        return fail("alias", &format!("「{alias}」是以前默认编号的写法，发布时会换成「{want}」：直接写「{want}」，或者换一个"));
+    }
     let sel = args[1].trim().to_lowercase();
     let (only, email) = match sel.split_once(':') {
         Some((tool, e)) if tools().iter().any(|x| x.name == tool) => (Some(tool.to_string()), e.trim().to_string()),
         _ => (None, sel.clone()),
     };
-    default_aliases(&a);
+    default_aliases(&a, &t.name);
     let config = a.dict("config").unwrap_or_default();
     let (accounts, by_tool) = (config.dict("accounts").unwrap_or_default(), config.dict("tool_aliases").unwrap_or_default());
     let targets: Vec<_> = tools()
@@ -2010,7 +2043,7 @@ pub fn cmd_team_alias(args: &[String]) -> R<()> {
     }
     config.set("tool_aliases", by_tool);
     a.set("config", config);
-    default_aliases(&a); // 按邮箱的 aliases 跟着算
+    default_aliases(&a, &t.name); // 按邮箱的 aliases 跟着算
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
     out!("{}\n{stored}", old.join("、"));
@@ -2042,6 +2075,7 @@ pub fn cmd_team_alias_lock(args: &[String]) -> R<()> {
 }
 
 /// py team-name Team 新名字：改这个 Team 的名字（team.json 的 name），再发布：各台设备下次同步配置时跟着改（配置里的 name：follow）。
+/// 照原来的名字默认编的别名（「旧名字-N」）跟着换成「新名字-N」（rename_defaults），各台设备上照 Team 给的用着的一起跟着换。
 /// 已经发出去的邀请链接里带着的还是原来的名字，拿它加入的设备第一次同步到配置时换成新的。手机网页端的标题是部署时写进服务器的（app/name），
 /// 下次部署（cca team deploy）时才换。这台设备上别的 Team 已经叫这个名字的不行（按名字选 Team 就分不清了）。先和服务器对一遍：连不上、
 /// 对不上（server）时名字还没改，照原来的命令再来一次就行；发布没成（publish）时名字已经改了，原因里说照新名字 cca team publish。
@@ -2068,6 +2102,11 @@ pub fn cmd_team_name(args: &[String]) -> R<()> {
         save_team(&t.id, &raw)?;
     }
     let t = load_team(&t.id).ok_or_else(|| Fail::Die("刚写好的 team.json 读不回来".into()))?;
+    if old != name {
+        rename_defaults(&a, &old, &name);
+        default_aliases(&a, &name);
+        admin_save(&t.id, &a)?;
+    }
     // 发布没成时名字已经改了：照原来的名字再来一次找不到这个 Team，所以说清楚
     let later = |why: String| {
         if old == name {

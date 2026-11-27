@@ -3,7 +3,7 @@
 //! （先说清楚改了什么，bash 那边问过同意再换、发布）。文件的样子：
 //! ```text
 //! {"kind": "cca-team-config", "version": 1, "team": 导出时 Team 的名字（只给人看：导入时不管，名字照 cca team name 改）,
-//!  "accounts": {工具: {邮箱: {"node": 节点, "alias": 别名}}}（值也可以只写节点；没写别名的：原来就在的照原来的，新加的编成 team-N）,
+//!  "accounts": {工具: {邮箱: {"node": 节点, "alias": 别名}}}（值也可以只写节点；没写别名的：原来就在的照原来的，新加的编成「Team 的名字-N」）,
 //!  "alias_lock": true | false, "install_node": 节点（没指定是 ""）,
 //!  "nodes": {"group": 策略组, "proxies": [节点定义…]} | null}
 //! ```
@@ -107,9 +107,9 @@ fn check(args: &[String]) -> R<()> {
     };
     let (t, a, _lk) = admin_of(sel)?;
     let (p, sha) = read_parsed(file)?;
-    let b = candidate(&a, &p);
+    let b = candidate(&a, &p, &t.name);
     let here = cfg_load().ok().and_then(|c| c.list("nodes"));
-    let mut ch = changes(&a, &b, &here);
+    let mut ch = changes(&a, &b, &here, &t.name);
     if base.is_some_and(|d| d != config_digest(&a)) {
         ch.lines.push(format!("! 打开以后「{}」的配置在别处改过（App 里、别的命令）：照这份换掉的话，那些改动就没了", t.name));
     }
@@ -154,7 +154,7 @@ fn apply(args: &[String]) -> R<()> {
     if want.is_some_and(|h| h != sha) {
         return fail("file", &format!("「{}」在确认以后又改过了：没有换，重新导入一次", path::abspath(&path::expanduser(file))));
     }
-    let b = candidate(&a, &p);
+    let b = candidate(&a, &p, &t.name);
     a.set("config", b.at("config"));
     a.set("alias_n", b.at("alias_n"));
     admin_save(&t.id, &a)?;
@@ -168,10 +168,10 @@ fn config_digest(a: &Dict) -> String {
     sha256_hex(json::dumps(&a.at("config"), json::Fmt::new().compact().sort_keys()))[..16].to_string()
 }
 
-/// 导出的内容：各工具都列出来（没有账号的是 {}，照着加就行），每个账号带着别名（没起过的是默认编的 team-N）
+/// 导出的内容：各工具都列出来（没有账号的是 {}，照着加就行），每个账号带着别名（没起过的是默认编的「Team 的名字-N」）
 fn export_doc(t: &Team, a: &Dict) -> Dict {
     let config = a.dict("config").unwrap_or_default();
-    let names = alias_plan(a).by_tool;
+    let names = alias_plan(a, &t.name).by_tool;
     let all = config.dict("accounts").unwrap_or_default();
     let accounts = Dict::new();
     for tool in tools().iter() {
@@ -359,11 +359,12 @@ fn parse(doc: &V) -> Result<Parsed, Vec<String>> {
 }
 
 /// 照文件换掉配置以后的 admin.json（深拷贝，a 不动）。账号照原来的先后：还在的在前，新加的照文件里的先后接在后面（各台设备的配置不会
-/// 只因为先后变了就重新发布）。别名：文件里写了的照它；没写的、原来就在的留着原来的（和写了的撞了就不留），剩下的 default_aliases 编成 team-N
-fn candidate(a: &Dict, p: &Parsed) -> Dict {
+/// 只因为先后变了就重新发布）。别名：文件里写了的照它；没写的、原来就在的留着原来的（和写了的撞了就不留），剩下的 default_aliases 编成
+/// 「Team 的名字-N」（team：这个 Team 的名字）
+fn candidate(a: &Dict, p: &Parsed, team: &str) -> Dict {
     let b = V::Dict(a.clone()).deepcopy().as_dict().unwrap_or_default();
     let config = b.dict("config").unwrap_or_default();
-    let (old_acc, old_names) = (config.dict("accounts").unwrap_or_default(), alias_plan(a).by_tool);
+    let (old_acc, old_names) = (config.dict("accounts").unwrap_or_default(), alias_plan(a, team).by_tool);
     let (accounts, by_tool) = (Dict::new(), Dict::new());
     for tool in tools().iter() {
         let (want, given) = (p.accounts.dict(tool.name).unwrap_or_default(), p.aliases.dict(tool.name).unwrap_or_default());
@@ -399,7 +400,7 @@ fn candidate(a: &Dict, p: &Parsed) -> Dict {
     }
     config.set("nodes", p.nodes.clone());
     b.set("config", config);
-    default_aliases(&b);
+    default_aliases(&b, team);
     b
 }
 
@@ -432,11 +433,12 @@ fn listed(v: &[String]) -> String {
     }
 }
 
-/// a（原来的）换成 b（candidate 算的）会改什么。here：这台设备的可选节点（config.json 的 nodes；没有是 None，不提醒节点的事：说不准）
-fn changes(a: &Dict, b: &Dict, here: &Option<List>) -> Changes {
+/// a（原来的）换成 b（candidate 算的）会改什么。here：这台设备的可选节点（config.json 的 nodes；没有是 None，不提醒节点的事：说不准）；
+/// team：这个 Team 的名字
+fn changes(a: &Dict, b: &Dict, here: &Option<List>, team: &str) -> Changes {
     let (oc, nc) = (a.dict("config").unwrap_or_default(), b.dict("config").unwrap_or_default());
     let (oa, na) = (oc.dict("accounts").unwrap_or_default(), nc.dict("accounts").unwrap_or_default());
-    let (old_names, new_names) = (alias_plan(a).by_tool, nc.dict("tool_aliases").unwrap_or_default());
+    let (old_names, new_names) = (alias_plan(a, team).by_tool, nc.dict("tool_aliases").unwrap_or_default());
     let (np, op) = (proxy_defs(&nc.at("nodes")), proxy_defs(&oc.at("nodes")));
     let (mut added, mut removed, mut moved, mut renamed) = (vec![], vec![], vec![], vec![]);
     // 新加的、换了节点的账号走的节点
@@ -617,22 +619,23 @@ mod tests {
             "tool_aliases": {"claude": {"a@x.com": "team-1", "b@x.com": "小王"}}, "aliases": {}, "nodes": null}}"#)
         .as_dict()
         .expect("对象");
-        // 先后变了（照原来的先后，新加的接在后面）、b 只写了节点（别名照原来的）、新加的 c 编成 team-3（用过的号不再用）
+        // 先后变了（照原来的先后，新加的接在后面）、b 只写了节点（别名照原来的）、新加的 c 编成 Lab-3（用过的号不再用）；a 写的是以前
+        // 默认的 team-1：换成 Lab-1
         let p = parsed(
             r#"{"kind": "cca-team-config", "version": 1,
             "accounts": {"claude": {"c@x.com": "JP-A", "b@x.com": "JP-B", "a@x.com": {"node": "JP-B", "alias": "team-1"}}}}"#,
         );
-        let b = candidate(&a, &p);
+        let b = candidate(&a, &p, "Lab");
         let c = b.dict("config").expect("有");
         assert_eq!(js(&c.at("accounts")), r#"{"claude": {"a@x.com": "JP-B", "b@x.com": "JP-B", "c@x.com": "JP-A"}}"#);
-        assert_eq!(js(&c.at("tool_aliases")), r#"{"claude": {"a@x.com": "team-1", "b@x.com": "小王", "c@x.com": "team-3"}}"#);
+        assert_eq!(js(&c.at("tool_aliases")), r#"{"claude": {"a@x.com": "Lab-1", "b@x.com": "小王", "c@x.com": "Lab-3"}}"#);
         assert_eq!(js(&b.at("alias_n")), r#"{"claude": 3}"#);
         assert_eq!(
             a.dict("config").and_then(|c| c.dict("accounts")).and_then(|m| m.dict("claude")).map(|m| m.len()),
             Some(2),
             "a 不动"
         );
-        let ch = changes(&a, &b, &None);
+        let ch = changes(&a, &b, &None, "Lab");
         assert_eq!(
             ch.lines,
             ["加 1 个账号：Claude c@x.com（JP-A）", "换节点：Claude a@x.com：JP-A → JP-B"],
@@ -644,13 +647,13 @@ mod tests {
             r#"{"kind": "cca-team-config", "version": 1,
             "accounts": {"claude": {"a@x.com": "JP-A", "b@x.com": "JP-B", "d@x.com": {"node": "JP-Z", "alias": "小王"}}}, "alias_lock": true}"#,
         );
-        let b = candidate(&a, &p);
-        let ch = changes(&a, &b, &Some(List::from_vec(vec![V::from("JP-A"), V::from("JP-B")])));
+        let b = candidate(&a, &p, "Lab");
+        let ch = changes(&a, &b, &Some(List::from_vec(vec![V::from("JP-A"), V::from("JP-B")])), "Lab");
         assert_eq!(
             ch.lines,
             [
                 "加 1 个账号：Claude d@x.com（JP-Z）",
-                "改别名：Claude b@x.com：小王 → team-3",
+                "改别名：Claude b@x.com：小王 → Lab-3",
                 "锁定别名（各台设备上照 Team 给的别名用，自己改不了）",
                 "! 节点「JP-Z」：这份配置里没有它的定义，这台设备上也没有：各台设备上要有同名的节点才连得上",
             ]
@@ -662,8 +665,8 @@ mod tests {
             "nodes": {"group": "AI", "proxies": [{"name": "JP-A", "type": "socks5", "server": "192.0.2.10", "port": 1080},
                                                  {"name": "JP-C", "type": "socks5", "server": "192.0.2.10", "port": 1081}]}}"#,
         );
-        let b = candidate(&a, &p);
-        let ch = changes(&a, &b, &Some(List::from_vec(vec![V::from("JP-A")])));
+        let b = candidate(&a, &p, "Lab");
+        let ch = changes(&a, &b, &Some(List::from_vec(vec![V::from("JP-A")])), "Lab");
         assert_eq!(
             ch.lines,
             [
@@ -674,9 +677,40 @@ mod tests {
             ]
         );
         assert_eq!((ch.count, ch.removed, ch.defs), (4, 1, 2));
-        assert_eq!(js(&b.at("config").as_dict().expect("有").at("tool_aliases")), r#"{"claude": {"a@x.com": "team-1"}}"#);
+        assert_eq!(js(&b.at("config").as_dict().expect("有").at("tool_aliases")), r#"{"claude": {"a@x.com": "Lab-1"}}"#);
         // 和自己比：什么都没改
-        assert_eq!(changes(&b, &candidate(&b, &p), &None).count, 0);
+        assert_eq!(changes(&b, &candidate(&b, &p, "Lab"), &None, "Lab").count, 0);
         assert_eq!(listed(&(1..=8).map(|i| i.to_string()).collect::<Vec<_>>()), "1、2、3、4、5、6 等 8 个");
+    }
+
+    #[test]
+    fn default_aliases_migrate_and_follow_the_name() {
+        // 3.7.8 的 Team：a、c 是以前默认的 team-N，b 是管理员起的 Lab-1（a 要换成的就是它：a 留着 team-1），d 还没有别名
+        let a = d(r#"{"alias_n": {"claude": 2}, "config": {"accounts": {"claude": {"a@x.com": "JP-A", "b@x.com": "JP-A", "c@x.com": "JP-A",
+            "d@x.com": "JP-A"}}, "tool_aliases": {"claude": {"a@x.com": "team-1", "b@x.com": "Lab-1", "c@x.com": "team-2"}}, "aliases": {},
+            "nodes": null}}"#)
+        .as_dict()
+        .expect("对象");
+        let names = |a: &Dict| js(&a.dict("config").expect("有").at("tool_aliases"));
+        default_aliases(&a, "Lab");
+        assert_eq!(names(&a), r#"{"claude": {"a@x.com": "team-1", "b@x.com": "Lab-1", "c@x.com": "Lab-2", "d@x.com": "Lab-3"}}"#);
+        assert_eq!(js(&a.at("alias_n")), r#"{"claude": 3}"#);
+        // 再算一遍还是一样：不用记换没换过，配置的摘要不会白变
+        let once = js(&V::Dict(a.clone()));
+        default_aliases(&a, "Lab");
+        assert_eq!(js(&V::Dict(a.clone())), once);
+        // Team 改名：照原来的名字默认编的换成新名字的，号不变（b 的 Lab-1 和默认编的一样：也换）；以前的 team-1 要换成的又被 b 占着：还是留着
+        super::super::rename_defaults(&a, "Lab", "设计 组");
+        default_aliases(&a, "设计 组");
+        assert_eq!(
+            names(&a),
+            r#"{"claude": {"a@x.com": "team-1", "b@x.com": "设计组-1", "c@x.com": "设计组-2", "d@x.com": "设计组-3"}}"#
+        );
+        assert_eq!(js(&a.at("alias_n")), r#"{"claude": 3}"#);
+        // 新加的账号接着编新名字的号
+        let acc = a.dict("config").and_then(|c| c.dict("accounts")).and_then(|m| m.dict("claude")).expect("有");
+        acc.set("e@x.com", "JP-A");
+        default_aliases(&a, "设计 组");
+        assert!(names(&a).contains(r#""e@x.com": "设计组-4""#), "{}", names(&a));
     }
 }

@@ -40,6 +40,7 @@ pub const MODULE: Module = Module {
         case!(rename),
         case!(aliases),
         case!(alias_per_tool),
+        case!(alias_migrate),
         case!(alias_lock),
         case!(nodes),
         case!(spec_admin),
@@ -434,7 +435,7 @@ fn doc(dev: &Device, tid: &str) -> (i64, Value) {
 }
 
 /// 给这个 Team 一份现成的配置（config()）：整份写进管理员这台的 admin.json（3.6.0 以前是 cca team import 导入维护者映射仓库里的
-/// policy.json、nodes.json），再经 cca team map 编别名（没写的编成 team-N）、发布（还没接上服务器的只改本机的）。返回存上了几台的配置
+/// policy.json、nodes.json），再经 cca team map 编别名（没写的编成「Team 的名字-N」）、发布（还没接上服务器的只改本机的）。返回存上了几台的配置
 fn load(admin: &Device, tid: &str) -> Vec<String> {
     let path = tdir(admin, tid).join("admin.json");
     let mut a = fsx::read_json(&path);
@@ -591,10 +592,10 @@ fn lifecycle(t: &mut Ctx) {
         list![
             "测试组",
             list!["alice@example.com", "bob@example.com"],
-            obj! { "alice@example.com" => "alice", "bob@example.com" => "team-1", "carol@example.com" => "team-1" },
+            obj! { "alice@example.com" => "alice", "bob@example.com" => "测试组-1", "carol@example.com" => "测试组-1" },
             obj! {
-                "claude" => obj! { "alice@example.com" => "alice", "bob@example.com" => "team-1" },
-                "codex" => obj! { "carol@example.com" => "team-1" },
+                "claude" => obj! { "alice@example.com" => "alice", "bob@example.com" => "测试组-1" },
+                "codex" => obj! { "carol@example.com" => "测试组-1" },
             },
             list!["US-A", "US-B", "US-C", "US-D", "US-E"]
         ],
@@ -609,15 +610,15 @@ fn lifecycle(t: &mut Ctx) {
                 "codex" => obj! { "carol@example.com" => "US-A" },
             },
             obj! {
-                "claude" => obj! { "alice@example.com" => "alice", "bob@example.com" => "team-1" },
-                "codex" => obj! { "carol@example.com" => "team-1" },
+                "claude" => obj! { "alice@example.com" => "alice", "bob@example.com" => "测试组-1" },
+                "codex" => obj! { "carol@example.com" => "测试组-1" },
             },
-            obj! { "alice@example.com" => "alice", "bob@example.com" => "team-1", "carol@example.com" => "team-1" },
+            obj! { "alice@example.com" => "alice", "bob@example.com" => "测试组-1", "carol@example.com" => "测试组-1" },
             "US-D",
             "测试组",
             obj! { "u" => url, "p" => list![pin] }
         ],
-        "配置里没写别名的编成 team-N：各工具各编各的（Claude 的 bob、Codex 的 carol 都是 team-1）"
+        "配置里没写别名的编成「Team 的名字-N」：各工具各编各的（Claude 的 bob、Codex 的 carol 都是 测试组-1）"
     );
     assert_eq!(proxy_names(&d), ["US-A", "US-B", "US-C", "US-D"], "用得着的节点（连同 dialer-proxy 连着的）");
     // 邀请：链接只在 stdout 里出现一次；那串随机数、令牌不落盘、不进命令行
@@ -1024,9 +1025,9 @@ fn rename(t: &mut Ctx) {
     assert_eq!(lines(&admin, &["team-rename", tid, "carol-mac", "mini-2"])[..2], ["carol-mac", "mini-2"]);
 }
 
-/// Team 里账号的别名：没写的编成 team-1、team-2……（加账号、发布时；同一个 Team 里不重复，用过的号不再用，--mine 带进这台设备上
+/// Team 里账号的别名：没写的编成「Team 的名字-1」「Team 的名字-2」……（加账号、发布时；同一个 Team 里不重复，用过的号不再用，--mine 带进这台设备上
 /// 起过的）；cca team alias 改。成员设备上只有邮箱的补上、照 Team 给的用着的跟着改、自己改过的不动；管理员这台
-/// 设备上的不动；两个 Team 给的别名撞了时后来的那个叫「Team 名-N」
+/// 设备上的不动；两个 Team 给的别名撞了时后来的那个叫「Team 名-别名」
 fn aliases(t: &mut Ctx) {
     let fx = fx(t);
     let (admin, tid, _root, _srv, _url, _pin) = fx.new_team();
@@ -1036,15 +1037,15 @@ fn aliases(t: &mut Ctx) {
     load(&admin, tid);
     assert_eq!(
         alias_map(),
-        obj! { "alice@example.com" => "alice", "bob@example.com" => "team-1", "carol@example.com" => "team-1" }
+        obj! { "alice@example.com" => "alice", "bob@example.com" => "测试组-1", "carol@example.com" => "测试组-1" }
     );
     // 多了一个账号：原来的编号不变，新的接着编
     lines(&admin, &["team-map", tid, "claude", "Dave@Example.com", "US-A"]);
     assert_eq!(
         alias_map(),
         obj! {
-            "alice@example.com" => "alice", "bob@example.com" => "team-1", "carol@example.com" => "team-1",
-            "dave@example.com" => "team-2",
+            "alice@example.com" => "alice", "bob@example.com" => "测试组-1", "carol@example.com" => "测试组-1",
+            "dave@example.com" => "测试组-2",
         }
     );
     // 去掉一个账号、再加一个：去掉的那个的号不给新加的
@@ -1053,18 +1054,20 @@ fn aliases(t: &mut Ctx) {
     assert_eq!(
         alias_map(),
         obj! {
-            "alice@example.com" => "alice", "bob@example.com" => "team-1", "carol@example.com" => "team-1",
-            "erin@example.com" => "team-3",
+            "alice@example.com" => "alice", "bob@example.com" => "测试组-1", "carol@example.com" => "测试组-1",
+            "erin@example.com" => "测试组-3",
         }
     );
-    // 另一个 Team 也有 team-1（给 frank）
+    // 另一个 Team：默认编的带着它的名字（给 frank 的是 设计组-1），和「测试组」的 测试组-1 不撞；给 hank 起的 own 和这台设备上的撞了
     let admin2 = fx.device("admin2");
     let (tid2, root2, _) = three(lines(&admin2, &["team-new", "设计 组", "--device", "desk"]));
     let tid2 = tid2.as_str();
     let (_srv2, url2, pin2) = fx.server(&root2, "srv2");
     lines(&admin2, &["team-attach", tid2, &url2, &pin2]);
     lines(&admin2, &["team-map", tid2, "claude", "frank@example.com", "US-C"]);
-    // 成员：只有邮箱的补上，加进来的带着 Team 给的；这台设备上起过的不动；两个 Team 的 team-1 撞了：后加入的那个的叫「设计组-1」
+    lines(&admin2, &["team-map", tid2, "claude", "hank@example.com", "US-C"]);
+    lines(&admin2, &["team-alias", tid2, "hank@example.com", "own"]);
+    // 成员：只有邮箱的补上，加进来的带着 Team 给的；这台设备上起过的不动；Team 给的别名和这台设备上的（或者先加入的 Team 给的）撞了：叫「设计组-own」
     let bob = Device::new(&fx.d.join("bob"), "bob", &obj! { "alice@example.com" => "US-A", "own(erin@example.com)" => "US-A" });
     with_nodes(&bob);
     lines_in(&bob, &["team-join", "--name", "bob-mini"], &invite(&admin, tid, "bob-mini", &[]).0);
@@ -1074,8 +1077,8 @@ fn aliases(t: &mut Ctx) {
     assert_eq!(
         table(&bob),
         obj! {
-            "alice(alice@example.com)" => "US-A", "own(erin@example.com)" => "US-A", "team-1(bob@example.com)" => "US-B",
-            "设计组-1(frank@example.com)" => "US-C",
+            "alice(alice@example.com)" => "US-A", "own(erin@example.com)" => "US-A", "测试组-1(bob@example.com)" => "US-B",
+            "设计组-1(frank@example.com)" => "US-C", "设计组-own(hank@example.com)" => "US-C",
         }
     );
     assert_eq!(team_apply(&bob), "", "再对一遍没有要改的");
@@ -1086,20 +1089,22 @@ fn aliases(t: &mut Ctx) {
     assert_eq!(code(&bob, &["team-alias", tid, "bob@example.com", "x"]), "not_admin");
     assert_eq!(
         lines(&admin, &["team-alias", tid, "claude:Bob@Example.com", "小王"]),
-        ["team-1", "2"],
+        ["测试组-1", "2"],
         "管理员自己这台和 bob 的配置变了"
     );
-    assert_eq!(lines(&admin, &["team-alias", tid, "erin@example.com", "erin-x"]), ["team-3", "2"]);
-    assert_eq!(lines(&admin2, &["team-alias", tid2, "frank@example.com", "f1"]), ["team-1", "2"]);
+    assert_eq!(lines(&admin, &["team-alias", tid, "erin@example.com", "erin-x"]), ["测试组-3", "2"]);
+    assert_eq!(lines(&admin2, &["team-alias", tid2, "frank@example.com", "f1"]), ["设计组-1", "2"]);
+    assert_eq!(lines(&admin2, &["team-alias", tid2, "hank@example.com", "h1"]), ["own", "2"]);
     bob.ok(&["team-sync"]);
     let said = team_apply(&bob);
-    assert_in("按「测试组」的配置把 Claude 账号 team-1（bob@example.com） 的别名改成 小王", &said);
+    assert_in("按「测试组」的配置把 Claude 账号 测试组-1（bob@example.com） 的别名改成 小王", &said);
     assert_in("按「设计 组」的配置把 Claude 账号 设计组-1（frank@example.com） 的别名改成 f1", &said);
+    assert_in("按「设计 组」的配置把 Claude 账号 设计组-own（hank@example.com） 的别名改成 h1", &said);
     assert_eq!(
         table(&bob),
         obj! {
             "alice(alice@example.com)" => "US-A", "own(erin@example.com)" => "US-A", "小王(bob@example.com)" => "US-B",
-            "f1(frank@example.com)" => "US-C",
+            "f1(frank@example.com)" => "US-C", "h1(hank@example.com)" => "US-C",
         }
     );
     // 这台设备上自己改了名字的：管理员再改，不跟着
@@ -1112,7 +1117,7 @@ fn aliases(t: &mut Ctx) {
     bob.ok(&["team-sync"]);
     assert_not_in("别名改成", &team_apply(&bob));
     assert!(table(&bob).obj().contains_key("mybob(bob@example.com)"));
-    // 管理员这台设备上的不动：只有邮箱的不补，以前照 Team 加进来的也不跟着改
+    // 管理员这台设备上的不动：只有邮箱的不补，以前照 Team 加进来的（还是以前默认的 team-1）也不跟着改
     let own = obj! { "team-1(bob@example.com)" => "US-B", "erin@example.com" => "US-A" };
     put(admin.cca.join("accounts.json"), &own);
     with_nodes(&admin);
@@ -1134,13 +1139,14 @@ fn aliases(t: &mut Ctx) {
     assert_eq!(lines(&admin2, &["team-publish", tid2]), ["2", ""]);
     assert_eq!(
         fsx::read_json(&admin2_json)["config"]["aliases"],
-        obj! { "frank@example.com" => "f1", "gina@example.com" => "team-2" }
+        obj! { "frank@example.com" => "f1", "hank@example.com" => "h1", "gina@example.com" => "设计组-3" }
     );
 }
 
-/// 别名按工具记（3.5.3-beta.6 起）：各工具各自从 team-1 编；同一个邮箱在两个工具里各有各的号，成员设备上各工具的账号表各用各的；
+/// 别名按工具记（3.5.3-beta.6 起）：各工具各自从 1 号编（「Team 的名字-1」）；同一个邮箱在两个工具里各有各的号，成员设备上各工具的账号表各用各的；
 /// cca team alias 写 工具:邮箱 只改这个工具里的、只写邮箱改它在的每个工具里的；3.5.3-beta.5 的 Team（alias_n 是一个数、没有 tool_aliases）
-/// 发布时照各工具重新编，成员设备上没有记录的旧编号跟着换；几个账号对调别名一次换好；cca team name 改 Team 的名字，成员设备跟着改
+/// 发布时照各工具重新编，成员设备上没有记录的旧编号跟着换；几个账号对调别名一次换好；cca team name 改 Team 的名字，成员设备跟着改，
+/// 默认编的别名跟着换成新名字的
 fn alias_per_tool(t: &mut Ctx) {
     let fx = fx(t);
     let (admin, tid, _root, _srv, _url, _pin) = fx.new_team();
@@ -1152,8 +1158,8 @@ fn alias_per_tool(t: &mut Ctx) {
         list![&adm()["config"]["tool_aliases"], &adm()["alias_n"]],
         list![
             obj! {
-                "claude" => obj! { "alice@example.com" => "alice", "bob@example.com" => "team-1" },
-                "codex" => obj! { "carol@example.com" => "team-1" },
+                "claude" => obj! { "alice@example.com" => "alice", "bob@example.com" => "测试组-1" },
+                "codex" => obj! { "carol@example.com" => "测试组-1" },
             },
             obj! { "claude" => 1, "codex" => 1 }
         ]
@@ -1168,7 +1174,7 @@ fn alias_per_tool(t: &mut Ctx) {
     let listing = devices(&admin, tid);
     assert_eq!(
         list![&listing["tool_aliases"]["codex"], &listing["aliases"]["carol@example.com"]],
-        list![obj! { "carol@example.com" => "team-1" }, "team-1"],
+        list![obj! { "carol@example.com" => "测试组-1" }, "测试组-1"],
         "还没发布：管理页给的已经是按工具编好的样子"
     );
     assert!(!adm()["config"].obj().contains_key("tool_aliases"), "team devices 不改 admin.json 里的别名");
@@ -1182,56 +1188,66 @@ fn alias_per_tool(t: &mut Ctx) {
     lines_in(&m, &["team-join", "--name", "m-mini"], &invite(&admin, tid, "m-mini", &[]).0);
     assert_eq!(
         list![&adm()["config"]["tool_aliases"]["codex"], &adm()["alias_n"]],
-        list![obj! { "carol@example.com" => "team-1" }, obj! { "claude" => 1, "codex" => 1 }],
+        list![obj! { "carol@example.com" => "测试组-1" }, obj! { "claude" => 1, "codex" => 1 }],
         "发布（发邀请）时照各工具重新编，alias_n 换成按工具的"
     );
     let said = apply(&["claude", "codex"]);
     assert!(
-        said.contains("按「测试组」的配置把 Codex 账号 team-2（carol@example.com） 的别名改成 team-1"),
+        said.contains("按「测试组」的配置把 Codex 账号 team-2（carol@example.com） 的别名改成 测试组-1"),
         "没有记录的旧编号跟着换：{said}"
     );
-    let claude_table = obj! { "alice(alice@example.com)" => "US-A", "team-1(bob@example.com)" => "US-B" };
-    assert_eq!(tables(), list![&claude_table, obj! { "team-1(carol@example.com)" => "US-A" }]);
+    let claude_table = obj! { "alice(alice@example.com)" => "US-A", "测试组-1(bob@example.com)" => "US-B" };
+    assert_eq!(tables(), list![&claude_table, obj! { "测试组-1(carol@example.com)" => "US-A" }]);
     assert_eq!(apply(&["claude", "codex"]), "", "再对一遍没有要改的");
-    // bob 在 Codex 里也有：Codex 里接着编（team-2）；Claude 里还是 team-1，按邮箱的那一份用它最前面那个工具（Claude）的
+    // bob 在 Codex 里也有：Codex 里接着编（测试组-2）；Claude 里还是 测试组-1，按邮箱的那一份用它最前面那个工具（Claude）的
     lines(&admin, &["team-map", tid, "codex", "bob@example.com", "US-A"]);
     assert_eq!(
         list![&adm()["config"]["tool_aliases"]["codex"], &adm()["config"]["aliases"]["bob@example.com"]],
-        list![obj! { "carol@example.com" => "team-1", "bob@example.com" => "team-2" }, "team-1"]
+        list![obj! { "carol@example.com" => "测试组-1", "bob@example.com" => "测试组-2" }, "测试组-1"]
     );
     m.ok(&["team-sync"]);
     let d = doc(&m, tid).1;
     assert_eq!(
         list![&d["tool_aliases"]["codex"]["bob@example.com"], &d["aliases"]["bob@example.com"]],
-        list!["team-2", "team-1"],
+        list!["测试组-2", "测试组-1"],
         "配置里两份都带着：旧版本的设备照按邮箱的"
     );
     apply(&["claude", "codex"]);
-    assert_eq!(tables(), list![&claude_table, obj! { "team-1(carol@example.com)" => "US-A", "team-2(bob@example.com)" => "US-A" }]);
+    assert_eq!(
+        tables(),
+        list![&claude_table, obj! { "测试组-1(carol@example.com)" => "US-A", "测试组-2(bob@example.com)" => "US-A" }]
+    );
     // 改别名：写了工具的只改这个工具里的；同一个工具里重名不行，别的工具里的可以；只写邮箱改它在的每个工具里的
-    assert_eq!(code(&admin, &["team-alias", tid, "codex:bob@example.com", "team-1"]), "alias", "Codex 里 carol 已经叫 team-1");
+    assert_eq!(code(&admin, &["team-alias", tid, "codex:bob@example.com", "测试组-1"]), "alias", "Codex 里 carol 已经叫 测试组-1");
     assert_eq!(code(&admin, &["team-alias", tid, "agy:bob@example.com", "x"]), "no_account");
-    assert_eq!(lines(&admin, &["team-alias", tid, "codex:bob@example.com", "alice"]), ["team-2", "2"], "Claude 里的 alice 不碍事");
+    assert_eq!(
+        lines(&admin, &["team-alias", tid, "codex:bob@example.com", "alice"]),
+        ["测试组-2", "2"],
+        "Claude 里的 alice 不碍事"
+    );
     m.ok(&["team-sync"]);
-    assert_in("按「测试组」的配置把 Codex 账号 team-2（bob@example.com） 的别名改成 alice", &apply(&["claude", "codex"]));
-    assert_eq!(tables(), list![&claude_table, obj! { "team-1(carol@example.com)" => "US-A", "alice(bob@example.com)" => "US-A" }]);
-    assert_eq!(lines(&admin, &["team-alias", tid, "bob@example.com", "小王"]), ["team-1、alice", "2"]);
+    assert_in("按「测试组」的配置把 Codex 账号 测试组-2（bob@example.com） 的别名改成 alice", &apply(&["claude", "codex"]));
+    assert_eq!(
+        tables(),
+        list![&claude_table, obj! { "测试组-1(carol@example.com)" => "US-A", "alice(bob@example.com)" => "US-A" }]
+    );
+    assert_eq!(lines(&admin, &["team-alias", tid, "bob@example.com", "小王"]), ["测试组-1、alice", "2"]);
     m.ok(&["team-sync"]);
     apply(&["claude", "codex"]);
     assert_eq!(
         tables(),
         list![
             obj! { "alice(alice@example.com)" => "US-A", "小王(bob@example.com)" => "US-B" },
-            obj! { "team-1(carol@example.com)" => "US-A", "小王(bob@example.com)" => "US-A" }
+            obj! { "测试组-1(carol@example.com)" => "US-A", "小王(bob@example.com)" => "US-A" }
         ]
     );
     // 两个账号对调别名：成员设备上一次换好（要换走的账号原来的别名不算占着）
     lines(&admin, &["team-map", tid, "claude", "erin@example.com", "US-C"]);
     m.ok(&["team-sync"]);
     apply(&["claude", "codex"]);
-    assert_eq!(tables()[0]["team-2(erin@example.com)"].str(), "US-C");
+    assert_eq!(tables()[0]["测试组-2(erin@example.com)"].str(), "US-C");
     for (account, new) in
-        [("claude:bob@example.com", "tmp"), ("claude:erin@example.com", "小王"), ("claude:bob@example.com", "team-2")]
+        [("claude:bob@example.com", "tmp"), ("claude:erin@example.com", "小王"), ("claude:bob@example.com", "测试组-2")]
     {
         lines(&admin, &["team-alias", tid, account, new]);
     }
@@ -1239,7 +1255,7 @@ fn alias_per_tool(t: &mut Ctx) {
     let said = apply(&["claude"]);
     assert_eq!(
         tables()[0],
-        obj! { "alice(alice@example.com)" => "US-A", "team-2(bob@example.com)" => "US-B", "小王(erin@example.com)" => "US-C" },
+        obj! { "alice(alice@example.com)" => "US-A", "测试组-2(bob@example.com)" => "US-B", "小王(erin@example.com)" => "US-C" },
         "{said}"
     );
     assert_eq!(apply(&["claude", "codex"]), "", "对调完了，再对一遍没有要改的");
@@ -1252,6 +1268,24 @@ fn alias_per_tool(t: &mut Ctx) {
     assert_eq!(fsx::read_json(tdir(&admin, tid).join("team.json"))["name"].str(), "新组");
     m.ok(&["team-sync"]);
     assert_eq!(list![&fsx::read_json(tdir(&m, tid).join("team.json"))["name"], &doc(&m, tid).1["name"]], list!["新组", "新组"]);
+    // 照原来的名字默认编的别名换成新名字的（号不变），管理员起的不动；m 上照 Team 给的用着的跟着换
+    assert_eq!(
+        adm()["config"]["tool_aliases"],
+        obj! {
+            "claude" => obj! { "alice@example.com" => "alice", "bob@example.com" => "新组-2", "erin@example.com" => "小王" },
+            "codex" => obj! { "carol@example.com" => "新组-1", "bob@example.com" => "小王" },
+        }
+    );
+    let said = apply(&["claude", "codex"]);
+    assert_in("按「新组」的配置把 Claude 账号 测试组-2（bob@example.com） 的别名改成 新组-2", &said);
+    assert_in("按「新组」的配置把 Codex 账号 测试组-1（carol@example.com） 的别名改成 新组-1", &said);
+    assert_eq!(
+        tables(),
+        list![
+            obj! { "alice(alice@example.com)" => "US-A", "新组-2(bob@example.com)" => "US-B", "小王(erin@example.com)" => "US-C" },
+            obj! { "新组-1(carol@example.com)" => "US-A", "小王(bob@example.com)" => "US-A" }
+        ]
+    );
     // 和服务器对不上（假 curl：连不上）时名字不改，照原来的命令再来一次就行；发布没成时名字已经改了，原因里说照新名字发布
     let named = || fsx::read_json(tdir(&admin, tid).join("team.json"))["name"].str().to_string();
     let reply = admin.home.join("reply");
@@ -1264,10 +1298,69 @@ fn alias_per_tool(t: &mut Ctx) {
     assert_eq!((r.code, r.out.split('\t').next().unwrap_or_default(), named().as_str()), (1, "publish", "新组二"), "{}", r.out);
     assert_in("名字已经改成「新组二」", &r.out);
     assert_in("cca team publish 新组二", &r.out);
+    assert_eq!(
+        adm()["config"]["tool_aliases"]["claude"]["bob@example.com"].str(),
+        "新组二-2",
+        "别名跟着名字一起改了，下次发布带上"
+    );
     fs::remove_file(reply.join("team_put")).expect("删 reply/team_put");
     assert_eq!(lines(&admin, &["team-publish", "新组二"]), ["2", ""]);
     m.ok(&["team-sync"]);
     assert_eq!(fsx::read_json(tdir(&m, tid).join("team.json"))["name"].str(), "新组二");
+    assert_in("Claude 账号 新组-2（bob@example.com） 的别名改成 新组二-2", &apply(&["claude", "codex"]));
+}
+
+/// 以前（3.7.8 及以前）默认编的 team-N：管理页上已经是换好的样子，下一次发布时换成「Team 的名字-N」存下来（号不变；换成的那个被别的账号
+/// 用着的留着 team-N），再算还是一样；成员设备上没有记录的 team-N 也跟着换；cca team alias 不收 team-数字
+fn alias_migrate(t: &mut Ctx) {
+    let fx = fx(t);
+    let (admin, tid, _root, _srv, _url, _pin) = fx.new_team();
+    let tid = tid.as_str();
+    let admin_json = tdir(&admin, tid).join("admin.json");
+    let adm = || fsx::read_json(&admin_json);
+    load(&admin, tid);
+    lines(&admin, &["team-map", tid, "claude", "erin@example.com", "US-C"]);
+    lines(&admin, &["team-map", tid, "claude", "dave@example.com", "US-C"]);
+    // 3.7.8 的 Team：bob、erin、Codex 的 carol 是默认编的 team-N；dave 是管理员起的「测试组-2」（erin 要换成的就是它）
+    let old = obj! {
+        "claude" => obj! {
+            "alice@example.com" => "alice", "bob@example.com" => "team-1", "erin@example.com" => "team-2", "dave@example.com" => "测试组-2",
+        },
+        "codex" => obj! { "carol@example.com" => "team-1" },
+    };
+    let mut a = adm();
+    sub(&mut a, &["config"]).insert("tool_aliases", old.clone());
+    put(&admin_json, &a);
+    let want = obj! {
+        "claude" => obj! {
+            "alice@example.com" => "alice", "bob@example.com" => "测试组-1", "erin@example.com" => "team-2", "dave@example.com" => "测试组-2",
+        },
+        "codex" => obj! { "carol@example.com" => "测试组-1" },
+    };
+    assert_eq!(devices(&admin, tid)["tool_aliases"], want, "管理页上已经是换好的样子");
+    assert_eq!(adm()["config"]["tool_aliases"], old, "只算，不改 admin.json");
+    // 成员设备：账号表里的 bob 是旧版本照 team-1 补上的（没有记录）
+    let m = Device::new(&fx.d.join("m"), "m", &obj! { "team-1(bob@example.com)" => "US-B" });
+    with_nodes(&m);
+    lines_in(&m, &["team-join", "--name", "m-mini"], &invite(&admin, tid, "m-mini", &[]).0);
+    assert_eq!(adm()["config"]["tool_aliases"], want, "发布（发邀请）时换好、存下来");
+    assert_eq!(adm()["alias_n"], obj! { "claude" => 3, "codex" => 1 }, "号不变");
+    let said = team_apply(&m);
+    assert_in("按「测试组」的配置把 Claude 账号 team-1（bob@example.com） 的别名改成 测试组-1", &said);
+    let now = table(&m);
+    assert_eq!(
+        list![&now["测试组-1(bob@example.com)"], &now["team-2(erin@example.com)"], &now["测试组-2(dave@example.com)"]],
+        list!["US-B", "US-C", "US-C"],
+        "{said}"
+    );
+    assert_eq!(team_apply(&m), "", "再对一遍没有要改的");
+    assert_eq!(lines(&admin, &["team-publish", tid]), ["1", ""], "发邀请只给新的那一台发布：管理员自己这台的这回换上");
+    assert_eq!(lines(&admin, &["team-publish", tid]), ["0", ""], "再算还是一样：配置没变");
+    // 不收以前默认编号的写法（发布时会换掉），说照名字编的那个；那个能写
+    let r = admin.run(&["team-alias", tid, "alice@example.com", "team-7"]);
+    assert_eq!((r.code, r.out.split('\t').next().unwrap_or_default()), (1, "alias"), "{}", r.out);
+    assert_in("「测试组-7」", &r.out);
+    assert_eq!(lines(&admin, &["team-alias", tid, "alice@example.com", "测试组-7"])[0], "alice");
 }
 
 /// 管理员锁定别名（cca team alias Team --lock）：配置里带 alias_lock，成员设备上照 Team 给的用（自己改过的换回来，cca rename
@@ -1283,11 +1376,11 @@ fn alias_lock(t: &mut Ctx) {
     team_apply(&m);
     assert_eq!(
         table(&m),
-        obj! { "mine(alice@example.com)" => "US-A", "team-1(bob@example.com)" => "US-B" },
+        obj! { "mine(alice@example.com)" => "US-A", "测试组-1(bob@example.com)" => "US-B" },
         "没锁定：自己起的不动"
     );
     assert!(!doc(&m, tid).1.obj().contains_key("alias_lock"), "没锁定时配置里没有这一项（和以前一样）");
-    assert_eq!(m.run(&["rename", "team-1(bob@example.com)", "b2"]).code, 0);
+    assert_eq!(m.run(&["rename", "测试组-1(bob@example.com)", "b2"]).code, 0);
     // 锁定：管理员自己这台和 m 的配置变了；名单里说锁定着
     assert_eq!(code(&m, &["team-alias-lock", tid, "on"]), "not_admin");
     assert_eq!(lines(&admin, &["team-alias-lock", tid, "on"]), ["测试组", "2"]);
@@ -1298,7 +1391,7 @@ fn alias_lock(t: &mut Ctx) {
     assert_eq!(doc(&m, tid).1["alias_lock"], Value::Bool(true));
     let said = team_apply(&m);
     assert_in("按「测试组」的配置把 Claude 账号 mine（alice@example.com） 的别名改成 alice", &said);
-    let given = obj! { "alice(alice@example.com)" => "US-A", "team-1(bob@example.com)" => "US-B" };
+    let given = obj! { "alice(alice@example.com)" => "US-A", "测试组-1(bob@example.com)" => "US-B" };
     assert_eq!(table(&m), given, "自己改过的换回 Team 给的");
     assert_eq!(team_apply(&m), "", "再对一遍没有要改的");
     let r = m.run(&["rename", "alice(alice@example.com)", "x"]);
@@ -1671,10 +1764,10 @@ fn accounts_follow(t: &mut Ctx) {
     assert_eq!(sync_fields(&bob)[2], "ok");
     let said = apply();
     assert!(
-        said.contains("按「测试组」的配置添加了 Claude 账号 team-2（erin@example.com），出口 US-D"),
-        "新加的账号编成 team-2（Claude 里的第二个：Codex 的 carol 另编）：{said}"
+        said.contains("按「测试组」的配置添加了 Claude 账号 测试组-2（erin@example.com），出口 US-D"),
+        "新加的账号编成 测试组-2（Claude 里的第二个：Codex 的 carol 另编）：{said}"
     );
-    assert_eq!(now_table()["team-2(erin@example.com)"].str(), "US-D");
+    assert_eq!(now_table()["测试组-2(erin@example.com)"].str(), "US-D");
     let erin = ident("erin@example.com");
     assert_eq!(cfg()["team_added"], obj! { &erin => tid });
     // 手里那一份配置一时读不出来（文件坏了）：说不准还给不给，不把 Team 加的账号收起来
@@ -1682,23 +1775,23 @@ fn accounts_follow(t: &mut Ctx) {
     let good = fsx::read_text(&doc_json);
     fsx::write(&doc_json, "{");
     assert_not_in("收起来", &apply());
-    assert!(now_table().obj().contains_key("team-2(erin@example.com)"));
+    assert!(now_table().obj().contains_key("测试组-2(erin@example.com)"));
     fsx::write(&doc_json, &good);
     apply();
-    assert_eq!(list![&now_table()["team-2(erin@example.com)"], &now_table()["alice(alice@example.com)"]], list!["US-D", "US-A"]);
+    assert_eq!(list![&now_table()["测试组-2(erin@example.com)"], &now_table()["alice(alice@example.com)"]], list!["US-D", "US-A"]);
     // 不再给 erin：收起来（登录留着），再给回来照原来的键
     assert_eq!(lines(&admin, &["team-grant", tid, "bob-mini", "-claude:erin@example.com"]), ["2 个账号"]);
     bob.ok(&["team-sync"]);
-    assert_in("Team 不再给这台设备 Claude 账号 team-2（erin@example.com）：收起来了", &apply());
-    assert!(!now_table().obj().contains_key("team-2(erin@example.com)"));
+    assert_in("Team 不再给这台设备 Claude 账号 测试组-2（erin@example.com）：收起来了", &apply());
+    assert!(!now_table().obj().contains_key("测试组-2(erin@example.com)"));
     assert_eq!(
         list![&cfg()["parked"], cfg().obj().contains_key("team_added")],
-        list![obj! { &erin => obj! { "key" => "team-2(erin@example.com)", "node" => "US-D", "team" => tid } }, false]
+        list![obj! { &erin => obj! { "key" => "测试组-2(erin@example.com)", "node" => "US-D", "team" => tid } }, false]
     );
     assert_eq!(lines(&admin, &["team-grant", tid, "bob-mini", "+claude:erin@example.com"]), ["3 个账号"]);
     bob.ok(&["team-sync"]);
-    assert_in("添加了 Claude 账号 team-2（erin@example.com）", &apply());
-    assert_eq!((now_table().obj().contains_key("team-2(erin@example.com)"), cfg().obj().contains_key("parked")), (true, false));
+    assert_in("添加了 Claude 账号 测试组-2（erin@example.com）", &apply());
+    assert_eq!((now_table().obj().contains_key("测试组-2(erin@example.com)"), cfg().obj().contains_key("parked")), (true, false));
     // 不再给 bob@example.com：它是这台机器自己的账号，留着（节点不再被固定）
     assert_eq!(lines(&admin, &["team-grant", tid, "bob-mini", "-claude:bob@example.com"]), ["2 个账号"]);
     bob.ok(&["team-sync"]);
@@ -1707,7 +1800,7 @@ fn accounts_follow(t: &mut Ctx) {
     // 被管理员移除了：手里那一份不再算数。Team 加的 erin 收起来；这台机器本来就有的 alice 留着（节点不再被固定）
     assert_eq!(lines(&admin, &["team-revoke", "apply", tid, "bob-mini"]), ["bob-mini"]);
     assert_eq!(sync_fields(&bob)[2], "removed");
-    assert_in("Team 不再给这台设备 Claude 账号 team-2（erin@example.com）：收起来了", &apply());
+    assert_in("Team 不再给这台设备 Claude 账号 测试组-2（erin@example.com）：收起来了", &apply());
     assert_eq!(now_table(), fixed);
     assert_eq!(apply(), "", "再对一遍没有要改的");
 }
@@ -2035,9 +2128,9 @@ fn import_mine(t: &mut Ctx) {
         list![&a["config"]["accounts"]["claude"], &a["config"]["aliases"]],
         list![
             obj! { "me@example.com" => "US-C", "plain@example.com" => "US-D" },
-            obj! { "me@example.com" => "me", "plain@example.com" => "team-1" }
+            obj! { "me@example.com" => "me", "plain@example.com" => "我的设备-1" }
         ],
-        "这台设备上起过的别名带进去，没起过的编成 team-1"
+        "这台设备上起过的别名带进去，没起过的编成「我的设备-1」"
     );
     // 接上服务器以后发布：管理员自己这台拿到的就是这两个账号
     let (_srv, url, pin) = fx.server(&root, "srv");
@@ -2073,7 +2166,7 @@ fn config_file(t: &mut Ctx) {
         e["accounts"]["claude"],
         obj! {
             "alice@example.com" => obj! { "node" => "US-A", "alias" => "alice" },
-            "bob@example.com" => obj! { "node" => "US-B", "alias" => "team-1" },
+            "bob@example.com" => obj! { "node" => "US-B", "alias" => "测试组-1" },
         }
     );
     assert_eq!(e["nodes"], config()["nodes"]);
@@ -2084,7 +2177,7 @@ fn config_file(t: &mut Ctx) {
     // 原样导入：没有要改的
     let same = lines(&admin, &["team-config", "check", tid, file]);
     assert_eq!((same[2].as_str(), same[3].as_str(), same[5].as_str(), same.len()), ("0", "0", "0", 6));
-    // 改：去掉 alice、bob 换到 US-E、Codex 的 carol 改名、加 dave（只写节点：编成 team-2）、锁定别名
+    // 改：去掉 alice、bob 换到 US-E、Codex 的 carol 改名、加 dave（只写节点：编成 测试组-2）、锁定别名
     let mut e2 = e.clone();
     sub(&mut e2, &["accounts", "claude"]).remove("alice@example.com");
     sub(&mut e2, &["accounts", "claude", "bob@example.com"]).insert("node", "US-E");
@@ -2102,7 +2195,7 @@ fn config_file(t: &mut Ctx) {
             "加 1 个账号：Claude dave@example.com（US-A）",
             "去掉 1 个账号：Claude alice@example.com（各台设备上收起来，登录留着）",
             "换节点：Claude bob@example.com：US-B → US-E",
-            "改别名：Codex carol@example.com：team-1 → 小李",
+            "改别名：Codex carol@example.com：测试组-1 → 小李",
             "锁定别名（各台设备上照 Team 给的别名用，自己改不了）",
         ]
     );
@@ -2118,7 +2211,7 @@ fn config_file(t: &mut Ctx) {
         list![&a["config"]["accounts"], &a["config"]["tool_aliases"], &a["config"]["alias_lock"], &a["config"]["install_node"]],
         list![
             obj! { "claude" => obj! { "bob@example.com" => "US-E", "dave@example.com" => "US-A" }, "codex" => obj! { "carol@example.com" => "US-A" } },
-            obj! { "claude" => obj! { "bob@example.com" => "team-1", "dave@example.com" => "team-2" }, "codex" => obj! { "carol@example.com" => "小李" } },
+            obj! { "claude" => obj! { "bob@example.com" => "测试组-1", "dave@example.com" => "测试组-2" }, "codex" => obj! { "carol@example.com" => "小李" } },
             true,
             "US-D"
         ]
@@ -2165,7 +2258,7 @@ fn config_file(t: &mut Ctx) {
 
 /// 新建 Team 时放进这台设备上的账号（team-candidates 列出来、team-new --accounts 选）：自己加的，和这台设备当管理员的 Team 里的
 /// （那个 Team 带着节点的定义的，连同经 dialer-proxy 连着的一起带过来）；这台设备只是成员的 Team 给的、第三方 API 账号不能放。
-/// 节点、别名照这台设备上的（默认样子的 team-N 另编）；写错了什么都不建
+/// 节点、别名照这台设备上的（默认样子的另编：以前的 team-N、Team 编的「名字-N」）；写错了什么都不建
 fn new_with_accounts(t: &mut Ctx) {
     let fx = fx(t);
     // 「测试组」：这台设备是它的管理员
@@ -2185,7 +2278,7 @@ fn new_with_accounts(t: &mut Ctx) {
     admin.ok(&["team-sync"]);
     let claude_table = obj! {
         "me(me@example.com)" => "US-C", "team-7(old@example.com)" => "US-D", "alice(alice@example.com)" => "US-A",
-        "team-1(bob@example.com)" => "US-B", "frank@example.com" => "US-E",
+        "测试组-1(bob@example.com)" => "US-B", "frank@example.com" => "US-E",
         "api(k@example.com)" => obj! { "node" => "US-B", "base_url" => "https://api.example.com" },
     };
     put(admin.cca.join("accounts.json"), &claude_table);
@@ -2196,7 +2289,7 @@ fn new_with_accounts(t: &mut Ctx) {
             "claude\tClaude\tme@example.com\tme\t-\tUS-C",
             "claude\tClaude\told@example.com\tteam-7\t-\tUS-D",
             "claude\tClaude\talice@example.com\talice\t测试组\tUS-A",
-            "claude\tClaude\tbob@example.com\tteam-1\t测试组\tUS-B",
+            "claude\tClaude\tbob@example.com\t测试组-1\t测试组\tUS-B",
             "codex\tCodex\tcarol@example.com\t-\t测试组\tUS-A",
             "codex\tCodex\tcx@example.com\tcx\t-\tUS-B",
         ]
@@ -2224,8 +2317,8 @@ fn new_with_accounts(t: &mut Ctx) {
                 "codex" => obj! { "carol@example.com" => "US-A" },
             },
             obj! {
-                "claude" => obj! { "me@example.com" => "me", "old@example.com" => "team-1", "bob@example.com" => "team-2" },
-                "codex" => obj! { "carol@example.com" => "team-1" },
+                "claude" => obj! { "me@example.com" => "me", "old@example.com" => "新组-1", "bob@example.com" => "新组-2" },
+                "codex" => obj! { "carol@example.com" => "新组-1" },
             }
         ]
     );

@@ -117,7 +117,7 @@ pub struct AliasFrom {
 }
 
 /// 映射给这个工具的账号起的别名和是谁给的：[(邮箱（小写）, AliasFrom)]。不合规的不用。照加入 Team 的先后，同一个邮箱先出现的算数。
-/// Team 的配置里有按工具分的 tool_aliases（{"工具": {"邮箱": "别名"}}，3.5.3-beta.6 起：各工具各编各的 team-N，同一个邮箱在两个工具里
+/// Team 的配置里有按工具分的 tool_aliases（{"工具": {"邮箱": "别名"}}，3.5.3-beta.6 起：各工具各编各的号，同一个邮箱在两个工具里
 /// 可以叫得不一样）时照它里面这个工具的，没有时照按邮箱、各工具通用的 aliases（{"邮箱": "别名"}）
 pub fn alias_sources(tool: &Tool) -> Vec<(String, AliasFrom)> {
     let mut out: Vec<(String, AliasFrom)> = Vec::new();
@@ -148,7 +148,8 @@ pub fn alias_locks(tool: &Tool) -> HashMap<String, String> {
     alias_sources(tool).into_iter().filter(|(_, f)| f.locked).map(|(e, f)| (e, f.team)).collect()
 }
 
-/// 两个 Team 给的别名在这台设备上撞了（比如都有 team-1）时后来的那个用的：team-N 换成「Team 的名字-N」（书房组-1），别的是「Team 的名字-别名」。
+/// 两个 Team 给的别名在这台设备上撞了（比如都叫 alice，或者都还是以前默认的 team-1）时后来的那个用的：team-N 换成「Team 的名字-N」
+/// （书房组-1），别的是「Team 的名字-别名」。
 /// Team 的名字里别名不能有的字符（空格、引号、括号、反斜杠、@）去掉，太长了从后面截短（别名最多 24 格宽）；去掉以后什么都不剩、拼不出
 /// 合规的别名是 None
 pub fn alias_fallback(alias: &str, team: &str) -> Option<String> {
@@ -163,6 +164,32 @@ pub fn alias_fallback(alias: &str, team: &str) -> Option<String> {
     }
     let cand = format!("{}-{tail}", base.trim_end_matches('-'));
     (!base.trim_end_matches('-').is_empty() && alias_ok(&V::from(cand.as_str()))).then_some(cand)
+}
+
+/// 以前（3.7.8 及以前）Team 给没起过别名的账号默认编的 team-N 的 N；别的样子是 None
+pub fn legacy_n(alias: &str) -> Option<i64> {
+    alias.strip_prefix("team-").filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
+}
+
+/// Team 给没起过别名的账号默认编的第 n 个别名：「Team 的名字-n」（书房组-1；名字照 alias_fallback 去掉别名不能有的字符、太长了截短）。
+/// 名字里一个能用的字都没有时还是 team-n
+pub fn team_default_alias(team: &str, n: i64) -> String {
+    let legacy = format!("team-{n}");
+    alias_fallback(&legacy, team).unwrap_or(legacy)
+}
+
+/// 这个别名是不是照这个 Team 的名字默认编的、第几号：照 team_default_alias 重新拼一遍、一模一样才算（名字可能截短过、去掉过字符，
+/// 本身也可能带着「-」和数字）；以前默认的 team-N 也算
+pub fn team_default_n(alias: &str, team: &str) -> Option<i64> {
+    if let Some(n) = legacy_n(alias) {
+        return Some(n);
+    }
+    let (_, tail) = alias.rsplit_once('-')?;
+    if tail.is_empty() || tail.starts_with('0') || !tail.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: i64 = tail.parse().ok()?;
+    (team_default_alias(team, n) == alias).then_some(n)
 }
 
 /// 映射给这个账号（邮箱 e）的别名在账号表 table 里用得上的那一个：别名本身；被这台设备上别的账号用了，换成 alias_fallback。
@@ -301,7 +328,7 @@ pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
 }
 
 /// 映射里的账号在这台机器上还没有别名（键只是邮箱）、映射里给它起了别名：补上，返回 [(旧键, 新键)]。比如先按没写
-/// 别名的配置加进来的账号，管理员后来补了别名；管理员给 Team 里的账号编的 team-1、team-2……。这台机器上起过别名的不改；
+/// 别名的配置加进来的账号，管理员后来补了别名；管理员给 Team 里的账号默认编的「Team 的名字-1」「Team 的名字-2」……。这台机器上起过别名的不改；
 /// 这台设备是管理员的那个 Team 给的不补（管理员这台设备上的别名不动）；别名和这台机器上别的账号重名的：换成「Team 的名字-N」
 /// （alias_fallback），还撞就不补。只改键：账号目录、端口和上次使用都按邮箱认，跟着走（reconcile 里随后的端口分配按 acct_id 找回原来的端口）
 pub fn policy_alias_fill(table: &Dict, tool: &Tool) -> Vec<(String, String)> {
@@ -341,8 +368,8 @@ fn rekey(table: &Dict, ren: &[(String, String)]) {
 /// 管理员改了 Team 里一个账号的别名：这台设备上没自己改过的跟着改，返回 [(旧键, 新键, Team 的编号)]。哪个别名是 Team 给的记在工具状态的
 /// `team_alias`（{账号目录名: {"a": 账号表里现在用着的别名, "t": 那时 Team 给的别名}}）：账号表里的别名就是 Team 给的（或者撞了以后换成的
 /// 「Team 的名字-N」）时记下；以后账号表里的还是记着的那个、Team 给的变了，才换成新的；账号表里的和记着的不一样了是这台设备上自己改过
-/// （cca rename），不再跟着。没有记录、账号表里是 team-N、Team 给的是另一个 team-N 的（3.5.3-beta.5 各工具一起编的号，旧版本补上时
-/// 不记）也跟着换。几个账号一起换（挨个挪一位、两个对调）时，要换走的账号原来的别名不算占着；新的别名被这台设备上别的账号占着：换成
+/// （cca rename），不再跟着。没有记录、账号表里是以前默认的 team-N、Team 给的是默认编的（「Team 的名字-N」，或者还是 team-N：
+/// 3.5.3-beta.5 各工具一起编的号，旧版本补上时不记）也跟着换。几个账号一起换（挨个挪一位、两个对调）时，要换走的账号原来的别名不算占着；新的别名被这台设备上别的账号占着：换成
 /// 「Team 的名字-N」，还撞就先不换、下次再看。这台设备是管理员的那个 Team 给的不记、不跟。管理员锁定了别名的 Team（配置里的
 /// alias_lock）给的：账号表里的不是 Team 给的（或者撞了以后的那个）就换，自己改过的也换回来。
 /// 账号不在账号表里、也没收起来（parked）的，记着的那一项去掉
@@ -352,7 +379,6 @@ pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<
     if rec.is_empty() && names.is_empty() {
         return Vec::new(); // 没有 Team 给的别名、也没记着的（没用 Team 的机器都是这样）
     }
-    let team_n = |x: &str| re!(r"^team-[0-9]+$").fullmatch(x).is_some();
     // 要跟着换的：(键, 邮箱, 账号目录名, 谁给的)
     let mut todo: Vec<(String, String, String, &AliasFrom)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -383,7 +409,7 @@ pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<
         }
         match r {
             None if given(&a) => rec.set(&*aid, dict! { "a" => a.as_str(), "t" => f.alias.as_str() }),
-            None if team_n(&a) && team_n(&f.alias) => todo.push((k.to_string(), e, aid, f)),
+            None if legacy_n(&a).is_some() && team_default_n(&f.alias, &f.team).is_some() => todo.push((k.to_string(), e, aid, f)),
             None => {}
             Some(r) if r.str("a").as_deref() != Some(a.as_str()) => {
                 rec.pop(&aid);
@@ -651,6 +677,34 @@ mod tests {
         // Team 的名字去掉不能有的字符以后什么都不剩、别名本身太长：拼不出来
         assert_eq!(alias_fallback("team-1", "(  )"), None);
         assert_eq!(alias_fallback("一二三四五六七八九十一二", "Lab"), None);
+    }
+
+    #[test]
+    fn team_default_names() {
+        assert_eq!(team_default_alias("Lab", 3), "Lab-3");
+        assert_eq!(team_default_alias("设计 组", 12), "设计组-12", "别名不能有的字符去掉");
+        assert_eq!(team_default_alias("(  )", 1), "team-1", "名字里一个能用的字都没有：还是 team-N");
+        assert_eq!(team_default_alias("一二三四五六七八九十一二三", 3), "一二三四五六七八九十一-3", "太长了截短");
+        assert_eq!(team_default_alias("Lab-2", 3), "Lab-2-3");
+        // 反过来认：照名字重新拼一遍一样才算；以前默认的 team-N 也算
+        for (alias, team, n) in [
+            ("Lab-3", "Lab", Some(3)),
+            ("设计组-12", "设计 组", Some(12)),
+            ("Lab-2-3", "Lab-2", Some(3)),
+            ("一二三四五六七八九十一-3", "一二三四五六七八九十一二三", Some(3)),
+            ("team-3", "Lab", Some(3)),
+            ("team-1", "(  )", Some(1)),
+            ("team-3", "team", Some(3)),
+            ("Lab-03", "Lab", None),
+            ("Lab-0", "Lab", None),
+            ("Lab-x", "Lab", None),
+            ("Other-3", "Lab", None),
+            ("Lab", "Lab", None),
+            ("Lab-", "Lab", None),
+        ] {
+            assert_eq!(team_default_n(alias, team), n, "{alias}（{team}）");
+        }
+        assert_eq!((legacy_n("team-7"), legacy_n("team-"), legacy_n("team-x"), legacy_n("Lab-7")), (Some(7), None, None, None));
     }
 
     #[test]

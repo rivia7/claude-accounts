@@ -1153,7 +1153,7 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   退出了的、移除了的不再记，3.6.5 及以前的 cca 还给，App 不列它们）, me, grants: "all" | {工具: [邮箱…]},
   seq, have, seen_age, expires_epoch, problem, role（3.6.15 起：`owner` 建 Team 的那台 | `admin` 别的管理员 | `member`；以前的 cca 没有）}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
   没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
-  别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
+  别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的号，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
   `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。`alias_lock`（3.5.3-beta.7 起；没有这一项时 App 不给锁定的开关）
   见下面「锁定别名」。设备只有一个名字：`label`（管理员起的，界面上只用它）；`name` 是它在服务器上的名字，3.5.3-beta.7 起和服务器对一遍时照
   `label` 改成一样的（以前的设备加入时报的是主机名），App 不显示。`seq`、`have` 只用来比新旧：App 只说「配置是最新的」「还没同步到最新的配置」，不说第几版。
@@ -1195,8 +1195,9 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   没有交互，不发布配置（配置里没有设备的名字）。
 - **改别名**（`cca team alias <Team> <工具:邮箱> <新别名>`，3.5.3-beta.5 起；3.5.3-beta.6 起别名按工具记，写 `工具:邮箱` 只改这个工具里的，
   只写邮箱改它在的每个工具里的——App 写 `工具:邮箱`）：改完发布，跑完为止（和 `map` 一样）。别名不合规、同一个工具里别的账号已经叫它是
-  `team_alias`，Team 里没有这个账号是 `team_no_account`。没起过别名的账号管理员这边默认编成 `team-1`、`team-2`……（各工具各编各的，
-  各自的第一个账号都是 `team-1`）；各台设备上照 Team 给的用着的跟着改（`notices` 的 `policy_alias`），自己改过的、管理员自己这台的账号表不动。
+  `team_alias`，Team 里没有这个账号是 `team_no_account`。没起过别名的账号管理员这边默认编成「Team 的名字-1」「Team 的名字-2」……（各工具各编各的，
+  各自的第一个账号都是 1 号；3.7.8 及以前是 `team-1`、`team-2`……，下次发布时换过来；`team-数字` 不能写，也是 `team_alias`；改了 Team 的名字，
+  默认编的跟着换成新名字的）；各台设备上照 Team 给的用着的跟着改（`notices` 的 `policy_alias`），自己改过的、管理员自己这台的账号表不动。
 - **锁定别名**（`cca team alias <Team> --lock | --unlock`，3.5.3-beta.7 起）：改完发布，跑完为止（和 `alias` 一样）。锁定了：各台设备上这个 Team
   给的账号照 Team 给的别名用，自己改过的换回来（`notices` 的 `policy_alias`），`cca rename` 改不了（账号的 `alias_locked`，失败的原因 `alias_locked`）；
   管理员自己这台的账号表照旧不动。管理员照样能改别名（`cca team alias`），各台设备跟着换。解开以后又能自己改，现在用着的不变。

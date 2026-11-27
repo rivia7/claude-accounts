@@ -103,7 +103,7 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
     var accounts: [String: [String: String]]
     /// 邮箱 → 别名（各工具通用的那一份：每个邮箱用它最前面那个工具里的；cca 3.5.3-beta.5 及以前只有它）
     var aliases: [String: String]
-    /// 工具 → 邮箱 → 别名（按工具记的，各工具各编各的 team-N；cca 3.5.3-beta.6 起，有它时照它）
+    /// 工具 → 邮箱 → 别名（按工具记的，各工具各编各的号；cca 3.5.3-beta.6 起，有它时照它）
     var toolAliases: [String: [String: String]]?
     /// 管理员锁定了别名（各台设备上不能自己改；cca 3.5.3-beta.7 起，以前的 cca 没有这一项：nil，App 不给锁定的开关）
     var aliasLock: Bool?
@@ -131,7 +131,7 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
         devices = c.lossyArray(TeamDevice.self, .devices) ?? []
     }
 
-    /// 配置里的账号，排好的：先照工具（Claude、Codex、Antigravity，别的在后），再照别名（数字按大小：team-2 在 team-10 前面；
+    /// 配置里的账号，排好的：先照工具（Claude、Codex、Antigravity，别的在后），再照别名（数字按大小：书房组-2 在 书房组-10 前面；
     /// 不分大小写、不随系统的语言变），没有别名的在后，最后照邮箱
     var accountList: [TeamAccount] {
         accounts.flatMap { tool, m in

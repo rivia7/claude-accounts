@@ -6575,7 +6575,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
                                                    加（粘贴代理链接或 Clash 节点配置）/ 照一个节点复制（换名字、端口）/ 去掉节点
       cca team node Team test [节点…] [--tool 工具] [--json]   起一个临时内核实测这些节点的出口（不写是全部）
       cca team node Team install 节点|-            各台设备经内置代理安装客户端时用哪个节点（- 是不再指定）
-      cca team alias Team 账号 新别名              改一个账号在这个 Team 里的别名（没起过的各工具各自编成 team-1、team-2……；
+      cca team alias Team 账号 新别名              改一个账号在这个 Team 里的别名（没起过的各工具各自编成「Team 的名字-1」「Team 的名字-2」……；
                                                    账号写 工具:邮箱 只改这个工具里的，只写邮箱改它在的每个工具里的）
       cca team alias Team --lock | --unlock        锁定（解开）账号的别名：锁定了，各台设备上照 Team 给的用、不能自己改
       cca team publish Team                        和服务器对一遍、发布配置"
@@ -6633,7 +6633,7 @@ cmd_team() {
 			out=$(py team-name "$@") || team_fail "$out" "没改成"
 			{ local nm_old nm_new nm_stored; IFS= read -r nm_old; IFS= read -r nm_new; IFS= read -r nm_stored; } <<< "$out"
 			okay "改好了：「${nm_old}」现在叫「${nm_new}」；$(team_stored "$nm_stored")"
-			say "  各台设备下次同步配置时跟着改；服务器上手机网页端的标题下次部署时换（cca team deploy ${nm_new} …）" ;;
+			say "  各台设备下次同步配置时跟着改，默认编的别名也跟着换成新名字的；服务器上手机网页端的标题下次部署时换（cca team deploy ${nm_new} …）" ;;
 		rename)
 			[ $# -eq 3 ] || die "用法: cca team rename Team 设备 新名字"
 			out=$(py team-rename "$@") || team_fail "$out" "没改成"
