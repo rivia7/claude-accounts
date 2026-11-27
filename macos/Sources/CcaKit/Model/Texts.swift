@@ -283,6 +283,28 @@ enum Texts {
         return parts.joined(separator: " · ")
     }
 
+    /// 管理员的「信任的转发中转」那一行：这个 Team 给的 Claude 账号在各台设备上信任哪些（`team devices --json` 的 `mail_forwarders`）
+    static func teamForwarders(_ domains: [String]) -> String {
+        guard !domains.isEmpty else { return "不信任：这个 Team 给的 Claude 账号只认带 Anthropic 签名的登录邮件" }
+        let it = domains.count > 1 ? "它们" : "它"
+        return "信任 \(domains.joined(separator: "、"))（不安全）：经\(it)转来、标着来自 Anthropic 的登录邮件也会打开。各台设备上都关不掉"
+    }
+
+    /// 账号页「邮箱」一节，Team 给的账号（cca 3.7.9 起，`mail.team_forwarders`）：信任哪些转发中转照 Team 的配置，这台 Mac 上改不了
+    static func mailTeamForwarders(_ f: TeamForwarders) -> String {
+        let team = nonEmpty(f.teamName) ?? String(f.team.prefix(8))
+        guard !f.domains.isEmpty else { return "按 Team「\(team)」的配置，不信任转发中转：只认带 Anthropic 签名的登录邮件" }
+        let these = f.domains.count > 1 ? "这些" : "这个"
+        return "按 Team「\(team)」的配置，信任来自 \(f.domains.joined(separator: "、")) 的转发（不安全）：\(these)中转重签了邮件，cca 没法再验 Anthropic 的签名，"
+            + "只能信\(these)域名。这台 Mac 上改不了，要改请找 Team 的管理员"
+    }
+
+    /// 这台 Mac 以前给这个账号登记的转发中转（照 Team 的配置以后不算数了）；没登记过是 nil
+    static func mailTeamForwarderStale(_ f: TeamForwarders) -> String? {
+        guard let local = nonEmpty(f.local) else { return nil }
+        return "这台 Mac 以前登记的 \(local) 不算数了：这个账号照 Team「\(nonEmpty(f.teamName) ?? String(f.team.prefix(8)))」的配置"
+    }
+
     /// 管理员看一台设备：状态、给了它几个账号、它手里的配置是不是最新的（不说第几版：序号只是 cca 用来比新旧的）
     static func teamDeviceDetail(_ d: TeamDevice, accounts total: Int, now: Double) -> String {
         var parts: [String] = []

@@ -73,6 +73,12 @@ enum Snapshot {
                     m.refreshMail(r)
                 }
             },
+            Scene(name: "account-mail-team") { m in
+                m.tool = .claude
+                if let r = first(.claude, { $0.mail?.teamForwarders?.local != nil }) {
+                    m.selection = .account(r)   // Team 给的账号：照 Team 的名单信任转发中转（没有开关）+ 这台 Mac 以前登记、不算数了的那一行
+                }
+            },
             Scene(name: "claude-api") { m in
                 m.tool = .claude
                 m.selection = first(.claude) { $0.isAPI && $0.health != nil }.map { .account($0) }

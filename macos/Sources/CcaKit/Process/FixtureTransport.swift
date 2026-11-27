@@ -21,7 +21,7 @@ import Foundation
 /// | `_onboard`（配置向导，提问会话） | flow__onboard.flow | — |
 /// | `team devices <Team> --json` | team_devices.json | — |
 /// | `team invite …` | 演示用的邀请链接（运行时拼出来） | — |
-/// | `team sync` / `leave` / `revoke` / `grant` / `map` / `export` / `import` | 直接成功（没有真的改、没有写文件） | — |
+/// | `team sync` / `leave` / `revoke` / `grant` / `map` / `alias` / `forwarder` / `export` / `import` | 直接成功（没有真的改、没有写文件） | — |
 /// | `team new`（提问会话） | flow_team_new.flow | — |
 /// | `team deploy <Team>`（提问会话） | flow_team_deploy.flow（哪个 Team 都用它） | — |
 /// | `remote list --json` | remote_list.json | — |
@@ -230,7 +230,7 @@ struct FixtureTransport: Transport {
             // 演示用的假邀请：运行时拼出来（仓库里不放长得像真邀请的字符串）
             return CcaResponse(exitCode: 0, stdout: Data(("cca-team1.demo-" + String(repeating: "0", count: 24) + ".0000").utf8), stderr: Data(), events: [])
         case ("team", "sync"), ("team", "leave"), ("team", "revoke"), ("team", "grant"), ("team", "rename"), ("team", "map"), ("team", "alias"),
-             ("team", "export"), ("team", "import"), ("team", "admin"):
+             ("team", "forwarder"), ("team", "export"), ("team", "import"), ("team", "admin"):
             let code: ResultCode = sub == "leave" ? .teamLeft : sub == "revoke" ? .teamRevoked : sub == "export" ? .teamExported
                 : sub == "import" ? .teamImported : sub == "admin" ? (request.arguments.contains("add") ? .teamAdminAdded : .teamAdminRemoved) : .opened
             let e = CcaEvent.result(ResultEvent(code: code, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: nil, key: nil))

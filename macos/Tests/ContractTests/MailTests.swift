@@ -68,6 +68,16 @@ import Foundation
               && bob?.teamForwarders?.domains == ["relay.example.com"] && bob?.teamForwarders?.local == nil
               && grace?.teamForwarders?.local == "old-relay.example.net"
               && dave?.teamForwarders == nil && dave?.forwarder == "relay.example.com" && erin != nil && erin?.teamForwarders == nil)
+        if let b = bob?.teamForwarders, let g = grace?.teamForwarders {
+            check("「邮箱」一节：Team 给的账号说是照哪个 Team 的配置、信任哪些（不安全）、这台 Mac 上改不了；以前登记、不算数的另说一句",
+                  Texts.mailTeamForwarders(b).hasPrefix("按 Team「书房组」的配置，信任来自 relay.example.com 的转发（不安全）")
+                  && Texts.mailTeamForwarders(b).contains("这台 Mac 上改不了") && Texts.mailTeamForwarderStale(b) == nil
+                  && Texts.mailTeamForwarderStale(g) == "这台 Mac 以前登记的 old-relay.example.net 不算数了：这个账号照 Team「书房组」的配置",
+                  Texts.mailTeamForwarders(b))
+        }
+        check("Team 的管理员那一行：信任的转发中转（几个用顿号连起来）、一个都不信",
+              Texts.teamForwarders(["b.example.net", "relay.example.com"]).hasPrefix("信任 b.example.net、relay.example.com（不安全）：经它们转来")
+              && Texts.teamForwarders([]).hasPrefix("不信任："))
     }
 
     // MARK: 模型：按需拉、打开、gate

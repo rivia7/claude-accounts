@@ -619,7 +619,7 @@ cca 的启动器照记下的级别决定最多起几个会话，见 launch.md「
   这个字段**，账号的 `team` 也只有 Team 给的官方账号才有：没有 Team 的机器输出和原来逐字节一样。
 - `cca team devices <Team> --json` 多了 `name`、`accounts`（工具 → 邮箱 → 节点）、`aliases`、`nodes`：管理页一次要到的就是这一份。3.5.3-beta.6 起
   还有 `tool_aliases`（工具 → 邮箱 → 别名，照 `alias_plan` 算：还没发布过的旧 Team 也是按工具编好的样子），App 有它时照它（`TeamDevicesDoc.accountList`）；
-  3.5.3-beta.7 起还有 `alias_lock`（App 有它才放「锁定别名」的开关）。
+  3.5.3-beta.7 起还有 `alias_lock`（App 有它才放「锁定别名」的开关），3.7.9 起还有 `mail_forwarders`（App 有它才放「信任的转发中转」那一块）。
 - `_gui state` 的账号的 `alias_locked`（3.5.3-beta.7 起）：别名被 Team 锁定了，App 里账号页的名字不能点、侧栏菜单的「改别名…」灰着。
 - 邀请链接是那台设备的密钥：`cca team invite` 的 stdout 只经内存里的管道读（`CcaCommand.teamInvite` 不是跑完为止的那种），放进剪贴板
   （`copySecret`：标成机密、60 秒后清掉），不进被观察的状态、提示和读屏。
@@ -640,11 +640,13 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `cca team rename`）、移除 / 撤回邀请（`cca team revoke`，先问同意）、发邀请（起名字、勾账号，链接进剪贴板）、各个账号走
   哪个节点（`cca team map`；能选的是这个 Team 带着定义的节点加上这台设备上有的）、各个账号的「改别名…」（账号那一行下面开输入框，`AppModel.teamAlias`，
   按 `工具:邮箱` 改：`cca team alias`，只改这个工具里的；别名没变不发命令）、账号那一块标题右边的「锁定别名」开关（`cca team alias Team --lock`
-  / `--unlock`）。加账号、导入还在终端里（`cca team map`、`import --mine`）。
-- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`、`alias`，连同锁定别名）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
+  / `--unlock`）、账号下面的「信任的转发中转」（`TeamForwardersBlock`：有 `mail_forwarders`，这个 Team 有 Claude 账号或者已经设了名单时才放；
+  「修改…」在下面开输入框（`AppModel.teamForwarders`，先填着现在的名单），空格、逗号、顿号隔开的几个域名各是一个参数：`cca team forwarder`，
+  比现在宽了 cca 先问同意（`team_forwarders`），名单没变不发命令；「不再信任」是 `off`）。加账号、导入还在终端里（`cca team map`、`import --mine`）。
+- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`、`alias`，连同锁定别名、`forwarder`）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
 - `HubKind` 认得 `team` 了；`config.hubs`、`devices --json` 的 `hubs[]` 里 Team 的服务器照 `team`（编号）分，账号问的是哪一台照
   `(hub, team)` 认（`DevicesDoc.hub(for:)`）。
-- 截图场景：`teams`（卡片，展开着管理员的 Team）、`team-filter`（总览筛出一个 Team）；屏幕睡着时系统不给截屏，`Snapshot.capture` 退一步
+- 截图场景：`teams`（卡片，展开着管理员的 Team）、`team-filter`（总览筛出一个 Team）、`account-mail-team`（Team 给的账号的「邮箱」一节）；屏幕睡着时系统不给截屏，`Snapshot.capture` 退一步
   让窗口自己画进位图（没有玻璃效果，侧栏画不出来；版面和文字看得到）。
 - **手机上**（iOS 的 cca App 的「共享与同步」页，只看；3.7.9 起）：配对过的每台电脑把它在这个配对所在的 Team 里的状态（`config.teams` 里那一项的名字、角色、
   状态和原因、分给它几个账号、设备名、服务器的地址、要不要更新）封给配对的手机（remote.md「手机上的账号」的 `team`；一个配对只给它那台服务器的 Team），手机照 Team 分组、
@@ -886,7 +888,9 @@ Team 说了算：这些账号在各台设备上照配置的 `mail_forwarders` �
   留给下一条在前台对一遍账号表的命令；只读（`_gui state`）也不说，`notices` 里没有它（那是「下次运行时会做的改动」）。记过的 Team 这一轮没看到时，
   说得准退出了、被移除了（`grant_settled`）才删记录。
 - 界面：`_gui state` 的 `mail.team_forwarders`（`mail_view`：`{team, team_name, domains, local}`，这时 `forwarder` 是 null），`team devices --json` 的
-  `mail_forwarders`（PROTOCOL 2.2、4.11、4.14）。
+  `mail_forwarders`（PROTOCOL 2.2、4.11、4.14）。App：管理员的「设备和账号」里「信任的转发中转」（见「界面」）；账号页「邮箱」一节有
+  `team_forwarders` 时没有「信任转发中转」的开关，照它说是哪个 Team 定的、信任哪些（`Texts.mailTeamForwarders`；一个都不信的只在配置了邮箱时说），
+  这台设备以前登记、不算数的那一个另起一行，「清掉」是 `mail trust-forwarder KEY off`。
 - 旧版本：以前的 cca 不认得 `mail_forwarders`：Team 给的账号照它自己登记的（没登记就不信）；以前的 cca 当管理员发布配置时会丢掉这一项（它的
   `config` 里没有）：各台设备上就一个都不信了——都是往不信的那边错。更新到这一版以后，Team 给的账号以前在设备上登记的中转不算数了：WhatsNew 要说。
 - 导出的文件里是 `mail_forwarders`（没设不写），导入时同样规整、查（`mail_forwarders：…` 说哪一项不对）；变宽时的同意见「导出、导入、修改配置」。

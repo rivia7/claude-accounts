@@ -1660,6 +1660,8 @@ final class AppModel {
     var teamRename: TeamRenameDraft?
     /// 正在改别名的账号（「改别名…」打开的输入框）
     var teamAlias: TeamAliasDraft?
+    /// 正在改「信任的转发中转」的 Team（「修改…」打开的输入框）
+    var teamForwarders: TeamForwardersDraft?
 
     func teamSnapshot(_ t: TeamEntry) -> TeamSnapshot? { teamSnapshots[t.id] }
 
@@ -1830,6 +1832,39 @@ final class AppModel {
     func setTeamAliasLock(_ t: TeamEntry, _ on: Bool) {
         runTeam(.teamAliasLock(team: t.id, on: on), failureTitle: on ? "锁定别名失败" : "解锁别名失败", success: on ? "已锁定别名" : "已解锁别名",
                 refresh: t)
+    }
+
+    /// 「信任的转发中转」的「修改…」：输入框里先填着现在的名单
+    func startTeamForwarders(_ t: TeamEntry, current: [String]) {
+        teamForwarders = TeamForwardersDraft(team: t.id, text: current.joined(separator: ", "))
+    }
+
+    /// 改好：这个 Team 给的 Claude 账号照输入框里的域名信任转发中转（`cca team forwarder`；对不对、怎么规整由 cca 查）。比现在宽了
+    /// cca 先问同意（`consent.team_forwarders`，对话框里的话是 cca 给的），同意了重跑。名单没变不发命令；没改成时输入框留着，原因在提示里
+    func setTeamForwarders(_ t: TeamEntry, current: [String]) {
+        guard let draft = teamForwarders, draft.team == t.id else { return }
+        let domains = Self.forwarderDomains(draft.text)
+        guard !domains.isEmpty else { return }
+        guard domains != current else {
+            teamForwarders = nil
+            return
+        }
+        runTeam(.teamForwarders(team: t.id, domains: domains), failureTitle: "修改「\(t.name)」信任的转发中转失败", success: "已修改", refresh: t) { [weak self] ok in
+            if ok, self?.teamForwarders == draft { self?.teamForwarders = nil }
+        }
+    }
+
+    /// 「不再信任」：这个 Team 给的 Claude 账号改回只认带 Anthropic 签名的登录邮件（`cca team forwarder <Team> off`，不用同意）
+    func clearTeamForwarders(_ t: TeamEntry) {
+        runTeam(.teamForwarders(team: t.id, domains: []), failureTitle: "修改「\(t.name)」信任的转发中转失败", success: "已不再信任转发中转",
+                refresh: t) { [weak self] ok in
+            if ok, self?.teamForwarders?.team == t.id { self?.teamForwarders = nil }
+        }
+    }
+
+    /// 输入框里的字拆成一个个域名：空格、换行、逗号、顿号、分号（全角半角都算）隔开，去掉空的；是不是域名由 cca 查
+    nonisolated static func forwarderDomains(_ text: String) -> [String] {
+        text.components(separatedBy: CharacterSet(charactersIn: ",，、;；").union(.whitespacesAndNewlines)).filter { !$0.isEmpty }
     }
 
     /// 定一个账号走哪个节点（各台设备下次同步配置时跟着换）

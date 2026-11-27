@@ -117,6 +117,13 @@ func teamFixtureTests() {
           && CcaCommand.teamAliasLock(team: teamA, on: true).arguments == ["team", "alias", teamA, "--lock"]
           && CcaCommand.teamAliasLock(team: teamA, on: false).arguments == ["team", "alias", teamA, "--unlock"]
           && CcaCommand.teamAliasLock(team: teamA, on: true).runsToCompletion && CcaCommand.teamAliasLock(team: teamA, on: true).gate == CcaCommand.routerSync.gate)
+    let fwdSet = CcaCommand.teamForwarders(team: teamA, domains: ["relay.example.com", "b.example.net"]), fwdOff = CcaCommand.teamForwarders(team: teamA, domains: [])
+    check("命令：team forwarder（几个域名各是一个参数，一个都没有是 off）；跑完为止、和同步路由器排队；输入框里的字照空格、逗号、顿号、分号拆开",
+          fwdSet.arguments == ["team", "forwarder", teamA, "relay.example.com", "b.example.net"] && fwdOff.arguments == ["team", "forwarder", teamA, "off"]
+          && fwdSet.runsToCompletion && fwdSet.gate == CcaCommand.routerSync.gate && fwdSet.tool == nil && fwdSet.key == nil && fwdOff.timeout == 180
+          && AppModel.forwarderDomains(" relay.example.com, b.example.net，c.example.org、d.example.org；\n e.example.org ")
+            == ["relay.example.com", "b.example.net", "c.example.org", "d.example.org", "e.example.org"]
+          && AppModel.forwarderDomains(" ，、 ").isEmpty)
     check("命令：邀请的输出只经内存里的管道（不是跑完为止的那种）；改账号表的几条跑完为止、和同步路由器排队",
           !CcaCommand.teamInvite(team: teamA, label: "x", accounts: "all").runsToCompletion && CcaCommand.teamSync.runsToCompletion
           && CcaCommand.teamLeave(team: teamA).runsToCompletion && CcaCommand.teamSync.gate == CcaCommand.routerSync.gate
@@ -294,6 +301,25 @@ func teamFixtureTests() {
     m.setTeamAlias(a, acct)
     check("改别名：去掉首尾空白，按 工具:邮箱 改（只改这个工具里的）；改成了收起输入框",
           await waitUntil { !m.teamBusy && m.teamAlias == nil } && teamRuns(t).contains(["team", "alias", teamA, acct.spec, "书房-1"]))
+    // 信任的转发中转（cca 3.7.9 起 team devices --json 有 mail_forwarders）：输入框里先填着现在的；名单没变不发命令；改了照拆开的域名发
+    // （比现在宽了 cca 问同意）；「不再信任」是 off；输入框是别的 Team 的不发
+    let fwd = doc.mailForwarders ?? []
+    check("team devices 带着名单", fwd == ["relay.example.com"])
+    m.startTeamForwarders(a, current: fwd)
+    check("「修改…」：输入框里先填着现在的名单", m.teamForwarders == TeamForwardersDraft(team: teamA, text: "relay.example.com"))
+    m.setTeamForwarders(a, current: fwd)
+    try? await Task.sleep(nanoseconds: 60_000_000)
+    check("名单没变：不发命令，输入框收起", !teamRuns(t).contains { $0.prefix(2) == ["team", "forwarder"] } && m.teamForwarders == nil)
+    m.startTeamForwarders(a, current: fwd)
+    m.teamForwarders?.text = "relay.example.com， b.example.net"
+    m.setTeamForwarders(m.teams[1], current: fwd)
+    try? await Task.sleep(nanoseconds: 60_000_000)
+    check("输入框是别的 Team 的：不发", !teamRuns(t).contains { $0.prefix(2) == ["team", "forwarder"] } && m.teamForwarders != nil)
+    m.setTeamForwarders(a, current: fwd)
+    check("改名单：照空格、逗号拆开，一个域名一个参数；改成了收起输入框",
+          await waitUntil { !m.teamBusy && m.teamForwarders == nil } && teamRuns(t).contains(["team", "forwarder", teamA, "relay.example.com", "b.example.net"]))
+    m.clearTeamForwarders(a)
+    check("「不再信任」：cca team forwarder … off", await waitUntil { !m.teamBusy && teamRuns(t).contains(["team", "forwarder", teamA, "off"]) })
     // 导出、导入（hello.team_config）：先弹面板，取消了不发命令；不是管理员的 Team 都不做
     check("cca 有 team_config", m.teamConfigAvailable)
     m.exportTeamConfig(a)

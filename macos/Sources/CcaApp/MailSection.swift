@@ -77,7 +77,11 @@ struct MailSection: View {
                 Divider()
                 Button("移除默认邮箱（所有账号）…", role: .destructive) { confirmRemoveDefault.wrappedValue = true }
             }
-            if mail?.configured == true {
+            if let tf = mail?.teamForwarders {
+                // Team 给的账号：信任哪些转发中转照 Team 的配置（下面那一行说是哪些），这里没有开关
+                Divider()
+                Text("转发中转照 Team「\(nonEmpty(tf.teamName) ?? String(tf.team.prefix(8)))」的配置")
+            } else if mail?.configured == true {
                 Divider()
                 if mail?.trustsForwarder == true {
                     Button("更换信任的转发中转…") { model.mailTrustForwarder(account.ref) }
@@ -125,9 +129,12 @@ struct MailSection: View {
     // MARK: 信任转发中转（不安全）
 
     /// 开了「信任转发中转」时的警示行：这个开关让 cca 放弃验 Anthropic 的签名、改信这个域名，所以一直显眼地提示，并给个「关掉」。
+    /// Team 给的账号（cca 3.7.9 起有 `team_forwarders`）照 Team 的配置：见 `teamForwarderRows`
     @ViewBuilder
     private func forwarderRow(_ mail: MailConfig?) -> some View {
-        if let fwd = nonEmpty(mail?.forwarder) {
+        if let tf = mail?.teamForwarders {
+            teamForwarderRows(tf, configured: mail?.configured == true)
+        } else if let fwd = nonEmpty(mail?.forwarder) {
             let busy = model.activity(account.ref) != nil
             InfoRow(Text("信任来自 \(fwd) 的转发（不安全）：这个中转重签了邮件，cca 没法再验 Anthropic 的签名，只能信这个域名。只在你清楚它可信时才开着"),
                     systemImage: "exclamationmark.shield", tint: .orange) {
@@ -136,6 +143,26 @@ struct MailSection: View {
                     .controlSize(.regular)
                     .disabled(busy)
                     .help("不再信任这个中转：发件人是它的登录邮件会重新被拦下")
+            }
+        }
+    }
+
+    /// Team 给的账号：信任哪些转发中转由 Team 的管理员定，这台 Mac 上改不了（没有开关、没有「关闭」）。信任着的一直显眼地说；
+    /// 一个都不信的只在配置了邮箱时说一句。这台 Mac 以前登记过、现在不算数的另起一行，可以清掉（`mail trust-forwarder KEY off`）
+    @ViewBuilder
+    private func teamForwarderRows(_ tf: TeamForwarders, configured: Bool) -> some View {
+        if !tf.domains.isEmpty {
+            InfoRow(Text(Texts.mailTeamForwarders(tf)), systemImage: "exclamationmark.shield", tint: .orange) { EmptyView() }
+        } else if configured {
+            InfoRow(Text(Texts.mailTeamForwarders(tf)), systemImage: "checkmark.shield") { EmptyView() }
+        }
+        if let stale = Texts.mailTeamForwarderStale(tf) {
+            InfoRow(Text(stale), systemImage: "info.circle") {
+                Button("清掉") { model.mailTrustForwarderOff(account.ref) }
+                    .buttonStyle(.glass)
+                    .controlSize(.regular)
+                    .disabled(model.activity(account.ref) != nil)
+                    .help("删掉这台 Mac 以前给这个账号登记的转发中转（照 Team 的配置以后它不再起作用）")
             }
         }
     }

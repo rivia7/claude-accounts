@@ -288,6 +288,12 @@ struct TeamAliasDraft: Equatable, Sendable {
     var alias: String
 }
 
+/// 管理员在改的「信任的转发中转」（「修改…」打开的输入框）：哪个 Team、框里的字（几个域名，空格或逗号隔开）
+struct TeamForwardersDraft: Equatable, Sendable {
+    var team: String
+    var text: String
+}
+
 /// 按 Team 筛选账号（侧栏、总览、菜单栏面板共用一个选择；只管显示）
 enum TeamFilter: Equatable, Hashable, Sendable {
     /// 全部账号

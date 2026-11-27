@@ -201,6 +201,11 @@ private struct TeamAdminSection: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    // 信任的转发中转（cca 3.7.9 起才给 mail_forwarders）：只管 Claude 账号，这个 Team 一个 Claude 账号都没有、也没设过时不放
+                    if let fwd = doc.mailForwarders, !fwd.isEmpty || accounts.contains(where: { $0.tool == .claude }) {
+                        Divider()
+                        TeamForwardersBlock(team: team, domains: fwd)
+                    }
                 } else if !loading, snap?.error == nil {
                     Text("尚未查询服务器").font(.callout).foregroundStyle(.secondary)
                 }
@@ -399,6 +404,49 @@ private struct TeamAccountLine: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+/// 这个 Team 给的 Claude 账号在各台设备上信任哪些转发中转（`cca team forwarder`）：各台设备照这里的，设备上关不掉、自己登记的不算数。
+/// 「修改…」在下面开一个输入框（`AppModel.teamForwarders`），比现在宽了 cca 先问同意；「不再信任」去掉（不用同意）
+private struct TeamForwardersBlock: View {
+    @Environment(AppModel.self) private var model
+    let team: TeamEntry
+    let domains: [String]
+
+    private var editing: Bool { model.teamForwarders?.team == team.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("信任的转发中转").font(.headline)
+            InfoRow(Text(Texts.teamForwarders(domains)), systemImage: domains.isEmpty ? "checkmark.shield" : "exclamationmark.shield",
+                    tint: domains.isEmpty ? nil : .orange) {
+                RowAction("修改…", systemImage: "pencil") { model.startTeamForwarders(team, current: domains) }
+                    .disabled(editing)
+                    .help("登录邮件经隐私邮箱、转发服务重签以后才要信任它（不安全）：写上它的域名")
+                if !domains.isEmpty {
+                    RowAction("不再信任", systemImage: "xmark.circle") { model.clearTeamForwarders(team) }
+                        .help("这个 Team 给的 Claude 账号改回只认带 Anthropic 签名的登录邮件")
+                }
+            }
+            .disabled(model.teamBusy || model.flow != nil)
+            if editing {
+                HStack(spacing: 10) {
+                    TextField("中转的域名，几个用空格或逗号隔开（比如 relay.example.com）",
+                              text: Binding(get: { model.teamForwarders?.text ?? "" }, set: { model.teamForwarders?.text = $0 }))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 360)
+                        .onSubmit { model.setTeamForwarders(team, current: domains) }
+                    SectionAction("改好", systemImage: "checkmark", prominent: true) { model.setTeamForwarders(team, current: domains) }
+                        .disabled(AppModel.forwarderDomains(model.teamForwarders?.text ?? "").isEmpty)
+                    SectionAction("取消", systemImage: "xmark") { model.teamForwarders = nil }
+                }
+                .disabled(model.teamBusy || model.flow != nil)
+            }
+            Text("只在登录邮件经隐私邮箱、转发服务重签、你清楚这个中转可信时才加：经它转来的登录邮件 cca 没法再验 Anthropic 的签名。改了马上发布，各台设备下次同步配置时照它，设备上自己登记的不再算数。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

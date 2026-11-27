@@ -123,6 +123,10 @@ enum CcaCommand: Sendable, Hashable {
     case teamAlias(team: String, account: String, alias: String)
     /// 锁定（解开）这个 Team 里账号的别名，再发布（`cca team alias Team --lock|--unlock`）
     case teamAliasLock(team: String, on: Bool)
+    /// Team 给的 Claude 账号信任哪些转发中转（`cca team forwarder <Team> <域名…>`，一个域名都没有时是 `off`：不再信任；cca 3.7.9 起，
+    /// `team devices --json` 有 `mail_forwarders` 时才有）：比现在宽了要同意（team_forwarders，范围是 Team 的编号和新名单的摘要，默认不同意），
+    /// 改完发布、这台设备马上同步一次、照它对一遍账号表
+    case teamForwarders(team: String, domains: [String])
     /// 把这个 Team 的配置导出成 JSON 文件（`cca team export <Team> <文件> --force`，要 `hello.team_config`）：保存面板问过要不要换掉已有的，
     /// 所以总是带 --force；文件里有节点的密钥（cca 写成只有自己能读）
     case teamExport(team: String, path: String)
@@ -137,7 +141,7 @@ enum CcaCommand: Sendable, Hashable {
              .costSync, .costHook, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
              .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch, .remoteStart,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamAdmin, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock,
-             .teamExport, .teamImport: return nil
+             .teamForwarders, .teamExport, .teamImport: return nil
         }
     }
 
@@ -150,7 +154,7 @@ enum CcaCommand: Sendable, Hashable {
              .clientAutoInstall, .clientInstall, .costSync, .costHook, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
              .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch, .remoteStart,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamAdmin, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock,
-             .teamExport, .teamImport: return nil
+             .teamForwarders, .teamExport, .teamImport: return nil
         }
     }
 
@@ -230,6 +234,7 @@ enum CcaCommand: Sendable, Hashable {
         case .teamMap(let team, let tool, let email, let node): return ["team", "map", team, tool.rawValue, email, node]
         case .teamAlias(let team, let account, let alias): return ["team", "alias", team, account, alias]
         case .teamAliasLock(let team, let on): return ["team", "alias", team, on ? "--lock" : "--unlock"]
+        case .teamForwarders(let team, let domains): return ["team", "forwarder", team] + (domains.isEmpty ? ["off"] : domains)
         case .teamExport(let team, let path): return ["team", "export", team, path, "--force"]
         case .teamImport(let team, let path): return ["team", "import", team, path]
         }
@@ -260,7 +265,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteLaunch: return 40   // 改配对表，再照它装上 / 卸掉启动器（launchctl）
         case .remoteStart: return 100   // 问服务器、进启动器、等它回话（最多 25 秒），再等新会话登记好（最多 45 秒）
         case .teamDevices, .teamInvite, .teamRevoke, .teamAdmin, .teamRename: return 60   // 问 Team 的服务器，发布配置（设备多时分几次存）
-        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock: return 180   // 改完账号表马上照它对一遍，可能同步路由器
+        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock, .teamForwarders: return 180   // 改完账号表马上照它对一遍，可能同步路由器
         case .teamExport: return 30   // 只读管理员这边的配置、写一个文件
         case .teamImport: return 240   // 新的节点定义先拿内核校验（可能要先下载内核），再发布、对账号表
         }
@@ -276,7 +281,7 @@ enum CcaCommand: Sendable, Hashable {
              .clientAutoInstall, .devices, .devicesAll, .keyShow, .keyForget, .costSync, .costHook, .mailForget, .mailTrustForwarderOff,
              .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .remoteTemplates, .remoteTemplateSave, .remoteTemplateRemove, .remoteLaunch,
              .remoteStart, .teamDevices, .teamInvite, .teamRevoke, .teamAdmin, .teamRename, .teamExport: return false
-        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock, .teamImport: return true   // 改账号表、同步路由器：半路杀掉会留下一半
+        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock, .teamForwarders, .teamImport: return true   // 改账号表、同步路由器：半路杀掉会留下一半
         }
     }
 
@@ -303,7 +308,7 @@ enum CcaCommand: Sendable, Hashable {
             return "remote"   // 改配对表、开关、模板、结束会话：一个接一个
         case .teamDevices: return nil   // AppModel 保证一次一个
         case .teamInvite, .teamRevoke, .teamAdmin, .teamRename, .teamExport: return "team"   // 改管理员这边记着的设备、读它的配置：一个接一个
-        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock, .teamImport: return "router-sync"   // 账号表跟着变，可能同步路由器：和同步路由器排队
+        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock, .teamForwarders, .teamImport: return "router-sync"   // 账号表跟着变，可能同步路由器：和同步路由器排队
         }
     }
 }
