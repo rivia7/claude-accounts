@@ -533,7 +533,7 @@ final class AppModel {
             phase = .ready
         }
         await client?.setEnabledTools(h.enabledTools)
-        if !h.enabled(tool) { tool = .claude }
+        if !h.supports(tool) { tool = .claude }
         if homeChanged { restartWatcher() }
         reconcileCore()
     }
@@ -2787,8 +2787,21 @@ final class AppModel {
 
     var codexEnabled: Bool { hello?.codexEnabled ?? false }
 
-    /// 启用了的工具（Claude 一直有；Codex、Antigravity 有账号表时才有）
+    /// 启用了的工具（Claude 一直有；Codex、Antigravity 有账号表时才有）：cca 能对它跑命令（查用量这些，PROTOCOL 1）。界面上列哪些工具看 listedTools
     var visibleTools: [ToolID] { hello?.enabledTools ?? [.claude] }
+
+    /// 这一版 cca 有没有这个工具（`HelloDoc.supports`；还没读到 hello 时 Claude、Codex 算有）
+    func toolSupported(_ t: ToolID) -> Bool { hello?.supports(t) ?? (t == .claude || t == .codex) }
+
+    /// 界面上列出来的工具：总览的组、侧栏和菜单栏的工具切换。这一版 cca 有的都列，启用了没有、装没装命令、有没有账号都一样——Claude、
+    /// ChatGPT、Antigravity 一样的地位（没有账号的组和列表就是添加它的地方：加它的第一个账号就启用了它）。3.7.12 及以前只列启用了的，
+    /// Claude 组一直排在最前面，没启用的工具在侧栏底下给「启用 X 账号」
+    var listedTools: [ToolID] { ToolID.allKnown.filter { toolSupported($0) } }
+
+    /// 工具栏「＋」里列哪几组的「添加 X 账号…」：cca 有的工具都列，启用了没有、装没装命令都不管；第三方 API 一直有
+    var addMenuDepartments: [Employee.Department] {
+        Employee.Department.allCases.filter { d in d.tool.map { toolSupported($0) } ?? true }
+    }
 
     /// 这个工具有没有桌面 App、第三方 API 账号、App 里显示的用量（cca 给的 features；还没读到 state 时按工具认）
     func features(_ t: ToolID) -> ToolFeatures { toolState(t)?.features ?? .defaults(t) }
@@ -2862,7 +2875,7 @@ final class AppModel {
             t.accounts = t.accounts.filter(filter.includes)
             return t
         }
-        return Office.make(tools: tools, enabled: visibleTools, usage: { self.usage(for: $0) },
+        return Office.make(tools: tools, listed: listedTools, usage: { self.usage(for: $0) },
                     live: { self.liveSlot(for: $0) }, now: now, elsewhere: { self.elsewhereNames($0, now: now) },
                     arrange: { d, people in self.arrangement.arranged(people, group: d.key, id: \.account.stableID) })
     }
@@ -2976,7 +2989,12 @@ final class AppModel {
 
     /// state 变了之后：选中的账号不在了就回办公室；第一次加载时打开办公室（首页）。
     private func fixSelection() {
-        if !visibleTools.contains(tool) { tool = .claude }
+        if !listedTools.contains(tool) { tool = .claude }
+        // 还没选过工具（第一次打开）、正列着的这个没有账号、别的有：先列有账号的那个——三种工具一样，不总是 Claude
+        if defaults.string(forKey: Prefs.tool) == nil, accounts(tool).isEmpty,
+           let t = listedTools.first(where: { !accounts($0).isEmpty }) {
+            tool = t
+        }
         dropGoneTeams()
         // 换成了没有远程会话的旧版 cca：那一页没了，开着的终端也断开（不然没有入口能断开它）
         if !remoteAvailable, !remoteTerminals.isEmpty { closeAllRemoteTerminals() }

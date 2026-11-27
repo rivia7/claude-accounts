@@ -234,7 +234,8 @@ _BASE=" $(compgen -v 2>/dev/null | tr '\n' ' ')"   # 分节续跑的变量基线
 _BASEF=" $(compgen -A function 2>/dev/null | tr '\n' ' ')"   # 函数基线：前置阶段已有的函数（ok/run/sect…；只存各节新定义的）
 if sect 1; then
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
-out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
+out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y 1 alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
+ok "install：新增第一个账号前问加哪种（三种都列、默认 Claude Code，终端里列编号；三个命令都装着时说明里不提安装），选 1 是 Claude Code" 'printf "%s" "$out" | grep -q "添加哪种账号？" && printf "%s" "$out" | grep -q "1\. Claude Code：Anthropic 的账号（Claude Pro、Max 这些套餐）" && printf "%s" "$out" | grep -q "2\. Codex：OpenAI 的账号" && printf "%s" "$out" | grep -q "3\. Antigravity：Google 账号" && printf "%s" "$out" | grep -q "选择编号 \[1\]" && ! printf "%s" "$out" | grep -q "还没装" && tblok "\"alice@example.com\" in t"'
 ok "install：从路由器的节点里选可选节点" '"$TESTBIN" check -f "j=$H/.cca/config.json" "j[\"nodes\"]==[\"US-A\",\"US-B\",\"US-C\",\"US-D\"]" && printf "%s" "$out" | grep -q "账号可选的出口节点：US-A、US-B、US-C、US-D"'
 ok "install：建端口池前先问，提示重载约 20 秒" 'printf "%s" "$out" | grep -q "约 20 秒，期间局域网的新连接会中断"'
 ok "install：8 个槽位 7901-7908，CCA-1 默认 US-A，空槽位默认 REJECT" '[ "$(nl_)" = 8 ] && [ "$(first CCA-1)" = US-A ] && [ "$(first CCA-8)" = REJECT ] && [ "$(sel CCA-1)" = US-A ]'
@@ -2374,17 +2375,31 @@ cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- cca _onboard 2>&1); rc=$?
 ok "配置向导：选「路由器」→ 接着走配置路由器表单（router.basic）；在那页取消就不记 onboarded" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net router.basic" ] && gj state | jok "not cfg.get(\"onboarded\")"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+# 有别的工具的账号也算有账号（三种工具一样）：Claude 没有、Codex 有时不问第 3 步。3.7.12 及以前只看 Claude 的，只有 Codex 账号的 Mac 还会问
 printf '{}' > "$H/.cca/accounts.json"
-out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"claude"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+out=$(sess '{"onboard.team":[{"v":"n"}]}' -- cca _onboard 2>&1); rc=$?
 cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是、装了 codex / agy 时再问加哪种（choice，默认 Claude Code），选 Claude Code 接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.add onboard.tool add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\"" && evq "e.get(\"q\") == \"onboard.tool\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"default\"] == \"claude\" and [o[\"value\"] for o in e[\"fields\"][0][\"options\"]] == [\"claude\", \"codex\", \"agy\"] and e[\"title\"].endswith(\"添加账号\")" && evq "e.get(\"q\") == \"add.basic\" and \"Codex\" not in e.get(\"title\", \"\")"'
-# 选 Codex：在 Codex 的账号表里加（还没有 codex.json 时建出来），结果事件带 tool=codex；没装 agy 时不列它
+ok "配置向导：Claude 没有账号、Codex 有 → 算已经有账号，不问第 3 步（三种工具一样算）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team" ] && "$TESTBIN" check -f "j=$H/.cca/codex.json" "len(j) > 0"'
+# 三种工具都还没有账号（Codex 的表也清空，测完还原）
+cp "$H/.cca/codex.json" "$T/cdx.onb0.bak"; printf '{}' > "$H/.cca/accounts.json"; printf '{}' > "$H/.cca/codex.json"
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"claude"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"; cp "$T/cdx.onb0.bak" "$H/.cca/codex.json"
+ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是再问加哪种（choice，三种都列，默认 Claude Code；三个命令都装着时说明里不提安装），选 Claude Code 接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.add onboard.tool add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\"" && evq "e.get(\"q\") == \"onboard.tool\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"default\"] == \"claude\" and [o[\"value\"] for o in e[\"fields\"][0][\"options\"]] == [\"claude\", \"codex\", \"agy\"] and not [o for o in e[\"fields\"][0][\"options\"] if \"还没装\" in o[\"note\"]] and e[\"title\"].endswith(\"添加账号\")" && evq "e.get(\"q\") == \"add.basic\" and \"Codex\" not in e.get(\"title\", \"\")"'
+# 选 Codex：在 Codex 的账号表里加（还没有 codex.json 时建出来），结果事件带 tool=codex；没装 agy 时照样列它，说明里说加好以后在账号页安装
 cp "$H/.cca/codex.json" "$T/cdx.onb.bak" 2>/dev/null; rm -f "$H/.cca/codex.json"; mv "$T/bin/agy" "$T/agy.off"
 printf '{}' > "$H/.cca/accounts.json"
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"codex"}],"add.basic":[{"email":"onbcx@example.com","alias":""}],"add.node":[{"v":"1"}]}' -- cca _onboard 2>&1); rc=$?
 mv "$T/agy.off" "$T/bin/agy"
-ok "配置向导：选 Codex → 在 Codex 的账号表里加（没有 codex.json 时建出来），结果带 tool=codex；没装 agy 时选项里没有它；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.add onboard.tool add.basic add.node" ] && evq "e.get(\"q\") == \"onboard.tool\" and [o[\"value\"] for o in e[\"fields\"][0][\"options\"]] == [\"claude\", \"codex\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"added\" and e[\"tool\"] == \"codex\"" && [ "$(lastres)" = onboarded ] && "$TESTBIN" check -f "j=$H/.cca/codex.json" "any(k.endswith(\"(onbcx@example.com)\") or k == \"onbcx@example.com\" for k in j)" && [ "$(cat "$H/.cca/accounts.json")" = "{}" ]'
+ok "配置向导：选 Codex → 在 Codex 的账号表里加（没有 codex.json 时建出来），结果带 tool=codex；没装 agy 时选项里照样有它，它的说明里说加好以后在账号页安装（装着的 codex 不说）；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.add onboard.tool add.basic add.node" ] && evq "e.get(\"q\") == \"onboard.tool\" and [o[\"value\"] for o in e[\"fields\"][0][\"options\"]] == [\"claude\", \"codex\", \"agy\"] and \"还没装 agy 命令，加好以后在账号页安装\" in e[\"fields\"][0][\"options\"][2][\"note\"] and \"还没装\" not in e[\"fields\"][0][\"options\"][1][\"note\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"added\" and e[\"tool\"] == \"codex\"" && [ "$(lastres)" = onboarded ] && "$TESTBIN" check -f "j=$H/.cca/codex.json" "any(k.endswith(\"(onbcx@example.com)\") or k == \"onbcx@example.com\" for k in j)" && [ "$(cat "$H/.cca/accounts.json")" = "{}" ]'
 cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"; rm -f "$H/.cca/codex.json"; [ -f "$T/cdx.onb.bak" ] && cp "$T/cdx.onb.bak" "$H/.cca/codex.json"
+# 没装 agy 命令也能选 Antigravity：在 agy 的账号表里加（10f2 删掉了 agy.json，这里建出来），结果事件带 tool=agy；加账号用不着 agy 命令（登录、启动时才要）。
+# 以前没装 agy 时不列它，一个账号都没有的 Mac 上就没有地方添加 Antigravity 账号。做完照「没用过 agy」还原（后面的用例照它写）
+mv "$T/bin/agy" "$T/agy.off"
+cp "$H/.cca/codex.json" "$T/cdx.onb0.bak"; printf '{}' > "$H/.cca/accounts.json"; printf '{}' > "$H/.cca/codex.json"   # 三种工具都还没有账号
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}],"onboard.tool":[{"v":"agy"}],"add.basic":[{"email":"onbag@example.com","alias":""}],"add.node":[{"v":"1"}]}' -- cca _onboard 2>&1); rc=$?
+mv "$T/agy.off" "$T/bin/agy"
+ok "配置向导：没装 agy 命令也能选 Antigravity → 在 agy 的账号表里加（没有 agy.json 时建出来），结果带 tool=agy，Claude、Codex 的账号表不动；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.add onboard.tool add.basic add.node" ] && evq "e.get(\"q\") == \"add.basic\" and \"Antigravity\" in e.get(\"title\", \"\")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"added\" and e[\"tool\"] == \"agy\"" && [ "$(lastres)" = onboarded ] && "$TESTBIN" check -f "j=$H/.cca/agy.json" "any(k.endswith(\"(onbag@example.com)\") or k == \"onbag@example.com\" for k in j)" && [ "$(cat "$H/.cca/accounts.json")" = "{}" ] && [ "$(cat "$H/.cca/codex.json")" = "{}" ]'
+cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"; cp "$T/cdx.onb0.bak" "$H/.cca/codex.json"; rm -rf "$H/.cca/agy.json" "$H/.cca/agy"
 # 没有路由器笔记本：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没有可选节点 → 加账号时粘贴自定义代理（下面）
 cp "$H/.cca/config.json" "$T/cfg.b2.bak"; cp "$H/.cca/accounts.json" "$T/tbl.b2.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.b2.bak"
 "$TESTBIN" edit "c=$H/.cca/config.json" 'c["router"]={}'
@@ -2943,12 +2958,13 @@ ok "Team 不再给 alice：出口不再固定（改成 US-A 不被改回）" 'tb
 gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
 out=$(run cca team sync 2>&1)
 ok "再给回来：照收起来时的键加回来（同一个账号目录，不用重新登录），不再算收起来的" 'tblok "t.get(\"二号(erin@example.com)\") == \"US-D\" and t[\"alice@example.com\"] == \"US-B\"" && cfgok "not [v for v in c.get(\"parked\", {}).values() if \"erin\" in v[\"key\"]]"'
-# Team 给的 Codex 账号要到第一次用 cca codex 时才加（模拟还没用过 Codex 的机器：先把 Codex 的账号表挪开，测完还原）
+# Team 给的 Codex 账号马上加进来，和 Claude 的一样（模拟还没用过 Codex 的机器：先把 Codex 的账号表挪开，测完还原）：还没有 Codex 的账号表时
+# 建出来。3.7.12 及以前要到第一次用 cca codex 时才加
 cp "$H/.cca/config.json" "$T/config.pre"; mv "$H/.cca/codex.json" "$T/codex.pre"
 gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}, "codex": {"gina@example.com": "US-A"}}, "aliases": {"hank@example.com": "Hank", "gina@example.com": "Gina"}}'
-out=$(run cca team sync 2>&1); rc=$?; [ -f "$H/.cca/codex.json" ] && cx1=yes || cx1=no
+out=$(run cca team sync 2>&1); rc=$?
 out2=$(run cca codex ls 2>&1)
-ok "Team 给的 Codex 账号：这台机器还没用过 cca codex 时不加（不建 Codex 的账号表），第一次用 cca codex 时加进来" '[ $rc -eq 0 ] && [ $cx1 = no ] && printf "%s" "$out2" | grep -q "按「阁楼组」的配置添加了 Codex 账号 Gina（gina@example.com），出口 US-A" && tblok "t == {\"Gina(gina@example.com)\": \"US-A\"}" "$H/.cca/codex.json"'
+ok "Team 给的 Codex 账号：这台机器还没用过 cca codex 也马上加进来（建出 Codex 的账号表），之后不再说一遍" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "按「阁楼组」的配置添加了 Codex 账号 Gina（gina@example.com），出口 US-A" && tblok "t == {\"Gina(gina@example.com)\": \"US-A\"}" "$H/.cca/codex.json" && ! printf "%s" "$out2" | grep -q "按「阁楼组」的配置添加了"'
 gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'; run cca _team-sync >/dev/null 2>&1
 mv "$T/codex.pre" "$H/.cca/codex.json"; cp "$T/config.pre" "$H/.cca/config.json"
 # 后台同步到了新的一版（账号表在下一条命令里才改）：cca web / check 要先让路由器跟上
@@ -4432,10 +4448,21 @@ ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $r
 ok "一键安装：~/.local/bin 不在 PATH 里时，问过之后写进 ~/.zshrc" 'grep -qF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$H3/.zshrc" && printf "%s" "$out" | grep -q "打开一个新的终端标签，输入 cca 就能用"'
 out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 2>&1); rc=$?
 ok "再运行一次：修复/重装，不重复写 PATH" '[ $rc -eq 0 ] && [ "$(grep -c "\.local/bin" "$H3/.zshrc")" = 1 ] && printf "%s" "$out" | grep -q "已经写在"'
-mv "$T/bin/claude" "$T/claude.off"; : > "$T/install.log"   # 新机器上还没装 Claude Code（一键安装不再要求先装好它）
-out=$(r3 CCA_TTY="$(ans n y n)" "$H3/.cca/bin/cca" install 2>&1); rc=$?
+# cca install 里的账号三种工具一样问（3.7.12 及以前只加 Claude Code 的、只问 Claude Code 装不装）：一个账号都没有时问新增、加哪种，选的那种
+# 没装先问要不要装；已经有账号的，有账号的工具里没装的才问。一个可选节点（US-A）：加账号那步只用选它。新机器上还没装 Codex、Claude Code
+# （一键安装不再要求先装好它们）
+"$TESTBIN" edit --indent 2 --unicode "c=$H3/.cca/config.json" 'c["nodes"] = ["US-A"]'
+mv "$T/bin/codex" "$T/codex.off"; : > "$T/install.log"
+out=$(r3 CCA_TTY="$(ans n y 2 n cx3@example.com '' 1)" "$H3/.cca/bin/cca" install 2>&1); rc=$?
+ok "cca install：一个账号都没有时问新增第一个、加哪种（三种都列、默认 Claude Code；没装的说选了以后问要不要装上）；选 Codex、没装 codex：问要不要装（不装说以后怎么装），再添加 Codex 的账号（建出 codex.json，Claude 的账号表不动）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "现在新增第一个账号？" && printf "%s" "$out" | grep -q "添加哪种账号？" && printf "%s" "$out" | grep -q "1\. Claude Code：Anthropic 的账号" && printf "%s" "$out" | grep -q "2\. Codex：OpenAI 的账号（ChatGPT Plus、Pro 这些套餐）；还没装 codex 命令：选了以后问要不要装上" && printf "%s" "$out" | grep -q "3\. Antigravity：" && printf "%s" "$out" | grep -q "没找到 Codex（codex 命令）。现在用官方安装脚本装上吗？" && printf "%s" "$out" | grep -q "以后用 cca codex install-cli 装 Codex" && ! grep -q "INSTALL-" "$T/install.log" && tblok "t == {\"cx3@example.com\": \"US-A\"}" "$H3/.cca/codex.json" && tblok "t == {}" "$H3/.cca/accounts.json"'
+mv "$T/bin/claude" "$T/claude.off"; : > "$T/install.log"
+out=$(r3 CCA_TTY="$(ans n y)" "$H3/.cca/bin/cca" install 2>&1); rc=$?
+rm -f "$H3/.local/bin/codex"; mv "$T/codex.off" "$T/bin/codex"
+ok "再运行 cca install（已经有 Codex 的账号）：不问新增，有账号的工具里没装的（codex）问要不要装、装上；没有账号的 Claude Code 不问" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "没找到 Codex（codex 命令）。现在用官方安装脚本装上吗？" && grep -qx "INSTALL-DONE codex via=direct" "$T/install.log" && ! printf "%s" "$out" | grep -qE "新增第一个账号|没找到 Claude Code"'
+rm -f "$H3/.cca/codex.json"; : > "$T/install.log"   # 又一个账号都没有了；Claude Code 还没装
+out=$(r3 CCA_TTY="$(ans n y 1 y ann@example.com '' 1)" "$H3/.cca/bin/cca" install 2>&1); rc=$?
 rm -f "$H3/.local/bin/claude"; mv "$T/claude.off" "$T/bin/claude"
-ok "cca install：没装 Claude Code 时问过之后用官方安装脚本装上（~/.local/bin 不在 PATH 里也找得到）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "没找到 Claude Code（claude 命令）。现在用官方安装脚本装上吗？" && grep -qx "INSTALL-DONE claude via=direct" "$T/install.log" && printf "%s" "$out" | grep -qF "装好了 claude：$H3/.local/bin/claude" && printf "%s" "$out" | grep -q "~/.local/bin 不在 PATH 里"'
+ok "cca install：选 Claude Code、没装时问过之后用官方安装脚本装上（~/.local/bin 不在 PATH 里也找得到），再添加它的账号" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "1\. Claude Code：Anthropic 的账号（Claude Pro、Max 这些套餐）；还没装 claude 命令：选了以后问要不要装上" && printf "%s" "$out" | grep -q "没找到 Claude Code（claude 命令）。现在用官方安装脚本装上吗？" && grep -qx "INSTALL-DONE claude via=direct" "$T/install.log" && printf "%s" "$out" | grep -qF "装好了 claude：$H3/.local/bin/claude" && printf "%s" "$out" | grep -q "~/.local/bin 不在 PATH 里" && tblok "t == {\"ann@example.com\": \"US-A\"}" "$H3/.cca/accounts.json"'
 publish 9.9.21; echo "# 篡改" >> "$G/v9.9.21/cca"; rm -rf "$H3"; mkdir -p "$H3"
 out=$(r3 CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装：签名不对就不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "签名校验没通过" && [ ! -e "$H3/.cca" ]'

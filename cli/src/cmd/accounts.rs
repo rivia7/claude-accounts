@@ -9,7 +9,7 @@ use super::{arg, arity, Cmd};
 use crate::core::base::*;
 use crate::core::ctx::{cfg_save, ctx, policy_skip_add, table_problems};
 use crate::core::model::*;
-use crate::core::policy::{alias_locks, alias_problem, by_whom, policy_in_use, policy_map, policy_raw};
+use crate::core::policy::{alias_locks, alias_problem, by_whom, policy_map, policy_raw};
 use crate::core::tool::{t, tools, Kind, Tool, CLAUDE_SHARED, CODEX_PROVIDER};
 use crate::py::fs::{load_quiet, save_json};
 use crate::py::hash::sha1_hex;
@@ -783,15 +783,13 @@ pub fn cmd_nodes_preselect(args: &[String]) -> R<()> {
     let c = ctx()?.0;
     let mut want: Vec<String> = c.at("nodes").as_list().map(|l| l.items().iter().map(|n| n.py_str()).collect()).unwrap_or_default();
     for tool in tools() {
-        if policy_in_use(tool) {
-            let skip: Vec<Rc<str>> = match tool.state(&c, false).get("policy_skip") {
-                Some(V::List(l)) => l.strs(),
-                _ => Vec::new(),
-            };
-            for (e, n) in policy_map(tool, Some(&c)).items() {
-                if !skip.contains(&e) {
-                    want.push(n.py_str());
-                }
+        let skip: Vec<Rc<str>> = match tool.state(&c, false).get("policy_skip") {
+            Some(V::List(l)) => l.strs(),
+            _ => Vec::new(),
+        };
+        for (e, n) in policy_map(tool, Some(&c)).items() {
+            if !skip.contains(&e) {
+                want.push(n.py_str());
             }
         }
     }

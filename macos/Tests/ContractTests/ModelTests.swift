@@ -156,7 +156,8 @@ import Foundation
     await m5.start()
     let states = { counter.requests.filter { $0.arguments == ["_gui", "state"] }.count }
     let hellos = { counter.requests.filter { $0.arguments == ["_gui", "hello"] }.count }
-    check("Codex 没启用只显示 Claude", m5.phase == .ready && m5.visibleTools == [.claude] && m5.tool == .claude)
+    check("Codex 没启用：能对它跑命令的只有 Claude，工具切换照样列 ChatGPT（没有账号的列表就是添加它的地方）",
+          m5.phase == .ready && m5.visibleTools == [.claude] && m5.listedTools == [.claude, .codex] && m5.tool == .claude)
     check("账号表校验不过", m5.invalidTables.first?.tool == .claude)
     check("测试注入的 transport 不找 cca", m5.ccaPath == nil)
     let before = states(), hellosBefore = hellos()

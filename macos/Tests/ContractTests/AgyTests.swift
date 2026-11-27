@@ -13,9 +13,12 @@ func agyFixtureTests() {
         check("hello_agy：启用了 Antigravity、没启用 Codex", h.enabled(.agy) && !h.codexEnabled && h.enabledTools == [.claude, .agy],
               "\(h.enabledTools)")
         check("hello_agy：agy 命令的路径", h.tools[.agy]?.bin == "/Users/me/.local/bin/agy")
+        check("hello_agy：cca 有这三种工具", h.supports(.claude) && h.supports(.codex) && h.supports(.agy))
     }
     if let h = loadFixture(HelloDoc.self, "hello.json") {
         check("旧版 cca 的 hello 没有 tools.agy：当作没启用", !h.enabled(.agy) && h.enabledTools == [.claude, .codex])
+        check("旧版 cca 的 hello 没有 tools.agy：当作没有这个工具（不给添加它的入口），Claude、Codex 一直有",
+              !h.supports(.agy) && h.supports(.claude) && h.supports(.codex))
     }
     guard let s = loadFixture(StateDoc.self, "state_agy.json") else { return }
     let ag = s.tool(.agy)
@@ -91,14 +94,23 @@ func agyFixtureTests() {
     let partial = try? JSONDecoder().decode(ToolFeatures.self, from: Data(#"{"usage":false}"#.utf8))
     check("features 少了几项：没写的当作有", partial == ToolFeatures(app: true, api: true, usage: false))
 
-    // 总览：Antigravity 一组排在 Claude（和 ChatGPT）后面、第三方 API 前面；没启用就没有这一组
-    let o = Office.make(tools: s.tools, enabled: [.claude, .agy], usage: { $0.usage }, live: { _ in nil }, now: 1794042000)
-    check("总览：Claude、Antigravity、第三方 API 三组", o.rooms.map(\.department) == [.claude, .antigravity, .contractors],
+    // 总览：列出来的工具（这一版 cca 有的）每个一组，三种工具一样：有账号的组照 Claude、ChatGPT、Antigravity 的先后排在前面，
+    // 接着第三方 API，没有账号的组在最后（空的也画出来：那里就是添加它的地方）
+    let o = Office.make(tools: s.tools, listed: [.claude, .codex, .agy], usage: { $0.usage }, live: { _ in nil }, now: 1794042000)
+    check("总览：Claude、Antigravity、第三方 API，没有账号的 ChatGPT 组在最后", o.rooms.map(\.department) == [.claude, .antigravity, .contractors, .chatgpt],
           "\(o.rooms.map(\.department))")
     let moods = Dictionary(uniqueKeysWithValues: o.people.map { ($0.account.key, $0.mood) })
     check("总览：gina 在用（命令行开着）、henry 没登录", moods[gina.key] == .working && moods[henry.key] == .absent, "\(moods)")
-    check("总览：没启用 agy 就没有这一组", Office.make(tools: s.tools, enabled: [.claude], usage: { $0.usage }, live: { _ in nil },
-                                                now: 1794042000).rooms.map(\.department) == [.claude, .contractors])
+    check("总览：cca 没有 agy（旧版，listed 里没有）就没有这一组", Office.make(tools: s.tools, listed: [.claude, .codex], usage: { $0.usage },
+          live: { _ in nil }, now: 1794042000).rooms.map(\.department) == [.claude, .contractors, .chatgpt])
+    let agyOnly = s.tools.map { t -> ToolState in
+        var t = t
+        if t.id != .agy { t.accounts = [] }
+        return t
+    }
+    let o3 = Office.make(tools: agyOnly, listed: [.claude, .codex, .agy], usage: { $0.usage }, live: { _ in nil }, now: 1794042000)
+    check("总览：只有 Antigravity 有账号时它排第一，空着的 Claude、ChatGPT 组在后面（不总是 Claude 在前）",
+          o3.rooms.map(\.department) == [.antigravity, .claude, .chatgpt], "\(o3.rooms.map(\.department))")
     check("组和工具一一对应", Employee.Department.official(.agy) == .antigravity && Employee.Department.antigravity.tool == .agy
           && Employee.Department.antigravity.key == "agy")
     check("添加 Antigravity 账号：cca agy add", Employee.Department.antigravity.addHandoff(prefix: ["agy"]).arguments == ["agy", "add"]
@@ -139,15 +151,19 @@ func agyGateTests() async {
     }
     let m = makeModel(t, prefs: MemoryPrefs())
     await m.start()
-    check("看得见的工具：Claude、Antigravity", m.visibleTools == [.claude, .agy], "\(m.visibleTools)")
+    check("能对它跑命令的工具（启用了的）：Claude、Antigravity", m.visibleTools == [.claude, .agy], "\(m.visibleTools)")
+    check("列出来的工具（侧栏和菜单栏的工具切换、总览的组）：三种都列，没启用的 Codex 也列", m.listedTools == [.claude, .codex, .agy],
+          "\(m.listedTools)")
     check("features 取 cca 给的", m.features(.agy) == ToolFeatures(app: false, api: false, usage: true) && m.features(.claude).usage)
     check("命令前缀、App 的叫法", m.prefix(.agy) == ["agy"] && m.appLabel(.agy) == "桌面 App")
     check("用量统计页只有 Claude 一组（agy 没有每周用量的统计）", m.officialGroups().map(\.department) == [.claude],
           "\(m.officialGroups().map(\.department))")
     check("侧栏：agy 的官方账号一组", m.accountGroups(.agy).map(\.department) == [.antigravity]
           && m.accountGroups(.agy).first?.accounts.map(\.key) == ["工作(gina@example.com)", "henry@example.com"])
-    check("总览：三组", m.office(now: 1794042000).rooms.map(\.department) == [.claude, .antigravity, .contractors])
+    check("总览：有账号的三组在前，没有账号的 ChatGPT 组在最后",
+          m.office(now: 1794042000).rooms.map(\.department) == [.claude, .antigravity, .contractors, .chatgpt])
     check("添加：cca agy add", m.addHandoff(.antigravity).arguments == ["agy", "add"])
+    check("工具栏「＋」：四组都列", m.addMenuDepartments == [.claude, .chatgpt, .antigravity, .contractors], "\(m.addMenuDepartments)")
     m.tool = .agy
     m.refreshUsage(manual: true)
     m.refreshUsage(tool: .agy, key: "工作(gina@example.com)", manual: true)
@@ -194,7 +210,7 @@ func agyGateTests() async {
     check("旧版 cca：点了刷新也不跑 cca agy usage", !t3.requests.contains { $0.arguments.first == "agy" && $0.arguments.contains("usage") })
     m3.shutdown()
 
-    // 没启用 agy 的 hello：工具换回 Claude，看不见 agy
+    // 没启用 agy 的 hello：不对它跑命令，照样列出来（加它的第一个账号就启用了它）
     let off = hello.replacingOccurrences(of: #""enabled": true,\#n      "bin": "/Users/me/.local/bin/agy""#,
                                          with: #""enabled": false,\#n      "bin": "/Users/me/.local/bin/agy""#)
     check("改出没启用 agy 的 hello", off != hello)
@@ -205,9 +221,71 @@ func agyGateTests() async {
     }
     let m2 = makeModel(t2, prefs: MemoryPrefs())
     await m2.start()
-    check("没启用：只有 Claude", m2.visibleTools == [.claude] && m2.office(now: 1794042000).rooms.map(\.department) == [.claude, .contractors])
+    check("没启用 agy：能跑命令的只有 Claude，列出来的照样三种、总览里有 Antigravity 组",
+          m2.visibleTools == [.claude] && m2.listedTools == [.claude, .codex, .agy]
+          && m2.office(now: 1794042000).rooms.map(\.department).contains(.antigravity))
     check("没启用：一条 cca agy … 都不跑", !t2.requests.contains { $0.arguments.first == "agy" })
+    check("没启用、装了 agy 命令：工具栏「＋」里有它", m2.addMenuDepartments.contains(.antigravity))
     m2.shutdown()
+
+    // 一开始一个账号都没有、也没装 agy 命令（tools.agy 是 {"enabled": false, "bin": null}）：照样给添加 Antigravity 账号的入口
+    // （加账号用不着命令，账号页再装）。3.7.12 及以前的 App 要装了 agy 命令才给，这样的 Mac 上就没有地方添加它
+    let bare = hello.replacingOccurrences(of: #""enabled": true,\#n      "bin": "/Users/me/.local/bin/agy""#,
+                                          with: #""enabled": false,\#n      "bin": null"#)
+    check("改出没启用、也没装 agy 的 hello", bare != hello)
+    let t4 = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: bare) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: state) }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let m4 = makeModel(t4, prefs: MemoryPrefs())
+    await m4.start()
+    check("没装 agy 命令：照样列出 Antigravity（工具切换、总览的组），工具栏「＋」里有它",
+          m4.hello?.tools[.agy]?.bin == nil && m4.listedTools == [.claude, .codex, .agy]
+          && m4.addMenuDepartments == [.claude, .chatgpt, .antigravity, .contractors],
+          "\(m4.addMenuDepartments)")
+    check("没装 agy 命令：添加它照样是 cca agy add", m4.addHandoff(.antigravity).arguments == ["agy", "add"])
+    m4.shutdown()
+
+    // 旧版 cca（hello 里没有 tools.agy）：不认识 cca agy …，不给添加 Antigravity 的入口
+    guard let oldHello = text("hello.json") else { check("夹具 hello.json", false); return }
+    let t5 = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: oldHello) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: state) }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let m5 = makeModel(t5, prefs: MemoryPrefs())
+    await m5.start()
+    check("旧版 cca：不列 Antigravity，工具栏「＋」里没有它",
+          m5.listedTools == [.claude, .codex] && m5.addMenuDepartments == [.claude, .chatgpt, .contractors], "\(m5.addMenuDepartments)")
+    m5.shutdown()
+
+    // 第一次打开（还没选过工具）、Claude 没有账号、Antigravity 有：侧栏先列 Antigravity 的（三种工具一样，不总是 Claude）；
+    // 选过工具的照选过的
+    var root = (try? JSONSerialization.jsonObject(with: Data(state.utf8))) as? [String: Any] ?? [:]
+    root["tools"] = (root["tools"] as? [[String: Any]] ?? []).map { t -> [String: Any] in
+        var t = t
+        if t["id"] as? String == "claude" { t["accounts"] = [Any]() }
+        return t
+    }
+    let agyFirst = String(decoding: (try? JSONSerialization.data(withJSONObject: root)) ?? Data(), as: UTF8.self)
+    let t6 = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: agyFirst) }
+        if request.arguments.contains("usage") { return response(0, stdout: tinyUsage) }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let m6 = makeModel(t6, prefs: MemoryPrefs())
+    await m6.start()
+    check("第一次打开、只有 Antigravity 有账号：侧栏先列 Antigravity 的，记下来",
+          m6.accounts(.claude).isEmpty && m6.tool == .agy && m6.defaults.string(forKey: "tool") == "agy", "\(m6.tool)")
+    m6.shutdown()
+    let p7 = MemoryPrefs()
+    p7.set("claude", forKey: "tool")
+    let m7 = makeModel(t6, prefs: p7)
+    await m7.start()
+    check("选过 Claude：照选过的（不自己换）", m7.tool == .claude, "\(m7.tool)")
+    m7.shutdown()
 }
 
 /// Antigravity 的额度什么时候算用完：每一组的这个窗口都用完了才算（一组用完了，别的组的模型照样能用），到最早重置的那一组时就能接着用；

@@ -2293,6 +2293,42 @@ cmd_router() {
 # ---------------------------------------------------------------------------
 # 账号
 # ---------------------------------------------------------------------------
+ask_choice() {   # v=$(ask_choice "问题" 默认值 [k=v…])：从几项（opt=值<TAB>名字<TAB>说明）里选一项，打印选的值。图形界面里是 choice（k=v 原样
+	             # 交给 gui_ask）；终端里列出编号（名字：说明；真的终端里是方向键菜单），输入编号或值，回车是默认那一项，不认识的再问一次。
+	             # 别的 k=v（q=、title=、message=）终端里用不上
+	[ -z "$PROMPT_GUI" ] || { gui_ask choice "$@"; return; }
+	local q="$1" def="$2" a o rest lab note tab=$'\t' n=0 d=0 i sel
+	local -a vals rows
+	shift 2
+	for a in "$@"; do
+		case "$a" in
+			opt=*)
+				o=${a#opt=}; vals[n]=${o%%"$tab"*}; rest=${o#*"$tab"}; lab=${rest%%"$tab"*}; note=""
+				case "$rest" in *"$tab"*) note=${rest#*"$tab"} ;; esac
+				if [ -n "$note" ]; then rows[n]="${lab}：${note}"; else rows[n]=$lab; fi
+				[ "${vals[n]}" != "$def" ] || d=$n
+				n=$((n + 1)) ;;
+		esac
+	done
+	[ $n -gt 0 ] || return 1
+	say "  ${q}"
+	if fancy_ok; then
+		arrow_menu "$d" "${rows[@]}"
+		[ "$MENU_PICK" -ge 0 ] || return 1
+		printf '%s' "${vals[MENU_PICK]}"
+		return 0
+	fi
+	for ((i = 0; i < n; i++)); do say "    $((i + 1)). ${rows[i]}"; done
+	while :; do
+		sel=$(ask "  选择编号 [$((d + 1))]：" "$((d + 1))")
+		for ((i = 0; i < n; i++)); do [ "$sel" != "${vals[i]}" ] || { printf '%s' "$sel"; return 0; }; done
+		case "$sel" in
+			''|*[!0-9]*) warn "请输入编号" ;;
+			*) if [ "$sel" -ge 1 ] && [ "$sel" -le $n ]; then printf '%s' "${vals[sel - 1]}"; return 0; fi
+			   warn "没有编号 ${sel}" ;;
+		esac
+	done
+}
 pick_node() {   # pick_node [direct] [给图形界面的 k=v…]：从可选节点里选一个，打印节点名；标出已被当前工具的哪些账号使用、路由器上是否存在。
 	                # direct 时第一项（默认）是"直连"，选它打印空字符串。能用内置代理时末尾加一项「自定义代理…」（粘贴代理链接 / Clash 节点）
 	local onrouter="" def n=0 i node sel off=0 cols note custom=0 picked=-1
@@ -8083,23 +8119,71 @@ onboard_builtin() {   # 向导第 2 步选了「没有路由器（内置代理�
 	return 0
 }
 
-ONB_TOOL=claude
-onboard_add_one() {   # 向导第 3 步添加一个账号：这台 Mac 上装了 codex / agy 命令时先问加哪种（onboard.tool，默认 Claude Code；没装的不列），
-	                   # 选了 Codex / Antigravity 就在子 shell 里切到那个工具（use_tool；还没有它的账号表时 py init 建出来，Team 给的随即加进来）
-	                   # 再走 cmd_add。记下选的是哪种（ONB_TOOL：别的工具的账号不在 py keys 里，向导结束时照它判断要不要同步路由器）
-	local opts=()
-	ONB_TOOL=claude
-	if [ -n "$CODEX_BIN" ] || [ -n "$AGY_BIN" ]; then
-		opts=("opt=claude"$'\t'"Claude Code"$'\t'"Anthropic 的账号（Claude Pro、Max 这些套餐）")
-		[ -z "$CODEX_BIN" ] || opts+=("opt=codex"$'\t'"Codex"$'\t'"OpenAI 的账号（ChatGPT Plus、Pro 这些套餐）")
-		[ -z "$AGY_BIN" ] || opts+=("opt=agy"$'\t'"Antigravity"$'\t'"Google 账号（Google AI Pro、Ultra 这些套餐）")
-		ONB_TOOL=$(gui_ask choice "添加哪种账号？" claude "q=onboard.tool" "title=${ONB_TITLE}" \
-			"message=先加一个，别的工具的账号以后在侧栏里切到那个工具再添加。" "${opts[@]}") || return 1
-	fi
-	case "$ONB_TOOL" in
-		codex|agy) ( use_tool "$ONB_TOOL"; [ -f "$TABLE" ] || py init; cmd_add ) ;;
-		*) ONB_TOOL=claude; cmd_add ;;
+all_keys() {   # 三种工具的账号，一行一个「工具<TAB>键」（照 claude、codex、agy 的先后；还没有账号表的工具没有）。配置向导、终端里的 cca install
+	           # 照它看是不是一个账号都没有、Team 加了谁：三种工具一样算（3.7.12 及以前只看 Claude 的 py keys）
+	local t k
+	for t in claude codex agy; do
+		( use_tool "$t"; [ -f "$TABLE" ] || exit 0
+		  py keys | while IFS= read -r k; do [ -z "$k" ] || printf '%s\t%s\n' "$t" "$k"; done )
+	done
+}
+
+keys_named() {   # keys_named "all_keys 的几行"：「Claude 账号 工作、个人，Codex 账号 Gina」（键只写别名，没有别名写邮箱）
+	local t k c="" x="" g="" out=""
+	while IFS=$'\t' read -r t k; do
+		[ -n "$k" ] || continue
+		k=${k%%(*}
+		case "$t" in codex) x="${x:+${x}、}${k}" ;; agy) g="${g:+${g}、}${k}" ;; *) c="${c:+${c}、}${k}" ;; esac
+	done <<< "$1"
+	[ -z "$c" ] || out="Claude 账号 ${c}"
+	[ -z "$x" ] || out="${out:+${out}，}Codex 账号 ${x}"
+	[ -z "$g" ] || out="${out:+${out}，}Antigravity 账号 ${g}"
+	printf '%s' "$out"
+}
+
+pick_first_tool() {   # pick_first_tool q=题号 [给图形界面的 k=v…]：添加第一个账号前问加哪种，打印 claude | codex | agy（默认 Claude Code，排在第一个）。
+	                  # 三种都列，这台机器上没装那个命令的也列：加账号用不着命令（登录、启动时才要它），说明里说一声之后怎么装。配置向导第 3 步
+	                  # （onboard.tool）、终端里的 cca install（install.tool）都问它。3.7.12 及以前向导只列装了命令的（codex、agy 都没装时不问，没装 agy
+	                  # 的 Mac 上就没有地方添加 Antigravity 账号），终端里只加 Claude Code 的
+	local c="Anthropic 的账号（Claude Pro、Max 这些套餐）" x="OpenAI 的账号（ChatGPT Plus、Pro 这些套餐）" g="Google 账号（Google AI Pro、Ultra 这些套餐）" a b
+	if [ -n "$PROMPT_GUI" ]; then a="这台 Mac 还没装 " b=" 命令，加好以后在账号页安装"; else a="还没装 " b=" 命令：选了以后问要不要装上"; fi
+	[ -n "$CLAUDE_BIN" ] || c="${c}；${a}claude${b}"
+	[ -n "$CODEX_BIN" ] || x="${x}；${a}codex${b}"
+	[ -n "$AGY_BIN" ] || g="${g}；${a}agy${b}"
+	ask_choice "添加哪种账号？" claude "$@" \
+		"opt=claude"$'\t'"Claude Code"$'\t'"${c}" "opt=codex"$'\t'"Codex"$'\t'"${x}" "opt=agy"$'\t'"Antigravity"$'\t'"${g}"
+}
+
+add_first() {   # add_first 工具 [cli [proxy]]：添加这种工具的第一个账号（pick_first_tool 选的）：Claude Code 在当前的 shell 里 cmd_add，Codex /
+	            # Antigravity 在子 shell 里切到它（use_tool；还没有它的账号表时 py init 建出来，Team 给的随即加进来）再 cmd_add。cli：先问要不要装
+	            # 这个工具的命令（cli_offer，终端里的 cca install；proxy 是经内置代理装）
+	case "$1" in
+		codex|agy) ( use_tool "$1"; [ -f "$TABLE" ] || py init; [ "${2:-}" != cli ] || cli_offer "${3:-}"; cmd_add ) ;;
+		*) [ "${2:-}" != cli ] || cli_offer "${3:-}"; cmd_add ;;
 	esac
+}
+
+cli_offer() {   # cli_offer [proxy]：当前工具的命令没装时问要不要现在用官方安装脚本装上（终端里的 cca install；proxy：服务器上直连不通，经内置代理
+	            # 的安装节点装，见 tool_install）；不装就说以后怎么装。三种工具一样问（3.7.12 及以前只问 Claude Code）
+	local name
+	[ -z "$TOOL_BIN" ] || return 0
+	case "$TOOL" in codex) name=Codex ;; agy) name=Antigravity ;; *) name="Claude Code" ;; esac
+	if [ "${1:-}" = proxy ]; then
+		if confirm "没找到 ${name}（${TOOL} 命令）。现在经内置代理用官方安装脚本装上吗？" y; then
+			tool_install proxy || warn "${name} 没装上：稍后运行 ${CMD} install-cli 再装"
+			return 0
+		fi
+	elif confirm "没找到 ${name}（${TOOL} 命令）。现在用官方安装脚本装上吗？" y; then
+		tool_install || warn "${name} 没装上：稍后运行 ${CMD} install-cli 再装"
+		return 0
+	fi
+	info "以后用 ${CMD} install-cli 装 ${name}"
+}
+
+onboard_add_one() {   # 向导第 3 步添加一个账号：先问加哪种（pick_first_tool，onboard.tool），再添加那种工具的账号（add_first）
+	local t
+	t=$(pick_first_tool q=onboard.tool "title=${ONB_TITLE}" "message=先加一个，别的工具的账号以后点工具栏的「＋」添加。") || return 1
+	add_first "$t"
 }
 
 onboard_title() {   # onboard_title 这一步的名字：向导的页标题 ONB_TITLE（第几步、共几步；只有一步时不写）。n 和要问哪几步（ask…）是 cmd_onboard 的
@@ -8113,16 +8197,16 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 	                # ① 加入 Team（onboard.team：有没有 Team 的邀请链接，默认没有；答了有走 team join，那一页可以留空：先不加入。已经在 Team 里的
 	                #   不问）；
 	                # ② 网络出口（onboard.net：路由器 / 内置代理 / 先跳过；路由器、本机的客户端已经配好时不问）；
-	                # ③ 添加账号（不要求配置了路由器：没有可选节点时选节点那步可以粘贴自定义代理）。
+	                # ③ 添加账号（开始时三种工具都还没有账号才问；先问加哪种，不要求配置了路由器：没有可选节点时选节点那步可以粘贴自定义代理）。
 	                # 做完记下 onboarded（以后 App 不再弹向导）。--skip：不配置、只记下。取消（答案管道关掉）走 gui_abort：不记 onboarded，下次还能再来
-	local mode team="" askteam="" asknet="" askadd="" keys0 keys1 k added="" n=0 det net_default net_msg
+	local mode team="" askteam="" asknet="" askadd="" keys0 keys1 added="" n=0 det net_default net_msg
 	if [ "${1:-}" = --skip ]; then py onboard-done; return 0; fi
 	if [ -z "$PROMPT_GUI" ]; then info "配置向导在 cca App 里使用（或运行 ${SELF} install 在终端里配置）"; return 0; fi
-	keys0=$(py keys)
+	keys0=$(all_keys)   # 三种工具的账号都算（3.7.12 及以前只看 Claude 的）
 	# 先定下要问哪几步（页标题写第几步、共几步，onboard_title 照它们数）：已经在 Team 里的不问 Team；路由器、本机的客户端配好了的不问网络出口
 	[ -n "$(py team-list)" ] || askteam=1
 	if ! router_ready && [ -z "$LOCAL_SET" ]; then asknet=1; fi
-	# 添加账号：开始时还没有账号才问（那时加入的 Team 给了账号的，问还要不要再加一个自己的）；已经有账号的不问
+	# 添加账号：开始时三种工具都还没有账号才问（那时加入的 Team 给了账号的，问还要不要再加一个自己的）；已经有账号的不问
 	[ -n "$keys0" ] || askadd=1
 	if [ -n "$askteam" ]; then   # ① 加入 Team
 		onboard_title "加入 Team"
@@ -8156,14 +8240,14 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 	fi
 	if [ -n "$askadd" ]; then   # ③ 添加账号
 		onboard_title "添加账号"
-		keys1=$(py keys)
+		keys1=$(all_keys)
 		if [ -z "$keys1" ]; then
 			if confirm "现在添加第一个账号？" y "q=onboard.add" "title=${ONB_TITLE}" \
 				"detail=填登录邮箱、选一个出口节点；第一次使用时会在它专属的浏览器窗口里登录。"; then
 				onboard_add_one || true
 			fi
 		else   # Team 给的账号这次加进来了（开始时一个都没有）：问要不要再加一个自己的
-			while IFS= read -r k; do [ -z "$k" ] || added="${added:+${added}、}${k%%(*}"; done <<< "$keys1"
+			added=$(keys_named "$keys1")
 			if confirm "还要再添加一个账号吗？" n "q=onboard.add" "title=${ONB_TITLE}" "message=已按 Team 的配置添加了 ${added}。" \
 				"detail=Team 里没有的账号在这里添加：填登录邮箱、选一个出口节点。"; then
 				onboard_add_one || true
@@ -8171,7 +8255,7 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 		fi
 	fi
 	# Team 给的账号这次加进来了、还没同步到路由器（刚配好路由器时还没有账号，配置路由器那一步不同步）：现在同步，要重载时当场问
-	if { [ "$(py keys)" != "$keys0" ] || [ "$ONB_TOOL" != claude ]; } && router_ready && [ "$(digest)" != "$(py get synced)" ]; then
+	if [ "$(all_keys)" != "$keys0" ] && router_ready && [ "$(digest)" != "$(py get synced)" ]; then
 		router_sync_soon
 		case $? in 0|3) ;; *) fail_warn sync_failed "账号还没同步到路由器：修好后在节点分流页点「同步」（或者运行 cca router sync）" ;; esac
 	fi
@@ -8234,26 +8318,24 @@ cmd_install() {
 	elif ! router_ready && confirm "现在配置路由器（OpenClash 或 ShellCrash；SSH 免密 + 按端口分流）？" y; then
 		cmd_router_setup || warn "路由器配置没完成，稍后可运行 cca router setup"
 	fi
-	if [ -z "$CLAUDE_BIN" ]; then   # 辅助安装：直连不通时可以经内置代理装（要有节点定义：Team 的配置带的、自己粘贴的，或者在家时从路由器拷的）
-		if [ "$onboard" = skip ]; then
-			:   # 还没有节点：builtin_onboard 说了之后怎么接着配置
-		elif [ "$onboard" = ok ]; then
-			if confirm "没找到 Claude Code（claude 命令）。现在经内置代理用官方安装脚本装上吗？" y; then
-				tool_install proxy || warn "Claude Code 没装上：稍后运行 cca install-cli 再装"
-			else
-				info "以后用 cca install-cli 装 Claude Code（只用 Codex、Antigravity 账号的话不需要它）"
+	# 账号和命令，三种工具一样（3.7.12 及以前只问 Claude Code）：一个账号都没有时问要不要新增第一个、加哪种（install.tool），选的那种的命令
+	# 没装就先问要不要用官方安装脚本装上，再添加；已经有账号的（再运行 cca install、Team 给的）：有账号的工具里没装命令的问要不要装。
+	# 辅助安装直连不通时经内置代理装（要有节点定义：Team 的配置带的、自己粘贴的，或者在家时从路由器拷的）；还没有节点（onboard=skip：
+	# builtin_onboard 说了之后怎么接着配置）时都不问
+	local via="" t used
+	[ "$onboard" != ok ] || via=proxy
+	if [ "$onboard" != skip ]; then
+		used=$(all_keys | cut -f1 | uniq)
+		if [ -z "$used" ]; then
+			if confirm "现在新增第一个账号？" y; then
+				t=$(pick_first_tool q=install.tool) && { add_first "$t" cli "$via" || true; }
 			fi
-		elif confirm "没找到 Claude Code（claude 命令）。现在用官方安装脚本装上吗？" y; then
-			tool_install || warn "Claude Code 没装上：稍后运行 cca install-cli 再装"
 		else
-			info "以后用 cca install-cli 装 Claude Code（只用 Codex、Antigravity 账号的话不需要它）"
+			for t in $used; do ( use_tool "$t"; cli_offer "$via" ); done
 		fi
 	fi
-	if [ "$onboard" != skip ] && [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
-		cmd_add || true
-	fi
 	if [ -n "${CCA_PATH_ADDED:-}" ]; then info "完成。${CCA_PATH_ADDED}，输入 cca 就能用（cca help 查看全部命令）"
-	else info "完成。以后输入 cca 启动 Claude Code（cca help 查看全部命令）"; fi
+	else info "完成。以后输入 cca 启动 Claude Code、cca codex 启动 Codex、cca agy 启动 Antigravity（cca help 查看全部命令）"; fi
 }
 
 cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的两个名字（确认时输入的就是用的那个名字）

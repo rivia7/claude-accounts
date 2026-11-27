@@ -71,7 +71,7 @@ Setup takes three steps. You can stop at any point and continue later from the o
 
    <img src="docs/images/network.png" width="528" alt="Step 2: how this Mac gets your accounts online (demo data)">
 
-3. **Add an account**: enter its email, an optional alias, and pick an exit node.
+3. **Add an account**: pick which kind (Claude Code, Codex or Antigravity; you can add one before its command is installed and install it from the account page later), then enter its email, an optional alias, and pick an exit node. To add more accounts later, use the 「＋」 button in the toolbar.
 
 A newly added account isn't signed in yet: click its card in the overview to open the account page, then click 「登录…」 (Sign in…). cca opens a terminal window and the sign-in page in a Chrome window just for that account, with the email already filled in; follow the prompts. Once signed in, the account page shows usage and the network exit, and buttons such as 「打开 Claude App」 (Open Claude App), 「网页版」 (Web) and 「终端」 (Terminal) get you going:
 
@@ -79,7 +79,7 @@ A newly added account isn't signed in yet: click its card in the overview to ope
 
 At the bottom left of the app, 「新手教程」 (Tutorial) walks you through each page with pictures.
 
-**Setting up in the terminal** (`cca install`): on a machine with a working direct connection, it asks whether to set up a router (address, root password, which nodes to allow) and then adds your first account; on a server without one, it uses cca's built-in proxy instead, first asking for a Team invite link and, if you have none, for a proxy of your own. On a Mac's command line, the first time you use an account (`cca @alias`), cca opens that account's own Chrome window so you can sign in.
+**Setting up in the terminal** (`cca install`): on a machine with a working direct connection, it asks whether to set up a router (address, root password, which nodes to allow) and then adds your first account (pick which kind first: Claude Code, Codex or Antigravity; if its command isn't installed yet, it offers to install it); on a server without one, it uses cca's built-in proxy instead, first asking for a Team invite link and, if you have none, for a proxy of your own. On a Mac's command line, the first time you use an account (`cca @alias`), cca opens that account's own Chrome window so you can sign in.
 
 ## Everyday use
 

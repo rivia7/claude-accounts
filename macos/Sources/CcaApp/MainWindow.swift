@@ -261,9 +261,8 @@ struct MainToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                // Antigravity：启用了、或者装了 agy 命令才列出来
-                ForEach(Employee.Department.allCases.filter { $0 != .antigravity || model.visibleTools.contains(.agy)
-                            || model.hello?.tools[.agy]?.bin != nil }, id: \.self) { d in
+                // 各组的「添加 X 账号…」：cca 有的工具都列，Antigravity 没装 agy 命令、还没启用也列（AppModel.addMenuDepartments）
+                ForEach(model.addMenuDepartments, id: \.self) { d in
                     let add = model.addHandoff(d)
                     Button(add.title + "…") { model.run(add) }
                 }

@@ -805,7 +805,7 @@ S
 	"$KT" accept-close 127.0.0.2:12222 & echo $! >> "$D/pids"
 	for i in $(seq 1 40); do curl -q -s -m 1 --noproxy '*' -H 'Authorization: Bearer test-secret' http://127.0.0.1:19390/version | grep -q version && listen 12222 127.0.0.2 && break; sleep 0.25; done
 	rr() { HOME="$RH" PATH="$SB:$RH/.local/bin:$PATH" "$@"; }   # ~/.local/bin 在 PATH 里：cca install 不问要不要写进 ~/.bashrc（一键安装那里测过）
-	out=$(rr env CCA_TTY="$(ans y 127.0.0.2 '' 12222 '1 2' y alice@example.com alice 1 y)" "$C" install 2>&1); rc=$?
+	out=$(rr env CCA_TTY="$(ans y 127.0.0.2 '' 12222 '1 2' y 1 alice@example.com alice 1 y)" "$C" install 2>&1); rc=$?
 	for i in $(seq 1 40); do [ "$(get 7901 127.0.0.2)" = cca-linux-ok ] && break; sleep 0.25; done
 	if [ $rc -eq 0 ] && grep -q '"host": "127.0.0.2"' "$RH/.cca/config.json" && grep -q '"alice(alice@example.com)": "US-A"' "$RH/.cca/accounts.json" &&
 		grep -qF 'cca-router.sh ensure' "$RT/etc/crontabs/root" && grep -qF '# >>> cca >>>' "$RT/etc/openclash/custom/openclash_custom_overwrite.sh" &&

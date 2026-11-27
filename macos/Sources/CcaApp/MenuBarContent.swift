@@ -86,7 +86,7 @@ struct MenuBarContent: View {
                         .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
                 }
             }
-            if model.visibleTools.count > 1 {
+            if model.listedTools.count > 1 {
                 ToolPicker()
                     .pickerStyle(.segmented)
             }

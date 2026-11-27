@@ -31,9 +31,9 @@ struct Sidebar: View {
                 ClientUpdatesRow()
                     .tag(SidebarItem.clientUpdates)
             }
-            if model.visibleTools.count > 1 || model.teamFilterAvailable {
+            if model.listedTools.count > 1 || model.teamFilterAvailable {
                 Section {
-                    if model.visibleTools.count > 1 { ToolPickerRow() }
+                    if model.listedTools.count > 1 { ToolPickerRow() }
                     if model.teamFilterAvailable { TeamFilterRow() }
                 }
             }
@@ -87,7 +87,7 @@ struct ToolPicker: View {
     var body: some View {
         @Bindable var model = model
         Picker("工具", selection: $model.tool) {
-            ForEach(model.visibleTools, id: \.self) { Text(Texts.product($0)).tag($0) }
+            ForEach(model.listedTools, id: \.self) { Text(Texts.product($0)).tag($0) }
         }
         .labelsHidden()
     }
@@ -364,27 +364,6 @@ struct SidebarFooter: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if model.phase == .ready, !model.codexEnabled {
-                Button {
-                    model.run(.addAccount(prefix: ToolID.codex.defaultPrefix, product: "ChatGPT"))
-                } label: {
-                    Label("启用 ChatGPT 账号", systemImage: "plus.circle")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .help("添加第一个 ChatGPT 账号（Codex）")
-            }
-            // Antigravity：装了 agy 命令才提（用的人少，没装时不占地方）
-            if model.phase == .ready, !model.visibleTools.contains(.agy), model.hello?.tools[.agy]?.bin != nil {
-                Button {
-                    model.run(.addAccount(prefix: ToolID.agy.defaultPrefix, product: "Antigravity"))
-                } label: {
-                    Label("启用 Antigravity 账号", systemImage: "plus.circle")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .help("添加第一个 Antigravity 账号（Google 的 agy 命令行）")
-            }
             HStack(spacing: 6) {
                 if model.stateLoading || model.updateChecking {
                     ProgressView().controlSize(.mini)

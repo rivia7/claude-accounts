@@ -205,8 +205,9 @@
 - **合并进账号表**（每条命令读账号表都经过 `reconcile`：添加、`cca edit`、启动、同步前都管得到）：配置里有、这台设备上还没有的官方账号加进来
   （`policy_merge`，事件 `policy_added`；别名见下面）。不加的，`policy_missing` 给原因：这台设备上删掉过的（工具状态里的 `policy_skip`：`cmd_rm`、
   `cca edit` 记下——`cca edit` 经 `py policy-have` / `policy-forget`，要在 `py validate` 之前记，不然 ctx 又加回来了——`cmd_add` 清掉）、节点不在可选
-  节点里的（加进来整张表就校验不过）、这台设备还没用过的工具（`policy_in_use`：当前的工具或者已经有账号表；Codex 账号第一次 `cca codex` 时才加，
-  免得白占端口）。已经在表里的，节点和配置的不一样就改回配置的、写回账号表（事件 `policy_pinned`：「! … 的出口按「Team 的名字」的配置固定为 …
+  节点里的（加进来整张表就校验不过）。三种工具一样：这台设备还没用过的工具（还没有它的账号表）也马上加进来，账号表随即建出来（`CCA_RO` 下照常
+  只在内存里对账、不写）；3.7.12 及以前要等第一次 `cca codex` / `cca agy` 才加（`policy_in_use`，免得白占端口）。
+  已经在表里的，节点和配置的不一样就改回配置的、写回账号表（事件 `policy_pinned`：「! … 的出口按「Team 的名字」的配置固定为 …
   （账号表里写的是 …，已改回）」）；`cca add` 加一个配置里有的邮箱时不问节点（`py policy-node`）。这台设备自己的账号（配置里没有的）不动。
   配置要的节点还不在可选节点里、定义在 Team 的配置里的，先加进可选节点（`policy_nodes_fill`，事件 `nodes_filled`，见 fill.md）。
 - **别名**（3.5.3-beta.5 起）：`alias_sources(工具)` 是合起来的这个工具的 [(邮箱, 别名, 哪个 Team 给的、这台设备是不是它的管理员)]（照加入的先后，

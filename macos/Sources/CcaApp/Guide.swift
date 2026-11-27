@@ -132,7 +132,7 @@ struct TutorialCard {
 
     static let all: [TutorialCard] = [
         TutorialCard(title: "一台 Mac，好几个账号", points: [
-            ("person.2", "同时管好几个 Claude、ChatGPT 账号：总览里一眼看全，左边按工具分开列出。"),
+            ("person.2", "同时管好几个 Claude、ChatGPT、Antigravity 账号：总览里一眼看全，左边按工具分开列出。"),
             ("point.3.connected.trianglepath.dotted", "每个账号有自己的登录资料和网络出口，启动前 cca 会先检查。"),
             ("lock.shield", "每个账号用自己的登录和浏览器资料，换账号不用重新登录。"),
         ], art: .fan),
@@ -149,19 +149,19 @@ struct TutorialCard {
             ("arrow.forward", "先跳过：还没想好也没关系，可以直接添加账号；以后在工具栏的「＋」中再配置。"),
         ], art: .netchoice),
         TutorialCard(title: "添加账号", points: [
-            ("person.badge.plus", "最后一步添加账号：填登录邮箱、起个别名（可留空）、选一个出口节点，不用先配置路由器。加入了 Team 的话，Team 给这台 Mac 的账号会自动加进来。"),
+            ("person.badge.plus", "最后一步添加账号：先选哪种（Claude、ChatGPT 还是 Antigravity），再填登录邮箱、起个别名（可留空）、选一个出口节点，不用先配置路由器。加入了 Team 的话，Team 给这台 Mac 的账号会自动加进来。"),
             ("globe", "第一次使用时，会在这个账号专属的浏览器窗口里登录——每个账号各用各的登录资料，换账号不用重登。"),
-            ("checkmark.circle", "加好就能用了：在总览点这张卡片打开账号。想再加就点账号列表上的「＋」。"),
+            ("checkmark.circle", "加好就能用了：在总览点这张卡片打开账号。想再加就点工具栏的「＋」选哪种账号；账号列表上的「＋」加正列着的那种。"),
         ], art: .addacct),
         TutorialCard(title: "总览：哪个在用，哪个额度已用完", points: [
-            ("square.grid.2x2", "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、第三方 API 账号分开排好。"),
+            ("square.grid.2x2", "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、Antigravity、第三方 API 账号分开排好；还没有账号的那一组排在最后，点它就能添加。"),
             ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者终端里有会话）。"),
             ("moon.zzz", "趴在桌上表示额度已用完，屏幕上显示几点恢复；椅子空着表示未登录，坐着灰色的人表示登录的不是这个账号。账号正在使用时仍显示为在用，问题写在卡片下方那一行（「在用 · 端口无法连接」）。"),
             ("sparkle", "套餐看徽章前面的小记号：灰圈、蓝点、紫色菱形，最高档（Ultra、Pro 500）是彩色的四角星。点一张卡片就进这个账号的页面。"),
             ("chart.bar.xaxis", "左边的「用量统计」把每个账号每周用了多少排在一起：哪个总不够用、哪个常常剩一大半，一眼看出来；「折合金额」按官方 API 的价格把每个账号用掉的折成美元。"),
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
-            ("cursorarrow.click", "点一个账号，右边就是它的详情；账号列表上面的「Claude / ChatGPT」切换工具（用了 Antigravity 命令行时还有它）。"),
+            ("cursorarrow.click", "点一个账号，右边就是它的详情；账号列表上面的「Claude / ChatGPT / Antigravity」切换工具。"),
             ("chart.bar", "名字右边的小条是额度：5 小时、本周，Claude 账号还有一根 Fable；没有 5 小时限制的套餐（比如 Ultra）没有 5h 那一根。"),
             ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者终端里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
             ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名、置顶、重新登录。上下拖动可以调整顺序。"),

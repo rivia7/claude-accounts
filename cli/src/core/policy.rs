@@ -9,7 +9,6 @@ use crate::py::fs::load_quiet;
 use crate::py::hash::sha256_hex;
 use crate::py::json;
 use crate::py::obj::{Dict, List, V};
-use crate::py::path;
 use crate::py::text;
 use crate::py::uni;
 use crate::{dict, re};
@@ -206,12 +205,6 @@ fn pick_alias(table: &Dict, f: &AliasFrom, e: &str, used: &HashSet<String>) -> O
     alias_fallback(&f.alias, &f.team).filter(|a| fits(a))
 }
 
-/// 这台机器用着这个工具吗：当前的工具，或者已经有它的账号表。Team 给的 Codex 账号要到第一次用 cca codex 时
-/// 才加进来，免得不用 Codex 的机器白占路由器上的端口
-pub fn policy_in_use(tool: &Tool) -> bool {
-    tool.is_current() || path::exists(&tool.table)
-}
-
 /// `set(tool.state(c).get('policy_skip') or [])`
 fn policy_skip(c: &Dict, tool: &Tool) -> HashSet<String> {
     match tool.state(c, false).get("policy_skip") {
@@ -231,9 +224,7 @@ pub fn policy_missing(c: &Dict, table: &Dict, tool: &Tool) -> Vec<(String, Strin
         if have.contains(&*e) {
             continue;
         }
-        let why = if !policy_in_use(tool) {
-            format!("第一次用 {} 时加进来", tool.cmd)
-        } else if skip.contains(&*e) {
+        let why = if skip.contains(&*e) {
             format!("这台机器上删掉过（要加回来：{} add）", tool.cmd)
         } else if !nodes.truthy() {
             let router_host = c.get("router").filter(|r| r.truthy()).and_then(|r| r.as_dict()).is_some_and(|r| r.truthy("host"));

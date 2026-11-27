@@ -301,9 +301,6 @@ pub fn policy_nodes_fill(c: &Dict, server: bool) -> Vec<String> {
         want.push((inst, Vec::new()));
     }
     for tool in tools() {
-        if !policy_in_use(tool) {
-            continue;
-        }
         let skip: HashSet<String> = match tool.state(c, false).get("policy_skip") {
             Some(V::List(l)) => l.strs().iter().map(|s| s.to_string()).collect(),
             _ => HashSet::new(),

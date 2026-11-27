@@ -84,8 +84,7 @@ private struct RoomSection: View {
                     DeskCard(employee: e, now: now, animate: animate)
                 }
                 if room.people.isEmpty {
-                    EmptyDesk(title: room.department == .chatgpt ? "还没有 ChatGPT 账号"
-                                : room.department == .antigravity ? "还没有 Antigravity 账号" : "还没有账号", action: add.title + "…") {
+                    EmptyDesk(title: "还没有 \(Texts.product(room.department.tool ?? .claude)) 账号", action: add.title + "…") {
                         model.run(add)
                     }
                 }

@@ -218,7 +218,7 @@ func officeTests() async {
 
     // 手写的演示数据：每种状态都有
     if let d = fixture("state.json"), let s = try? DocumentDecoder.decode(StateDoc.self, from: d) {
-        let o = Office.make(tools: s.tools, codexEnabled: true, usage: { $0.usage }, live: { _ in nil }, now: now0)
+        let o = Office.make(tools: s.tools, listed: [.claude, .codex], usage: { $0.usage }, live: { _ in nil }, now: now0)
         check("三个组：Claude 5 人、ChatGPT 1 人、外包 2 人", o.rooms.map(\.department) == [.claude, .chatgpt, .contractors]
               && o.rooms.map(\.people.count) == [5, 1, 2])
         let moods = Dictionary(uniqueKeysWithValues: o.people.map { ($0.account.key, $0.mood) })
@@ -231,10 +231,14 @@ func officeTests() async {
         check("点名", Texts.officeSummary(o.census) == "8 个账号 · 2 个在用 · 2 个空闲 · 1 个额度用完 · 1 个未登录 · 1 个账号不符 · 1 个有问题"
               && Texts.officeSummary(o.census, brief: true) == "8 个账号 · 2 个在用"
               && o.census.needsAttention == 3, Texts.officeSummary(o.census))
-        check("没启用 Codex：没有 ChatGPT 组", Office.make(tools: s.tools, codexEnabled: false, usage: { $0.usage }, live: { _ in nil },
-                                                    now: now0).rooms.map(\.department) == [.claude, .contractors])
+        check("cca 没有 Codex（listed 里没有）：没有 ChatGPT 组", Office.make(tools: s.tools, listed: [.claude], usage: { $0.usage },
+              live: { _ in nil }, now: now0).rooms.map(\.department) == [.claude, .contractors])
+        let all3 = Office.make(tools: s.tools, listed: [.claude, .codex, .agy], usage: { $0.usage }, live: { _ in nil }, now: now0)
+        check("三种都列：没有账号的 Antigravity 组排在最后（第三方 API 后面），空的也画出来",
+              all3.rooms.map(\.department) == [.claude, .chatgpt, .contractors, .antigravity] && all3.rooms.map(\.people.count) == [5, 1, 2, 0],
+              "\(all3.rooms.map(\.department))")
         if let ld = fixture("live_unreachable.json"), let live = try? DocumentDecoder.decode(LiveDoc.self, from: ld) {
-            let o2 = Office.make(tools: s.tools, codexEnabled: true, usage: { $0.usage }, live: { live.slot(for: $0) }, now: now0)
+            let o2 = Office.make(tools: s.tools, listed: [.claude, .codex], usage: { $0.usage }, live: { live.slot(for: $0) }, now: now0)
             let m2 = Dictionary(uniqueKeysWithValues: o2.people.map { ($0.account.key, $0.mood) })
             let t2 = Dictionary(uniqueKeysWithValues: o2.people.map { ($0.account.key, $0.trouble) })
             check("路由器连不上：走路由器的人都端口不通（没登录、登错号的照旧，直连的不受影响）",
@@ -250,7 +254,10 @@ func officeTests() async {
         check("读 state.json", false)
     }
     check("空的总览", Texts.officeSummary(OfficeCensus([])) == "还没有账号"
-          && Office.make(tools: [], codexEnabled: false, usage: { _ in nil }, live: { _ in nil }, now: now0).rooms.map(\.department) == [.claude])
+          && Office.make(tools: [], listed: [.claude], usage: { _ in nil }, live: { _ in nil }, now: now0).rooms.map(\.department) == [.claude])
+    check("一个账号都没有：三种工具的组都画出来（空的，照 Claude、ChatGPT、Antigravity 的先后）",
+          Office.make(tools: [], listed: [.claude, .codex, .agy], usage: { _ in nil }, live: { _ in nil }, now: now0).rooms.map(\.department)
+            == [.claude, .chatgpt, .antigravity])
 
     // 演示数据的时间平移到“现在”（测试不平移）
     let shifted = FixtureTransport(directory: fixtureDir, stepDelay: 0, rebaseTo: 1_800_000_000)

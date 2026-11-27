@@ -102,6 +102,9 @@ struct HelloDoc: CcaDocument, Equatable {
 
     /// `cca codex …`、`cca agy …` 只有这里为真时才能调用（PROTOCOL 1）：Claude 一直能用，别的缺字段一律当作没启用。
     func enabled(_ t: ToolID) -> Bool { t == .claude || (tools[t]?.enabled ?? false) }
+    /// 这一版 cca 有没有这个工具（认不认识 `cca agy …`）：Claude、Codex 一直有，Antigravity 看 hello 里有没有 `tools.agy`（3.1.0 以前的
+    /// cca 没有）。和 `enabled` 不同：有、还没启用的，App 可以调 `cca agy add` 启用它（加它的第一个账号，PROTOCOL 1），装没装 agy 命令都行
+    func supports(_ t: ToolID) -> Bool { t == .claude || t == .codex || tools[t] != nil }
     /// 启用了的工具（认识的），按 Claude、Codex、Antigravity 的顺序。
     var enabledTools: [ToolID] { ToolID.allKnown.filter { enabled($0) } }
     var codexEnabled: Bool { enabled(.codex) }

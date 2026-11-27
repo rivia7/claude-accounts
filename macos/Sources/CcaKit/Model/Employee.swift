@@ -190,28 +190,24 @@ struct Office: Equatable, Sendable {
     var people: [Employee] { rooms.flatMap(\.people) }
     var census: OfficeCensus { OfficeCensus(people) }
 
-    /// Claude 组一直有（空的也画出来，好让人知道从哪里添加）；ChatGPT、Antigravity 组在启用了这个工具时有；外包有人才有。
-    static func make(tools: [ToolState], enabled: [ToolID], usage: (Account) -> UsageEntry?,
+    /// 列出来的工具（listed：AppModel.listedTools，这一版 cca 有的）每个一组，空的也画出来（好让人知道从哪里添加），三种工具一样：
+    /// 有账号的组在前（照 Claude、ChatGPT、Antigravity 的先后），接着第三方 API 的（有人才有），空着的组在最后。
+    /// 3.7.12 及以前 Claude 组一直排在最前（空的也是），ChatGPT、Antigravity 组启用了才有。
+    static func make(tools: [ToolState], listed: [ToolID], usage: (Account) -> UsageEntry?,
                      live: (AccountRef) -> LiveSlot?, now: Double, elsewhere: (AccountRef) -> [String] = { _ in [] },
                      arrange: (Employee.Department, [Employee]) -> [Employee] = { $1 }) -> Office {
-        let on = Set(enabled).union([.claude])
+        let on = Set(listed)
         let people = tools.filter { on.contains($0.id) }
             .flatMap(\.accounts)
             .map { Employee.make($0, usage: usage($0), live: live($0.ref), now: now, elsewhere: elsewhere($0.ref)) }
         let byDept = Dictionary(grouping: people, by: \.department)
-        var rooms = [Room(department: .claude, people: arrange(.claude, byDept[.claude] ?? []))]
-        for t in ToolID.allKnown where t != .claude && on.contains(t) {
+        let official = ToolID.allKnown.filter { on.contains($0) }.map { t -> Room in
             let d = Employee.Department.official(t)
-            rooms.append(Room(department: d, people: arrange(d, byDept[d] ?? [])))
+            return Room(department: d, people: arrange(d, byDept[d] ?? []))
         }
+        var rooms = official.filter { !$0.people.isEmpty }
         if let c = byDept[.contractors], !c.isEmpty { rooms.append(Room(department: .contractors, people: arrange(.contractors, c))) }
-        return Office(rooms: rooms)
-    }
-
-    static func make(tools: [ToolState], codexEnabled: Bool, usage: (Account) -> UsageEntry?,
-                     live: (AccountRef) -> LiveSlot?, now: Double,
-                     arrange: (Employee.Department, [Employee]) -> [Employee] = { $1 }) -> Office {
-        make(tools: tools, enabled: codexEnabled ? [.claude, .codex] : [.claude], usage: usage, live: live, now: now, arrange: arrange)
+        return Office(rooms: rooms + official.filter(\.people.isEmpty))
     }
 }
 
