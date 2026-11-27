@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.9", title: "手机上也能看总览、用量统计和折合金额", points: [
+            .init(symbol: "iphone",
+                  text: "iPhone 上的 cca App 照 Mac 的侧栏分成五页：总览、用量统计、折合金额、远程会话、共享与同步。总览里每个账号一张卡片，和 Mac 上的一样。"),
+            .init(symbol: "dollarsign.circle",
+                  text: "手机上也能看每个账号的折合金额（按周、按天，按模型、按设备）；用量统计把几台 Mac 上的账号放在一起比；「共享与同步」显示每台 Mac 在 Team 里的状态。"),
+            .init(symbol: "arrow.down.circle",
+                  text: "Mac 上的 cca 要更新到这一版，才会把这些交给配对的手机；iPhone 上的 App 也要更新。Team 的服务器不用更新。"),
+        ]),
         ReleaseNote(version: "3.7.8", title: "其他设备也能看到 Antigravity 的套餐，App 的说法更简短", points: [
             .init(symbol: "arrow.triangle.2.circlepath",
                   text: "在一台设备上用 cca 打开过 Antigravity 会话后，Team 里登录了同一账号的其他设备也会显示它的套餐。两台设备都需要更新到这一版，Team 的服务器不用更新。"),
