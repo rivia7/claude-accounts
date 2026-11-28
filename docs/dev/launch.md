@@ -18,9 +18,14 @@ iPhone 上的 App 在终端页给「结束会话」；随 3.7.12 发布（2026-1
 - 只给能操作这台机器的配对：能看和操作（`incoming` 是 `control`）、单独打开过远程启动（`launch`，打开要同意：同意项 `remote_launch`，
   范围是配对编号，默认不同意）。改成只让看、不让接入时 `launch` 跟着清掉，改回来不跟着回来。3.7.6 还要是手机（`web`）；2026-11-27 起手机、电脑都行
   （`peers.rs` 的 `can_launch` 只看 `incoming`）
-- 开场白放进参数：模板能带开场白（`line`：claude、codex，参数里还没有一句话——除了选项和选项的值没有别的参数，也没有 `--`）时，那一头给的那句作为客户端的
-  最后一个参数（`-- 开场白`），不是起来以后往终端里敲。参数里已经有一句话的再接一句：claude 只拿头一句、那一头给的那句不理（2.1.332：多出来的参数
-  它不拦也不用），codex 起不来（0.172.0：`unexpected argument`），所以不给带（`template.rs` 的 `has_words`）
+- 开场白放进参数：模板能带开场白（`line`）时，那一头给的那句交给客户端的参数（`template.rs` 的 `line_args`），不是起来以后往终端里敲。
+  claude、codex：最后一个参数（`-- 开场白`），参数里还没有一句话的才能带（除了选项和选项的值没有别的参数，也没有 `--`）。参数里已经有一句话的再接一句：
+  claude 只拿头一句、那一头给的那句不理（2.1.332：多出来的参数它不拦也不用），codex 起不来（0.172.0：`unexpected argument`），所以不给带（`template.rs` 的 `has_words`）。
+  agy 不认参数里的话（1.5.18：`agy -- 一句话`、`agy 一句话` 都报 `unexpected argument`、退出码 2，没登录也是先查参数；话只能经 `-p` / `--print`、
+  `-i` / `--prompt-interactive` 或者标准输入给）：开场白是一项 `--prompt-interactive=开场白`（以 `-` 开头的也不会被当成选项）；参数里已经有
+  `-i` / `--prompt-interactive`、有不是选项的参数或者 `--` 的不给带（`agy.rs` 的 `agy_line_ok`）。2026-11-28 离线核对过（临时 HOME、代理指向关着的端口）：
+  伪终端里 `--prompt-interactive=-看看 README` 照常进到界面（没登录：登录页），参数不报错；登录了的 agy 把它当头一句发出去（`agy --help`：「Run an
+  initial prompt interactively and continue the session」）还没在真的账号上看过
 - 服务器不为它改：启动器在每台走得到的 Team 服务器上登记成一个“会话”（`relay_host`，占这台设备的一个会话名额：3.7.10 起的服务器 101 个，以前的 8 个）；
   那一头和它握手、说要起哪个，跟接入会话一样
 - 模板的摘要（`h`）：那一头列出来以后这台机器上改了模板，拿旧的摘要来起是 `changed`，不照改过的起
@@ -121,7 +126,8 @@ iPhone 上的 App 在终端页给「结束会话」；随 3.7.12 发布（2026-1
 
 ## 起的会话
 
-- `remote-host --headless --sid 编号 --size 列x行 工具 账号键 名字 -- cca [codex|agy] @账号键 -- 模板的参数… [-- 开场白]`（`spawn_session`），当前目录是模板的文件夹，
+- `remote-host --headless --sid 编号 --size 列x行 工具 账号键 名字 -- cca [codex|agy] @账号键 -- 模板的参数… [开场白]`（`spawn_session`；开场白：claude、codex 是
+  `-- 开场白`，agy 是 `--prompt-interactive=开场白`），当前目录是模板的文件夹，
   自己一个会话（setsid），标准输入输出是 /dev/null
 - 环境只带 `KEEP_ENV`：`HOME USER LOGNAME PATH LANG LC_ALL LC_CTYPE TMPDIR SHELL SSH_AUTH_SOCK __CF_USER_TEXT_ENCODING CCA_HOME CCA_HELPER CCA_KEYSTORE TZ CCA_HEADLESS_LINGER CCA_HEADLESS_IDLE`，
   再加 `TERM=xterm-256color`、`CCA_REMOTE=1`、`CCA_REMOTE_HOSTED=会话编号`。后台进程的环境是 launchd / cron 给的，别的不该带进会话；`CCA_KEYSTORE`（密钥存成文件，只给测试）
@@ -184,6 +190,8 @@ iPhone 上的 App 在终端页给「结束会话」；随 3.7.12 发布（2026-1
   归属另一个 Team 的模板（说明里没有它，照它起是 `no_template`）、不说挑哪个而能挑的不止一个（`need_account`）、拿另一台手机的编号（`no_account`）、
   挑的账号后来归另一个 Team 了（`other_hub`：常驻的启动器重读 Team 的配置）、参数后来过不了检查（`bad_args`）、会话已经有 7 个（服务器的级别不到 3 时 `busy`，到 3 照起）、
   关掉一台手机的远程启动以后它收不到说明、要不来票据（另一台照旧）。`denied` 只在配对表改了、转接进程还没看到的那 3 秒里出得来，没有单独测。
+  `an_agy_template_takes_the_line_as_an_option`：agy 的模板（这台机器自己的 agy 账号）能带开场白、客户端收到的是 `--prompt-interactive=开场白`（以 `-` 开头的也是一项），
+  参数里已经有 `-i` 的说明里 `l` 是 false、带了是 `bad`；单元：`template.rs` 的 `opening_lines`
   `a_phone_launches_a_session` 的最后：手机结束远程启动的会话（说明里的 `end`；改成只看以后说明里没有它，硬发 `END` 也不转；改回能操作以后发 `END`：`<EXIT 129>`、会话没了）
 - `tests/remote_launch.rs` 的 `a_machine_launches_a_session`：两台真的设备配对，盒子上的启动器允许 mac（不是手机）：`remote-list --json` 的 `peer_launchers`（模板的各项、
   账号的名字）、不写模板时列出来、起之前就停的（不在终端里 69、开场白里有控制字符 64、没有这台机器 / 这个模板 65，启动器的日志是空的）、
@@ -201,7 +209,7 @@ iPhone 上的 App 在终端页给「结束会话」；随 3.7.12 发布（2026-1
 
 ## 没验证的
 
-- 真的 LaunchAgent：登录以后起不起来、launchd 给的环境里找不找得到 claude / codex（PATH 是装的时候的）、从 LaunchAgent 起的进程读不读得了钥匙串里配对的密钥
+- 真的 LaunchAgent：登录以后起不起来、launchd 给的环境里找不找得到 claude / codex / agy（PATH 是装的时候的）、从 LaunchAgent 起的进程读不读得了钥匙串里配对的密钥
 - 真机上起会话；TestFlight 还没传带这一页的构建
 - 两台真的电脑之间（真的 Team 服务器、真的 LaunchAgent）用 `cca remote launch`、Mac 上的 App 起会话；App 里「新建会话…」的弹层只在契约测试里走过，没人点过
 - 挑账号：真机上的「用哪个账号」、两台真的电脑之间 `--account`；新的 App 对着 3.7.9 及以前的那台机器（不挑账号）只在契约测试、ccaguest 里走过

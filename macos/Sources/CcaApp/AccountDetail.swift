@@ -27,11 +27,14 @@ struct AccountDetail: View {
                                 let cost = model.costEnabled && a.can.cost
                                 VStack(alignment: .leading, spacing: 32) {
                                     UsageSection(account: a)
-                                    // Antigravity 没有每周用量的统计（cca 按 5 小时、本周的窗口记，agy 没有这两个窗口）
-                                    if a.tool != .agy {
-                                        // 图的右边留出和下面折合金额的纵轴一样宽的一栏：同一周的条上下对齐
-                                        WeeklyUsageSection(account: a, gutter: cost ? CostChart.gutterLabels(
-                                            a.cost, granularity: model.costGranularity, scope: model.costScopeShown(for: a.cost)) : [])
+                                    // 图的右边留出和下面折合金额的纵轴一样宽的一栏：同一周的条上下对齐
+                                    let gutter = cost ? CostChart.gutterLabels(
+                                        a.cost, granularity: model.costGranularity, scope: model.costScopeShown(for: a.cost)) : []
+                                    // Antigravity 的额度分几组：每组一节（cca 的 usage_weeks_groups）；还没有记录时和别的工具一样一节
+                                    if let groups = a.usageWeeksGroups, !groups.isEmpty {
+                                        ForEach(groups) { g in WeeklyUsageSection(account: a, group: g, gutter: gutter) }
+                                    } else {
+                                        WeeklyUsageSection(account: a, gutter: gutter)
                                     }
                                     if cost {
                                         CostSection(account: a).id(CostSection.anchor)

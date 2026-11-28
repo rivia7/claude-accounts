@@ -138,9 +138,9 @@ struct UsageSection: View {
             }
             if a.can.billing {
                 InfoRow(Text("订阅附带的每月 API 额度"), systemImage: "creditcard") {
-                    RowAction.web("在控制台查看") { model.openBilling(a.ref) }
+                    RowAction.web(Texts.billingAction(a.tool)) { model.openBilling(a.ref) }
                         .disabled(busy)
-                        .help("用这个账号自己的浏览器和出口打开控制台的账单页；要登录时邮箱已复制好，直接粘贴")
+                        .help(Texts.billingHelp(a.tool))
                 }
             }
             if a.can.apiKey {

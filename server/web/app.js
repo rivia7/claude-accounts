@@ -153,7 +153,7 @@ function home() {
     return [
       isIOS && !standalone ? h('p', { class: 'problem' },
         '先把这一页添加到主屏幕：点 Safari 底下的分享按钮，选「添加到主屏幕」，之后从主屏幕打开再配对。主屏幕上的那一份有自己的数据，在这里配对的它用不上。') : null,
-      h('p', null, '在手机上接着用电脑上的 Claude Code、Codex 会话。先让这台手机和电脑配对：'),
+      h('p', null, '在手机上接着用电脑上的 Claude Code、Codex、Antigravity 会话。先让这台手机和电脑配对：'),
       h('ol', { class: 'steps' },
         h('li', null, '电脑上运行 ', h('code', null, 'cca remote on'), '：之后在终端里启动的会话才接得进来。'),
         h('li', null, '电脑上运行 ', h('code', null, 'cca remote pair --web'), '，它会显示一个配对码。'),

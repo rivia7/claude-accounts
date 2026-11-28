@@ -1,8 +1,8 @@
 import CcaRemoteKit
 import SwiftUI
 
-/// 「用量统计」（Mac App 的 UsageStatsPage）：各台电脑上的官方账号每周用了多少放在一起比，Claude、ChatGPT 各一组（第三方 API 账号
-/// 没有订阅的额度，Antigravity 没有每周用量的统计，都不在这里）。几台电脑上都有的账号（同一个 Team）只列一次。每个账号一行：头像和名字、
+/// 「用量统计」（Mac App 的 UsageStatsPage）：各台电脑上的官方账号每周用了多少放在一起比，Claude、ChatGPT、Antigravity 各一组（第三方 API
+/// 账号没有订阅的额度，不在这里）。几台电脑上都有的账号（同一个 Team）只列一次。每个账号一行（Antigravity 每组额度一行：StatsLine）：头像和名字、
 /// 平均每周用到多少和几周用完 / 没用到一半，下面是最近 12 周的小柱状图（所有行同一个时间范围、同一个纵轴，上下对得齐、高低能比）和本周
 /// 到现在。点一行进这个账号的页面。数字都是电脑上的 cca 算好的（usage_weeks），这里只排版
 struct UsageStatsView: View {
@@ -13,12 +13,13 @@ struct UsageStatsView: View {
             let now = ctx.date.timeIntervalSince1970
             let all = model.hostedAccounts()
             let rows = Pages.statsRows(all)
-            let lists = rows.map { $0.account.weeks?.weeks ?? [] }
+            let lines = rows.flatMap(Pages.statsLines)
+            let lists = lines.map { $0.weeks?.weeks ?? [] }
             let scale = StatsScale(domain: WeeklyChart.domain(lists, now: now), top: WeeklyChart.scaleTop(lists),
                                    machines: Pages.machines(rows) > 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    Text(Self.subtitle(rows, now: now))
+                    Text(Self.subtitle(lines, now: now))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -27,7 +28,7 @@ struct UsageStatsView: View {
                     if model.fetchedAt == nil, all.isEmpty {
                         HStack(spacing: 8) { ProgressView(); Text("正在查询…").foregroundStyle(.secondary) }
                     } else if rows.isEmpty {
-                        Text("电脑上还没有 Claude、ChatGPT 账号（或电脑还没上传账号状态）。第三方 API 账号没有订阅的额度，不在这里统计。")
+                        Text("电脑上还没有 Claude、ChatGPT、Antigravity 账号（或电脑还没上传账号状态）。第三方 API 账号没有订阅的额度，不在这里统计。")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
@@ -58,8 +59,8 @@ struct UsageStatsView: View {
     }
 
     /// 标题下面那一句：数字从哪来、从什么时候开始记
-    static func subtitle(_ rows: [HostedAccount], now: Double) -> String {
-        guard let since = rows.compactMap({ $0.account.weeks?.sinceEpoch }).min() else {
+    static func subtitle(_ lines: [StatsLine], now: Double) -> String {
+        guard let since = lines.compactMap({ $0.weeks?.sinceEpoch }).min() else {
             return "还没有记录：电脑上的 cca 每次查询用量时会记录本周的用量，满一周后这里就会显示统计。"
         }
         return "最近 12 周每周用了多少额度。" + Texts.weeksSince(since, now: now) + "，电脑上的 cca 每次查询用量时更新。"
@@ -161,9 +162,9 @@ private struct StatsGroup: View {
                 .accessibilityAddTraits(.isHeader)
                 .padding(.top, 10)
             VStack(spacing: 0) {
-                ForEach(Array(group.rows.enumerated()), id: \.element.id) { i, r in
+                ForEach(Array(group.rows.flatMap(Pages.statsLines).enumerated()), id: \.element.id) { i, line in
                     if i > 0 { Divider().padding(.leading, StatsColumns.inset + StatsColumns.lead) }
-                    StatsRow(row: r, scale: scale, now: now)
+                    StatsRow(line: line, scale: scale, now: now)
                 }
             }
             .padding(.vertical, 4)
@@ -172,21 +173,23 @@ private struct StatsGroup: View {
     }
 }
 
-/// 一个账号一行：点了进账号页
+/// 一个账号（Antigravity 是账号的一组额度）一行：点了进账号页
 private struct StatsRow: View {
-    let row: HostedAccount
+    let line: StatsLine
     let scale: StatsScale
     let now: Double
 
+    private var row: HostedAccount { line.row }
+
     var body: some View {
         let a = row.account
-        let uw = a.weeks
+        let uw = line.weeks
         let summary = uw.flatMap { Texts.weeksSummary($0.summary) }
         NavigationLink(value: row.ref) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .center, spacing: 10) {
                     AccountAvatar(account: a, size: StatsColumns.avatar)
-                    AccountName(row: row, machines: scale.machines)
+                    AccountName(row: row, machines: scale.machines, group: line.group?.displayName)
                     Spacer(minLength: 6)
                     average(uw?.summary)
                 }
@@ -207,7 +210,7 @@ private struct StatsRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Texts.nonEmpty(a.name) ?? "账号")
+        .accessibilityLabel((Texts.nonEmpty(a.name) ?? "账号") + (line.group.map { "，" + $0.displayName } ?? ""))
         .accessibilityValue(summary ?? (uw == nil ? "还没有记录" : "最近 12 周没有记录"))
         .accessibilityHint("打开这个账号的页面")
     }
@@ -246,11 +249,13 @@ private struct StatsRow: View {
     }
 }
 
-/// 一行左边的名字：名字，下面是套餐（和几台电脑时是哪台电脑的；几台电脑上都有的不写）
+/// 一行左边的名字：名字，下面是套餐（和几台电脑时是哪台电脑的；几台电脑上都有的不写）；用量统计页上 Antigravity 的一组写组名，不写套餐
 struct AccountName: View {
     let row: HostedAccount
     let machines: Bool
     var warn = false
+    /// 用量统计页上 Antigravity 的一组：组名（Gemini 模型）
+    var group: String?
 
     var body: some View {
         let a = row.account
@@ -262,7 +267,11 @@ struct AccountName: View {
                 }
             }
             HStack(spacing: 6) {
-                if !a.plan.isEmpty { PlanBadge(plan: a.plan, tier: a.tier) }
+                if let group {
+                    Text(group).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                } else if !a.plan.isEmpty {
+                    PlanBadge(plan: a.plan, tier: a.tier)
+                }
                 if machines, !row.shared {
                     Text(row.peer.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }

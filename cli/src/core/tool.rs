@@ -4,7 +4,7 @@
 //! 写在各自的模块里（见 `impl Tool` 的其余部分）。当前管的是哪个工具（原来的全局变量 `T`）用 `t()` 取，
 //! `Using::tool(…)` 临时换一个（原来的 `with using(工具)`）。
 
-use super::base::{CCA_HOME, HOME};
+use super::base::{AGY_RESTRICTED, CCA_HOME, CLAUDE_RESTRICTED, CODEX_RESTRICTED, HOME};
 use crate::py::obj::{Dict, V};
 use crate::py::path;
 use crate::py::proc::getenv;
@@ -63,6 +63,8 @@ pub struct Tool {
     pub url_example: &'static str,
     /// 出口在受限地区时的提示
     pub region_name: &'static str,
+    /// 不能用的地区（地区代码、名字），照这家官方的名单（base.rs 的 CLAUDE_RESTRICTED 这些）
+    pub restricted: &'static [(&'static str, &'static str)],
     /// 出口检测：经账号的端口取这个网站看到的 IP 和地区
     pub trace_host: &'static str,
     pub web_url: &'static str,
@@ -83,7 +85,7 @@ pub struct Tool {
     pub has_app: bool,
     pub has_api: bool,
     /// 图形界面显示不显示这个工具的用量（_gui state 的 features.usage、can.usage）。三种都显示：agy 的格式不一样（几组额度，
-    /// --json 的 quota_groups，没有 5 小时、本周这些窗口），也没有每周用量的统计（usage_weeks）
+    /// --json 的 quota_groups，没有 5 小时、本周这些窗口），每周用量每组各记一份（usage_weeks_groups；usage_weeks 是 null）
     pub has_usage: bool,
     pub has_cost: bool,
 }
@@ -286,6 +288,7 @@ pub static TOOLS: LazyLock<[Tool; 3]> = LazyLock::new(|| {
             api_fields: &["base_url", "model", "node", "env", "key", "id"],
             url_example: "https://api.example.com/anthropic",
             region_name: "Claude",
+            restricted: CLAUDE_RESTRICTED,
             trace_host: "claude.ai",
             web_url: "https://claude.ai/",
             billing_url: "https://platform.claude.com/settings/billing",
@@ -327,6 +330,7 @@ pub static TOOLS: LazyLock<[Tool; 3]> = LazyLock::new(|| {
             api_fields: &["base_url", "model", "node", "key", "id"],
             url_example: "https://api.example.com/v1",
             region_name: "OpenAI",
+            restricted: CODEX_RESTRICTED,
             trace_host: "chatgpt.com",
             web_url: "https://chatgpt.com/",
             billing_url: "https://platform.openai.com/settings/organization/billing/overview",
@@ -368,9 +372,11 @@ pub static TOOLS: LazyLock<[Tool; 3]> = LazyLock::new(|| {
             api_fields: &[],
             url_example: "",
             region_name: "Google",
+            restricted: AGY_RESTRICTED,
             trace_host: "www.cloudflare.com",
             web_url: "https://gemini.google.com/",
-            billing_url: "",
+            // Google AI Pro / Ultra 附带的 Google Developer Program 权益（每月的 Google Cloud 额度）在这里领、看余额
+            billing_url: "https://me.developers.google.com/benefits",
             login_hosts: &["accounts.google.com"],
             login_paths: &["/o/oauth2/auth", "/o/oauth2/v2/auth"],
             mail_rules: &[],
@@ -580,6 +586,30 @@ pub fn codex_profile_name(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::dict;
+
+    /// 各工具的受限地区照各家自己的名单（base.rs 里写着出处）：两个大写字母、不重复；三家都不能用的那几个三份都有，
+    /// 各家不一样的地方分得开
+    #[test]
+    fn restricted_regions_per_tool() {
+        let lists = [claude().restricted, codex().restricted, agy().restricted];
+        for l in lists {
+            for (i, (cc, name)) in l.iter().enumerate() {
+                assert!(cc.len() == 2 && cc.chars().all(|c| c.is_ascii_uppercase()), "{cc}");
+                assert!(!name.is_empty() && !l[..i].iter().any(|(x, _)| x == cc), "{cc}");
+            }
+        }
+        let has = |l: &[(&str, &str)], cc: &str| l.iter().any(|(x, _)| *x == cc);
+        for cc in ["CN", "HK", "MO", "RU", "KP", "IR", "CU", "BY"] {
+            assert!(lists.iter().all(|l| has(l, cc)), "{cc}");
+        }
+        let [c, x, g] = lists;
+        assert!(has(c, "MM") && !has(x, "MM") && has(g, "MM"));
+        assert!(has(c, "VE") && has(x, "VE") && !has(g, "VE"));
+        assert!(has(c, "SY") && has(x, "SY") && !has(g, "SY"));
+        assert!(!has(c, "MD") && !has(x, "MD") && has(g, "MD"));
+        assert!(has(c, "YE") && !has(x, "YE") && !has(g, "YE"));
+        assert!(has(c, "XK") && has(x, "XK") && !has(g, "XK"));
+    }
 
     #[test]
     fn state_semantics() {

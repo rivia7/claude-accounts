@@ -37,7 +37,7 @@ struct StateDoc: CcaDocument, Equatable {
     var config: StateConfig?
     var routing: Routing?
     var tools: [ToolState]
-    /// 所有账号的折合金额加起来（折合金额页的页头，PROTOCOL 2.2）：关掉了、没有 Claude / Codex 的官方账号时为 nil，旧版 cca 没有
+    /// 所有账号的折合金额加起来（折合金额页的页头，PROTOCOL 2.2）：关掉了、没有 Claude、Codex、Antigravity 的官方账号时为 nil，旧版 cca 没有
     var costTotal: CostTotal?
 
     enum CodingKeys: String, CodingKey {
@@ -331,7 +331,7 @@ struct NodeUse: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// 一个工具（Claude / Codex）。
+/// 一个工具（Claude / Codex / Antigravity）。
 /// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`）、折合金额（`cost`）。
 /// 旧版 cca 没有这个字段：那时只有 Claude 和 Codex，都有（折合金额除外：没有这个键当作没有）。
 struct ToolFeatures: Decodable, Sendable, Equatable {
@@ -474,6 +474,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var usage: UsageEntry?
     /// 最近几周每周用了多少（PROTOCOL 2.2；cca 记下的，官方账号才有；旧版 cca 没有，是 nil）
     var usageWeeks: UsageWeeks?
+    /// Antigravity 各组额度的每周用量（PROTOCOL 2.2 的 `usage_weeks_groups`；agy 的官方账号才有，没有记录、旧版 cca 是 nil）
+    var usageWeeksGroups: [GroupWeeks]?
     /// 折合金额（PROTOCOL 2.2；只给 `can.cost` 为真的账号，还没有任何记录、旧版 cca 是 nil）
     var cost: AccountCost?
     var health: Health?
@@ -498,6 +500,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case apiKey = "api_key"
         case usage
         case usageWeeks = "usage_weeks"
+        case usageWeeksGroups = "usage_weeks_groups"
         case cost
         case health
     }
@@ -538,6 +541,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         apiKey = c.lossy(APIKeyInfo.self, .apiKey)
         usage = c.lossy(UsageEntry.self, .usage)
         usageWeeks = c.lossy(UsageWeeks.self, .usageWeeks)
+        usageWeeksGroups = c.lossyArray(GroupWeeks.self, .usageWeeksGroups).flatMap { $0.isEmpty ? nil : $0 }
         cost = c.lossy(AccountCost.self, .cost)
         health = c.lossy(Health.self, .health)
     }
@@ -686,14 +690,14 @@ struct Can: Decodable, Sendable, Equatable {
     var limitResets: Bool = false
     var usage: Bool = false
     var check: Bool = true
-    /// 能不能在终端里打开（要有 claude / codex 命令）
+    /// 能不能在终端里打开（要有 claude、codex 或 agy 命令）
     var cli: Bool = false
     /// 账号页有没有「设备」一节（Team 给的官方账号、这台设备用得了那个 Team 的服务器、没关掉设备统计；PROTOCOL 3.4）。
     /// 旧版 cca 没有这一项，当作没有。`policy_lock`（3.6.0 起总是 false）不读
     var devices: Bool = false
     /// 能不能记下 / 显示 / 复制 API key（`cca [codex] key`，PROTOCOL 4.10；旧版 cca 没有这一项，当作不能）
     var apiKey: Bool = false
-    /// 账号页有没有「折合金额」一节、折合金额页里有没有这一行（Claude、Codex 的官方账号，没登录的也有；
+    /// 账号页有没有「折合金额」一节、折合金额页里有没有这一行（Claude、Codex、Antigravity 的官方账号，没登录的也有；
     /// PROTOCOL 2.2）。旧版 cca 没有这一项，当作没有
     var cost: Bool = false
     /// 账号页有没有「邮箱」一节（邮箱助手，PROTOCOL 4.11；只有 Claude 官方账号、账号表里写了邮箱）。

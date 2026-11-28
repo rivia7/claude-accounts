@@ -61,7 +61,7 @@ const CU_CHECK_INTERVAL: i64 = 6 * 3600;
 /// 允许自动更新、下载好了而桌面客户端开着（等它退出再装）：后台多久再来看一次
 const CU_AUTO_RETRY: i64 = 15 * 60;
 
-/// 一种客户端。桌面客户端（`CuClient`）：产品标识、签名团队、更新源的规则；终端工具（`CuCli`，命令行的 Claude Code、Codex）：只查版本，
+/// 一种客户端。桌面客户端（`CuClient`）：产品标识、签名团队、更新源的规则；终端工具（`CuCli`，命令行的 Claude Code、Codex、agy）：只查版本，
 /// 不下载软件包，更新用它们自己的 update 命令（自己校验、自己替换），用户确认后才运行，命令在哪是 bash 找到的（env，空的就是没装）。
 /// 两种在原来是两个类，各自没有的属性这里留空
 pub struct Client {

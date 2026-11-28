@@ -341,7 +341,7 @@ pub fn cmd_runtime_record(args: &[String]) -> R<()> {
     Ok(())
 }
 
-// 命令行会话的登记（_gui state 的 cli）：run_account 启动 claude / codex 之前在账号目录写 cli-<cca 的进程号>.json，
+// 命令行会话的登记（_gui state 的 cli）：run_account 启动 claude / codex / agy 之前在账号目录写 cli-<cca 的进程号>.json，
 // 工具一退出就删（bash 的 session_close）。记 cca 的进程号和它的启动时间：进程号会被重用，启动时间对得上才是同一个进程
 
 /// 账号目录里登记的文件名 `cli-<进程号>.json` 里的进程号

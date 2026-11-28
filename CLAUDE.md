@@ -43,7 +43,7 @@
 - 切节点（路由器、本机内核）必须 GET 回读核实，失败不能以端口开放放行；探针、控制接口用的 curl 第一个参数是 `-q`，走代理时 `--noproxy ''`，直连时 `--noproxy '*'`
 - 泄露检测、隔离检查失败或没有结果，不能当作没问题；Chrome 没装、旧版 Codex 不支持独立登录时停下，不能退回默认浏览器
 - Claude App 多开只认 `--user-data-dir`，同一个资料目录绝不能开两份。见 docs/dev/desktop.md
-- `~/.cca` 里新加了凭证类的文件：补进 `CCA_DIR_PRIVATE`（cca 启动的 Claude Code 照它挡住读写），`cca restore` 的备份也别打包它（bsdtar 的 `--exclude` 不锚定开头，写具体文件名）
+- `~/.cca` 里新加了凭证类的文件：补进 `CCA_DIR_PRIVATE`（cca 启动的 Claude Code、Codex、agy 照它挡住读写），`cca restore` 的备份也别打包它（bsdtar 的 `--exclude` 不锚定开头，写具体文件名）
 - 仓库是公开的：代码和测试里不放真实节点名、路由器 IP、邮箱；测试用 `US-A`…`US-D`、`HK-A`、`192.0.2.10`、`example.com`
 
 ### 路由器
@@ -57,6 +57,7 @@
 - 账号表的值是字符串（官方账号，值是节点）或对象（第三方 API 账号）：读值一律用 `is_api` / `node_of`；要端口用 `routed(c, t, tool)`，跨工具用 `pool(c)`；各工具的端口、上次使用这些经 `T.state(c)`，不要直接碰 `c['ports']`。见 docs/dev/accounts.md
 - 依赖账号先后的逻辑（端口池、路由器的摘要、本机的端口池、启动器和头像的颜色）用 `base_order`，不要直接遍历账号表：不然调整一次顺序就要同步路由器、账号换颜色。见 docs/dev/accounts.md
 - 工具差异集中在辅助程序的 `Tool`（`cli/src/core/tool.rs`：claude、codex、agy 三份，按 `CCA_TOOL` 选出当前的 `t()`，原来的 `T`）和 bash 的 `TOOL`（`tool xxx` 调成对的 `claude_xxx` / `codex_xxx`）；`TOOLS` 的顺序 claude、codex、agy 不能变（端口池按它分）。见 docs/dev/accounts.md
+- 三种工具一样的地位：Claude 有的功能，Codex、Antigravity 能做的都要做；新功能三种一起做、一起测，列工具的文案三种都列；做不了的用开关和 `unsupported` 说清楚。差在哪、还没补的、卡在哪见 docs/dev/parity.md，补上一项就改它
 
 ### 界面 App 的接口
 - App 只经 `macos/PROTOCOL.md` 写的接口和 cca 打交道。改了 `_gui hello|state|live`、各个 `--json` 输出、`health.json`、事件，要同时改 PROTOCOL.md、Swift 模型（`macos/Sources/CcaKit/Protocol`）和 regress 的 10g；只能加字段，删改要升 `GUI_API`
@@ -90,6 +91,7 @@
 - `gui-contract.md` — 给界面 App 的接口：`_gui hello|state|live`、事件、`consent`、提问会话和题号、`CCA_RO`
 - `onboarding.md` — 配置向导（`cca _onboard`、`cca install --gui`）、配置路由器和账号表的表单、不先配置路由器就加账号
 - `accounts.md` — 账号表的值、`base_order`、三种工具的差异：`Tool` 的子类、`cxa` / `aga`、CODEX_HOME、Codex 的 app-server、Antigravity
+- `parity.md` — 三种工具的功能对照：差在哪、还没补的、做不了的卡在哪
 - `isolation.md` — 设备标识、共享的历史 / 记忆 / 配置、`child_env`、`--add-dir` 和 `--disallowedTools`、共享设置的说明和修复（`cca settings`）、启动前后的隔离检查
 - `secrets.md` — 钥匙串和密钥文件、第三方 API 的 key、官方账号记下备查的 key
 - `usage.md` — 查用量和用量表格、5 小时 / 按模型 / 每周的额度、周结算提醒、Codex 重置额度、登录失效、套餐档位、命令行会话登记、API 额度的入口

@@ -1,6 +1,6 @@
 import Foundation
 
-// 折合金额（PROTOCOL 2.2 的 `cost`、`cost_total`，3.5 的 `cca cost sync --json`）：账号用 Claude Code / Codex 干的活，
+// 折合金额（PROTOCOL 2.2 的 `cost`、`cost_total`，3.5 的 `cca cost sync --json`）：账号用 Claude Code / Codex / agy 干的活，
 // 按官方 API 的标价折成美元，**不是实际花费**。柱的高低、哪一根是浅色（partial）、平均和合计都是 cca 算好的，App 只排版、不重算。
 
 /// `hello.cost`：App 认识的版本（不认识的版本当作没有，不显示折合金额、不调 `cost sync`）。
@@ -797,7 +797,7 @@ struct CostTotalDevice: Decodable, Sendable, Equatable, Identifiable {
 }
 
 /// `cost_total`（顶层，折合金额页的页头）：所有账号加起来。各账号的周期不一样，没有按周加起来的柱子。
-/// config.json 里关掉了折合金额、没有 Claude / Codex 的官方账号时为 null（旧版 cca 没有这个字段，同样当作 null）。
+/// config.json 里关掉了折合金额、没有 Claude、Codex、Antigravity 的官方账号时为 null（旧版 cca 没有这个字段，同样当作 null）。
 struct CostTotal: Decodable, Sendable, Equatable {
     var currency: String
     var pricesDate: String?

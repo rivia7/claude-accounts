@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude Code 的 SessionStart hook（.claude/settings.json）：会话开始、/clear、续接、压缩上下文之后，告诉 Claude 这份检出现在的样子。
-# 别的会话、代理（Claude Code、Codex）可能正在同一份检出里改文件、提交、跑回归或者发布：不是这次会话改的文件别回退、覆盖、提交；
+# 别的会话、代理（Claude Code、Codex、Antigravity）可能正在同一份检出里改文件、提交、跑回归或者发布：不是这次会话改的文件别回退、覆盖、提交；
 # 这份检出里的 release.sh 在跑时别改文件（它在回归跑完后才拷 cca，中途改的会进一个不含它的版本）。
 # 打到 stdout 的会放进 Claude 的上下文，没什么要提醒的时候只有一行。只读：不改任何文件
 ROOT=${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}
@@ -49,7 +49,7 @@ EOF
 	[ -z "$here" ] || echo "这份检出里的回归、发布跑完之前：别改它们要测、要发的文件，也别另起一遍回归"
 fi
 
-# 同一份检出里别的 Claude Code、Codex：工作目录在这里、又不是这个 hook 的上级进程（那是这次会话自己）
+# 同一份检出里别的 Claude Code、Codex、Antigravity（agy）：工作目录在这里、又不是这个 hook 的上级进程（那是这次会话自己）
 anc=" $$ "
 p=$PPID
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -63,7 +63,7 @@ for pid in $(lsof -d cwd -Fpn 2>/dev/null | awk -v root="$ROOT" '/^p/ { pid = su
 	c=$(ps -o comm= -p "$pid" 2>/dev/null)
 	c=${c##*/}
 	case "$c" in
-	claude | codex | codex-*) ;;
+	claude | codex | codex-* | agy) ;;
 	[0-9]*.[0-9]*.[0-9]*) c=claude ;;   # Claude Code 的程序文件按版本号命名（~/.local/share/claude/versions/2.1.332）
 	*) continue ;;
 	esac

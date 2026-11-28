@@ -19,7 +19,7 @@ name = "kit"
 path = "kit/lib.rs"
 doctest = false
 
-# cca-test：回归（tests/regress.sh、setup.sh、linux.sh）用的小工具——断言、现造的夹具、假的 claude / codex……
+# cca-test：回归（tests/regress.sh、setup.sh、linux.sh）用的小工具——断言、现造的夹具、假的 claude / codex / agy……
 [[bin]]
 name = "cca-test"
 path = "tool/main.rs"

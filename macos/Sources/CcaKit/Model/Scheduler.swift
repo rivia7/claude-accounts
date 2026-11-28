@@ -10,7 +10,7 @@ struct SystemConditions: Sendable, Equatable {
     var thermalPressure = false
 }
 
-/// 自动刷新用量的节奏。查一次要经账号的出口起一个 Claude Code / Codex 进程，不便宜，所以只查到期的账号：
+/// 自动刷新用量的节奏。查一次要经账号的出口起一个 Claude Code / Codex / agy 进程，不便宜，所以只查到期的账号：
 /// 在用的（桌面 App 开着、命令行里有会话，额度在变）查得勤，没在用的很少查；App 看不见时放慢，低电量模式再慢一倍；
 /// 用户走开了、系统过热时不查（回来后下一分钟就补上）。查失败也按间隔重试，不会每分钟试一次。
 /// Antigravity（`slow`）查得更慢：查一次要经账号的出口起 agy，十几秒，它的额度又只有 5 小时、每周这样的长窗口；cca 也是过了

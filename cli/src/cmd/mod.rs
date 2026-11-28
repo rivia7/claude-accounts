@@ -10,6 +10,7 @@ pub mod codex;
 pub mod corenet;
 pub mod cost;
 pub mod dock;
+pub mod guard;
 pub mod gui;
 pub mod hub;
 pub mod keyshare;

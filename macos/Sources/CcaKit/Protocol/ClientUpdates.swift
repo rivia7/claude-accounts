@@ -42,7 +42,7 @@ struct ClientUpdatesDoc: CcaDocument, Equatable {
 struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
     var id: String
     var label: String?
-    /// `desktop` | `cli`（终端里的 Claude Code、Codex）；旧版 cca 没有这个字段，都是桌面客户端
+    /// `desktop` | `cli`（终端里的 Claude Code、Codex、Antigravity）；旧版 cca 没有这个字段，都是桌面客户端
     var kind: String?
     var path: String?
     var installedVersion: String?

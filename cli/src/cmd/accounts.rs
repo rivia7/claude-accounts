@@ -51,8 +51,10 @@ pub const CMDS: &[Cmd] = &[
 ];
 
 /// `py launch-args 账号 -- 用户参数…`：只这一次启动加在用户参数前面的（bash 的 run_account 记进 LAUNCH_ARGS，放在 ACC_ARGS 后面）。
-/// 和 `py env` 的 ACC_ARGS 分开：它要看用户参数，而切节点时 pick_route 会重新 eval `py env`。agy 交互的会话带上 cca 的状态栏
-/// 命令（记下套餐，做完了、在等你时推通知：`agy_launch_args`），Codex 交互的会话带上推通知的 notify（`codex_launch_args`）。
+/// 和 `py env` 的 ACC_ARGS 分开：它要看用户参数，而切节点时 pick_route 会重新 eval `py env`。agy 干活的会话（交互的、打印模式）
+/// 的 --settings 里挡住 ~/.cca 里的登录凭证，交互的会话再带上 cca 的状态栏命令（记下套餐，做完了、在等你时推通知：`agy_launch_args`）；
+/// Codex 干活的会话（交互的、exec、review）带上挡住登录凭证的权限配置（guard.rs 的 `codex_guard_args`），交互的会话再带上推通知的
+/// notify（`codex_launch_args`）。凭证挡不住时（用户自己指定了沙箱……）LAUNCH_NOTE 是原因，bash 启动前说一句；挡住了、用不着的是空的。
 /// `--hosted`（`py launch-args 账号 --hosted -- …`）：这次放进会话宿主（bash 的 HOSTCMD 不空），Codex 另让它把在等你写成终端的通知序列
 pub fn cmd_launch_args(args: &[String]) -> R<()> {
     let hosted = args.get(1).is_some_and(|a| a == "--hosted");
@@ -61,12 +63,17 @@ pub fn cmd_launch_args(args: &[String]) -> R<()> {
         return Err(Fail::Die(format!("TypeError: cmd_launch_args 的参数不对（给了 {} 个）", args.len())));
     }
     let user = &args[at + 1..];
-    let out = match t().kind {
+    let (out, note) = match t().kind {
         Kind::Agy => super::agy::agy_launch_args(&args[0], user),
-        Kind::Codex => super::codex::codex_launch_args(&args[0], user, hosted),
-        Kind::Claude => Vec::new(),
+        Kind::Codex => {
+            let (mut out, note) = super::guard::codex_guard_args(&args[0], user);
+            out.extend(super::codex::codex_launch_args(&args[0], user, hosted));
+            (out, note)
+        }
+        Kind::Claude => (Vec::new(), None),
     };
     sh_array("LAUNCH_ARGS", &out);
+    sh(&[("LAUNCH_NOTE", note.as_deref().unwrap_or(""))]);
     Ok(())
 }
 

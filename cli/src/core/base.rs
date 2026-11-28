@@ -64,8 +64,11 @@ pub fn secret_re_match(s: &str) -> bool {
     (8..=4096).contains(&body.len()) && body.bytes().all(|b| (0x21..=0x7e).contains(&b))
 }
 
-/// 与 ip.net.coffee/claude 页面一致：这些地区直接判 0 分
-pub const RESTRICTED: &[(&str, &str)] = &[
+// 各工具不能用的地区（`Tool.restricted`：出口检测 coffee 判 0 分、停下，`py restricted`，Team 测节点），照各家官方的「支持的地区」
+// 取补集。只看国家（和港澳）这一级：名单里没单独写的海外领地这些不另外判。各家改了名单照着改，抄的日期写在各自那一份上
+
+/// Claude：Anthropic 的 Supported Regions Policy（anthropic.com/supported-countries，2026-11-12 起的那一版，2026-11-28 抄的）
+pub const CLAUDE_RESTRICTED: &[(&str, &str)] = &[
     ("CN", "中国大陆"),
     ("HK", "香港"),
     ("MO", "澳门"),
@@ -76,6 +79,46 @@ pub const RESTRICTED: &[(&str, &str)] = &[
     ("CU", "古巴"),
     ("BY", "白俄罗斯"),
     ("VE", "委内瑞拉"),
+    ("AF", "阿富汗"),
+    ("MM", "缅甸"),
+    ("YE", "也门"),
+    ("XK", "科索沃"),
+];
+
+/// Codex：OpenAI 的「ChatGPT and OpenAI API supported countries and territories」（help.openai.com/en/articles/7947663，
+/// 2026-11-28 抄的）
+pub const CODEX_RESTRICTED: &[(&str, &str)] = &[
+    ("CN", "中国大陆"),
+    ("HK", "香港"),
+    ("MO", "澳门"),
+    ("RU", "俄罗斯"),
+    ("KP", "朝鲜"),
+    ("IR", "伊朗"),
+    ("SY", "叙利亚"),
+    ("CU", "古巴"),
+    ("BY", "白俄罗斯"),
+    ("VE", "委内瑞拉"),
+    ("XK", "科索沃"),
+];
+
+/// Antigravity：antigravity.google/docs/faq 的「geographical availability」（2026-11-28 抄的）。叙利亚不算：FAQ 亚洲一栏的标题写
+/// 43 个、列出来 42 个，少的那个看不出是谁，Google AI Studio 的名单（aistudio.google.com/docs/available-regions）里有它
+pub const AGY_RESTRICTED: &[(&str, &str)] = &[
+    ("CN", "中国大陆"),
+    ("HK", "香港"),
+    ("MO", "澳门"),
+    ("RU", "俄罗斯"),
+    ("KP", "朝鲜"),
+    ("IR", "伊朗"),
+    ("CU", "古巴"),
+    ("BY", "白俄罗斯"),
+    ("AF", "阿富汗"),
+    ("MM", "缅甸"),
+    ("MD", "摩尔多瓦"),
+    ("AD", "安道尔"),
+    ("MC", "摩纳哥"),
+    ("SM", "圣马力诺"),
+    ("VA", "梵蒂冈"),
 ];
 
 /// 只读（cca _gui state / live，CCA_RO=1）：按 Team 的配置对账、分配端口都只在内存里做，不写 config.json 和账号表，

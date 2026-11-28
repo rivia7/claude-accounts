@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cca — Claude Code / Codex 多账号启动器（macOS + 旁路由 OpenClash / ShellCrash 按端口分流）
+# cca — Claude Code / Codex / Antigravity 多账号启动器（macOS + 旁路由 OpenClash / ShellCrash 按端口分流）
 #
 #   cca                    方向键选择账号（光标默认在上次用的账号上，菜单里也能新增）后启动 Claude Code
 #   cca @<账号> [参数]      直接用该账号启动（账号可写别名、邮箱、编号或唯一前缀），参数原样交给 claude
@@ -3559,7 +3559,7 @@ health_note() {   # health_note 结果：没有出口检测数据的结果（第
 }
 settings_warn() {   # settings_warn 问题 [-- 启动参数…]：py settings-check（带 -- 时是 launch-check，同样的启动参数）查出的问题。
 	                 # 由 py settings-explain 说清楚是哪份文件、哪几项、带着它启动会怎样、怎么办（只说路径和名字，不说值；三种工具都有，
-	                 # Claude 的共享设置还能 cca settings fix）；说不出来时照下面的一句说
+	                 # Claude、agy 的共享设置还能 cca [agy] settings fix）；说不出来时照下面的一句说
 	local bad="$1" msg=""
 	shift
 	if [ "${1:-}" = -- ]; then shift; msg=$(py settings-explain launch "$@"); else msg=$(py settings-explain shared); fi
@@ -3578,9 +3578,11 @@ settings_warn() {   # settings_warn 问题 [-- 启动参数…]：py settings-ch
 
 # ---- 共享设置（cca settings）----
 cmd_settings() {   # cca [codex|agy] settings [check | fix]：查共享设置和这个目录的项目设置里会盖掉账号自己设置的配置（launch-check
-	               # 那一套，说明见 settings_warn）。fix 只给 Claude：问过（consent settings_fix，范围是这次要改的摘要）后先把
-	               # ~/.claude/settings.json（settings.local.json）整份备份在旁边，再只去掉这几项（py settings-fix）；项目设置、启动参数不改
-	local bad out rc scope plan line
+	               # 那一套，说明见 settings_warn）。fix 给 Claude、agy（Codex 的是 TOML，改写会丢注释：unsupported）：问过（consent
+	               # settings_fix，范围是这次要改的摘要）后先把共享的设置（~/.claude/settings.json、settings.local.json；agy 的
+	               # ~/.gemini/antigravity-cli/settings.json）整份备份在旁边，再只去掉这几项（py settings-fix）；项目设置、启动参数不改
+	local bad out rc scope plan line what="$TOOL_LABEL"
+	[ "$TOOL" != claude ] || what="Claude Code"
 	case "${1:-check}" in
 		check)
 			if bad=$(py launch-check); then okay "没有发现会盖掉账号自己设置的配置"; return 0; fi
@@ -3589,21 +3591,21 @@ cmd_settings() {   # cca [codex|agy] settings [check | fix]：查共享设置和
 		fix) ;;
 		*) die "用法：${CMD} settings [check | fix]" ;;
 	esac
-	[ "$TOOL" = claude ] || FAIL_CODE=unsupported die "${CMD} settings fix 只修 Claude Code 的共享设置；${TOOL_LABEL} 的请照 ${CMD} settings 说的手动改"
+	[ "$TOOL" != codex ] || FAIL_CODE=unsupported die "${CMD} settings fix 只修 Claude Code、Antigravity 的共享设置；${TOOL_LABEL} 的请照 ${CMD} settings 说的手动改"
 	out=$(py settings-fix plan); rc=$?
 	case $rc in
 		0) ;;
 		3)
-			if bad=$(py launch-check); then okay "~/.claude 里的共享设置没有要修的"; return 0; fi
+			if bad=$(py launch-check); then okay "${what} 的共享设置没有要修的"; return 0; fi
 			settings_warn "$bad" --   # 剩下的是项目设置、启动参数这类：cca 不改，照实说
 			exit 1 ;;
 		4) die "$out" ;;
-		*) die "没能读取 Claude Code 的共享设置" ;;
+		*) die "没能读取 ${what} 的共享设置" ;;
 	esac
 	scope=$(printf '%s\n' "$out" | head -n 1)
 	plan=$(printf '%s\n' "$out" | tail -n +2)
 	printf '%s\n' "$plan" | { IFS= read -r line; info "$line"; while IFS= read -r line; do printf '%s\n' "  ${line}" >&2; done; }
-	consent settings_fix "$scope" "修复 Claude Code 的共享设置" "现在备份并去掉这几项吗？" "$(printf '%s' "$plan" | tr -d '\n')" y
+	consent settings_fix "$scope" "修复 ${what} 的共享设置" "现在备份并去掉这几项吗？" "$(printf '%s' "$plan" | tr -d '\n')" y
 	case $? in
 		0) ;;
 		1) info "没有改动"; return 0 ;;
@@ -3614,7 +3616,7 @@ cmd_settings() {   # cca [codex|agy] settings [check | fix]：查共享设置和
 		0) ;;
 		2) die "这几份设置刚被改过，没有动它们：再运行一次 ${CMD} settings fix" ;;
 		4) die "$out" ;;
-		*) die "没能修复 Claude Code 的共享设置" ;;
+		*) die "没能修复 ${what} 的共享设置" ;;
 	esac
 	printf '%s\n' "$out" | { IFS= read -r line; okay "$line"; while IFS= read -r line; do printf '%s\n' "  ${line}" >&2; done; }
 	bad=$(py launch-check) && return 0
@@ -3877,10 +3879,12 @@ cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页�
 	gui_result opened "已用 ${ACC_NAME} 的浏览器实例打开 ${what}（经 ${ACC_PROXY} → ${ACC_NODE}）${note}"
 }
 
-cmd_billing() {   # cca [codex] billing [账号]：控制台的账单页。订阅附带的每月 API 额度和余额只在这里显示（两家都没有用 API Key 查余额的接口），
-	# 走网页版的全部检查，用账号自己的浏览器实例和出口打开
+cmd_billing() {   # cca [codex|agy] billing [账号]：控制台的账单页（agy 是 Google 开发者计划的权益页）。订阅附带的每月 API 额度和余额只在这里
+	# 显示（三家都没有用 API Key 查余额的接口），走网页版的全部检查，用账号自己的浏览器实例和出口打开
+	local what=控制台的账单页
 	[ -n "$BILLING_URL" ] || FAIL_CODE=unsupported die "${TOOL_LABEL} 账号没有控制台的账单页"
-	cmd_web "${1:-}" "$BILLING_URL" 控制台的账单页 mail
+	[ "$TOOL" != agy ] || what='Google 开发者计划的权益页'
+	cmd_web "${1:-}" "$BILLING_URL" "$what" mail
 }
 
 cmd_limit_resets() {   # cca limit-resets [账号]：claude.ai 的用量页。Claude 账号的重置次数和到期日只在这里显示（get_usage 不给，也不能拿登录凭证自己查）
@@ -5773,12 +5777,15 @@ run_account() {
 		else warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（官方账号用它自己的登录；要换模型写进 ${TOOL_SETTINGS} 或用 /model）"; fi
 	fi
 	remote_prepare
-	# 只这一次加在用户参数前面的（看用户参数、放不放进会话宿主）：agy 交互的会话带上 cca 的状态栏命令（记下套餐，做完了、在等你时推通知），
-	# Codex 交互的会话带上推通知的 notify，放进宿主时再让它把在等你写成终端的通知序列（辅助程序的 agy_launch_args、codex_launch_args）
-	LAUNCH_ARGS=()
+	# 只这一次加在用户参数前面的（看用户参数、放不放进会话宿主）：Codex、agy 干活的会话挡住 ~/.cca 里的登录凭证（Codex 的权限配置、
+	# agy 的 --settings 里的 deny；挡不住时 LAUNCH_NOTE 是原因，说一句），agy 交互的会话带上 cca 的状态栏命令（记下套餐，做完了、在等你时
+	# 推通知），Codex 交互的会话带上推通知的 notify，放进宿主时再让它把在等你写成终端的通知序列（辅助程序的 guard.rs、agy_launch_args、
+	# codex_launch_args）
+	LAUNCH_ARGS=(); LAUNCH_NOTE=""
 	if [ "$TOOL" != claude ]; then
 		if [ -n "$HOSTED" ]; then eval "$(py launch-args "$key" --hosted -- "$@")"
 		else eval "$(py launch-args "$key" -- "$@")"; fi
+		[ -z "$LAUNCH_NOTE" ] || warn "$LAUNCH_NOTE"
 	fi
 	trap ':' INT TERM HUP
 	session_open
@@ -7045,13 +7052,13 @@ team_node_test() {   # team_node_test Team [节点…] [--tool 工具] [--json]�
 		mkdir -p "$tmp/core"
 		"$(core_bin)" -d "$tmp/core" -f "$tmp/test.json" >"$tmp/core.log" 2>&1 </dev/null &
 		pid=$!
-		local hosts name port server sport i h n=0 ok="" trace ip loc colo err got lines out rc state text
-		local -a names=() ports=() servers=() sports=() jobs=()
+		local hosts name port server sport ntools i h n=0 ok="" trace ip loc colo err got lines out rc state text
+		local -a names=() ports=() servers=() sports=() utools=() jobs=()
 		{
 			IFS= read -r hosts
-			while IFS=$'\t' read -r name port server sport; do
+			while IFS=$'\t' read -r name port server sport ntools; do
 				[ -n "$name" ] || continue
-				names[n]="$name" ports[n]="$port" servers[n]="$server" sports[n]="$sport"
+				names[n]="$name" ports[n]="$port" servers[n]="$server" sports[n]="$sport" utools[n]="$ntools"
 				n=$((n + 1))
 			done
 		} <<< "$plan"
@@ -7094,6 +7101,8 @@ team_node_test() {   # team_node_test Team [节点…] [--tool 工具] [--json]�
 				if port_open "${servers[i]}" "${sports[i]}"; then lines="${lines}"$'\n'"${names[i]}"$'\ttcp\topen'
 				else lines="${lines}"$'\n'"${names[i]}"$'\ttcp\tclosed'; fi
 			fi
+			# 走它的账号是哪几种工具的（testconfig 给的）：verdict 照它看服务器自己的出口要不要照 Antigravity 的名单查
+			[ -z "${utools[i]}" ] || lines="${lines}"$'\n'"${names[i]}"$'\ttools\t'"${utools[i]}"
 		done
 		if [ -n "$json" ]; then
 			printf '%s\n' "$lines" | py team-node-verdict --json
@@ -7974,7 +7983,7 @@ path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的
 PATH_MARK='# cca（Claude Code 多账号）'
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 path_unhint() {   # 卸载时把 path_hint 写下的那两行（连同前面那个空行）去掉。只认一字不差、挨在一起的两行：用户改过的不动。
-	# ~/.local/bin 里还有别的命令时留着（claude、codex 的官方安装器也装在那：去掉了它们就不在 PATH 里了）；
+	# ~/.local/bin 里还有别的命令时留着（claude、codex、agy 的官方安装器也装在那：去掉了它们就不在 PATH 里了）；
 	# 启动文件是链接（dotfiles 管着的）时不改，说一声。四个文件都看：装的时候用的 shell 和现在的可能不一样
 	local bin="$HOME/.local/bin" rc tmp line n i hit from bad kept=""
 	local -a L
@@ -8381,7 +8390,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	[ -z "$backup" ] || command -v tar >/dev/null 2>&1 || die "这台机器上没有 tar，没法先打包备份配置，什么都没改：装上 tar 再还原$(pkg_hint tar)；不要备份的话用 cca uninstall --no-backup"
 	say "${C_B}${title}${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude、Codex 和 Antigravity）：把会话里新产生的共享内容并回 ~/.claude、~/.codex、~/.gemini，然后退出登录、删除它的登录凭证"
-	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
+	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex|agy] key 账号 --show 抄下来）"
 	mail_user=$(py mail-get-user 2>/dev/null)
 	[ -z "$mail_user" ] || say "  · 邮箱助手：删掉${KEYSTORE}里 ${mail_user} 的应用专用密码（Google 账号里的那个应用专用密码要你自己去撤销）"
 	[ -z "$(py remote-peers 2>/dev/null)" ] || say "  · 远程会话：取消和别的机器的配对（那些机器不能再接入这台机器，这台也接不了它们），配对的密钥从${KEYSTORE}里删掉"
@@ -8511,7 +8520,7 @@ usage() {   # Linux（服务器）上不列只在 macOS 上的命令（网页版
 	on_linux && mac="" host="这台机器" away="连不上路由器时走 cca 内置的代理" cxlogin="第一次启动时给出在 Mac 上运行的 login-page 那一行" leaks="DNS 泄露"
 	on_linux && aglogin="第一次启动时给出在 Mac 上运行的 login-page 那一行，再把授权码贴回这里"
 	cat >&2 <<EOF
-cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记忆/配置共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，${away}）
+cca $VERSION — Claude Code / Codex / Antigravity 多账号（账号独立登录，历史/记忆/配置共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，${away}）
 
 启动
   cca [claude 参数]          弹出账号菜单：↑↓ 选择、回车确认、数字键直接选、q 退出；
@@ -8591,8 +8600,10 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              用掉一次重置机会，把这个账号 5 小时和每周的用量清零（codex 里 /usage 的 Redeem reset）：
                              先经它自己的出口查还能重置几次、各在什么时候过期，问过你再用掉最早过期的那一次；
                              用量还不需要重置时不扣次数
-  cca codex ls | edit | rm | key | login${mac:+ | web} | check
-                             和上面同名的命令一样，作用于 Codex 账号${mac:+（web 打开 chatgpt.com）}
+  cca codex ls | edit | rm | key | login${mac:+ | web | billing} | check
+                             和上面同名的命令一样，作用于 Codex 账号${mac:+（web 打开 chatgpt.com，billing 打开 OpenAI 控制台的账单页）}
+  cca codex settings         查共享的 ~/.codex/config.toml 里会盖掉每个账号自己设置的配置（接口地址、代理……）；
+                             没有 fix（TOML 改写会丢注释）：照它说的手动改
 EOF
 	[ -z "$mac" ] || cat >&2 <<EOF
   cca codex app [账号]       用该账号自己的资料目录、登录和出口打开 ChatGPT App（Codex 桌面版）；
@@ -8608,10 +8619,13 @@ Antigravity（Google 的 agy 命令行；账号表 ~/.cca/agy.json，和 Claude�
   aga [agy 参数]             等于 cca agy：aga @<账号>、aga add、aga ls 等都一样（cca install 时和 cca
                              一起建在 ~/.local/bin；添加 Antigravity 账号时没有的话也会补上）
   cca agy add                新增 Antigravity 账号（用 Google 账号登录，${aglogin}）
-  cca agy ls | edit | rm | key | login${mac:+ | web} | check | usage
-                             和上面同名的命令一样，作用于 Antigravity 账号${mac:+（web 打开 gemini.google.com）}；
+  cca agy ls | edit | rm | key | login${mac:+ | web | billing} | check | usage
+                             和上面同名的命令一样，作用于 Antigravity 账号${mac:+（web 打开 gemini.google.com，billing 打开 Google 开发者计划的
+                             权益页：Google AI Pro / Ultra 附带的每月 Google Cloud 额度在那里领、看余额）}；
                              usage 经各账号的端口让 agy 自己查额度（一组组的额度，用了多少、什么时候重置）。
                              没有第三方 API 账号和桌面 App
+  cca agy settings [fix]     查共享的 ~/.gemini/antigravity-cli/settings.json 里的 Google Cloud 项目（各账号会记到同一个项目上）；
+                             fix：先把整份文件备份在旁边，再只去掉这几项
 EOF
 	cat >&2 <<EOF
 
@@ -8670,7 +8684,7 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
                              给一台设备发邀请。管设备、账号和节点：devices、grant、revoke、map、node、import（全部用法：cca team help）
   cca devices [账号…] [--json]
                              账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
-                             （问它所在的 Team 的服务器；Codex 账号：cca codex devices）。
+                             （问它所在的 Team 的服务器；Codex、Antigravity 账号：cca codex devices、cca agy devices）。
                              这些账号经 cca 用的时候（命令行会话${mac:+、cca app 打开的 App}），${host}也会报告给它走的那台服务器
 
 其它
@@ -8683,7 +8697,7 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
   cca update --check [--json] | --rollback | auto | notify | off
                              只检查（装着测试版时也看更新的测试版；--json 给界面 App）/ 退回上一版 / 自动安装（默认）/
                              只提示 / 关闭
-  cca clients status [--json] 查看桌面客户端和终端工具（Claude Code、Codex）的更新状态（与 cca 自身更新分开）
+  cca clients status [--json] 查看桌面客户端和终端工具（Claude Code、Codex、Antigravity）的更新状态（与 cca 自身更新分开）
   cca clients check --force  从官方更新源检查、下载并验证，安装前要确认（允许自动更新时直接装）
   cca clients mode auto|off  开启/关闭 GUI 的自动检查和准备（关掉时允许自动更新也一起关掉）
   cca clients auto-install on|off

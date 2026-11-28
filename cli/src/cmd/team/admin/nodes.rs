@@ -7,7 +7,6 @@
 use super::{admin_of, admin_save, fail, settle};
 use crate::cmd::arity;
 use crate::cmd::corenet::{config_write_new, test_proxy_config};
-use crate::core::base::RESTRICTED;
 use crate::core::policy::fill_problems;
 use crate::core::team::Team;
 use crate::core::tool::tools;
@@ -253,7 +252,7 @@ pub fn cmd_team_node_install(args: &[String]) -> R<()> {
 /// py team-node-testconfig Team 文件 [节点…] [--tool 工具]：实测出口（cca team node Team test）用的临时内核的配置，写进文件（600，新建；
 /// corenet 的 test_proxy_config：127.0.0.1 上每个节点一个入站，不开控制接口、通用的代理端口、TUN、DNS）。没写节点是这个 Team 的全部节点。
 /// stdout 第一行是要测的网站（空格隔开：账号要用的服务，最后是 www.cloudflare.com，看服务器自己的出口），后面一个节点一行：
-/// 名字\t本机端口\t服务器\t端口。要用的服务：--tool 给了就是那个工具的；没给时看这个 Team 里哪些工具的账号走这几个节点，都没有时是
+/// 名字\t本机端口\t服务器\t端口\t工具（走它的账号是哪几种工具的，逗号隔开，--tool 给了就是那一个；没有账号走它时是空的）。要用的服务：--tool 给了就是那个工具的；没给时看这个 Team 里哪些工具的账号走这几个节点，都没有时是
 /// Claude 的。原因码：no_team、not_admin、usage、no_node
 pub fn cmd_team_node_testconfig(args: &[String]) -> R<()> {
     const USAGE: &str = "用法: cca team node Team test [节点…] [--tool claude|codex|agy] [--json]";
@@ -316,7 +315,18 @@ pub fn cmd_team_node_testconfig(args: &[String]) -> R<()> {
     out!("{}", hosts.join(" "));
     for (n, port) in &ports {
         let p = named(&px, n).expect("刚核对过有");
-        out!("{n}\t{port}\t{}\t{}", field(p, "server").py_str(), field(p, "port").py_str());
+        let mine: Vec<&str> = match only {
+            Some(o) => vec![o],
+            None => {
+                let u = users(&a, n);
+                tools()
+                    .iter()
+                    .filter(|tool| u.iter().any(|x| x.split(':').next() == Some(tool.name)))
+                    .map(|tool| tool.name)
+                    .collect()
+            }
+        };
+        out!("{n}\t{port}\t{}\t{}\t{}", field(p, "server").py_str(), field(p, "port").py_str(), mine.join(","));
     }
     Ok(())
 }
@@ -351,11 +361,33 @@ struct Verdict {
     notes: Vec<String>,
 }
 
+/// h 看到的出口地区 loc 是用 h 测出口的那几种工具（trace_host 是 h 的；www.cloudflare.com 是 agy 的）不能用的地区时：地区名和
+/// 这几种工具的叫法（照各自的名单 `restricted`）
+fn restricted_at(h: &str, loc: &str) -> Option<(&'static str, String)> {
+    let mut region = None;
+    let mut who: Vec<&str> = Vec::new();
+    for t in tools().iter().filter(|t| t.trace_host == h) {
+        if let Some((_, name)) = t.restricted.iter().find(|(cc, _)| cc.eq_ignore_ascii_case(loc)) {
+            region.get_or_insert(*name);
+            who.push(t.label);
+        }
+    }
+    region.map(|r| (r, who.join("、")))
+}
+
 /// 照实测的结果判断每个节点：哪个网站都没取到是不通（tcp：直连它的服务器端口连不连得上，分清是没开入站还是入站的参数不对）；
 /// 取到了的再看要用的服务：经节点出得去、这个服务却不通，出口在受限地区，和别的节点看到同一个 IP（走这几个节点的账号在那边是同一个
 /// 出口），别的节点在这个服务那边有自己的出口（看到的 IP 和服务器自己的不一样）、它没有。hosts 最后一个是 www.cloudflare.com（服务器
-/// 自己的出口）。返回每个节点的判断和退出码：0 都好；1 有节点不通；2 全都不通（多半是这台机器的网络）；3 都通了、有要提醒的
-fn judge(hosts: &[String], order: &[String], traces: &[(String, String, Trace)], tcp: &[(String, bool)]) -> (Vec<Verdict>, i32) {
+/// 自己的出口）；uses 是每个节点上是哪几种工具的账号（testconfig 给的）：有别的服务时服务器自己的出口只拿来比 IP，走这个节点的账号里
+/// 有 agy 的（它的出口就是服务器自己的）才再照 agy 的名单看地区。返回每个节点的判断和退出码：0 都好；1 有节点不通；2 全都不通（多半是
+/// 这台机器的网络）；3 都通了、有要提醒的
+fn judge(
+    hosts: &[String],
+    order: &[String],
+    traces: &[(String, String, Trace)],
+    tcp: &[(String, bool)],
+    uses: &[(String, Vec<String>)],
+) -> (Vec<Verdict>, i32) {
     let get = |n: &str, h: &str| traces.iter().find(|(x, y, _)| x == n && y == h).map(|(_, _, r)| r.clone());
     let direct = hosts.last().map_or(DIRECT_HOST, |h| h.as_str());
     let services: Vec<&str> = hosts.iter().map(|h| h.as_str()).filter(|h| *h != direct).collect();
@@ -393,12 +425,24 @@ fn judge(hosts: &[String], order: &[String], traces: &[(String, String, Trace)],
                 None => parts.push(format!("{h} 没测")),
             }
         }
-        let checked: Vec<&str> = if services.is_empty() { vec![direct] } else { services.clone() };
+        // 走这个节点、出口就是服务器自己的出口的那几种工具的账号（agy）：有别的服务时也照它们的名单看服务器自己的出口
+        let mine = uses.iter().find(|(x, _)| x == n).map_or(&[][..], |(_, ts)| ts.as_slice());
+        let on_direct: Vec<&str> =
+            tools().iter().filter(|t| t.trace_host == direct && mine.iter().any(|x| x == t.name)).map(|t| t.label).collect();
+        let mut checked: Vec<&str> = if services.is_empty() { vec![direct] } else { services.clone() };
+        if !services.is_empty() && !on_direct.is_empty() {
+            checked.push(direct);
+        }
         for h in checked {
+            let what = if h == direct && !services.is_empty() {
+                "服务器自己的出口".to_string()
+            } else {
+                format!("{h} 看到的出口")
+            };
             match get(n, h) {
                 Some(Trace::Exit { ip, loc, .. }) => {
-                    if let Some((_, region)) = RESTRICTED.iter().find(|(cc, _)| cc.eq_ignore_ascii_case(&loc)) {
-                        notes.push(format!("{h} 看到的出口在{region}（{loc}）：在那边用不了"));
+                    if let Some((region, who)) = restricted_at(h, &loc) {
+                        notes.push(format!("{what}在{region}（{loc}）：{who} 在那边用不了"));
                     }
                     if h != direct {
                         let same: Vec<&str> = order
@@ -418,6 +462,9 @@ fn judge(hosts: &[String], order: &[String], traces: &[(String, String, Trace)],
                             ));
                         }
                     }
+                }
+                _ if h == direct => {
+                    notes.push(format!("经它出得去，{what}（{h}）却不通：走它的 {} 账号用的就是这个出口", on_direct.join("、")))
                 }
                 _ => notes.push(format!("经它出得去，{h} 却不通：服务器给它的 {h} 出口有问题")),
             }
@@ -440,7 +487,7 @@ fn judge(hosts: &[String], order: &[String], traces: &[(String, String, Trace)],
 
 /// py team-node-verdict [--json]：照实测的结果（stdin，bash 经临时内核取的）说每个节点怎么样（judge）。stdin 第一行是测过的网站（同
 /// testconfig 的第一行），后面每行一项：名字\t网站\tip\t地区\t机房（取到了）、名字\t网站\t-\t出错的话（没取到）、名字\ttcp\topen|closed
-/// （哪个网站都没取到时 bash 直连它的服务器端口）。stdout 一个节点一行：ok|down|flag\t名字\t说明，它的每条提醒接着一行 !\t名字\t提醒。
+/// （哪个网站都没取到时 bash 直连它的服务器端口）、名字\ttools\t工具,…（testconfig 给的最后一列：走它的账号是哪几种工具的，没有时不给）。stdout 一个节点一行：ok|down|flag\t名字\t说明，它的每条提醒接着一行 !\t名字\t提醒。
 /// --json：{"version": 1, "kind": "team_node_test", "hosts": [网站…], "nodes": [{name, state, exits: {网站: {ip, loc, colo} | {error}},
 /// tcp: open | closed | null, notes: [提醒…]}]}。退出码同 judge
 pub fn cmd_team_node_verdict(args: &[String]) -> R<()> {
@@ -454,6 +501,7 @@ pub fn cmd_team_node_verdict(args: &[String]) -> R<()> {
     let hosts: Vec<String> = lines.next().unwrap_or("").split_whitespace().map(String::from).collect();
     let (mut order, mut traces, mut tcp): (Vec<String>, Vec<(String, String, Trace)>, Vec<(String, bool)>) =
         (Vec::new(), Vec::new(), Vec::new());
+    let mut uses: Vec<(String, Vec<String>)> = Vec::new();
     for l in lines {
         let f: Vec<&str> = l.split('\t').collect();
         if f.len() < 3 || f[0].is_empty() {
@@ -466,13 +514,15 @@ pub fn cmd_team_node_verdict(args: &[String]) -> R<()> {
         let at = |i: usize| f.get(i).map_or(String::new(), |s| s.to_string());
         if f[1] == "tcp" {
             tcp.push((n, f[2] == "open"));
+        } else if f[1] == "tools" {
+            uses.push((n, f[2].split(',').filter(|x| !x.is_empty()).map(String::from).collect()));
         } else if f[2] == "-" {
             traces.push((n, at(1), Trace::Error(f.get(3).map_or("没取到", |e| e).to_string())));
         } else {
             traces.push((n, at(1), Trace::Exit { ip: at(2), loc: at(3), colo: at(4) }));
         }
     }
-    let (verdicts, code) = judge(&hosts, &order, &traces, &tcp);
+    let (verdicts, code) = judge(&hosts, &order, &traces, &tcp, &uses);
     if as_json {
         let nodes: Vec<V> = verdicts
             .iter()
@@ -538,13 +588,13 @@ mod tests {
             tr("B", "www.cloudflare.com", exit_at("198.51.100.1", "US")),
         ];
         // C 不通，直连它的端口连不上
-        let (v, code) = judge(&hosts, &order, &traces, &[("C".into(), false)]);
+        let (v, code) = judge(&hosts, &order, &traces, &[("C".into(), false)], &[]);
         assert_eq!(code, 1);
         assert_eq!((v[0].state, v[1].state, v[2].state), ("ok", "ok", "down"));
         assert_eq!(v[0].line, "claude.ai 看到 203.0.113.1（US）；服务器自己的出口 198.51.100.1（US）");
         assert!(v[2].line.contains("连不上"));
         // 端口连得上、经它出不去
-        let (v, _) = judge(&hosts, &order, &traces, &[("C".into(), true)]);
+        let (v, _) = judge(&hosts, &order, &traces, &[("C".into(), true)], &[]);
         assert!(v[2].line.contains("参数"));
         // B 的 claude.ai 出口和 A 的一样；C 看到的是服务器自己的 IP（A 有自己的出口），出口还在受限地区
         let traces = vec![
@@ -555,7 +605,7 @@ mod tests {
             tr("C", "claude.ai", exit_at("198.51.100.1", "cn")),
             tr("C", "www.cloudflare.com", exit_at("198.51.100.1", "cn")),
         ];
-        let (v, code) = judge(&hosts, &order, &traces, &[]);
+        let (v, code) = judge(&hosts, &order, &traces, &[], &[]);
         assert_eq!(code, 3);
         assert!(v[0].notes.iter().any(|n| n.contains("和 B 一样")));
         assert!(v[1].notes.iter().any(|n| n.contains("和 A 一样")));
@@ -563,17 +613,17 @@ mod tests {
         assert!(v[2].notes.iter().any(|n| n.contains("中国大陆（cn）")));
         // 都不通：2；没有直连的结果时说 curl 的话
         let traces = vec![tr("A", "claude.ai", Trace::Error("超时".into()))];
-        let (v, code) = judge(&hosts, &s(&["A"]), &traces, &[]);
+        let (v, code) = judge(&hosts, &s(&["A"]), &traces, &[], &[]);
         assert_eq!(code, 2);
         assert_eq!(v[0].line, "不通（超时）");
         // 都好
         let traces =
             vec![tr("A", "claude.ai", exit_at("203.0.113.1", "US")), tr("A", "www.cloudflare.com", exit_at("198.51.100.1", "US"))];
-        assert_eq!(judge(&hosts, &s(&["A"]), &traces, &[]).1, 0);
+        assert_eq!(judge(&hosts, &s(&["A"]), &traces, &[], &[]).1, 0);
         // 经节点出得去、要用的服务却不通
         let traces =
             vec![tr("A", "claude.ai", Trace::Error("被拒".into())), tr("A", "www.cloudflare.com", exit_at("198.51.100.1", "US"))];
-        let (v, code) = judge(&hosts, &s(&["A"]), &traces, &[]);
+        let (v, code) = judge(&hosts, &s(&["A"]), &traces, &[], &[]);
         assert_eq!((code, v[0].state), (3, "flag"));
         assert!(v[0].notes[0].contains("claude.ai 却不通"));
     }
@@ -586,8 +636,53 @@ mod tests {
             tr("A", "www.cloudflare.com", exit_at("198.51.100.1", "US")),
             tr("B", "www.cloudflare.com", exit_at("198.51.100.1", "US")),
         ];
-        let (v, code) = judge(&hosts, &s(&["A", "B"]), &traces, &[]);
+        let (v, code) = judge(&hosts, &s(&["A", "B"]), &traces, &[], &[]);
         assert_eq!(code, 0);
         assert_eq!(v[0].line, "www.cloudflare.com 看到 198.51.100.1（US）");
+    }
+
+    /// 地区照各工具自己的名单：claude.ai 看到的照 Claude 的，chatgpt.com 照 OpenAI 的，服务器自己的出口照 Antigravity 的（有别的服务时
+    /// 只在走这个节点的账号里有 agy 的时候看）
+    #[test]
+    fn judge_regions_per_tool() {
+        let hosts = s(&["claude.ai", "chatgpt.com", "www.cloudflare.com"]);
+        let at = |cc: &str| {
+            vec![
+                tr("A", "claude.ai", exit_at("203.0.113.1", cc)),
+                tr("A", "chatgpt.com", exit_at("203.0.113.2", cc)),
+                tr("A", "www.cloudflare.com", exit_at("198.51.100.1", cc)),
+            ]
+        };
+        let one = s(&["A"]);
+        // 缅甸：Claude 不能用，OpenAI 能用
+        let (v, code) = judge(&hosts, &one, &at("MM"), &[], &[]);
+        assert_eq!((code, v[0].state), (3, "flag"));
+        assert_eq!(v[0].notes, s(&["claude.ai 看到的出口在缅甸（MM）：Claude 在那边用不了"]));
+        // 科索沃：两家都不能用，各说各的
+        let (v, _) = judge(&hosts, &one, &at("XK"), &[], &[]);
+        assert_eq!(
+            v[0].notes,
+            s(&[
+                "claude.ai 看到的出口在科索沃（XK）：Claude 在那边用不了",
+                "chatgpt.com 看到的出口在科索沃（XK）：Codex 在那边用不了"
+            ])
+        );
+        // 摩尔多瓦：Claude、OpenAI 都能用，Antigravity 不能；服务器自己的出口只在走它的账号里有 agy 的时候看
+        assert_eq!(judge(&hosts, &one, &at("MD"), &[], &[]).1, 0);
+        assert_eq!(judge(&hosts, &one, &at("MD"), &[], &[("A".into(), s(&["claude", "codex"]))]).1, 0);
+        let (v, code) = judge(&hosts, &one, &at("MD"), &[], &[("A".into(), s(&["claude", "agy"]))]);
+        assert_eq!(code, 3);
+        assert_eq!(v[0].notes, s(&["服务器自己的出口在摩尔多瓦（MD）：Antigravity 在那边用不了"]));
+        // 服务器自己的出口不通、走它的有 agy 的账号
+        let traces =
+            vec![tr("A", "claude.ai", exit_at("203.0.113.1", "US")), tr("A", "www.cloudflare.com", Trace::Error("超时".into()))];
+        let (v, _) = judge(&s(&["claude.ai", "www.cloudflare.com"]), &one, &traces, &[], &[("A".into(), s(&["agy"]))]);
+        assert!(v[0].notes[0].contains("服务器自己的出口（www.cloudflare.com）却不通：走它的 Antigravity 账号"));
+        // 只测服务器自己的出口（只有 agy 的账号）：照 Antigravity 的名单，委内瑞拉能用
+        let direct = s(&["www.cloudflare.com"]);
+        let (v, code) = judge(&direct, &one, &[tr("A", "www.cloudflare.com", exit_at("198.51.100.1", "MD"))], &[], &[]);
+        assert_eq!(code, 3);
+        assert_eq!(v[0].notes, s(&["www.cloudflare.com 看到的出口在摩尔多瓦（MD）：Antigravity 在那边用不了"]));
+        assert_eq!(judge(&direct, &one, &[tr("A", "www.cloudflare.com", exit_at("198.51.100.1", "VE"))], &[], &[]).1, 0);
     }
 }

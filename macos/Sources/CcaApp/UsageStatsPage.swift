@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 用量统计（侧栏的「用量统计」）：所有官方账号每周用了多少放在一起比，Claude、ChatGPT 各一组（和总览一样的顺序；第三方 API
-/// 账号没有订阅的额度，不在这里）。每个账号一行：头像和名字、最近 12 周的小柱状图（所有行同一个时间范围，上下对得齐）、
-/// 平均每周用到多少和几周用完 / 没用到一半、本周到现在。点一行进这个账号的页面。数字都是 cca 算好的（usage_weeks），App 只排版。
+/// 用量统计（侧栏的「用量统计」）：所有官方账号每周用了多少放在一起比，Claude、ChatGPT、Antigravity 各一组（和总览一样的顺序；第三方 API
+/// 账号没有订阅的额度，不在这里）。每个账号一行（Antigravity 的额度分几组，每组一行：StatsLine）：头像和名字、最近 12 周的小柱状图
+/// （所有行同一个时间范围，上下对得齐）、平均每周用到多少和几周用完 / 没用到一半、本周到现在。点一行进这个账号的页面。
+/// 数字都是 cca 算好的（usage_weeks、usage_weeks_groups），App 只排版。
 /// 按官方 API 的价格折成多少美元是另一页（侧栏的「折合金额」，CostStatsPage）：钱没有额度、没有填满，图不一样。
 struct UsageStatsPage: View {
     @Environment(AppModel.self) private var model
@@ -13,12 +14,13 @@ struct UsageStatsPage: View {
                 let now = ctx.date.timeIntervalSince1970
                 let groups = model.officialGroups().filter { !$0.accounts.isEmpty }
                 let accounts = groups.flatMap(\.accounts)
-                let lists = accounts.map { $0.usageWeeks?.weeks ?? [] }
+                let lines = accounts.flatMap(StatsLine.lines)
+                let lists = lines.map { $0.weeks?.weeks ?? [] }
                 let scale = StatsScale(domain: WeeklyChart.domain(lists, now: now), top: WeeklyChart.scaleTop(lists))
                 VStack(alignment: .leading, spacing: 26) {
-                    header(accounts, now: now)
+                    header(lines, now: now)
                     TipCard(id: .usageStats, title: "这一页怎么看",
-                            message: "每个账号一行，一根竖条代表一周：填得越满用得越多，填满表示这一周的额度已用完；灰色的那一周最后一天没有数据，实际可能更多。"
+                            message: "每个账号一行（Antigravity 的每组额度各一行），一根竖条代表一周：填得越满用得越多，填满表示这一周的额度已用完；灰色的那一周最后一天没有数据，实际可能更多。"
                                 + "右边是平均每周的用量、用完的周数、不到一半的周数，以及本周至今的用量。点击一行查看这个账号的详情。")
                     if model.state == nil {
                         HStack(spacing: 8) {
@@ -26,7 +28,7 @@ struct UsageStatsPage: View {
                             Text("正在读取账号…").foregroundStyle(.secondary)
                         }
                     } else if accounts.isEmpty {
-                        Text("还没有 Claude、ChatGPT 账号。第三方 API 账号没有订阅的额度，不在这里统计。")
+                        Text("还没有 Claude、ChatGPT、Antigravity 账号。第三方 API 账号没有订阅的额度，不在这里统计。")
                             .foregroundStyle(.secondary)
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
@@ -46,8 +48,8 @@ struct UsageStatsPage: View {
     }
 
     /// 标题和一句说明：数字从哪来、从什么时候开始记
-    private func header(_ accounts: [Account], now: Double) -> some View {
-        let since = accounts.compactMap { $0.usageWeeks?.sinceEpoch }.min()
+    private func header(_ lines: [StatsLine], now: Double) -> some View {
+        let since = lines.compactMap { $0.weeks?.sinceEpoch }.min()
         return VStack(alignment: .leading, spacing: 6) {
             StatsPageTitle(text: "用量统计")
             Text(since.map { "最近 12 周每周用了多少额度。" + Texts.weeksSince($0, now: now) + "，cca 每次查询用量时更新。" }
@@ -56,6 +58,22 @@ struct UsageStatsPage: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// 用量统计页的一行：一个账号；Antigravity 的账号是它的一组额度（cca 每组各记一份每周用量：usage_weeks_groups），
+/// 还没有记录时也是一行（「还没有记录」）
+private struct StatsLine: Identifiable {
+    let account: Account
+    /// Antigravity 的一组（组名、这一组的每周用量）；别的工具、还没有记录的 Antigravity 账号是 nil
+    let group: GroupWeeks?
+
+    var weeks: UsageWeeks? { group?.weeks ?? account.usageWeeks }
+    var id: String { account.stableID + "#" + (group?.id ?? "") }
+
+    static func lines(_ a: Account) -> [StatsLine] {
+        guard let groups = a.usageWeeksGroups, !groups.isEmpty else { return [StatsLine(account: a, group: nil)] }
+        return groups.map { StatsLine(account: a, group: $0) }
     }
 }
 
@@ -139,7 +157,7 @@ struct StatsTimeScale: View {
     }
 }
 
-/// 一组（Claude / ChatGPT）：组名和一块底色上的几行
+/// 一组（Claude / ChatGPT / Antigravity）：组名和一块底色上的几行
 private struct StatsGroup: View {
     let group: AccountGroup
     let scale: StatsScale
@@ -152,9 +170,9 @@ private struct StatsGroup: View {
                 .accessibilityAddTraits(.isHeader)
                 .padding(.top, 10)
             VStack(spacing: 0) {
-                ForEach(Array(group.accounts.enumerated()), id: \.element.id) { i, a in
+                ForEach(Array(group.accounts.flatMap(StatsLine.lines).enumerated()), id: \.element.id) { i, line in
                     if i > 0 { Divider().padding(.horizontal, StatsColumns.inset) }
-                    StatsRow(account: a, scale: scale, now: now)
+                    StatsRow(line: line, scale: scale, now: now)
                 }
             }
             .padding(.vertical, 4)
@@ -163,18 +181,18 @@ private struct StatsGroup: View {
     }
 }
 
-/// 一个账号一行：点了进账号页
+/// 一个账号（Antigravity 是账号的一组额度）一行：点了进账号页
 private struct StatsRow: View {
     @Environment(AppModel.self) private var model
-    let account: Account
+    let line: StatsLine
     let scale: StatsScale
     let now: Double
     /// 鼠标在不在这一行上（命令行工具编不了 @State 宏：State 类型直接用）
     private let hovering = State(initialValue: false)
 
     var body: some View {
-        let a = account
-        let uw = a.usageWeeks
+        let a = line.account
+        let uw = line.weeks
         let summary = uw.flatMap { Texts.weeksSummary($0.summary) }
         Button { model.show(a.ref) } label: {
             HStack(spacing: StatsColumns.spacing) {
@@ -182,7 +200,10 @@ private struct StatsRow: View {
                     AccountAvatar(account: a, size: 28, dot: 9)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(a.displayName).font(.body.weight(.medium)).lineLimit(1)
-                        if let plan = nonEmpty(a.plan) {
+                        // Antigravity 的一组：写是哪一组（套餐在账号页、总览里看）
+                        if let g = line.group {
+                            Text(g.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        } else if let plan = nonEmpty(a.plan) {
                             PlanBadge(plan: plan, tier: a.planTier, size: .compact)
                         }
                     }
@@ -209,7 +230,7 @@ private struct StatsRow: View {
         .onHover { hovering.wrappedValue = $0 }
         .help(summary ?? "点击查看这个账号的详情")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(a.displayName)
+        .accessibilityLabel(a.displayName + (line.group.map { "，" + $0.displayName } ?? ""))
         .accessibilityValue(summary ?? (uw == nil ? "还没有记录" : "最近 12 周没有记录"))
         .accessibilityHint("打开这个账号的页面")
     }

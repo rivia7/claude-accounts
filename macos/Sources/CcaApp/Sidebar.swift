@@ -175,7 +175,7 @@ struct AccountMenu: View {
                     .disabled(busy)
             }
             if a.can.billing {
-                Button("在控制台查看 API 额度") { model.openBilling(a.ref) }
+                Button(Texts.billingMenu(a.tool)) { model.openBilling(a.ref) }
                     .disabled(busy)
             }
         }

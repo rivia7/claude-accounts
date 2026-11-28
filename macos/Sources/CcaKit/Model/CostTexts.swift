@@ -281,7 +281,7 @@ extension Texts {
         if case .device(let id) = scope {
             return (total?.device(id).map { $0.name + " " } ?? "那台设备") + "最近没有用过这里的账号。"
         }
-        return "还没有 Claude、ChatGPT 账号。第三方 API 账号按实际用量付费，不在这里折算。"
+        return "还没有 Claude、ChatGPT、Antigravity 账号。第三方 API 账号按实际用量付费，不在这里折算。"
     }
 
     /// 折合金额页合计那一块的读屏标签

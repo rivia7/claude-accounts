@@ -3,7 +3,6 @@
 
 use super::type_name;
 use crate::cmd::arity;
-use crate::core::base::RESTRICTED;
 use crate::core::tool::t;
 use crate::py::json;
 use crate::py::obj::{repr_str, str_list, Dict, List, V};
@@ -136,7 +135,7 @@ pub fn coffee_parse(min_trust: &str, trace: &str, risk: &str) -> R<Dict> {
             tags.push(name);
         }
     }
-    let restricted = RESTRICTED.iter().find(|(code, _)| *code == cc).map(|(_, name)| *name);
+    let restricted = t().restricted.iter().find(|(code, _)| *code == cc).map(|(_, name)| *name);
     if restricted.is_some() {
         score = Some(V::Int(0));
     }

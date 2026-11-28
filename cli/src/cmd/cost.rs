@@ -1,6 +1,6 @@
 //! 折合金额（`cost_model` 到 `CostView`）：cost-worker、cost-sync、cost-stop，和 _gui state 用的视图（`CostView`）。
 //!
-//! 这台设备上 Claude Code、Codex 的会话记录（共享的 ~/.claude/projects、~/.codex/sessions）里每一次请求的用量，按官方 API 的
+//! 这台设备上 Claude Code、Codex 的会话记录（共享的 ~/.claude/projects、~/.codex/sessions）和 agy 的会话库（cost/agy.rs）里每一次请求的用量，按官方 API 的
 //! 标价折成美元，按登录的账号身份（Claude 的 accountUuid、Codex 的 chatgpt_user_id）、按小时累计。不是实际花费（订阅不按这个
 //! 收费）。只读用量的数字（token 数、模型、时间、账号身份），不读对话的内容。
 //! 会话记录里带账号信息才算得进来：Claude Code 在会话里写 session-owner（2.1.317 起；按位置认：这一行以后的回复都是这个账号的。
@@ -2407,7 +2407,7 @@ impl Item {
     }
 }
 
-/// 和这台服务器同步的账号：走它的 Claude、Codex 官方账号（Team 给了这台设备的；3.6.6 起登录没登录都取，自己的那一份只传用过的、
+/// 和这台服务器同步的账号：走它的官方账号（Claude、Codex、agy：`has_cost` 的；Team 给了这台设备的；3.6.6 起登录没登录都取，自己的那一份只传用过的、
 /// 登录着的：cost_round）。账号表读不了是 None
 fn cost_items(hub: &Hub) -> R<Option<Vec<Item>>> {
     let Some(targets) = presence_targets(hub.kind) else { return Ok(None) };
@@ -3746,7 +3746,7 @@ impl CostView {
         self.sync_view(COST_ORPHAN_SLOT, best.map(|h| h.kind))
     }
 
-    /// 顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude / Codex 的官方账号时是 None。
+    /// 顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude、Codex、Antigravity 的官方账号时是 None。
     /// 顶层是各账号（所有设备）加起来的，me 是各账号里这台设备的那一份加起来的，devices 是按设备分开加起来的（App 的设备菜单）
     pub fn total(&self, tools: &[&str]) -> V {
         if !self.on || self.accounts.is_empty() {

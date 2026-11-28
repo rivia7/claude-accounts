@@ -2,7 +2,7 @@ import CcaRemoteKit
 import SwiftUI
 
 /// 一个账号的那一页（照 Mac App 的账号页，只能看）：头像、名字、套餐、在哪台电脑、现在怎么样；用量（5 小时、本周、分模型的，
-/// Antigravity 的几组）；每周用量的图；折合金额；这个账号在那台电脑上的会话，点一个接入。从折合金额页点进来的（focus 是 cost）
+/// Antigravity 的几组）；每周用量的图（Antigravity 每组一张）；折合金额；这个账号在那台电脑上的会话，点一个接入。从折合金额页点进来的（focus 是 cost）
 /// 打开时滚到「折合金额」那一节
 struct AccountDetailView: View {
     enum Focus { case cost }
@@ -24,9 +24,15 @@ struct AccountDetailView: View {
                             TipCard(id: .account, message: Self.tip(found.account))
                             AccountHeader(peer: found.peer, account: found.account, now: now)
                             UsageSection(account: found.account, now: now)
-                            // Antigravity 没有每周用量的统计（cca 按 5 小时、本周的窗口记，agy 没有这两个窗口：和 Mac App 一样）
-                            if !found.account.isAPI, found.account.tool != "agy" {
-                                WeeklySection(weeks: found.account.weeks, leftOut: host?.weeksLeftOut ?? false, now: now)
+                            // Antigravity 的额度分几组：每组一节（电脑上的 cca 每组各记一份，和 Mac App 一样）
+                            if !found.account.isAPI {
+                                if let groups = found.account.weeksGroups, !groups.isEmpty {
+                                    ForEach(groups) { g in
+                                        WeeklySection(weeks: g.weeks, title: g.displayName, leftOut: host?.weeksLeftOut ?? false, now: now)
+                                    }
+                                } else {
+                                    WeeklySection(weeks: found.account.weeks, leftOut: host?.weeksLeftOut ?? false, now: now)
+                                }
                             }
                             if CostSection.shows(found.account, host: host) {
                                 CostSection(account: found.account, host: host, now: now).id(Focus.cost)

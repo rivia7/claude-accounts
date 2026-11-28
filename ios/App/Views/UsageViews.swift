@@ -319,9 +319,11 @@ struct MiniUsage: View {
 }
 
 /// 账号页的「每周用量」（Mac App 的 WeeklyUsageSection）：最近 12 周每周用到这一周额度的百分之几（cca 每次查用量时记下的）。
-/// 点一根柱子，下面那一行说那一周的细节
+/// 点一根柱子，下面那一行说那一周的细节。Antigravity 每组额度一节（title 是组名：「每周用量 · Gemini 模型」）
 struct WeeklySection: View {
     let weeks: UsageWeeks?
+    /// Antigravity 的一组：组名
+    var title: String?
     /// 那台电脑的账号太多，没把每周用量放上来
     var leftOut = false
     let now: Double
@@ -330,7 +332,7 @@ struct WeeklySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text("每周用量").font(.headline)
+                Text(title.map { "每周用量 · " + $0 } ?? "每周用量").font(.headline)
                 Spacer(minLength: 8)
                 if let since = weeks?.sinceEpoch {
                     Text(Texts.weeksSince(since, now: now)).font(.caption).foregroundStyle(.secondary)

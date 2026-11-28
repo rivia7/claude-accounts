@@ -23,10 +23,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   它的 stdout 只能经内存里的管道读，不能按 `runsToCompletion` 接到文件。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   Team 给这台设备的 Codex 账号随即被自动加进来、分走端口。`cca agy …`（Antigravity）同理，只在 `hello.tools.agy.enabled` 为真时调用。
-- 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App、第三方 API 账号
-  和控制台账单页（`tools[].features`，2.2）：`app`、`billing`、`limit-resets`、`reset`、`add api` 这些它都没有，App 不调（调了 cca 也只回
-  `fail` 的 `unsupported`）。它的用量（`cca agy usage`）格式和别的工具不一样：几组额度（3.1 的 `quota_groups`），没有 5 小时、本周这些窗口，
-  也没有每周用量的统计（`usage_weeks`）。3.6.10 及以前的 cca 给它的 `features.usage` 是 false（App 不显示、不调），更早的 `cca agy usage` 只回 `unsupported`。
+- 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App 和第三方 API
+  账号（`tools[].features`，2.2）：`app`、`limit-resets`、`reset`、`add api` 这些它都没有，App 不调（调了 cca 也只回 `fail` 的 `unsupported`）；
+  它的 `billing` 打开 Google 开发者计划的权益页（3.8.0-beta.3 起；以前的 cca 给它的 `can.billing` 总是 false，调了也只回 `unsupported`）。它的用量（`cca agy usage`）格式和别的工具不一样：几组额度（3.1 的 `quota_groups`），没有 5 小时、本周这些窗口；
+  每周用量每组各记一份（2.2 的 `usage_weeks_groups`，`usage_weeks` 恒为 null）。3.6.10 及以前的 cca 给它的 `features.usage` 是 false（App 不显示、不调），更早的 `cca agy usage` 只回 `unsupported`。
 - 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `mail open` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live|mail-list`、`update --check --json`
   随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。`remote on|off|allow|unpair|end`、`remote template add|rm`
@@ -171,7 +171,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 - `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、App 里显示的用量（`usage`：5 小时、本周这些窗口，3.1）、
   折合金额（`cost`）。Claude、Codex 都是 true；Antigravity 有 `usage`（几组额度，3.1 的 `quota_groups`，账号的 `usage` 是缓存里的这些；
-  没有每周用量的统计，用量统计页不算它）和 `cost`（3.7.2 起；以前是 false）。3.6.10 及以前的 cca 给 Antigravity 的 `usage` 是 false：账号的 `usage` 一直是 null，`can_why.usage`
+  每周用量每组各记一份：账号的 `usage_weeks_groups`）和 `cost`（3.7.2 起；以前是 false）。3.6.10 及以前的 cca 给 Antigravity 的 `usage` 是 false：账号的 `usage` 一直是 null，`can_why.usage`
   是 `unsupported`，App 不显示、不调 `cca agy usage`。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有（`cost` 除外：没有这个键当作没有）。
 
 账号（`tools[].accounts[]`，顺序就是账号表的顺序）：
@@ -196,13 +196,14 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
            "team_forwarders": {"team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "team_name": "书房组", "domains": ["relay.example.com"], "local": null}},
   "usage": { "…用量条目，见 3.1…" },
   "usage_weeks": { "…每周用量，见下面…" },
+  "usage_weeks_groups": null,
   "cost": { "…折合金额，见下面…" },
   "health": { "…出口检测结果，见 3.3…" }
 }
 ```
 
 第三方 API 账号：`kind: "api"`、`login: "api"`、`email: ""`、`plan: ""`、`plan_tier: ""`、`badge: null`、`api: {"host": "api.example.com", "model": "model-x"}`
-（**绝不**带 key）；直连的没有端口：`node`、`port`、`slot`、`group` 都是 null；走节点的照常有。`usage`、`usage_weeks`、`cost` 恒为 null。
+（**绝不**带 key）；直连的没有端口：`node`、`port`、`slot`、`group` 都是 null；走节点的照常有。`usage`、`usage_weeks`、`usage_weeks_groups`、`cost` 恒为 null。
 
 - `login`：`logged_in` | `logged_out` | `email_mismatch`（登录的不是这个账号，`login_email` 是实际登录的）| `api`。
 - `plan`：套餐的显示名（`Max`、`Pro 200`……），不知道为 `""`。
@@ -226,7 +227,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `app.running` / `app.pid`：这个账号的桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）在不在运行。
 - `cli`：经 cca 启动（`cca @账号`、`cxa @账号`、`aga @账号`、菜单里选的）、还在运行的命令行会话：`sessions` 几个，`running` 等于 `sessions > 0`，
   `since_epoch` 是最早那个会话开始的时间（Unix 秒），没有会话时为 null。官方账号、第三方 API 账号都有；`cca usage`、登录、`app-server`
-  起的 claude / codex 不算，没经 cca 启动的也不算。cca 启动工具前在账号目录登记 `cli-<cca 的进程号>.json`，工具一退出就删；cca 被 `kill -9`、
+  起的 claude、codex、agy 不算，没经 cca 启动的也不算。cca 启动工具前在账号目录登记 `cli-<cca 的进程号>.json`，工具一退出就删；cca 被 `kill -9`、
   断电留下的登记，`state` 按进程号 + 进程的启动时间核对（对不上不算，也不删文件）。没有这个字段（旧版 cca）当作没有会话。
   “在用”（总览里画成在用、头像右下角的绿点）由 App 自己判断：`app.running || cli.running`；账号有问题（没登录、端口连不上……）时照样算在用，问题跟在后面。
 - `can` / `can_why`：按钮可不可用、为什么不可用。原因码：`api_account`（第三方 API 账号没有 App / 网页版 / 订阅用量）、
@@ -235,7 +236,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   第三方 API 账号也可以）；旧版 cca 没有这一项，当作不能。`policy_lock` 3.6.0 起总是 false（以前是能不能请求维护者把节点锁进映射，
   那时的 4.8；接口只加不删，cca 照旧给），App 不读。
   `billing` 是能不能打开控制台的账单页（`cca [codex] billing 账号`，用账号自己的浏览器实例和出口；订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，
-  所以 App 只给入口、不显示数字）：条件和 `web` 一样（Antigravity 没有账单页，总是 false），也走同样的步骤、事件和同意。打开后 cca 把账号的邮箱放进剪贴板（这些登录页不认网址里的邮箱参数），
+  所以 App 只给入口、不显示数字；Antigravity 账号打开的是 Google 开发者计划的权益页：Google AI Pro / Ultra 附带的每月 Google Cloud 额度在那里领、看余额）：
+  条件和 `web` 一样（3.8.0-beta.3 以前的 cca 给 Antigravity 账号的总是 false），也走同样的步骤、事件和同意。打开后 cca 把账号的邮箱放进剪贴板（这些登录页不认网址里的邮箱参数），
   `result` 的说明里会讲；`limit-resets` 也一样，网页版（`web`）不动剪贴板。同样没有对应的 `can_why`：不能就不显示这个入口；旧版 cca 没有这一项，当作不能。
   `limit_resets` 是能不能打开 claude.ai 的用量页（`cca limit-resets 账号`，Claude 账号的重置次数和到期日只在那里显示）：只有 Claude 的账号有，其余条件和 `web` 一样，也没有对应的 `can_why`；旧版 cca 没有这一项，当作不能。
   `devices` 是账号页有没有「设备」一节（3.4）：账号经某台服务器同步（`hub` 不是 null）：Team 给的账号、那个 Team 的服务器这台设备用得了
@@ -292,6 +294,21 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     （一周都没过完时为 null），`maxed` 用完（100% 及以上）的几周，`under_half` 没用到一半的几周。
 
   App 只排版、不重算：条的高低、哪一周填灰色、统计的数字都照这里的。
+- `usage_weeks_groups`：Antigravity 各组额度的每周用量（账号页每组一节「每周用量 · 组名」，「用量统计」里每组一行）。agy 的额度分几组
+  （3.1 的 `quota_groups`），各有各的本周额度和重置时间，cca 每次查到用量时有本周额度的组各记一份（按本周额度那个桶的 `id` 认，组名改了照样接上）。
+  只给 agy 的官方账号（没登录的也照样给以前记下的）；别的工具、还没有记录的是 null（旧版 cca 没有这个字段，同样当作 null）；有的话不空，
+  最多 8 组。Antigravity 账号的 `usage_weeks` 恒为 null。
+
+  ```json
+  "usage_weeks_groups": [
+    {"id": "gemini-pro-week", "name": "Gemini Pro", "since_epoch": 1793500000.0,
+     "weeks": [{"start_epoch": 1793664000.0, "end_epoch": 1794268800.0, "used_percent": 75, "resets": 0, "last_epoch": 1794041998.0, "current": true, "partial": false}],
+     "summary": {"weeks": 0, "average_percent": null, "maxed": 0, "under_half": 0}}
+  ]
+  ```
+
+  - `id`：认这一组的（不重复）；`name`：agy 给的组名（英文，App 照 `quota_groups` 的组名一样翻译）。
+  - `since_epoch`、`weeks`、`summary`：和 `usage_weeks` 一样。最近 12 周里没有记录的组不列；一组都没有时照列（`weeks` 是空的）。
 - `cost`：折合金额（账号页的「折合金额」、侧栏的「折合金额」页）：这个账号用 Claude Code / Codex / Antigravity 干的活，按官方 API 的标价
   （Anthropic、OpenAI、Google 的 Gemini API；Antigravity 里的 Claude 模型按 Anthropic 的）折成美元，
   **不是实际花费**（订阅不按这个收费），只给 `can.cost` 为真的账号。cca 在后台读共享的会话记录（`~/.claude/projects`、`~/.codex/sessions`、
@@ -349,7 +366,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
   - `weeks[]`：按时间排好、首尾相接，最多 13 项，只列结束在最近 12 周里的（和 `usage_weeks` 同一个范围）。一项是一个周期：
     有 `usage_weeks` 记下的本周额度窗口的地方用它（`basis: "quota"`，和每周用量的柱子对得上），没有的时段按本地时间周一零点切
-    （`basis: "calendar"`）；不到一天的零头并进相邻的那一项。`current`：还没过完的那一项（最后一项）。
+    （`basis: "calendar"`；Antigravity 的几组各有各的窗口，不照哪一组切，都是这样）；不到一天的零头并进相邻的那一项。`current`：还没过完的那一项（最后一项）。
   - `days[]`：最近 30 个本地日历日（夏令时的那天是 23 或 25 小时），最后一项是今天（`current`）。`date` 是本地日期，App 只拿来显示。
   - 用量按小时累计，跨过边界的那一个小时整个算在它的中点所在的那一项里（半小时时区的零点前后最多差一个小时的用量）。
   - `usd`：这一项折成多少美元（小数，App 自己按位数显示）；`requests` 请求数；`unpriced_requests`：其中没有公开价格的模型的请求数
@@ -461,7 +478,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 或者照 Team 改了的别名跟着改）、`{"code": "policy_pinned", "tool", "key", "node", "old_node"}`（照 Team 锁定的节点改）、`{"code": "nodes_filled", "node"}`。
 名字里的 `policy` 是以前维护者的映射（3.6.0 去掉了）留下的叫法，没有改。
 
-`cost_total`（顶层，折合金额页的页头）：所有账号的折合金额加起来。config.json 里写了 `"cost": false`、没有 Claude / Codex 的官方账号时为 null
+`cost_total`（顶层，折合金额页的页头）：所有账号的折合金额加起来。config.json 里写了 `"cost": false`、没有 Claude、Codex、Antigravity 的官方账号时为 null
 （旧版 cca 没有这个字段，同样当作 null）。
 
 ```json
@@ -730,7 +747,7 @@ App 自动刷新时另带 `CCA_USAGE_POLL=App 的进程号`（3.8.0 起）：带
 
 - `source`：`launch` | `check`。`kind`：`exit`（官方账号：claude.ai / chatgpt.com 看到的出口）| `api`（第三方 API 账号：接口连不连得上）。
 - `route`：`router` | `local` | `direct`（直连的第三方 API 账号，不经端口）| null。`port`、`node` 直连时为 null。
-- `result`：`ok` | `low_purity`（纯净度低于设定）| `restricted`（出口在不可用地区，`restricted_region` 是地区名）| `no_exit`（拿不到出口 IP）|
+- `result`：`ok` | `low_purity`（纯净度低于设定）| `restricted`（出口在这个工具不能用的地区，`restricted_region` 是地区名；3.8.0-beta.3 起照各家自己的名单，以前三种工具都照 Claude 的）| `no_exit`（拿不到出口 IP）|
   `no_score`（检测服务没给评分）| `port_closed` | `api_ok` | `api_unreachable`。
 - `trust`：0–100，没有评分为 null。`stale`：超过 6 小时。`applies`：测的时候用的节点和账号现在的节点相同（换了节点就是旧结果）。
 - `leak`：没测（关掉了泄露检测、出口本身就不对）为 null。`dns`：`ok` | `leak` | `failed` | null；`webrtc`：`ok` | `leak`（STUN 看到中国大陆的地址）| `note`（看到的地址和出口不同，但不是中国大陆的：只作提醒，不算问题）| `failed`（包括看到了别的地址、归属地查不到）| null；
@@ -801,7 +818,7 @@ cca 问这个账号走的那台服务器（账号的 `hub`：给它的那个 Tea
   顶层的 `state`、`message`、`checked_epoch` 是其中最要紧的那一台的（`error`、`waiting`、`ok`、`skipped` 依次）；
   旧版 cca 没有 `hubs`。每个账号的同步状态在 `_gui state` 的 `cost.sync`。
 - 退出码：0 统计好了（同步失败也是 0，看 `sync`）；1 没统计成（`fail` 事件的 `code` 是 `cost_unavailable`，`message` 是原因，比如读不了、
-  另一个统计一直没结束）；2 用不了（`cost_off`：config.json 里写了 `"cost": false`，或者没有 Claude / Codex 的官方账号）。
+  另一个统计一直没结束）；2 用不了（`cost_off`：config.json 里写了 `"cost": false`，或者没有 Claude、Codex、Antigravity 的官方账号）。
 - App 何时运行：`hello.cost` 有、`cost_total` 不是 null 时，看得见金额（折合金额页、账号页的「折合金额」）时每 5 分钟一次，
   看不见时每 30 分钟一次（低优先级；用户 15 分钟没碰电脑、过热时不跑）；`scan.state` 是 `never` 时马上跑一次。用户点「刷新」时带 `--now`，不降优先级。
   会话结束、`cca usage`、`cca devices` 时 cca 自己也会在后台统计（最多 5 分钟一次），App 看 `cost/` 里那几个文件变了就重读 `state`（见 1）。
@@ -833,7 +850,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 - `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对、结束会话，远程启动的模板和「允许远程启动」改好了，9.4），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；Team（4.14）是 `team_created` / `team_deployed` / `team_joined` / `team_left` / `team_revoked`（`cca team new` / `deploy` / `join` / `leave` / `revoke`）/ `team_exported` / `team_imported`（3.6.14 起，`cca team export` / `import`）/ `team_admin_added` / `team_admin_removed`（3.6.15 起，`cca team admin add` / `remove`），`message` 是给人看的那句话；`cost_hook`（3.6.9 起，`cost hook on|off` 改好了，3.5），`message` 是给人看的那句话，App 原样显示、再读一次 `state`（3.5.2 的 cca 还有自己的同步服务器的 `hub_joined`、`hub_removed`、`hub_left`、`hub_deployed`、`hub_hosted`，3.5.3 去掉了；3.6.0 以前还有
   维护者的共享的 `policy_on`、`policy_off`，3.6.0 去掉了，4.12）。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
-  `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；`message` 说清楚是哪份文件、哪几项、怎么办（Codex、agy 的 3.6.15 起也说；以前只有一句笼统的话），Claude 共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
+  `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；`message` 说清楚是哪份文件、哪几项、怎么办（Codex、agy 的 3.6.15 起也说；以前只有一句笼统的话），Claude、Antigravity 共享的那份可以 `cca settings fix`、`cca agy settings fix`）| `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
   `no_chrome`（无法使用独立浏览器）| `invalid_url`（不是 HTTP/HTTPS 地址）| `login_unsupported`（客户端不支持独立登录流程）|
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
@@ -842,7 +859,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）|
   `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
-  `unsupported`（这种账号没有这个功能：Antigravity 的 `app`、`billing`、`limit-resets`、`add api`；旧版 cca 的 `cca agy usage` 也是它）|
+  `unsupported`（这种账号没有这个功能：Antigravity 的 `app`、`limit-resets`、`add api`；旧版 cca 的 `cca agy usage`、3.8.0-beta.3 以前的 `cca agy billing` 也是它）|
   `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）|
   `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `mail_team`（3.7.11 起，`mail trust-forwarder`：这个账号是 Team 给的，
   信任哪些转发中转照 Team 的配置，这台设备上登记不了，4.11）| `node_pinned`（`node use`：Team 的配置锁定了这个账号的节点）|
@@ -882,7 +899,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `team_config` | Team 的编号和这份文件的摘要（`<编号>:<文件的 SHA-256 前 16 位>`） | `cca team import <Team> <文件>`、`cca team edit`（3.6.14 起）：照文件整份换掉这个 Team 的配置（账号走哪个节点、别名、锁定别名、安装客户端用的节点、信任的转发中转、节点的定义），再发布给各台设备。`detail` 是会改的几项，一项一句（「。」结尾），有提醒时最后是「注意：」和提醒（走的节点这份配置里没有定义、这台设备上也没有，新的定义和这台设备上已有的节点同名，`cca team edit` 打开以后配置在别处改过）。终端里问之前先一行一项打出来。同意以后、带着同意重跑之前文件又改过的话范围对不上，cca 照新的内容再发一次 consent（App 再问一次） | yes；要去掉账号时 no |
 | `team_forwarders` | Team 的编号和新名单的摘要（`<编号>:<排好序的域名一行一个、最后不带换行，它的 SHA-256 前 16 位>`） | `cca team forwarder <Team> <域名…>`、`cca team import`（3.7.11 起，管理员）：让这个 Team 给的 Claude 账号在每台拿到它们的设备上信任这些转发中转（4.11）——经它们转来、标注来自 Anthropic 的登录邮件也会认，没有密码学依据；别名一旦泄露，知道的人能经中转发来伪造的登录邮件。各台设备上关不掉。只在新名单比现在宽（多了现在的盖不住的域名）时问；`import` 先问 `team_config`，同意了再问它（App 把两次的授权一起带上重跑） | no |
 | `cost_hook` | 空 | `cca cost hook on`（3.5）：在共享的 `~/.claude/settings.json` 里加一条 SessionStart hook，Claude App 里的 Code 会话开始时运行 cca，记下会话 id 和 App 登录的账号（不读对话的内容），折合金额按它算；命令行里的会话不受影响。`detail` 里说怎么去掉 | yes |
-| `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
+| `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）；`cca agy settings fix`：同样先备份共享的 `~/.gemini/antigravity-cli/settings.json`，再只去掉 Google Cloud 项目那几项（`gcp`）。App 不运行这条命令，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
   同意了用某个 IP 启动，换了 IP 要重新问）。
@@ -1346,7 +1363,7 @@ ZeroTier / Tailscale、代理内核自己的流量照旧直连。
 
 ## 8. 客户端更新（桌面客户端和终端工具）
 
-管理 `com.anthropic.claudefordesktop`（Claude）和 `com.openai.codex`（ChatGPT）两个桌面客户端，以及终端里的 Claude Code、Codex 命令；和 cca 自身的 `update` 命令分开。
+管理 `com.anthropic.claudefordesktop`（Claude）和 `com.openai.codex`（ChatGPT）两个桌面客户端，以及终端里的 Claude Code、Codex、Antigravity（`agy`）命令；和 cca 自身的 `update` 命令分开。
 
 - `cca clients status --json`：只读本机状态，启动和进入客户端更新页时调用。
 - `cca clients check [--force] --json`：检查并准备更新；没允许自动更新时不安装。后台不带 `--force`，每个客户端 6 小时最多查一次，节流由 cca 负责；用户点“立即检查”时加 `--force`。
@@ -1606,7 +1623,8 @@ server/README.md）。模板只在这台 Mac 上改：App 的「远程会话」�
   - `dir`：在哪个文件夹里起（绝对路径；App 显示时主目录写成 `~`）。`args`：起会话时带的参数，一项一个，原样交给工具（不经 shell）。
     `args_line`：`args` 拼成的一行，照 shell 的写法（要引的才用单引号引起来，空格隔开；没有参数是空字符串）：App 显示它、修改时填它，
     `add --args-line` 拆回去是原样。缺了这一项时 App 照同样的写法拼（不然改模板时参数会被清空）。
-  - `line`：起会话时能带一句开场白（Claude Code、Codex 的模板，参数里还没有一句话的：除了选项和选项的值没有别的参数，也没有 `--`）。
+  - `line`：起会话时能带一句开场白（Claude Code、Codex 的模板，参数里还没有一句话的：除了选项和选项的值没有别的参数，也没有 `--`；
+    Antigravity 的模板，参数里没有 `-i` / `--prompt-interactive`、也没有不是选项的参数的。以前的 cca 给 Antigravity 的模板一律是 false）。
   - `digest`：工具、文件夹、参数的摘要（16 个十六进制字符；3.7.9 及以前账号也算在里面）：对方起会话时带回来，和现在的对不上（模板改过了）就不起。这一节 App 不用它（9.5 里用的是那台机器给的）。
   - `team`：归属的 Team 的编号（32 个十六进制字符）：只有在这个 Team 的服务器上配对的设备看得到、用得了它（别的 Team 的服务器上配对的设备那里没有它）。
     null：3.7.11 及以前建的，没有归属：每个 Team 配对的设备都看得到（和以前一样）；App 改它时先选上 `teams` 里默认的那一个，存了就有归属。

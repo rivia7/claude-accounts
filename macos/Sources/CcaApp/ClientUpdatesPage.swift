@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 管理这台 Mac 上的 Claude、ChatGPT 桌面客户端和终端里的 Claude Code、Codex（没装的不显示）。版本、安装资格和原因均来自 cca，不在界面重算校验规则。
+/// 管理这台 Mac 上的 Claude、ChatGPT 桌面客户端和终端里的 Claude Code、Codex、Antigravity（没装的不显示）。版本、安装资格和原因均来自 cca，不在界面重算校验规则。
 struct ClientUpdatesPage: View {
     @Environment(AppModel.self) private var model
 
@@ -32,7 +32,7 @@ struct ClientUpdatesPage: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text("允许自动更新")
                                 Text(model.clientUpdates?.mode == "auto"
-                                     ? "发现新版本后直接安装，不再询问。桌面 App 打开时不替换，等你退出后再安装；终端里的 Claude Code、Codex 只自动更新用官方安装器安装的，已打开的会话不受影响。"
+                                     ? "发现新版本后直接安装，不再询问。桌面 App 打开时不替换，等你退出后再安装；终端里的 Claude Code、Codex、Antigravity 只自动更新用官方安装器安装的，已打开的会话不受影响。"
                                      : "需要先打开自动检查。打开后发现新版本会直接安装，不再询问。")
                                     .font(.callout).foregroundStyle(.secondary)
                             }
@@ -60,7 +60,7 @@ struct ClientUpdatesPage: View {
                     ContentUnavailableView("这台 Mac 上还没有客户端", systemImage: "shippingbox",
                                            description: Text("安装 Claude、ChatGPT 桌面 App，或 Claude Code、Codex、Antigravity（agy）命令后，这里会显示它们的版本和更新。"))
                 }
-                Text("安装桌面 App 的更新前，请先保存工作并退出它的所有窗口；更新只替换程序，不影响账号资料。终端里的 Claude Code、Codex 更新后，已打开的会话仍是旧版本，新打开的才是新版本。")
+                Text("安装桌面 App 的更新前，请先保存工作并退出它的所有窗口；更新只替换程序，不影响账号资料。终端里的 Claude Code、Codex、Antigravity 更新后，已打开的会话仍是旧版本，新打开的才是新版本。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(.top, 24).padding(.bottom, 36).pageColumn()
@@ -80,8 +80,8 @@ struct ClientUpdatesPage: View {
                 if model.clientUpdatesBusy { ProgressView().controlSize(.small) }
             }
             Text(model.clientUpdates?.autoInstall == true
-                 ? "这台 Mac 上的桌面 App，以及终端里的 Claude Code、Codex。有新版本时自动安装，桌面 App 打开时会等你退出后再安装。"
-                 : "这台 Mac 上的桌面 App，以及终端里的 Claude Code、Codex。有新版本时由你决定何时安装。")
+                 ? "这台 Mac 上的桌面 App，以及终端里的 Claude Code、Codex、Antigravity。有新版本时自动安装，桌面 App 打开时会等你退出后再安装。"
+                 : "这台 Mac 上的桌面 App，以及终端里的 Claude Code、Codex、Antigravity。有新版本时由你决定何时安装。")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }

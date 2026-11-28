@@ -885,7 +885,7 @@ final class AppModel {
         launch(ref, kind: .web, command: .web(ref.tool, key: ref.key), title: "无法打开网页版")
     }
 
-    /// 查看 API 额度：在账号自己的浏览器里打开控制台的账单页（网址是 cca 的事）。
+    /// 查看 API 额度：在账号自己的浏览器里打开控制台的账单页（Antigravity 是开发者计划的权益页；网址是 cca 的事）。
     func openBilling(_ ref: AccountRef) {
         launch(ref, kind: .billing, command: .billing(ref.tool, key: ref.key), title: "无法打开账单页")
     }
@@ -905,7 +905,8 @@ final class AppModel {
             })
             guard let self else { return }
             self.activities[ref] = nil
-            let opened = kind == .web ? "已打开网页版" : kind == .billing ? "已打开账单页" : kind == .limitResets ? "已打开用量页"
+            let billing = ref.tool == .agy ? "已打开开发者计划的权益页" : "已打开账单页"
+            let opened = kind == .web ? "已打开网页版" : kind == .billing ? billing : kind == .limitResets ? "已打开用量页"
                 : kind == .mail ? "已在浏览器里打开登录邮件里的链接" : "已打开 \(self.appLabel(ref.tool))"
             self.finish(r, failureTitle: title, success: r.resultEvent?.message ?? opened)
             if kind == .mail { self.refreshMail(ref) }   // 打开后刷新：这封标为已打开过
@@ -2361,7 +2362,7 @@ final class AppModel {
     /// cca 有折合金额（`hello.cost` 是 App 认识的版本；旧版 cca 没有）
     var costAvailable: Bool { hello?.cost == CostAPI.version }
 
-    /// 有能统计的账号：`cost_total` 不是 null（没关掉、有 Claude / Codex 的官方账号）。这时才显示金额、才跑 `cost sync`
+    /// 有能统计的账号：`cost_total` 不是 null（没关掉、有 Claude、Codex、Antigravity 的官方账号）。这时才显示金额、才跑 `cost sync`
     var costEnabled: Bool { costAvailable && state?.costTotal != nil }
 
     /// 看得见金额：折合金额页，或者有「折合金额」一节的账号页（主窗口开着时）
@@ -2911,10 +2912,10 @@ final class AppModel {
         return out
     }
 
-    /// 用量统计页的分组：能查用量的工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有；Antigravity 没有每周用量的统计，
-    /// 不在里面），和总览一样按用户排的顺序。第三方 API 账号没有订阅的额度，也不在里面。
+    /// 用量统计页的分组：能查用量的工具的官方账号（Claude 一直有，ChatGPT、Antigravity 在启用了 Codex、agy 时有；Antigravity 的
+    /// 每组额度各一行，见 UsageStatsPage），和总览一样按用户排的顺序。第三方 API 账号没有订阅的额度，不在里面。
     func officialGroups() -> [AccountGroup] {
-        visibleTools.filter { features($0).usage && $0 != .agy }.map { Employee.Department.official($0) }
+        visibleTools.filter { features($0).usage }.map { Employee.Department.official($0) }
             .map { AccountGroup(department: $0, accounts: arranged($0)) }
     }
 

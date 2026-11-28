@@ -13,6 +13,17 @@ struct HostedAccount: Identifiable {
     var id: AccountRef { ref }
 }
 
+/// 用量统计页的一行（Mac App 的 StatsLine）：一个账号；Antigravity 的账号是它的一组额度（电脑上的 cca 每组各记一份每周用量），
+/// 还没有记录时也是一行
+struct StatsLine: Identifiable {
+    let row: HostedAccount
+    /// Antigravity 的一组；别的工具、还没有记录的 Antigravity 账号是 nil
+    let group: GroupWeeks?
+
+    var weeks: UsageWeeks? { group?.weeks ?? row.account.weeks }
+    var id: String { row.peer.pid + "/" + row.account.id + "#" + (group?.id ?? "") }
+}
+
 /// 一组：一个工具的账号（Mac App 的 AccountGroup：Claude、ChatGPT、Antigravity 各一组）
 struct HostedGroup: Identifiable {
     let tool: String
@@ -64,9 +75,15 @@ enum Pages {
         return tools.map { t in HostedGroup(tool: t, rows: rows.filter { $0.account.tool == t }) }
     }
 
-    /// 用量统计页的账号：官方账号（第三方 API 没有订阅的额度）；Antigravity 没有每周用量的统计（和 Mac App 一样不算它）
+    /// 用量统计页的账号：官方账号（第三方 API 没有订阅的额度），Antigravity 的也在（每组额度一行：statsLines）
     static func statsRows(_ all: [HostedAccount]) -> [HostedAccount] {
-        distinct(all.filter { !$0.account.isAPI && $0.account.tool != "agy" }) { $0.account.weeks != nil }
+        distinct(all.filter { !$0.account.isAPI }) { $0.account.weeks != nil || $0.account.weeksGroups != nil }
+    }
+
+    /// 一个账号在用量统计页上的几行：Antigravity 有按组记的每周用量时每组一行，别的一个账号一行
+    static func statsLines(_ r: HostedAccount) -> [StatsLine] {
+        guard let groups = r.account.weeksGroups, !groups.isEmpty else { return [StatsLine(row: r, group: nil)] }
+        return groups.map { StatsLine(row: r, group: $0) }
     }
 
     /// 折合金额页的账号：官方账号，那台电脑上的 cca 开着折合金额（放上来了折合金额那几样，或者账号太多没带）

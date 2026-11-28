@@ -139,8 +139,9 @@ pub fn codex_plan_tier(plan: &V) -> &'static str {
 /// 这个版本的 codex 认得哪些 cca 要用的参数：不认识的 --disable 开关、参数 codex 会直接报错退出，开关不存在了也就不会
 /// 改走系统代理。按 codex 程序文件缓存（换了版本才重新问，问一次要一秒多）。问不出来时照样全加上（宁可启动失败）。
 /// notify：认不认 cca 给交互的会话加的通知的那几个 -c（`codex_launch_args`；不认的值 codex 也是直接报错退出）——这一项和上面
-/// 反过来，问不出来时是 false、不加：加不加通知不能让会话起不来。
-/// 返回 `{'sig', 'flags', 'no_daemon', 'version', 'notify'}`（问不出来时没有 sig、notify）
+/// 反过来，问不出来时是 false、不加：加不加通知不能让会话起不来。perm：认不认 cca 定义的权限配置（凭证防护，guard.rs 的
+/// `codex_probe_args`），同样问不出来时是 false、不加。
+/// 返回 `{'sig', 'flags', 'no_daemon', 'version', 'notify', 'perm'}`（问不出来时没有 sig、notify、perm）
 pub fn codex_probe(bin_: &str) -> Dict {
     let full = dict! { "flags" => str_list(CODEX_FLAGS), "no_daemon" => true, "version" => "" };
     if bin_.is_empty() {
@@ -167,7 +168,7 @@ pub fn codex_probe(bin_: &str) -> Dict {
     let cache = path::join(&codex().sroot, "probe.json");
     if let Some(V::Dict(j)) = load_quiet(&cache) {
         let same = j.get("sig").is_some_and(|s| s.as_str() == Some(sig.as_str()));
-        if same && j.list("flags").is_some() && j.get("notify").is_some() {
+        if same && j.list("flags").is_some() && j.get("notify").is_some() && j.get("perm").is_some() {
             return j;
         }
     }
@@ -211,6 +212,15 @@ pub fn codex_probe(bin_: &str) -> Dict {
             flags.push(f);
         }
     }
+    // 权限配置：cca 那样定义、选中的一份要认（features list 读配置时就查），选一份没定义的要报错（不认 default_permissions 的
+    // 旧版本照样能跑，就是没有这一项）
+    let probe = |defined: bool| {
+        let mut argv = super::guard::codex_probe_args(defined);
+        argv.extend(["features".to_string(), "list".to_string()]);
+        run(&argv.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    let (rc, out) = probe(true);
+    let perm = rc == 0 && !text::strip(&out).is_empty() && probe(false).0 != 0;
     let (rc, help) = run(&["--help"]);
     let ver_out = run(&["--version"]).1;
     let ver = text::split_ws(text::strip(&ver_out));
@@ -220,6 +230,7 @@ pub fn codex_probe(bin_: &str) -> Dict {
         "no_daemon" => rc != 0 || help.contains("--no-daemon"),
         "version" => ver.last().copied().unwrap_or(""),
         "notify" => notify,
+        "perm" => perm,
     };
     let _ = save_json(&cache, &V::Dict(j.clone()), Some(0o600), true); // 存不了（OSError）就算了
     j
@@ -283,6 +294,24 @@ pub(crate) fn codex_interactive(args: &[String]) -> bool {
         }
     }
     true
+}
+
+/// 这一次是不是 Codex 干活的会话（凭证防护只加给它们，guard.rs）：交互的会话是 Some(true)，exec（e）、review 是 Some(false)，
+/// 别的子命令、--version、--help 是 None
+pub(crate) fn codex_agent(args: &[String]) -> Option<bool> {
+    if codex_interactive(args) {
+        return Some(true);
+    }
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        match a.as_str() {
+            "--version" | "-V" | "--help" | "-h" | "--" => return None,
+            f if CODEX_VALUES.contains(&f) => i += 2,
+            f if f.starts_with('-') && f.len() > 1 => i += 1,
+            p => return matches!(p, "exec" | "e" | "review").then_some(false),
+        }
+    }
+    None
 }
 
 /// 账号的 config.toml（一般是链到共享的那一份）里用户自己的 notify：没有是 Ok(None)，不空的字符串数组是 Ok(Some)，别的（不是

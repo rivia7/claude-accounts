@@ -648,6 +648,21 @@ enum Texts {
         }
     }
 
+    /// 「查看 API 额度」的入口（`cca [codex|agy] billing`，`can.billing`）：Antigravity 账号打开的是 Google 开发者计划的权益页
+    /// （Google AI Pro / Ultra 附带的每月 Google Cloud 额度），Claude、Codex 是控制台的账单页。
+    static func billingMenu(_ tool: ToolID) -> String {
+        tool == .agy ? "在 Google 开发者计划里查看 API 额度" : "在控制台查看 API 额度"
+    }
+
+    static func billingAction(_ tool: ToolID) -> String {
+        tool == .agy ? "在开发者计划里查看" : "在控制台查看"
+    }
+
+    static func billingHelp(_ tool: ToolID) -> String {
+        let page = tool == .agy ? "Google 开发者计划的权益页（每月的 Google Cloud 额度在那里领、看余额）" : "控制台的账单页"
+        return "用这个账号自己的浏览器和出口打开\(page)；要登录时邮箱已复制好，直接粘贴"
+    }
+
     static func liveError(_ e: LiveIssue) -> String {
         if let m = nonEmpty(e.message) { return m }
         switch e.code {

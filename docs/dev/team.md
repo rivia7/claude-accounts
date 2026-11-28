@@ -816,7 +816,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   TUN、DNS；别的程序开着 TUN 时和内置代理一样绑定物理网卡，`core_bind_apply`）。经每个入站同时取账号要用的服务（`--tool` 的，没写时看这个 Team 里走这些节点的
   账号是哪些工具的，都没有按 Claude：claude.ai / chatgpt.com）和 www.cloudflare.com（服务器自己的出口）的 `/cdn-cgi/trace`，各试两次；
   哪个都没取到的直连它的服务器端口（`port_open`），分清没开入站和入站参数不对。结果交给 `py team-node-verdict`（`judge`）：不通、经它出得去
-  而要用的服务不通、出口在受限地区（`RESTRICTED`）、和别的测着的节点在服务那边是同一个 IP、别的节点在那边有自己的出口而它看到的是服务器
+  而要用的服务不通、出口在用这个服务的工具不能用的地区（各工具自己的名单 `Tool.restricted`，network.md：claude.ai 看到的照 Claude 的、chatgpt.com 照 OpenAI 的；服务器自己的出口在只测它时、或者走这个节点的账号里有 Antigravity 的时候照 Antigravity 的——testconfig 每个节点一行的最后一列是走它的账号是哪几种工具的，bash 照样交给 verdict）、和别的测着的节点在服务那边是同一个 IP、别的节点在那边有自己的出口而它看到的是服务器
   自己的 IP。退出码：0 都好；1 有节点不通；2 全都不通（多半是这台机器的网络）；3 都通了、有要提醒的。不写节点是全部。`--json`
   （`kind: team_node_test`：`hosts`、每个节点的 `state`、`exits`、`tcp`、`notes`）给脚本用。
 - 只在命令行里（App 不调）；失败的原因码 `team_no_node`、`team_node`、`team_node_used`、`team_name`、`team_usage`（PROTOCOL 4.14）。

@@ -29,9 +29,12 @@ func agyFixtureTests() {
     let g = s.account(gina), hy = s.account(henry)
     check("gina：登录着、Google AI Pro / standard、命令行开着", g?.login == .loggedIn && g?.plan == "Google AI Pro" && g?.planTier == .standard
           && g?.cliSessions == 1 && g?.isWorking == true && g?.port == 7902)
-    check("gina：没有桌面 App（unsupported），用量、网页版、出口检测、终端都能用",
+    check("gina：没有桌面 App（unsupported），用量、网页版、出口检测、终端、开发者计划的权益页（billing）都能用",
           g?.can.app == false && g?.can.usage == true && g?.canWhy["app"] == .unsupported && g?.canWhy["usage"] == nil
-          && g?.can.web == true && g?.can.check == true && g?.can.cli == true && g?.can.billing == false && g?.can.limitResets == false)
+          && g?.can.web == true && g?.can.check == true && g?.can.cli == true && g?.can.billing == true && g?.can.limitResets == false)
+    check("Antigravity 账号的「查看 API 额度」打开开发者计划的权益页，Claude、Codex 是控制台的账单页",
+          Texts.billingMenu(.agy) == "在 Google 开发者计划里查看 API 额度" && Texts.billingMenu(.claude) == "在控制台查看 API 额度"
+          && Texts.billingAction(.codex) == "在控制台查看" && Texts.billingHelp(.agy).contains("Google 开发者计划的权益页"))
     check("henry：没登录，查不了用量", hy?.login == .loggedOut && hy?.canWhy["usage"] == .notLoggedIn)
     check("gina 的用量是缓存里的几组额度", g?.usage?.source == .cache && g?.usage?.hasQuota == true
           && g?.usage?.quotaGroups.map(\.name) == ["Gemini Pro", "Claude", "Gemini Flash"] && hy?.usage == nil)
@@ -156,8 +159,8 @@ func agyGateTests() async {
           "\(m.listedTools)")
     check("features 取 cca 给的", m.features(.agy) == ToolFeatures(app: false, api: false, usage: true) && m.features(.claude).usage)
     check("命令前缀、App 的叫法", m.prefix(.agy) == ["agy"] && m.appLabel(.agy) == "桌面 App")
-    check("用量统计页只有 Claude 一组（agy 没有每周用量的统计）", m.officialGroups().map(\.department) == [.claude],
-          "\(m.officialGroups().map(\.department))")
+    check("用量统计页：Claude、Antigravity 两组（agy 每组额度一行；没启用的 Codex 不在里面）",
+          m.officialGroups().map(\.department) == [.claude, .antigravity], "\(m.officialGroups().map(\.department))")
     check("侧栏：agy 的官方账号一组", m.accountGroups(.agy).map(\.department) == [.antigravity]
           && m.accountGroups(.agy).first?.accounts.map(\.key) == ["工作(gina@example.com)", "henry@example.com"])
     check("总览：有账号的三组在前，没有账号的 ChatGPT 组在最后",

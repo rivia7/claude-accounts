@@ -7,6 +7,9 @@
 //!
 //!   --version、--help（前面没有全局参数时）   codex-cli 0.167.0 / “      --no-daemon”：cca 照它们探测这个版本认哪些参数
 //!   features         两行开关（respect_system_proxy、system_proxy_fallback）：cca 照它定启动时关哪些
+//!
+//! 像 0.172.0 那样认权限配置（cca 的凭证防护，guard.rs）：全局参数里 -c default_permissions 选的不是内置的（: 开头）、又没有
+//! -c permissions.<名字>.… 定义它时，不管子命令是什么都在 $D/codex.log 里记一行 PERM-REJECT 名字、stderr 上一行、退出码 1
 //!   logout           删掉 $CODEX_HOME/auth.json（没有也不算错）
 //!   app-server       JSON-RPC，stdin 一行一个 JSON，回答一行一个、马上写出去；stdin 读到头就退出：
 //!       initialize               {"id", "result": {"userAgent": "x"}}
@@ -140,6 +143,24 @@ pub fn run(a: &[String]) -> R<i32> {
     let args = &a[2..];
     let home = env_or("CODEX_HOME", "");
     let i = globals(args);
+    let (mut perm, mut defined): (Option<String>, Vec<String>) = (None, Vec::new());
+    let mut j = 0;
+    while j < i {
+        if args[j] == "-c" {
+            let v = args.get(j + 1).map(String::as_str).unwrap_or("");
+            if let Some(p) = v.strip_prefix("default_permissions=") {
+                perm = Some(p.replace('"', ""));
+            } else if let Some(p) = v.strip_prefix("permissions.") {
+                defined.push(p.split('.').next().unwrap_or("").to_string());
+            }
+        }
+        j += if args[j] == "--no-daemon" { 1 } else { 2 };
+    }
+    if let Some(p) = perm.filter(|p| !p.starts_with(':') && !defined.contains(p)) {
+        log(d, &format!("PERM-REJECT {p}"))?;
+        eprintln!("Error: failed to load configuration");
+        return Ok(1);
+    }
     let sub = args.get(i).map(String::as_str).unwrap_or("");
     if i == 0 && sub == "--version" {
         print("codex-cli 0.167.0");

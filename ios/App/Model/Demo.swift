@@ -375,7 +375,14 @@ enum DemoAccounts {
                 "usage": usage(now, ["quota_groups": [
                     ["name": "Gemini models", "buckets": [bucket(35, 3 * 3600, "five_hour"), bucket(52, 5 * 86400, "seven_day")]],
                     ["name": "Claude and GPT models", "buckets": [bucket(86, 90 * 60, "five_hour"), bucket(64, 5 * 86400, "seven_day")]],
-                ]])]
+                ]]),
+                // 每组额度各记一份每周用量（本周的和上面的本周额度一样）
+                "weeks_groups": [
+                    weeks([44, 58, 71, 63], current: 52, end: (now + 5 * 86400).rounded())
+                        .merging(["id": "gemini-weekly", "name": "Gemini models"]) { $1 },
+                    weeks([20, 35, 90, 61], current: 64, end: (now + 5 * 86400).rounded(), partial: [0])
+                        .merging(["id": "3p-weekly", "name": "Claude and GPT models"]) { $1 },
+                ]]
     }
 }
 

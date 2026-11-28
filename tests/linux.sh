@@ -10,7 +10,8 @@
 #   登录（给出在 Mac 上运行的 cca login-page 那一行：带别名、节点和节点摘要；贴回验证码，转给假 claude 本机的回调）→ 启动账号 →
 #     API key 存成 600 的文件 → Team（真的服务器：辅助程序的 team-server，管理员由 cca-test spec 扮演：加入、照配置加账号、
 #     不是根密钥签的一版不用）→ 设备统计（报给 Team 的服务器：会话开着报在用、关了报没在用；会话的登记、进程的启动时间从 /proc 读）
-#     → Codex（假的 codex 和 app-server：添加、服务器上登录、启动、查用量、cxa）→ 真实的出口和泄露检测（测试节点直连出去；服务器上
+#     → Codex（假的 codex 和 app-server：添加、服务器上登录、启动、查用量、cxa）→ Antigravity（假的 agy：添加、第一次用时的探测、服务器上
+#     登录（授权码贴回）、启动、查额度和每周用量、aga）→ 真实的出口和泄露检测（测试节点直连出去；服务器上
 #     不测 WebRTC）→ 只在 macOS 上的命令说清楚 → cca local off
 #   服务器上不用路由器（全新的 HOME，直连通不通由假 curl 定）：直连不通时 cca install 不问路由器，先问有没有 Team 的邀请链接，没有就
 #     先跳过；再运行时贴上邀请链接：加入、导入 Team 的配置指定的节点、照配置加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
@@ -549,11 +550,18 @@ if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qF "cca codex login-page carol@ex
 else no "cca codex login（退出码 $rc）：$(printf '%s' "$out" | grep -F 'login-page' | head -n 1)$(printf '%s' "$out" | tail -n 3)"; fi
 out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" codex @carol exec hi 2>&1); rc=$?
 l=$(grep '^SESSION ' "$D/codex.log" 2>/dev/null | tail -n 1)
+RC=$(cd "$H/.cca" && pwd -P)   # 凭证防护写的是 ~/.cca 的真实路径
 if [ $rc -eq 0 ] && printf '%s' "$l" | grep -qF "https_proxy=http://127.0.0.1:$CP home=$H/.cca/codex/accounts/carol-example-com-" &&
 	printf '%s' "$l" | grep -qF -- '--no-daemon' && printf '%s' "$l" | grep -qF -- '--disable system_proxy_fallback' &&
 	printf '%s' "$l" | grep -qF -- '--disable respect_system_proxy' && printf '%s' "$l" | grep -q 'exec hi$'; then
 	ok "cca codex @carol：经账号的端口启动，CODEX_HOME 是账号自己的，关掉 system_proxy_fallback、respect_system_proxy，不起后台服务"
 else no "cca codex @carol（退出码 $rc）：${l:-没启动}；$(printf '%s' "$out" | tail -n 2)"; fi
+# 凭证防护（guard.rs）：codex 认权限配置时 Linux 上也加；还没有的目录下的几条合成一条（bubblewrap 挂不上同一个不存在的目录下的几个文件）
+if printf '%s' "$l" | grep -qF -- '-c default_permissions="cca"' && printf '%s' "$l" | grep -qF -- "\"$RC/teams/**\" = \"deny\"" &&
+	printf '%s' "$l" | grep -qF -- "\"$RC/hub/**\" = \"deny\"" && ! printf '%s' "$l" | grep -qF -- "$RC/hub/hub.json" &&
+	! grep -q '^PERM-REJECT cca$' "$D/codex.log" && ! printf '%s' "$out" | grep -q '这次没给'; then
+	ok "Codex 的凭证防护：Linux 上也在用户参数前面带上 cca 的权限配置（~/.cca 里的凭证 deny，还没有的 hub/ 合成 hub/**）"
+else no "Codex 的凭证防护：${l:-没启动}"; fi
 out=$(CCA_SKIP_CHECK=1 COLUMNS=160 "$C" codex usage 2>&1); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qE 'carol.* 13% .* 41% ' && grep -q "USAGE email=carol@example.com https_proxy=http://127.0.0.1:$CP" "$D/codex.log"; then
 	ok "cca codex usage：经账号的端口让 app-server 查，表里有 5 小时、本周"
@@ -584,6 +592,54 @@ else no "查用量途中 Ctrl-C（退出码 $rc，$((t1 - t0)) 秒）：查询�
 out=$("$H/.local/bin/cxa" ls 2>&1)
 if printf '%s' "$out" | grep -q 'carol' && ! printf '%s' "$out" | grep -q 'alice' && [ "$(get "$CP")" = cca-linux-ok ]; then ok "cxa ls：列的是 Codex 账号；carol 的端口也通"
 else no "cxa ls：$(printf '%s' "$out" | head -n 4)"; fi
+
+# Antigravity（agy）：添加账号（服务器上没有路由器、只配置了内置代理）、第一次用时探测这个版本的 agy 设了开关时把登录存进数据目录里的文件
+# （在临时的数据目录里跑一次 acp --login，不联网）、服务器上登录（agy 打出 Google 的登录网址：cca 给出在 Mac 上运行的 login-page 那一行，
+# 带别名、节点和节点摘要；授权码贴回这里交给 agy，换 token 经账号的端口）、启动（--gemini_dir 是账号自己的数据目录，经账号的端口，
+# 会话写进共享的 ~/.gemini）、查额度（打印模式的 /usage，经账号的端口；每组的本周额度各记一份每周用量）、aga 是 cca agy 的简写。
+# 假的 agy 就是回归里那一个（cca-test 的角色 fake-agy，tests/tool/fake/agy.rs：标记文件、记录都在它的 CCA_T，这里是 ${D}），外面包一层
+# 记下参数和环境
+{ echo '#!/bin/sh'; echo "D='$D' KT='$KT'"; cat <<'S'; } > "$D/bin/agy"
+echo "ARGS: $*" >> "$D/agy.log"
+echo "ENV: SSH_CONNECTION=${SSH_CONNECTION-unset} https_proxy=${https_proxy-unset} AGY_CLI_FORCE_FILE_TOKEN_STORAGE=${AGY_CLI_FORCE_FILE_TOKEN_STORAGE-unset}" >> "$D/agy.log"
+CCA_T=$D CCA_TEST_TRAP="$D/trap"; export CCA_T CCA_TEST_TRAP
+exec "$KT" fake-agy "$@"
+S
+chmod 755 "$D/bin/agy"; : > "$D/agy.log"
+out=$(CCA_TTY=$(ans dave@example.com dave 1) "$C" agy add 2>&1); rc=$?
+AP=$(kt val -f c="$H/.cca/config.json" 'list(c["agy"]["ports"].values())[0]' 2>/dev/null)
+AGD=$(ls -d "$H"/.cca/agy/accounts/dave-example-com-* 2>/dev/null | head -n 1); AG="$AGD/gemini"
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '已添加 dave' && ! printf '%s' "$out" | grep -qE '先配置路由器|还没配置路由器|路由器同步没完成' &&
+	[ -n "$AP" ] && [ -n "$AGD" ] && [ -d "$AG" ] && grep -q '"dave(dave@example.com)": "US-A"' "$H/.cca/agy.json"; then
+	ok "cca agy add：没有路由器也能加（节点从可选节点里选，不提路由器），端口 ${AP}，数据目录在 ~/.cca/agy/accounts 下"
+else no "cca agy add（退出码 ${rc}）：$(printf '%s' "$out" | tail -n 3)"; fi
+out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans bad-agy good-agy) "$C" agy login dave 2>&1); rc=$?
+if [ $rc -eq 0 ] && grep -q '^ARGS: --gemini_dir=.*cca-agy-probe\..*/gemini acp --login$' "$D/agy.log" &&
+	kt check -f j="$H/.cca/agy/probe2.json" 'j["files"] is True' 2>/dev/null; then
+	ok "agy 第一次用：先在临时的数据目录里跑一次 acp --login，确认这个版本设了开关时把登录存进文件（记在 probe2.json）"
+else no "agy 的探测（退出码 ${rc}）：$(grep -F 'cca-agy-probe' "$D/agy.log" | head -n 1)；$(cat "$H/.cca/agy/probe2.json" 2>&1 | head -c 200)"; fi
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qF "cca agy login-page dave@example.com --alias dave --node US-A --node-id $FPA 'https://accounts.google.com/o/oauth2/auth?" &&
+	printf '%s' "$out" | grep -q 'invalid_grant' && grep -q "AGY-EXCHANGE code=bad-agy https_proxy=http://127.0.0.1:$AP" "$D/agy.log" &&
+	grep -q "AGY-EXCHANGE code=good-agy https_proxy=http://127.0.0.1:$AP" "$D/agy.log" && printf '%s' "$out" | grep -q '已重新登录' &&
+	[ "$(stat -c %a "$AG/antigravity-cli/antigravity-oauth-token" 2>/dev/null)" = 600 ] && [ ! -e "$H/.gemini/antigravity-cli/antigravity-oauth-token" ]; then
+	ok "cca agy login：给出 cca agy login-page 那一行；授权码贴回这里交给 agy（换不到 token 时照 agy 的原话说、再问），经账号的端口换 token；token 只在账号自己的数据目录里（600）"
+else no "cca agy login（退出码 ${rc}）：$(printf '%s' "$out" | grep -F 'login-page' | head -n 1)$(printf '%s' "$out" | tail -n 3)"; fi
+out=$(CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" agy @dave --version 2>&1); rc=$?
+la=$(grep '^ARGS: ' "$D/agy.log" | tail -n 1); le=$(grep '^ENV: ' "$D/agy.log" | tail -n 1)
+if [ $rc -eq 3 ] && [ "$la" = "ARGS: --gemini_dir=$AG --version" ] && printf '%s' "$le" | grep -qF "https_proxy=http://127.0.0.1:$AP " &&
+	printf '%s' "$le" | grep -qF 'SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 ' && printf '%s' "$le" | grep -q 'AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1$' &&
+	[ -L "$AG/antigravity-cli/conversations" ] && ls "$H/.gemini/antigravity-cli/conversations"/from-*.pb >/dev/null 2>&1; then
+	ok "cca agy @dave：--gemini_dir 指向账号自己的数据目录，设了 AGY_CLI_FORCE_FILE_TOKEN_STORAGE，经账号的端口启动；会话写进共享的 ~/.gemini"
+else no "cca agy @dave（退出码 ${rc}）：${la:-没启动}；${le}；$(printf '%s' "$out" | tail -n 2)"; fi
+out=$(CCA_SKIP_CHECK=1 COLUMNS=160 "$C" agy usage 2>&1); rc=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qE 'Gemini Pro · 5 小时 +13% ' && printf '%s' "$out" | grep -qE 'Gemini Pro · 本周 +75% ' &&
+	grep -q "AGY-USAGE-AS dave@example.com https_proxy=http://127.0.0.1:$AP" "$D/agy.log" && [ "$(stat -c %a "$AGD/usage-weeks.json" 2>/dev/null)" = 600 ] &&
+	kt check -f j="$AGD/usage-weeks.json" '[(g["id"], g["name"], [w["peak"] for w in g["weeks"]]) for g in j["groups"]] == [("gemini-pro-week", "Gemini Pro", [75])]' 2>/dev/null; then
+	ok "cca agy usage：经账号的端口让 agy 自己查（打印模式的 /usage），表里是几组额度；有本周额度的那一组记进每周用量（usage-weeks.json，600）"
+else no "cca agy usage（退出码 ${rc}）：$(printf '%s' "$out" | tail -n 3)；$(head -c 300 "$AGD/usage-weeks.json" 2>&1)"; fi
+out=$("$H/.local/bin/aga" ls 2>&1)
+if printf '%s' "$out" | grep -qE 'dave +dave@example\.com +已登录 +US-A' && ! printf '%s' "$out" | grep -qE 'carol|alice' && [ "$(get "$AP")" = cca-linux-ok ]; then ok "aga ls：列的是 Antigravity 账号（dave 登录着）；dave 的端口也通"
+else no "aga ls：$(printf '%s' "$out" | head -n 4)"; fi
 
 # 真实的出口和泄露检测：经账号的端口（内置代理 → US-A → 测试节点直连出去）查出口、纯净度，DNS 泄露经账号的端口测；服务器上没有账号专属的
 # 浏览器和桌面 App，不测 WebRTC。结果随这台机器的网络变（出口可能在不能用的地区、检测服务可能连不上），只核对测了、记下了、没说 WebRTC
@@ -662,13 +718,13 @@ if ! command -v tar >/dev/null 2>&1; then
 		ok "cca restore：没有 tar 时先停下（没法先打包备份），什么都不动"
 	else no "cca restore 没有 tar（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)"; fi
 elif [ $rc -eq 0 ] && [ -n "$bk" ] && [ "$(stat -c %a "$bk")" = 600 ] && printf '%s' "$out" | grep -qF "配置备份：$bk" &&
-	tar -tzf "$bk" | grep -q 'accounts.json' && tar -tzf "$bk" | grep -q 'orphan-example-com/claude' &&
-	! tar -tzf "$bk" | grep -qE '\.credentials\.json|secrets|id_ed25519$|policy/(nodes\.json|tmp\.)' && tar -tzf "$bk" | grep -q 'policy/policy\.json' &&
-	! tar -xzOf "$bk" 2>/dev/null | grep -q 'LEFTOVER-SECRET' &&
+	tar -tzf "$bk" | grep -q 'accounts.json' && tar -tzf "$bk" | grep -q 'orphan-example-com/claude' && tar -tzf "$bk" | grep -q 'agy\.json' &&
+	! tar -tzf "$bk" | grep -qE '\.credentials\.json|(^|/)auth\.json$|antigravity-oauth-token|secrets|id_ed25519$|policy/(nodes\.json|tmp\.)' && tar -tzf "$bk" | grep -q 'policy/policy\.json' &&
+	! tar -xzOf "$bk" 2>/dev/null | grep -qE 'LEFTOVER-SECRET|ya29\.test' &&
 	[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ ! -L "$H/.local/bin/aga" ] &&
 	! grep -qF '# cca-core' "$D/crontab" && grep -qx '0 3 \* \* \* echo user-job' "$D/crontab"; then
-	ok "cca restore：先打包备份（600，登录凭证、密钥文件、参考节点不在里面），再删掉 ~/.cca、cca、cxa、aga 和 crontab 里开机起内核的那一行（别的行留着）"
-else no "cca restore（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|secrets|id_ed25519|policy/' | head -n 3 | tr '\n' ' ')"; fi
+	ok "cca restore：先打包备份（600，登录凭证（Claude Code、Codex、Antigravity 的）、密钥文件、参考节点不在里面），再删掉 ~/.cca、cca、cxa、aga 和 crontab 里开机起内核的那一行（别的行留着）"
+else no "cca restore（退出码 ${rc}）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|auth\.json|antigravity-oauth-token|secrets|id_ed25519|policy/' | head -n 3 | tr '\n' ' ')"; fi
 if ! command -v tar >/dev/null 2>&1; then   # 没有 tar：不留备份就能卸载
 	out=$(CCA_TTY=$(ans uninstall) "$C" uninstall --no-backup 2>&1); rc=$?
 	if [ $rc -eq 0 ] && [ ! -e "$H/.cca" ] && [ -z "$(ls "$H"/cca-backup-*.tar.gz 2>/dev/null)" ] && printf '%s' "$out" | grep -qF '没有留配置备份（--no-backup）'; then

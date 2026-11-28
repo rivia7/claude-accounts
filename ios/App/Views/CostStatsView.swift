@@ -36,7 +36,7 @@ struct CostStatsView: View {
                     } else if rows.isEmpty {
                         Text(hosts.isEmpty
                              ? "电脑上的 cca 还没有上传折合金额：更新到最新版、统计一次后就会显示（电脑上关闭了折合金额时不显示）。"
-                             : "还没有 Claude、ChatGPT 账号。第三方 API 账号按实际用量付费，不在这里折算。")
+                             : "还没有 Claude、ChatGPT、Antigravity 账号。第三方 API 账号按实际用量付费，不在这里折算。")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {

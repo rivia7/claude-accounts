@@ -48,6 +48,24 @@ func weeklyUsageTests() async {
           Account.sample(["key": "a@example.com", "usage_weeks": ["since_epoch": 5, "weeks": [], "summary": ["weeks": 0]]]).usageWeeks
           == UsageWeeks(sinceEpoch: 5, weeks: [], summary: UsageWeeksSummary()))
 
+    // Antigravity 各组的每周用量（usage_weeks_groups）：和 usage_weeks 一样的几项，多了 id、name；没有 id 的、不是对象的组
+    // 不要，空的数组当没有；组名照额度的组一样翻译
+    let gw = Account.sample(["key": "a@example.com", "usage_weeks_groups": [
+        ["id": "gemini-weekly", "name": "Gemini Models", "since_epoch": 5,
+         "weeks": [["start_epoch": 1, "end_epoch": 2, "used_percent": 40, "current": true]], "summary": ["weeks": 0]],
+        ["name": "no id", "weeks": []], ["id": "", "weeks": []], "x", NSNull(),
+        ["id": "3p-weekly", "name": "Claude and GPT models", "weeks": "x"],
+    ]], tool: .agy).usageWeeksGroups
+    check("usage_weeks_groups：没有 id 的组、不是对象的不要", gw?.map(\.id) == ["gemini-weekly", "3p-weekly"], "\(String(describing: gw?.map(\.id)))")
+    check("usage_weeks_groups：每组照 usage_weeks 解码", gw?.first?.weeks.current?.usedPercent == 40 && gw?.first?.weeks.sinceEpoch == 5
+          && gw?.last?.weeks.weeks.isEmpty == true && gw?.last?.weeks.summary == UsageWeeksSummary())
+    check("usage_weeks_groups：组名照额度的组翻译", gw?.map(\.displayName) == ["Gemini 模型", "Claude、GPT 模型"])
+    check("usage_weeks_groups：null、缺、空的数组、类型不对都是没有",
+          Account.sample(["key": "a@example.com", "usage_weeks_groups": NSNull()]).usageWeeksGroups == nil
+          && Account.sample(["key": "a@example.com"]).usageWeeksGroups == nil
+          && Account.sample(["key": "a@example.com", "usage_weeks_groups": [Any]()]).usageWeeksGroups == nil
+          && Account.sample(["key": "a@example.com", "usage_weeks_groups": ["id": "x"]]).usageWeeksGroups == nil)
+
     // 演示数据：bob 记了 12 周（一周没记全），frank（Codex）有一周中间重置过，超过 100%；carol 最近没查，没有本周；没查过、API 账号没有
     if let d = fixture("state.json"), let s = try? DocumentDecoder.decode(StateDoc.self, from: d) {
         func acct(_ t: ToolID, _ k: String) -> Account? { s.tool(t)?.accounts.first { $0.key == k } }
@@ -133,4 +151,28 @@ func weeklyUsageTests() async {
     let m2 = await model(noCodex)
     check("没启用 Codex：只有 Claude 一组", m2.officialGroups().map(\.department) == [.claude])
     m2.shutdown()
+
+    // 启用了 agy：Antigravity 也是一组（每组额度一行）；演示数据的 gina 记了 Gemini Pro 这一组 6 周（一周没记全）
+    guard let helloAgy = fixture("hello_agy.json"), let stateAgy = fixture("state_agy.json") else {
+        check("读演示数据（agy）", false)
+        return
+    }
+    let ha = String(decoding: helloAgy, as: UTF8.self), sa = String(decoding: stateAgy, as: UTF8.self)
+    let t3 = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: ha) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: sa) }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let m3 = makeModel(t3, prefs: MemoryPrefs())
+    await m3.start()
+    let g3 = m3.officialGroups()
+    check("用量统计：启用了 agy 时有 Antigravity 一组（这份演示数据没启用 Codex）", g3.map(\.department) == [.claude, .antigravity],
+          "\(g3.map(\.department))")
+    let gina = g3.last?.accounts.first { $0.key == "工作(gina@example.com)" }?.usageWeeksGroups
+    check("演示数据：gina 的 Gemini Pro 记了 6 周，统计是过完的 5 周", gina?.map(\.id) == ["gemini-pro-week"]
+          && gina?.first?.weeks.weeks.count == 6 && gina?.first?.weeks.current?.usedPercent == 75
+          && gina?.first?.weeks.summary == UsageWeeksSummary(weeks: 5, averagePercent: 70, maxed: 1, underHalf: 1)
+          && gina?.first?.weeks.weeks.filter(\.partial).count == 1 && gina?.first?.displayName == "Gemini Pro",
+          "\(String(describing: gina))")
+    m3.shutdown()
 }

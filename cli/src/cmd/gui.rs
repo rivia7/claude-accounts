@@ -13,7 +13,7 @@ use super::launchers::{launcher_badges, launcher_names};
 use super::leak::coffee_parse;
 use super::presence::app_proc_re;
 use super::session::{cli_marks, cli_view, gui_procs, proc_starts};
-use super::usage::{parse_ts, usage_cached, usage_entry, usage_row, usage_weeks_view};
+use super::usage::{parse_ts, usage_cached, usage_entry, usage_row, usage_weeks_groups_view, usage_weeks_view};
 use super::{arg, arity, Cmd};
 use crate::cmd::secrets::{kc_hints, kc_list, kc_slot, py_in};
 use crate::core::base::{sh, CCA_HOME, CFG, FIRST_PORT, HINT_RE, NOTICES, RO, RO_BAD};
@@ -496,8 +496,10 @@ fn gui_account(
         .iter()
         .find(|(key, _)| &**key == k)
         .map(|(_, (label, color))| dict! { "label" => label.as_str(), "color" => *color });
-    // 每周用量的统计按 5 小时、本周的窗口记：agy 没有这两个窗口，也就没有
+    // 每周用量记的是本周的额度窗口：agy 没有这个窗口，额度分几组，每组的本周额度各记一份（usage_weeks_groups）
     let weeks = if api || !tool.has_usage || tool.kind == Kind::Agy { None } else { usage_weeks_view(k, now, cached.as_ref())? };
+    let group_weeks =
+        if !api && tool.has_usage && tool.kind == Kind::Agy { usage_weeks_groups_view(k, now, cached.as_ref())? } else { None };
     let can_cost = env.cost.on && tool.has_cost && !api; // 折合金额（PROTOCOL 2.2 的 cost）
     let lower = e.to_lowercase();
     // Team 的配置里的官方账号：节点被它固定
@@ -512,7 +514,7 @@ fn gui_account(
     for x in ["app", "web", "usage", "check", "cli"] {
         can.set(x, !why.has(x));
     }
-    can.set("billing", !why.has("web") && !tool.billing_url.is_empty()); // 控制台的账单页和网页版走同一条路（cmd_web）；agy 没有
+    can.set("billing", !why.has("web") && !tool.billing_url.is_empty()); // 控制台的账单页（agy 是开发者计划的权益页）和网页版走同一条路（cmd_web）
     can.set("limit_resets", tool.kind == Kind::Claude && !why.has("web")); // claude.ai 的用量页，只有 Claude 账号有
     can.set("policy_lock", false); // 以前是请维护者把节点锁进映射（cca policy request）：3.6.0 起没有映射了，总是 false（接口只加不删）
     can.set("devices", hub.is_some()); // 账号页的「设备」（PROTOCOL 3.4）
@@ -548,7 +550,7 @@ fn gui_account(
         "can" => can, "can_why" => why,
         "mail" => if with_mail { V::Dict(super::mail::mail_view(c, k, src.str(&lower).as_deref())) } else { V::None },
         "api_key" => gui_api_key(c, k, v, share, &share_err)?,
-        "usage" => usage, "usage_weeks" => weeks,
+        "usage" => usage, "usage_weeks" => weeks, "usage_weeks_groups" => group_weeks.map_or(V::None, V::from),
         "cost" => cost,
         "health" => health_view(k, v, now),
         "hub" => hub.map(|h| h.name()),

@@ -5,7 +5,8 @@
 //! usage_query、usage_caches）也在这里；Codex 那一半（app-server、登录身份）在 codex.rs。
 
 use super::agy::{
-    agy_cell, agy_table_lines, agy_usage_query, agy_week, has_buckets as agy_has_buckets, quota_groups as agy_quota_groups,
+    agy_cell, agy_table_lines, agy_usage_query, agy_week, agy_weeklies, has_buckets as agy_has_buckets,
+    quota_groups as agy_quota_groups,
 };
 use super::codex::{
     agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query, json_loads_bytes, temp_file, Got, Piped,
@@ -781,7 +782,9 @@ pub fn usage_save(key: &str, rl: &Dict, sub: &V) -> R<()> {
 
 // 每周用量（App 账号页的「每周用量」、「用量统计」页；macos/PROTOCOL.md 2.2 的 usage_weeks）：Claude、OpenAI 都不给过去几周的额度，
 // 所以 cca 每次查到用量（usage_save）时把本周的窗口记进账号目录的 usage-weeks.json（600）。按窗口的重置时间认是哪一周，记这一周
-// 查到的最高百分比；同一周里比最高的低了一大截是中间重置过（重置额度、官方重置），之前的最高值累计下来。只给图形界面，终端不显示
+// 查到的最高百分比；同一周里比最高的低了一大截是中间重置过（重置额度、官方重置），之前的最高值累计下来。只给图形界面，终端不显示。
+// Antigravity 的额度分几组（一类模型一组，各有各的本周额度和重置时间）：每组照同样的规则各记一份（usage-weeks.json 的 groups，
+// _gui state 的 usage_weeks_groups）
 pub const WEEK: i64 = 7 * 86400;
 /// 最多记这么多周（一年多）
 pub const WEEKS_KEEP: usize = 60;
@@ -892,13 +895,80 @@ pub fn weeks_add(weeks: &mut Vec<Week>, rl: &Dict, at: f64) -> R<bool> {
     Ok(true)
 }
 
+/// Antigravity 一组额度的每周用量（usage-weeks.json 的 groups[]）：id 认这一组（agy_weeklies：本周额度那个桶的 id，没有时是组名），
+/// name 是最近一次记下时的组名，weeks 照 Claude、Codex 的记
+pub struct GroupWeeks {
+    pub id: String,
+    pub name: String,
+    pub weeks: Vec<Week>,
+}
+
+/// 最多记这么多组（agy 现在给两组）；agy 改了叫法以后旧的那几组不再更新，多了先丢最久没记的那组
+pub const GROUPS_KEEP: usize = 8;
+
+/// usage-weeks.json 里 Antigravity 的各组（照记下的先后）；没有 id、id 重复的组不要，组里格式不对的周照 weeks_parse 不要
+fn groups_parse(j: Option<&V>) -> Vec<GroupWeeks> {
+    let mut out: Vec<GroupWeeks> = Vec::new();
+    let Some(V::Dict(j)) = j else { return out };
+    for g in dicts(j, "groups") {
+        let id = g.str("id").map(|s| s.to_string()).unwrap_or_default();
+        if id.is_empty() || out.iter().any(|x| x.id == id) {
+            continue;
+        }
+        let name = g.str("name").map(|s| s.to_string()).unwrap_or_default();
+        out.push(GroupWeeks { id, name, weeks: weeks_parse(Some(V::Dict(g.clone()))) });
+    }
+    out
+}
+
+/// at 时查到的 Antigravity 额度（rl：agy 给的几组）并进 groups（原地改）：各组的本周额度照 weeks_add 记，新的组接在后面，
+/// 最多 GROUPS_KEEP 组；返回记了没有
+pub fn groups_add(groups: &mut Vec<GroupWeeks>, rl: &Dict, at: f64) -> R<bool> {
+    let mut changed = false;
+    for (id, name, one) in agy_weeklies(rl) {
+        if let Some(g) = groups.iter_mut().find(|g| g.id == id) {
+            if weeks_add(&mut g.weeks, &one, at)? {
+                g.name = name;
+                changed = true;
+            }
+            continue;
+        }
+        let mut weeks = Vec::new();
+        if weeks_add(&mut weeks, &one, at)? {
+            groups.push(GroupWeeks { id, name, weeks });
+            changed = true;
+        }
+    }
+    let last = |g: &GroupWeeks| g.weeks.iter().map(|w| num(&w.last)).fold(f64::NEG_INFINITY, f64::max);
+    while groups.len() > GROUPS_KEEP {
+        let i = (0..groups.len()).min_by(|&a, &b| last(&groups[a]).total_cmp(&last(&groups[b]))).unwrap_or(0);
+        groups.remove(i);
+    }
+    Ok(changed)
+}
+
 /// usage_save 里：查到的本周用量记进 usage-weeks.json
 fn weeks_record(key: &str, rl: &Dict, at: f64) -> R<()> {
     weeks_record_at(&weeks_file(key), rl, at)
 }
 
-/// weeks_record 的做法；p 是这个账号的 usage-weeks.json（weeks_file(key)；测试里是临时目录里的）。没记下新东西就不写
+/// weeks_record 的做法；p 是这个账号的 usage-weeks.json（weeks_file(key)；测试里是临时目录里的）。没记下新东西就不写。
+/// agy 给的额度（有 groups）按组记（groups_add），写成 {"version": 1, "groups": [{id, name, weeks}]}
 fn weeks_record_at(p: &str, rl: &Dict, at: f64) -> R<()> {
+    if rl.list("groups").is_some() {
+        let mut groups = groups_parse(load_quiet(p).as_ref());
+        if groups_add(&mut groups, rl, at)? {
+            let list: Vec<V> = groups
+                .iter()
+                .map(|g| {
+                    let weeks: Vec<V> = g.weeks.iter().map(|w| V::Dict(w.to_dict())).collect();
+                    V::Dict(dict! { "id" => g.id.as_str(), "name" => g.name.as_str(), "weeks" => weeks })
+                })
+                .collect();
+            quiet_os(save_json(p, &V::Dict(dict! { "version" => 1, "groups" => list }), Some(0o600), true))?;
+        }
+        return Ok(());
+    }
     let mut weeks = weeks_parse(load_quiet(p));
     if weeks_add(&mut weeks, rl, at)? {
         let doc = dict! { "version" => 1, "weeks" => weeks.iter().map(|w| V::Dict(w.to_dict())).collect::<Vec<V>>() };
@@ -912,6 +982,33 @@ fn weeks_record_at(p: &str, rl: &Dict, at: f64) -> R<()> {
 /// 下一周在这一周结束前就开始了（中间重置后重新计时）：这一周到那时为止，不算还没过完
 pub fn usage_weeks_view(key: &str, now: f64, cached: Option<&Cached>) -> R<Option<Dict>> {
     weeks_view(weeks_load(key), now, cached)
+}
+
+/// _gui state 的 usage_weeks_groups（macos/PROTOCOL.md 2.2）：Antigravity 各组的每周用量，一组一项（id、name 加上和 usage_weeks
+/// 一样的几项），照记下的先后；没有记录是 None。最近 WEEKS_SHOW 周里没有记录的组不列，一组都没有时照列（weeks 是空的，
+/// 和 usage_weeks 一样是「最近 12 周没有记录」）。cached 照 usage_weeks_view 只在内存里并进来，不写文件
+pub fn usage_weeks_groups_view(key: &str, now: f64, cached: Option<&Cached>) -> R<Option<Vec<V>>> {
+    groups_view(groups_parse(load_quiet(&weeks_file(key)).as_ref()), now, cached)
+}
+
+/// usage_weeks_groups_view 读进来以后的那一步：groups 是记下的各组
+fn groups_view(mut groups: Vec<GroupWeeks>, now: f64, cached: Option<&Cached>) -> R<Option<Vec<V>>> {
+    if let Some(c) = cached {
+        groups_add(&mut groups, &c.rl, c.at)?;
+    }
+    let mut all: Vec<(bool, V)> = Vec::new();
+    for g in groups {
+        let Some(view) = weeks_view(g.weeks, now, None)? else { continue };
+        let recent = view.list("weeks").is_some_and(|l| !l.is_empty());
+        let d = dict! { "id" => g.id, "name" => g.name };
+        d.update(&view);
+        all.push((recent, V::Dict(d)));
+    }
+    if all.is_empty() {
+        return Ok(None);
+    }
+    let any = all.iter().any(|(recent, _)| *recent);
+    Ok(Some(all.into_iter().filter(|(recent, _)| *recent || !any).map(|(_, v)| v).collect()))
 }
 
 /// usage_weeks_view 读进来以后的那一步：weeks 是记下的每周用量
@@ -2431,6 +2528,98 @@ mod tests {
         .unwrap();
         assert_eq!(dump(load()), r#"[{"end": 5, "peak": 6, "first": 7, "last": 8, "carried": 0, "resets": 0}]"#);
         assert!(weeks_parse(load_quiet(&path::join(&dir.path, "nobody.json"))).is_empty(), "没有记录的账号");
+    }
+
+    #[test]
+    fn groups_record_and_view() {
+        // Antigravity 的额度分几组（agy 1.5.16 在真实账号上回的样子：Gemini Models、Claude and GPT models，各有 5 小时、每周的桶）：
+        // 每组的本周额度各记一份；5 小时的、停用的、认不出窗口的、没有剩余比例的不记。同一组按桶的 id 认，组名换了跟着换；
+        // _gui state 照记下的先后一组一项，比记下的新的用量只在内存里并进来
+        use std::os::unix::fs::MetadataExt;
+        let dir = crate::py::fs::TempDir::new().unwrap();
+        let p = path::join(&dir.path, "usage-weeks.json");
+        let now = time::time();
+        let (gem_end, tp_end) = (iso(now + 50.0 * 3600.0).unwrap(), iso(now + 100.0 * 3600.0).unwrap());
+        let rl = |gem: f64, tp: f64, tp_name: &str| {
+            d(&format!(
+                r#"{{"groups": [
+                {{"name": "Gemini Models", "buckets": [
+                    {{"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.5, "reset_time": "{gem_end}"}},
+                    {{"id": "gemini-weekly", "window": "weekly", "remaining_fraction": {gem}, "reset_time": "{gem_end}"}}]}},
+                {{"name": "{tp_name}", "buckets": [
+                    {{"id": "3p-weekly", "window": "weekly", "remaining_fraction": {tp}, "reset_time": "{tp_end}"}}]}},
+                {{"name": "Gemini Flash", "buckets": [{{"id": "flash", "disabled": true, "window": "weekly", "remaining_fraction": 1}}]}},
+                {{"name": "Monthly", "buckets": [{{"id": "odd", "window": "monthly", "remaining_fraction": 0.3}}]}},
+                {{"name": "Empty", "buckets": [{{"id": "nofrac", "window": "weekly"}}]}}
+            ]}}"#
+            ))
+        };
+        weeks_record_at(&p, &rl(0.6, 1.0, "Claude and GPT models"), now).unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().mode() & 0o777, 0o600);
+        let seen = |p: &str| {
+            groups_parse(load_quiet(p).as_ref())
+                .iter()
+                .map(|g| (g.id.clone(), g.name.clone(), g.weeks.iter().map(|w| num(&w.peak)).collect::<Vec<f64>>()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            seen(&p),
+            [
+                ("gemini-weekly".to_string(), "Gemini Models".to_string(), vec![40.0]),
+                ("3p-weekly".to_string(), "Claude and GPT models".to_string(), vec![0.0])
+            ]
+        );
+        assert!(weeks_parse(load_quiet(&p)).is_empty(), "按组记的不进 Claude、Codex 那一份");
+        // 用得更多、组改了名：同一组接着记
+        weeks_record_at(&p, &rl(0.3, 0.9, "Claude and GPT-OSS models"), now + 60.0).unwrap();
+        assert_eq!(seen(&p)[0].2, vec![70.0]);
+        assert_eq!((seen(&p)[1].1.as_str(), seen(&p)[1].2[0]), ("Claude and GPT-OSS models", 10.0));
+        let st = std::fs::metadata(&p).unwrap();
+        weeks_record_at(&p, &rl(0.3, 0.9, "Claude and GPT-OSS models"), now + 60.0).unwrap();
+        let again = std::fs::metadata(&p).unwrap();
+        assert_eq!((again.ino(), again.mtime_nsec()), (st.ino(), st.mtime_nsec()), "同一次查询不重写");
+        // _gui state：一组一项，id、name 在前，其余和 usage_weeks 一样；缓存里更新的只在内存里并进来
+        let cached = Cached { at: now + 120.0, rl: rl(0.2, 0.9, "Claude and GPT-OSS models") };
+        let view = groups_view(groups_parse(load_quiet(&p).as_ref()), now + 180.0, Some(&cached)).unwrap().unwrap();
+        let first = view[0].as_dict().unwrap();
+        assert_eq!(
+            first.keys().iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            ["id", "name", "since_epoch", "weeks", "summary"]
+        );
+        let wk = first.list("weeks").unwrap().get(0).unwrap().as_dict().unwrap();
+        assert_eq!((wk.at("used_percent").as_num(), wk.at("current").as_bool()), (Some(80.0), Some(true)));
+        assert_eq!(view[1].as_dict().unwrap().str("name").as_deref(), Some("Claude and GPT-OSS models"));
+        assert_eq!(seen(&p)[0].2, vec![70.0], "_gui state 不写文件");
+        assert!(groups_view(Vec::new(), now, None).unwrap().is_none(), "没有记录");
+        // 最近 12 周里没有记录的组不列；一组都没有时照列，weeks 是空的（「最近 12 周没有记录」）
+        let old = |id: &str, end: f64| GroupWeeks {
+            id: id.into(),
+            name: id.into(),
+            weeks: vec![Week {
+                end: V::Float(end),
+                peak: V::Int(5),
+                first: V::Float(end - 10.0),
+                last: V::Float(end - 5.0),
+                carried: V::Int(0),
+                resets: 0,
+            }],
+        };
+        let long_ago = now - 20.0 * WEEK as f64;
+        let v = groups_view(vec![old("a", long_ago), old("b", now + 3600.0)], now, None).unwrap().unwrap();
+        assert_eq!(v.iter().map(|g| g.as_dict().unwrap().str("id").unwrap().to_string()).collect::<Vec<_>>(), ["b"]);
+        let v = groups_view(vec![old("a", long_ago)], now, None).unwrap().unwrap();
+        assert!(v.len() == 1 && v[0].as_dict().unwrap().list("weeks").unwrap().is_empty());
+        // 最多 GROUPS_KEEP 组：多了丢最久没记的那组；没有 id、id 重复的组读的时候不要
+        let mut many: Vec<GroupWeeks> = (0..GROUPS_KEEP).map(|i| old(&format!("g{i}"), now + i as f64)).collect();
+        many[3].weeks[0].last = V::Float(now - 99999.0);
+        assert!(groups_add(&mut many, &rl(0.5, 0.5, "x"), now).unwrap());
+        assert_eq!(many.len(), GROUPS_KEEP);
+        assert!(many.iter().all(|g| g.id != "g3") && many.iter().any(|g| g.id == "3p-weekly"));
+        let doc = j(
+            r#"{"groups": [{"name": "no id", "weeks": []}, {"id": "x", "weeks": [{"end": 1, "peak": 2, "first": 3, "last": 4}]}, {"id": "x", "weeks": []}, "bad"]}"#,
+        );
+        let parsed = groups_parse(Some(&doc));
+        assert!(parsed.len() == 1 && parsed[0].id == "x" && parsed[0].weeks.len() == 1 && parsed[0].name.is_empty());
     }
 
     #[test]

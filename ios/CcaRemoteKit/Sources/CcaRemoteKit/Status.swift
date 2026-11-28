@@ -138,7 +138,10 @@ public struct QuotaGroup: Sendable, Equatable {
 
     /// 界面上的组名（和 Mac App 的 QuotaGroup.displayName 一样）：agy 给的是英文，“… models”写成“… 模型”、“ and ”写成顿号；
     /// 没有名字是“额度”
-    public var displayName: String {
+    public var displayName: String { Self.displayName(name) }
+
+    /// 组名的译法（额度的组、每周用量的组 `GroupWeeks` 共用）
+    public static func displayName(_ name: String) -> String {
         var n = name.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty else { return "额度" }
         for suffix in [" models", " model"] where n.lowercased().hasSuffix(suffix) {
@@ -282,6 +285,27 @@ public struct UsageWeeks: Sendable, Equatable {
     }
 }
 
+/// Antigravity 一组额度的每周用量（宿主的 `weeks_groups`，取自 PROTOCOL 2.2 的 `usage_weeks_groups`）：agy 的额度分几组，各有各的
+/// 本周额度和重置时间，电脑上的 cca 每组各记一份
+public struct GroupWeeks: Sendable, Equatable, Identifiable {
+    /// 认这一组的（本周额度那个桶的 id）
+    public let id: String
+    /// agy 给的组名（英文；界面上用 displayName）
+    public let name: String
+    public let weeks: UsageWeeks
+
+    init?(json x: Any?) {
+        guard let j = x as? [String: Any], let w = UsageWeeks(json: j) else { return nil }
+        id = clean(j["id"], 64)
+        guard !id.isEmpty else { return nil }
+        name = clean(j["name"], 64)
+        weeks = w
+    }
+
+    /// 界面上的组名（Gemini 模型、Claude、GPT 模型：和额度的组一样的译法）
+    public var displayName: String { QuotaGroup.displayName(name) }
+}
+
 /// 那台电脑上的一个账号
 public struct AccountStatus: Sendable, Equatable, Identifiable {
     /// 这个配对里认这个账号的编号（16 个十六进制字符，宿主按配对算的：换了别名也不变，别的配对、服务器看不出是哪个账号）
@@ -306,6 +330,8 @@ public struct AccountStatus: Sendable, Equatable, Identifiable {
     public let badge: String
     public let usage: AccountUsage?
     public let weeks: UsageWeeks?
+    /// Antigravity 各组的每周用量（别的工具、还没有记录、那台电脑上的 cca 还不给、账号太多没带时是 nil）
+    public let weeksGroups: [GroupWeeks]?
     /// 在用什么（busy 时才有，旧版的宿主不给）：桌面 App 开着、命令行里几个会话、最早那个从什么时候开始的
     public let appOpen: Bool
     public let cliSessions: Int
@@ -342,6 +368,7 @@ public struct AccountStatus: Sendable, Equatable, Identifiable {
         badge = clean(j["badge"], 8)
         usage = AccountUsage(json: j["usage"])
         weeks = UsageWeeks(json: j["weeks"])
+        weeksGroups = (j["weeks_groups"] as? [Any]).map { $0.prefix(8).compactMap { GroupWeeks(json: $0) } }.flatMap { $0.isEmpty ? nil : $0 }
         appOpen = jsonBool(j["app"]) ?? false
         cliSessions = min(max(roundedInt(j["cli"]) ?? 0, 0), 999)
         cliSince = finiteNumber(j["since"])

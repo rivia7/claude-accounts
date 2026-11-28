@@ -1529,6 +1529,38 @@ run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; rc=$?; cn10=$(clast ARGS)
 rm -f "$T/codex_nocfg"
 ok "Codex 的通知：这个版本的 codex 不认通知的那几个 -c（探测时报错退出）：再不带它们问一次，启动时不加（加不加通知不能让会话起不来）；探测结果里 notify 是 false" '[ $rc -eq 3 ] && [ "$cn10" = "$CXF" ] && [ "$(grep -c "FEATURES list" codex.log)" = $((n_f + 1)) ] && "$TESTBIN" check -f "j=$H/.cca/codex/probe.json" "j[\"notify\"] is False"'
 rm -f "$H/.cca/codex/probe.json"; cp "$T/codex-config.bak" "$X/config.toml"   # 用户自己的 notify 放回去
+# Codex 的凭证防护（辅助程序的 guard.rs）：这个版本的 codex 认权限配置时（codex_perm，像 0.172.0），干活的会话（交互的、exec、review）在
+# 用户参数前面经 -c 定义一份 cca 的权限配置：扩展 Codex 本来会用的沙箱，~/.cca 里的登录凭证、浏览器资料都是 deny，再 -c default_permissions 选它
+touch "$T/codex_perm"; cgnf=$(grep -c "FEATURES-PERM list" codex.log); cgnr=$(grep -c "PERM-REJECT cca-probe-undefined" codex.log); n_f=$(grep -c "FEATURES list" codex.log); cgtp=$(pwd -P)
+cgd="\"$H/.cca/policy/id_ed25519\" = \"deny\", "; cgsel=' -c default_permissions="cca"'
+cgro="-c permissions.cca.extends=\":read-only\" -c permissions.cca.filesystem={$cgd"; cgws="-c permissions.cca.extends=\":workspace\" -c permissions.cca.filesystem={$cgd"
+cgrt='":workspace_roots" = {".git" = "read", ".agents" = "read", ".codex" = "read", ".aws" = "read"}}'
+run CCA_TTY="$(ans)" cca codex @alice exec hi >/dev/null 2>&1; rc=$?; cg1=$(clast ARGS)
+ok "Codex 的凭证防护：codex 认权限配置时，exec 在用户参数前面带上 cca 的权限配置（-c permissions.cca.*，-c default_permissions=\"cca\" 选它）：没记过信任的文件夹照 Codex 扩展 :read-only，~/.cca 里的登录凭证、浏览器资料（CCA_DIR_PRIVATE）都是 deny；探测时多问两次（定义好的要认、选一份没定义的要报错），记进 probe.json 的 perm，别的照旧只问一次" '[ $rc -eq 3 ] && [[ "$cg1" == "$CXF $cgro"* ]] && [[ "$cg1" == *"\"$H/.cca/teams/**\" = \"deny\", "* ]] && [[ "$cg1" == *"\"$H/.cca/accounts/*/chrome/**\" = \"deny\", "* ]] && [[ "$cg1" == *"\"deny\"}$cgsel exec hi" ]] && [ "$(grep -c "FEATURES-PERM list" codex.log)" = $((cgnf + 1)) ] && [ "$(grep -c "PERM-REJECT cca-probe-undefined" codex.log)" = $((cgnr + 1)) ] && [ "$(grep -c "FEATURES list" codex.log)" = $((n_f + 1)) ] && "$TESTBIN" check -f "j=$H/.cca/codex/probe.json" "j[\"perm\"] is True"'
+run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1; cg2=$(clast ARGS)
+mkdir -p "$T/cg-repo/.git" "$T/cg-repo/sub"; (cd "$T/cg-repo/sub" && run CCA_TTY="$(ans)" cca codex @alice >/dev/null 2>&1); cg3=$(clast ARGS)
+(cd "$T/cg-repo/sub" && run CCA_TTY="$(ans)" cca codex @alice exec hi >/dev/null 2>&1); cg3r=$(clast ARGS)
+(cd "$T/cg-repo/sub" && run CCA_TTY="$(ans)" cca codex @alice exec --trust hi >/dev/null 2>&1); cg3t=$(clast ARGS)
+printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$cgtp" >> "$X/config.toml"
+run CCA_TTY="$(ans)" cca codex @alice exec hi >/dev/null 2>&1; cg4=$(clast ARGS)
+cp "$T/codex-config.bak" "$X/config.toml"; rm -rf "$T/cg-repo"
+ok "Codex 的凭证防护：交互的会话也带上（在推通知的 notify 前面）；记过信任的文件夹（[projects] 的 trust_level）扩展 :workspace，再写上 Codex 本来只读的 .git、.agents、.codex、.aws；没记过信任、在 git 仓库里：交互的会话（Codex 先问信不信任，信任了才开会话）、exec --trust（Codex 先记下信任）是 :workspace，别的 exec 是 :read-only" '[[ "$cg3r" == "$CXF $cgro"* ]] && [[ "$cg3t" == "$CXF $cgws"* ]] && [[ "$cg3t" == *"$cgrt$cgsel exec --trust hi" ]] && [[ "$cg2" == "$CXF $cgro"* ]] && [[ "$cg2" == *"\"deny\"}$cgsel -c notify=["* ]] && [[ "$cg3" == "$CXF $cgws"* ]] && [[ "$cg3" == *"$cgrt$cgsel -c notify=["* ]] && [[ "$cg4" == "$CXF $cgws"* ]] && [[ "$cg4" == *"$cgrt$cgsel exec hi" ]]'
+out=$(run CCA_TTY="$(ans)" cca codex @alice exec --sandbox read-only hi 2>&1); cg5=$(clast ARGS)
+out2=$(run CCA_TTY="$(ans)" cca codex @alice exec --yolo hi 2>&1); cg6=$(clast ARGS)
+{ printf 'sandbox_mode = "danger-full-access"\n'; cat "$T/codex-config.bak"; } > "$X/config.toml"
+out3=$(run CCA_TTY="$(ans)" cca codex @alice exec hi 2>&1); cg7=$(clast ARGS)
+{ printf 'sandbox_mode = "workspace-write"\n'; cat "$T/codex-config.bak"; } > "$X/config.toml"
+run CCA_TTY="$(ans)" cca codex @alice exec hi >/dev/null 2>&1; cg7w=$(clast ARGS)
+run CCA_TTY="$(ans)" cca codex @alice exec --ignore-user-config hi >/dev/null 2>&1; cg7i=$(clast ARGS)
+{ cat "$T/codex-config.bak"; printf '\n[permissions.cca]\nextends = ":read-only"\n'; } > "$X/config.toml"
+cgo4=$(run CCA_TTY="$(ans)" cca codex @alice exec hi 2>&1); cg7c=$(clast ARGS)
+cp "$T/codex-config.bak" "$X/config.toml"
+run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; cg8=$(clast ARGS)
+ok "Codex 的凭证防护：用户自己定了沙箱（--sandbox 盖过权限配置，--yolo 不用沙箱）、共享的 config.toml 设成不用沙箱、里面已经有一份叫 cca 的权限配置（-c 只换掉它的两个键，别的会混进来）时不加，启动前说一句这次没挡住、为什么；--version 这类不是干活的会话不加也不说；共享的 config.toml 里 sandbox_mode = \"workspace-write\" 时扩展 :workspace，exec --ignore-user-config 时 Codex 不读它：照没写扩展 :read-only" '[ "$cg7c" = "$CXF exec hi" ] && printf "%s" "$cgo4" | grep -q "已经有一份叫 cca 的权限配置" && [[ "$cg7w" == "$CXF $cgws"* ]] && [[ "$cg7i" == "$CXF $cgro"* ]] && [[ "$cg7i" == *"\"deny\"}$cgsel exec --ignore-user-config hi" ]] && [ "$cg5" = "$CXF exec --sandbox read-only hi" ] && printf "%s" "$out" | grep -q "登录凭证这次没给 Codex 挡住：这次用 --sandbox 指定了沙箱" && [ "$cg6" = "$CXF exec --yolo hi" ] && printf "%s" "$out2" | grep -q "这次不用沙箱（--yolo）" && [ "$cg7" = "$CXF exec hi" ] && printf "%s" "$out3" | grep -q "Codex 设成了不用沙箱（sandbox_mode = \"danger-full-access\"）" && [ "$cg8" = "$CXF --version" ]'
+rm -f "$T/codex_perm" "$H/.cca/codex/probe.json"
+out=$(run CCA_TTY="$(ans)" cca codex @alice exec hi 2>&1); cg9=$(clast ARGS)
+ok "Codex 的凭证防护：codex 不认权限配置时（旧版本：选一份没定义的也照常运行）不加也不说；探测结果里 perm 是 false" '[ "$cg9" = "$CXF exec hi" ] && ! printf "%s" "$out" | grep -q "没给 Codex 挡住" && "$TESTBIN" check -f "j=$H/.cca/codex/probe.json" "j[\"perm\"] is False"'
+rm -f "$H/.cca/codex/probe.json"
 # 第三方 API 账号（Codex）：兼容 Responses 接口；key 存钥匙串，经 auth.command 回调 cca 取（不进命令行、环境变量）
 : > "$T/env.log"; rm -f "$T/security.stdin" "$T/codex.key"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/v1/ "$S1" kimi-k2 '')" cca codex add api 2>&1); rc=$?
@@ -1572,6 +1604,12 @@ touch "$T/codex_usage/unsupported"
 out=$(run COLUMNS=200 cca codex usage alice 2>&1)
 rm -f "$T/codex_usage/unsupported"
 ok "codex 不支持查用量：提示升级，用缓存顶上（套餐、剩余重置次数也取缓存里的）" 'printf "%s" "$out" | grep -q "这个版本的 Codex 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13%" && printf "%s" "$out" | grep -qE "升级后再试）；缓存（[0-9]+ 分钟前）；剩余重置 2 次（最早 [0-9]+ 月 [0-9]+ 日过期）"'
+# 受限地区照 OpenAI 的名单：出口在科索沃不拿账号去查，缅甸（Claude、Antigravity 都不能用）照样查
+mkdir -p "$T/loc"; n_rl=$(grep -c "^RPC rateLimits " codex.log)
+printf XK > "$T/loc/7902"; out=$(run COLUMNS=200 cca codex usage alice 2>&1)
+printf MM > "$T/loc/7902"; out2=$(run COLUMNS=200 cca codex usage alice 2>&1)
+rm -f "$T/loc/7902"
+ok "cca codex usage：受限地区照 OpenAI 的名单（科索沃不能用：不拿账号去查、说明原因；缅甸能用：照样查）" 'printf "%s" "$out" | grep -q "出口在科索沃" && ! printf "%s" "$out2" | grep -q "不可用地区" && [ "$(grep -c "^RPC rateLimits " codex.log)" = $((n_rl + 1)) ]'
 touch "$T/codex_usage/hang"; t0=$(date +%s)
 out=$(run CCA_USAGE_TIMEOUT=2 cca codex usage alice 2>&1); t1=$(date +%s)
 rm -f "$T/codex_usage/hang"
@@ -1675,6 +1713,7 @@ if sect 10f2; then
 # （后面的用例照没用过 agy 写）
 G="$H/.gemini"; AGJ="$H/.cca/agy.json"
 alast() { lastline "$1" agy.log; }
+agy_noperm() { sed 's/, "permissions": {[^}]*}}/}/; s/ --settings {"permissions": {[^}]*}}//'; }   # 去掉 --settings 里 cca 加的 permissions（挡住登录凭证的 deny，另有用例）
 alk() { [ -L "$AG/$1" ] && [ "$(readlink "$AG/$1")" = "$G/$1" ]; }
 mkdir -p "$G/antigravity-cli/conversations" "$G/config/skills/mine"
 printf '{"theme": "dark"}' > "$G/antigravity-cli/settings.json"; echo '# 共享的规则' > "$G/GEMINI.md"
@@ -1715,13 +1754,21 @@ ok "cca agy 菜单：标题是 Antigravity，账号已登录；没有添加第�
 n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
 run CCA_TTY="$(ans)" aga @alice --version >/dev/null 2>&1; rc=$?
 ok "aga @alice：启动的是 alice 的 agy（等于 cca agy @alice）" '[ $rc -eq 3 ] && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = $((n_args + 1)) ] && alast ARGS | grep -qx "ARGS: --gemini_dir=$AG --version"'
-out2=$(run CCA_TTY="$(ans)" cca agy add api 2>&1); rc2=$?; out3=$(run cca agy app alice 2>&1 </dev/null); rc3=$?; out4=$(run cca agy billing alice 2>&1 </dev/null); rc4=$?
-ok "agy 没有第三方 API 账号、桌面 App 和控制台账单页：说清楚，什么都不动" '[ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有第三方 API 账号" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "没有桌面 App" && [ $rc4 -ne 0 ] && printf "%s" "$out4" | grep -q "没有控制台的账单页"'
+out2=$(run CCA_TTY="$(ans)" cca agy add api 2>&1); rc2=$?; out3=$(run cca agy app alice 2>&1 </dev/null); rc3=$?
+ok "agy 没有第三方 API 账号、桌面 App：说清楚，什么都不动" '[ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有第三方 API 账号" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "没有桌面 App"'
+: > open.log; out4=$(run CCA_TTY="$(ans)" cca agy billing alice 2>&1); rc4=$?
+ok "cca agy billing：用账号专属的浏览器和出口打开 Google 开发者计划的权益页（AI Pro / Ultra 附带的每月 Google Cloud 额度），邮箱放进剪贴板" '[ $rc4 -eq 0 ] && [ "$(cat "$T/clipboard")" = alice@example.com ] && grep -F "https://me.developers.google.com/benefits" open.log | grep -F -- "--user-data-dir=$AGD/chrome" | grep -qF -- "--proxy-server=http://" && printf "%s" "$out4" | grep -q "打开 Google 开发者计划的权益页"'
 n_p=$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)
 out=$(run COLUMNS=120 cca agy usage 2>&1); rc=$?
 agy_ucwd=$(sed -n 's/^AGY-USAGE tty=.* cwd=\(.*\) @ .*$/\1/p' agy.log | tail -n 1)
 ok "cca agy usage：经账号的端口让 agy 自己查（打印模式的 /usage）：账号自己的数据目录，登录存成文件的开关，不顺带自动更新，没有控制终端（要授权码时读不到用户的键盘），工作目录是用完就删的空目录；探测结果照用缓存" '[ $rc -eq 0 ] && grep -qx "ARGS: --gemini_dir=$AG -p /usage --output-format json" agy.log && alast ENV | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=http://192.0.2.10:7902 " && alast ENV | grep -q "AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1 AGY_CLI_DISABLE_AUTO_UPDATE=true " && grep -q "AGY-USAGE tty=no auto_update=true cwd=.*/cca-agy-usage\.[a-z0-9_]* @ $AG$" agy.log && [ -n "$agy_ucwd" ] && [ ! -e "$agy_ucwd" ] && grep -q "AGY-USAGE-AS alice@example.com https_proxy=http://192.0.2.10:7902" agy.log && [ "$(grep -c "^ARGS: --gemini_dir=.*cca-agy-probe" agy.log)" = "$n_p" ]'
-ok "cca agy usage 的表格：一个额度一行（组名 · 窗口，和 Claude 的叫法一样：5 小时、本周；agy 的桶名 …Limit Remaining 写在「已用」旁边会被看反，不显示），用了多少、什么时候重置；账号和套餐只写在第一行，停用的写不可用；查到的存进 usage.json" 'printf "%s" "$out" | grep -qE "alice@example.com +Google AI Pro +Gemini Pro · 5 小时 +13% +2小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Pro · 本周 +75% +周" && printf "%s" "$out" | grep -qE "^ +Claude · 5 小时 +95% +1小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Flash +不可用" && ! printf "%s" "$out" | grep -q "Remaining" && [ "$(printf "%s" "$out" | grep -c "alice@example.com")" = 1 ] && [ -f "$AGD/usage.json" ] && [ ! -e "$AGD/usage-weeks.json" ]'
+ok "cca agy usage 的表格：一个额度一行（组名 · 窗口，和 Claude 的叫法一样：5 小时、本周；agy 的桶名 …Limit Remaining 写在「已用」旁边会被看反，不显示），用了多少、什么时候重置；账号和套餐只写在第一行，停用的写不可用；查到的存进 usage.json，每组的本周额度各记一份每周用量（usage-weeks.json，600：有本周额度的只有 Gemini Pro 这一组，按本周额度那个桶的 id 认）" 'printf "%s" "$out" | grep -qE "alice@example.com +Google AI Pro +Gemini Pro · 5 小时 +13% +2小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Pro · 本周 +75% +周" && printf "%s" "$out" | grep -qE "^ +Claude · 5 小时 +95% +1小时[0-9]+分后" && printf "%s" "$out" | grep -qE "^ +Gemini Flash +不可用" && ! printf "%s" "$out" | grep -q "Remaining" && [ "$(printf "%s" "$out" | grep -c "alice@example.com")" = 1 ] && [ -f "$AGD/usage.json" ] && [ "$(stat -f %Lp "$AGD/usage-weeks.json")" = 600 ] && "$TESTBIN" check -f "j=$AGD/usage-weeks.json" "j[\"version\"] == 1 and \"weeks\" not in j and [(g[\"id\"], g[\"name\"], [w[\"peak\"] for w in g[\"weeks\"]]) for g in j[\"groups\"]] == [(\"gemini-pro-week\", \"Gemini Pro\", [75])]"'
+# 受限地区照 Antigravity 的名单（Google 的，和 Claude、OpenAI 的不一样）：出口在摩尔多瓦不拿账号去查，委内瑞拉照样查
+mkdir -p "$T/loc"; n_au=$(grep -c "^AGY-USAGE " agy.log)
+printf MD > "$T/loc/7902"; out=$(run COLUMNS=120 cca agy usage alice 2>&1)
+printf VE > "$T/loc/7902"; out2=$(run COLUMNS=120 cca agy usage alice 2>&1)
+rm -f "$T/loc/7902"
+ok "cca agy usage：受限地区照 Antigravity 的名单（摩尔多瓦不能用：不拿账号去查、说明原因；委内瑞拉能用：照样查）" 'printf "%s" "$out" | grep -q "出口在摩尔多瓦" && ! printf "%s" "$out2" | grep -q "不可用地区" && [ "$(grep -c "^AGY-USAGE " agy.log)" = $((n_au + 1)) ]'
 out=$(run cca agy usage --json 2>/dev/null); rc=$?; mkdir -p "$T/guifx"; printf '%s' "$out" > "$T/guifx/usage_agy.json"
 ok "cca agy usage --json：tool 是 agy；条目的 quota_groups 是 agy 给的几组额度（原样的几项，每个桶另加 utilization、resets_at、resets_epoch、reset 和认出的窗口 slot：five_hour、seven_day，认不出是 null），没有 5 小时、本周这些窗口（输出交给 10g 的契约测试解码）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and d[\"tool\"] == \"agy\" and (lambda a: a[\"source\"] == \"live\" and a[\"plan\"] == \"Google AI Pro\" and a[\"error_code\"] is None and \"five_hour\" not in a and \"credits\" not in a and a[\"quota_description\"] == \"Quota for Antigravity models\" and [g[\"name\"] for g in a[\"quota_groups\"]] == [\"Gemini Pro\", \"Claude\", \"Gemini Flash\"] and a[\"quota_groups\"][1][\"description\"] == \"Claude and GPT-OSS models\" and (lambda b: b[\"id\"] == \"gemini-pro-5h\" and b[\"utilization\"] == 13.0 and b[\"remaining_fraction\"] == 0.87 and b[\"window\"] == \"5h\" and b[\"slot\"] == \"five_hour\" and a[\"quota_groups\"][0][\"buckets\"][1][\"slot\"] == \"seven_day\" and b[\"reset\"] is False and b[\"resets_epoch\"] > d[\"generated_epoch\"] and b[\"resets_at\"].endswith(\"Z\"))(a[\"quota_groups\"][0][\"buckets\"][0]) and (lambda b: b[\"disabled\"] is True and b[\"slot\"] is None and b[\"utilization\"] is None and b[\"resets_epoch\"] is None)(a[\"quota_groups\"][2][\"buckets\"][0]))(d[\"accounts\"][0])"'
 out=$(run cca agy ls 2>&1)
@@ -1754,7 +1801,23 @@ cp "$G/antigravity-cli/settings.json" "$T/agy-settings.bak"; printf '{"theme": "
 out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
 cp "$T/agy-settings.bak" "$G/antigravity-cli/settings.json"
 out2=$(run CCA_TTY="$(ans)" cca agy @alice --gemini_dir=/tmp/elsewhere --version 2>&1); rc2=$?
-ok "共享的设置里给了 Google Cloud 项目（各账号会用同一个项目）、启动参数里另给 --gemini_dir（换掉账号的数据目录和登录）：拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "~/.gemini/antigravity-cli/settings.json 里设置了 Google Cloud 项目（gcp）" && printf "%s" "$out" | grep -q "删掉这几项再用 cca agy 启动" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q -- "启动参数 --gemini_dir 会换掉账号" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
+ok "共享的设置里给了 Google Cloud 项目（各账号会用同一个项目）、启动参数里另给 --gemini_dir（换掉账号的数据目录和登录）：拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "~/.gemini/antigravity-cli/settings.json 里设置了 Google Cloud 项目（gcp）" && printf "%s" "$out" | grep -qF "运行 cca agy settings fix 修复" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q -- "启动参数 --gemini_dir 会换掉账号" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
+# cca agy settings fix：照 Claude 的做（先列出、问过、整份备份、只去掉这几项、Lock 里照摘要改）；Codex 的不做（TOML 改写会丢注释）
+printf '{"theme": "dark", "gcp": {"project": "evil-proj"}, "gcp.location": "eu"}' > "$G/antigravity-cli/settings.json"; cp "$G/antigravity-cli/settings.json" "$T/agy-fix.orig"
+out=$(run CCA_TTY="$(ans n)" cca agy settings fix 2>&1); rc=$?
+ok "cca agy settings fix 先列出要去掉的（Google Cloud 项目那几项），答 n 什么都不动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "~/.gemini/antigravity-cli/settings.json 里要去掉：gcp、gcp.location（Google Cloud 项目）。" && printf "%s" "$out" | grep -qF "直接运行 agy 也不再用这几项" && printf "%s" "$out" | grep -qF "没有改动" && cmp -s "$G/antigravity-cli/settings.json" "$T/agy-fix.orig" && ! ls "$G/antigravity-cli" | grep -q cca-backup'
+out=$(runev cca agy settings fix 2>&1); rc=$?
+ok "cca agy settings fix 非交互（界面 App）：记一条 consent（settings_fix，范围是这次要改的摘要），不改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"settings_fix\" and len(e[\"scope\"]) == 16" && cmp -s "$G/antigravity-cli/settings.json" "$T/agy-fix.orig"'
+out=$(run CCA_TTY="$(ans y)" cca agy settings fix 2>&1); rc=$?
+BK=$(ls "$G/antigravity-cli" | grep '^settings\.json\.cca-backup-' | head -n 1)
+chk=$("$TESTBIN" run -f j="$G/antigravity-cli/settings.json" 'assert j == {"theme": "dark"}
+print("ok")')
+run CCA_TTY="$(ans)" cca agy @alice --version >/dev/null 2>&1; rc2=$?
+out2=$(run cca agy settings fix 2>&1); rc3=$?
+ok "答 y：原文整份备份在旁边（600），只去掉这几项、别的设置留着，说备份在哪、怎么恢复（不提 add api）；修好以后照常启动，再 fix 一次：没有要修的" '[ $rc -eq 0 ] && [ -n "$BK" ] && cmp -s "$G/antigravity-cli/$BK" "$T/agy-fix.orig" && [ "$(stat -f %Lp "$G/antigravity-cli/$BK")" = 600 ] && [ "$chk" = ok ] && printf "%s" "$out" | grep -qF "已修复 ~/.gemini/antigravity-cli/settings.json：去掉了 2 项" && printf "%s" "$out" | grep -qF "cp ~/.gemini/antigravity-cli/$BK ~/.gemini/antigravity-cli/settings.json" && ! printf "%s" "$out" | grep -q "add api" && [ $rc2 -eq 3 ] && [ $rc3 -eq 0 ] && printf "%s" "$out2" | grep -qF "没有要修的"'
+out=$(run cca codex settings fix 2>&1); rc=$?
+ok "cca codex settings fix：不支持（TOML 改写会丢注释），说照 cca codex settings 说的手动改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "照 cca codex settings 说的手动改"'
+cp "$T/agy-settings.bak" "$G/antigravity-cli/settings.json"; rm -f "$G/antigravity-cli"/settings.json.cca-backup-* "$T/agy-fix.orig"
 n_p=$(grep -c "cca-agy-probe" agy.log); run CCA_TTY="$(ans)" cca agy @alice --version >/dev/null 2>&1; rc=$?
 ok "（探测结果按 agy 程序缓存，不每次都跑）" '[ $rc -eq 3 ] && [ "$(grep -c "cca-agy-probe" agy.log)" = "$n_p" ]'
 # 从以前的 cca 升级上来：只有它记下的 probe.json（只设了 SSH_CONNECTION 探测，像 1.5.16 那样说不存文件；程序文件对得上）
@@ -1802,7 +1865,7 @@ out=$(run CCA_COST= cca cost sync --json 2>/dev/null </dev/null); rc=$?; out2=$(
 ok "agy 的折合金额：会话库里的回复按记下的运行认出是 alice 的 agy 账号，按 Gemini API 的标价折合 4.503 美元（按模型列出 gemini-4-neon）；cost_total 的 by_tool 有 agy" '[ $rc -eq 0 ] && printf "%s" "$out2" | jok "(lambda a: a[\"can\"][\"cost\"] is True and abs(a[\"cost\"][\"summary\"][\"days_usd\"] - 4.503) < 0.001 and a[\"cost\"][\"summary\"][\"requests\"] == 1 and [m[\"model\"] for m in a[\"cost\"][\"models\"]] == [\"gemini-4-neon\"])(d[\"tools\"][2][\"accounts\"][0]) and d[\"tools\"][2][\"features\"][\"cost\"] is True and abs(d[\"cost_total\"][\"by_tool\"][\"agy\"][\"days_usd\"] - 4.503) < 0.001"'
 rm -rf "$H/.cca/cost" "$G/antigravity-cli/conversations/$AGC.db"   # 10g 从还没统计过开始
 GF0="$T/guifx"; mkdir -p "$GF0"; out=$(gj state); printf '%s' "$out" > "$GF0/state_agy.json"; out2=$(gj hello); printf '%s' "$out2" > "$GF0/hello_agy.json"
-ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API，有 App 里显示的用量（usage 是缓存里的几组额度 quota_groups，没有 5 小时、本周这些窗口，也没有每周用量的统计）；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": True, \"cost\": True} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is True and \"usage\" not in a[\"can_why\"] and a[\"usage\"][\"source\"] == \"cache\" and \"five_hour\" not in a[\"usage\"] and a[\"usage\"][\"quota_groups\"][0][\"buckets\"][0][\"slot\"] == \"five_hour\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
+ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API，有 App 里显示的用量（usage 是缓存里的几组额度 quota_groups，没有 5 小时、本周这些窗口；每周用量按组记：usage_weeks 是 null，usage_weeks_groups 是有本周额度的那一组）；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": True, \"cost\": True} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is True and \"usage\" not in a[\"can_why\"] and a[\"usage\"][\"source\"] == \"cache\" and \"five_hour\" not in a[\"usage\"] and a[\"usage\"][\"quota_groups\"][0][\"buckets\"][0][\"slot\"] == \"five_hour\" and a[\"can\"][\"billing\"] is True and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None and [(g[\"id\"], g[\"name\"], g[\"weeks\"][-1][\"current\"], g[\"weeks\"][-1][\"used_percent\"], g[\"summary\"][\"weeks\"]) for g in a[\"usage_weeks_groups\"]] == [(\"gemini-pro-week\", \"Gemini Pro\", True, 75, 0)] and list(a[\"usage_weeks_groups\"][0]) == [\"id\", \"name\", \"since_epoch\", \"weeks\", \"summary\"])(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
 ok "_gui hello：agy 已启用，找到了 agy 命令" 'printf "%s" "$out2" | jok "d[\"tools\"][\"agy\"][\"enabled\"] is True and d[\"tools\"][\"agy\"][\"bin\"]"'
 # 套餐：agy 1.5 的登录文件里没有档位（user_tier），cca 启动交互的会话时经 --settings 带上自己的状态栏命令，从状态栏的 JSON 里
 # 记下 plan_tier（账号目录的 agy-plan.json，邮箱对得上才算）；用户自己的状态栏命令接在后面照样运行。token、共享的设置先存一份，最后放回去
@@ -1812,7 +1875,7 @@ printf 'Pro' > "$T/agy_plan_tier"; : > agy.log
 out=$(run CCA_TTY="$(ans)" cca agy @alice --model gemini-x 2>&1); rc=$?
 agy_slc=$(sed -n 's/^AGY-STATUSLINE-CMD //p' agy.log | tail -n 1); out2=$(gj state)
 agy_sl1="ARGS: --gemini_dir=$AG --settings {\"statusLine\": {\"type\": \"command\", \"command\": \"$agy_slc\", \"enabled\": true, \"padding\": 0, \"stack_with_default\": true}} --model gemini-x"
-ok "agy 的套餐：交互的会话在用户参数前面带上 --settings（cca 的状态栏命令 cca _agy-statusline 账号目录名 会话标记，叠在 agy 自己的状态栏上、什么都不输出）；状态栏 JSON 里的 plan_tier 连同邮箱记进账号目录的 agy-plan.json（600）；token 里没有档位时 _gui state 照它显示套餐（Pro 认成 Google AI Pro、standard）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && printf "%s" "${agy_slc##* _agy-statusline }" | grep -Eqx "$(basename "$AGD") [0-9a-f]{16}" && grep -qx "AGY-STATUSLINE rc=0 out=" agy.log && [ "$(stat -f %Lp "$AGD/agy-plan.json")" = 600 ] && "$TESTBIN" check -f "j=$AGD/agy-plan.json" "j[\"plan_tier\"] == \"Pro\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Pro\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"standard\""'
+ok "agy 的套餐：交互的会话在用户参数前面带上 --settings（cca 的状态栏命令 cca _agy-statusline 账号目录名 会话标记，叠在 agy 自己的状态栏上、什么都不输出）；状态栏 JSON 里的 plan_tier 连同邮箱记进账号目录的 agy-plan.json（600）；token 里没有档位时 _gui state 照它显示套餐（Pro 认成 Google AI Pro、standard）" '[ $rc -eq 3 ] && [ "$(alast ARGS | agy_noperm)" = "$agy_sl1" ] && alast ARGS | grep -qF ", \"permissions\": {\"deny\": [\"read_file($H/.cca/policy/id_ed25519)\", " && printf "%s" "${agy_slc##* _agy-statusline }" | grep -Eqx "$(basename "$AGD") [0-9a-f]{16}" && grep -qx "AGY-STATUSLINE rc=0 out=" agy.log && [ "$(stat -f %Lp "$AGD/agy-plan.json")" = 600 ] && "$TESTBIN" check -f "j=$AGD/agy-plan.json" "j[\"plan_tier\"] == \"Pro\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Pro\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"standard\""'
 printf '#!/bin/sh\ncat > "$CCA_T/agy_sl.json"; printf "mine %%s" "$1"\n' > "$H/sl.sh"; chmod +x "$H/sl.sh"
 printf '{"theme": "dark", "statusLine": {"type": "command", "command": "~/sl.sh x", "padding": 1}}' > "$G/antigravity-cli/settings.json"
 printf 'Ultra' > "$T/agy_plan_tier"; : > agy.log
@@ -1820,12 +1883,22 @@ out=$(run CCA_TTY="$(ans)" cca agy @alice 2>&1); rc=$?
 agy_slc=$(sed -n 's/^AGY-STATUSLINE-CMD //p' agy.log | tail -n 1); out2=$(gj state)
 agy_sl1="ARGS: --gemini_dir=$AG --settings {\"statusLine\": {\"type\": \"command\", \"command\": \"$agy_slc\", \"padding\": 1, \"enabled\": true}}"
 agy_sl2="$(basename "$AGD") [0-9a-f]{16} --then '~/sl.sh x'"
-ok "agy 的套餐：共享的 settings.json 里有用户自己的状态栏命令时照用户的那一份（padding 留着），命令换成 cca 的、经 --then 接着运行用户的（同一份 JSON，它的输出就是状态栏）；套餐跟着换（Ultra 认成 Google AI Ultra、premium）" '[ $rc -eq 3 ] && [ "$(alast ARGS)" = "$agy_sl1" ] && printf "%s" "${agy_slc##* _agy-statusline }" | grep -Eqx "$agy_sl2" && grep -qx "AGY-STATUSLINE rc=0 out=mine x" agy.log && "$TESTBIN" check -f "j=$T/agy_sl.json" "j[\"plan_tier\"] == \"Ultra\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Ultra\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"premium\""'
+ok "agy 的套餐：共享的 settings.json 里有用户自己的状态栏命令时照用户的那一份（padding 留着），命令换成 cca 的、经 --then 接着运行用户的（同一份 JSON，它的输出就是状态栏）；套餐跟着换（Ultra 认成 Google AI Ultra、premium）" '[ $rc -eq 3 ] && [ "$(alast ARGS | agy_noperm)" = "$agy_sl1" ] && printf "%s" "${agy_slc##* _agy-statusline }" | grep -Eqx "$agy_sl2" && grep -qx "AGY-STATUSLINE rc=0 out=mine x" agy.log && "$TESTBIN" check -f "j=$T/agy_sl.json" "j[\"plan_tier\"] == \"Ultra\" and j[\"email\"] == \"alice@example.com\"" && printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"Google AI Ultra\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"premium\""'
 cp "$T/agy_set.bak" "$G/antigravity-cli/settings.json"; : > agy.log
-run CCA_TTY="$(ans)" cca agy @alice -p hi >/dev/null 2>&1; agy_a1=$(alast ARGS)
+run CCA_TTY="$(ans)" cca agy @alice -p hi >/dev/null 2>&1; agy_a1=$(alast ARGS | agy_noperm)
 run CCA_TTY="$(ans)" cca agy @alice mcp list >/dev/null 2>&1; agy_a2=$(alast ARGS)
-run CCA_TTY="$(ans)" cca agy @alice --settings '{"x": 1}' >/dev/null 2>&1; agy_a3=$(alast ARGS)
-ok "agy 的套餐：打印模式、子命令、自己带了 --settings 的启动不加 cca 的状态栏命令（用户的 --settings 原样生效）" '[ "$agy_a1" = "ARGS: --gemini_dir=$AG -p hi" ] && [ "$agy_a2" = "ARGS: --gemini_dir=$AG mcp list" ] && [ "$agy_a3" = "ARGS: --gemini_dir=$AG --settings {\"x\": 1}" ]'
+out3=$(run CCA_TTY="$(ans)" cca agy @alice --settings '{"x": 1}' 2>&1); agy_a3=$(alast ARGS)
+ok "agy 的套餐：打印模式、子命令、自己带了 --settings 的启动不加 cca 的状态栏命令（用户的 --settings 原样生效）；自己带了 --settings 的连挡住登录凭证的 permissions 也不加（agy 只认一个），说一句这次没挡住" '[ "$agy_a1" = "ARGS: --gemini_dir=$AG -p hi" ] && [ "$agy_a2" = "ARGS: --gemini_dir=$AG mcp list" ] && [ "$agy_a3" = "ARGS: --gemini_dir=$AG --settings {\"x\": 1}" ] && printf "%s" "$out3" | grep -q "登录凭证这次没给 Antigravity 挡住：这次带了自己的 --settings"'
+# agy 的凭证防护：干活的会话（交互的、打印模式）的 --settings 里带上 permissions：共享的 settings.json 里用户自己的那一份（--settings 整个顶掉
+# 同名的顶层键），deny 加上 ~/.cca 里的登录凭证（read_file(全路径)：* 换成这台机器上有的那一层，结尾的 /** 是那个目录）
+printf '{"theme": "dark", "permissions": {"allow": ["read_file(*)"], "deny": ["command(rm)"]}}' > "$G/antigravity-cli/settings.json"
+run CCA_TTY="$(ans)" cca agy @alice -p hi >/dev/null 2>&1; ag_s=$(alast ARGS | sed 's/^ARGS: --gemini_dir=[^ ]* --settings //; s/ -p hi$//')
+ag_t="read_file($H/.cca/teams)"; ag_k="read_file($AG/antigravity-cli/antigravity-oauth-token)"; ag_c="read_file($(ls -d "$H"/.cca/accounts/alice-example-com-* | head -n 1)/chrome)"
+ok "agy 的凭证防护：打印模式的 --settings 里只有 permissions：用户自己的 allow、deny 照抄，deny 后面加上 ~/.cca 里的登录凭证（Team 的目录、agy 自己的登录 token、各账号的浏览器资料……，写成 read_file(全路径)，没有通配符）" 'printf "%s" "$ag_s" | jok "list(d) == [\"permissions\"] and d[\"permissions\"][\"allow\"] == [\"read_file(*)\"] and d[\"permissions\"][\"deny\"][0] == \"command(rm)\" and \"$ag_t\" in d[\"permissions\"][\"deny\"] and \"$ag_k\" in d[\"permissions\"][\"deny\"] and \"$ag_c\" in d[\"permissions\"][\"deny\"] and not any(\"*\" in x for x in d[\"permissions\"][\"deny\"])"'
+printf '{"theme": "dark", "permissions": "all"}' > "$G/antigravity-cli/settings.json"
+out=$(run CCA_TTY="$(ans)" cca agy @alice -p hi 2>&1); ag_b=$(alast ARGS)
+cp "$T/agy_set.bak" "$G/antigravity-cli/settings.json"
+ok "agy 的凭证防护：共享的 settings.json 里的 permissions 不是对象时不加（不顶掉用户的），说一句这次没挡住" '[ "$ag_b" = "ARGS: --gemini_dir=$AG -p hi" ] && printf "%s" "$out" | grep -q "登录凭证这次没给 Antigravity 挡住：共享的 settings.json 里的 permissions 不是对象"'
 printf '{"email": "bob@example.com", "plan_tier": "Pro", "at": 1}' > "$AGD/agy-plan.json"; out2=$(gj state)
 ok "agy 的套餐：状态栏记下时的邮箱和现在登录的不一样（换了账号登录）时不算" 'printf "%s" "$out2" | jok "d[\"tools\"][2][\"accounts\"][0][\"plan\"] == \"\" and d[\"tools\"][2][\"accounts\"][0][\"plan_tier\"] == \"\""'
 printf '{"email": "alice@example.com", "plan_tier": "Ultra", "at": 1, "from": "bob-mini"}' > "$AGD/agy-plan.json"; out2=$(gj state)
@@ -1862,10 +1935,22 @@ waitfor "[Antigravity 在等你]" osascript.log; gone "agy-turn-wait $(basename 
 ok "agy 的通知（等一会儿再推）：等到时候还在等你确认就推「在等你」" '[ $rc -eq 3 ] && grep -qxF -- "$agy_ask" osascript.log && [ "$(grep -c "^OSA " osascript.log)" = 1 ]'
 rm -rf "$AGD/agy-turns"; rm -f "$T/agy_states" "$T/agy_title"
 ok "agy 的登录 token 从没出现在 cca 写的文件、日志和命令行里（cca 只读里面的邮箱和档位）" '! grep -rqF -e ya29.test -e 1//test --exclude antigravity-oauth-token "$H/.cca" && ! grep -qF -e ya29.test -e 1//test agy.log open.log curl.log "$T/env.log"'
+# 官方账号记一把 API key 备查（cca agy key 账号，和 Claude、Codex 的一样）：钥匙串里单独的条目（cca-agy-ref-账号目录名，账户名
+# reference），cca 绝不拿它启动 agy；--show 原样打出来，--forget 先问再删，cca agy rm 连它一起删
+AGK=AIzaSyAGYREFtest0123456789abcdWXYZ; AGID=$(basename "$AGD")
+out=$(run CCA_TTY="$(ans "$AGK")" cca agy key alice 2>&1); rc=$?
+v=$(run cca agy key alice --show 2>/dev/null); rc1=$?
+run CCA_TTY="$(ans)" cca agy @alice --version >/dev/null 2>&1; rc2=$?
+ok "cca agy key 官方账号：记一把备查的 key（钥匙串的 cca-agy-ref-账号目录名，账户名 reference），--show 原样读回来；启动 agy 时不带它（参数、环境里都没有）" '[ $rc -eq 0 ] && [ "$(cat "$T/keychain/cca-agy-ref-$AGID/reference")" = "$AGK" ] && [ $rc1 -eq 0 ] && [ "$v" = "$AGK" ] && [ $rc2 -eq 3 ] && ! grep -qF "$AGK" agy.log'
+out=$(runev cca agy key alice --forget 2>&1); rc=$?
+ok "cca agy key --forget 先要同意：非交互时发 consent 事件（key_forget:账号目录名，默认不删），key 还在" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"grant\"] == \"key_forget:$AGID\" and e[\"default\"] == \"no\"" && [ -f "$T/keychain/cca-agy-ref-$AGID/reference" ]'
+out=$(runev CCA_GRANT="key_forget:$AGID" cca agy key alice --forget 2>&1); rc=$?
+ok "cca agy key --forget：同意后钥匙串里的条目没了" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-agy-ref-$AGID" ]'
+run CCA_TTY="$(ans "$AGK")" cca agy key alice >/dev/null 2>&1   # 再记一把：下面的 cca agy rm 连它一起删
 out=$(run cca help 2>&1)
-ok "cca help 有 Antigravity 一节" 'printf "%s" "$out" | grep -q "cca agy add" && printf "%s" "$out" | grep -q "Antigravity（Google 的 agy 命令行"'
+ok "cca help 有 Antigravity 一节（也有 agy 的 settings [fix]）" 'printf "%s" "$out" | grep -q "cca agy add" && printf "%s" "$out" | grep -q "Antigravity（Google 的 agy 命令行" && printf "%s" "$out" | grep -qF "cca agy settings [fix]"'
 out=$(run CCA_TTY="$(ans y)" cca agy rm alice 2>&1); rc=$?
-ok "cca agy rm：退出登录、删掉账号目录；~/.gemini 里共享的会话、历史、设置和原来的登录都还在；7902 回到 REJECT；同一个邮箱的 Claude 账号不动" '[ $rc -eq 0 ] && [ ! -e "$AGD" ] && [ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && grep -q master "$G/antigravity-cli/antigravity-oauth-token" && [ "$(sel CCA-2)" = REJECT ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && [ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ]'
+ok "cca agy rm：退出登录、删掉账号目录和记下备查的 key；~/.gemini 里共享的会话、历史、设置和原来的登录都还在；7902 回到 REJECT；同一个邮箱的 Claude 账号不动" '[ $rc -eq 0 ] && [ ! -e "$AGD" ] && [ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && grep -q master "$G/antigravity-cli/antigravity-oauth-token" && [ "$(sel CCA-2)" = REJECT ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && [ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ] && [ ! -e "$T/keychain/cca-agy-ref-$AGID" ]'
 rm -rf "$AGJ" "$H/.cca/agy"; "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" 'c.pop("agy", None)'
 run cca ls >/dev/null 2>&1
 ok "（收尾）删掉 agy.json：后面的用例照没用过 agy 写" '[ ! -e "$AGJ" ] && [ "$(cfgv "\"agy\" in c")" = False ]'
@@ -4624,6 +4709,9 @@ for a in "gina-example-com-$(printf %s gina@example.com | shasum | cut -c1-6)" o
 	mkdir -p "$H/.cca/agy/accounts/$a/gemini/antigravity-cli"
 	echo '{"access_token": "ya29.agy-LEFTOVER-SECRET", "id_token_email": "gina@example.com"}' > "$H/.cca/agy/accounts/$a/gemini/antigravity-cli/antigravity-oauth-token"
 done
+# gina 也记一把备查的 key（cca-agy-ref-）：还原时和 Claude、Codex 的一起删掉
+GAID="gina-example-com-$(printf %s gina@example.com | shasum | cut -c1-6)"
+run CCA_TTY="$(ans AIzaSyGINAREFtest0123456789abcdWXYZ)" cca agy key gina >/dev/null 2>&1; refs_agy=$(ls "$T/keychain" | grep -c "^cca-agy-ref-$GAID$")
 ag_pre=$(readlink "$H/.local/bin/aga" 2>/dev/null)
 # 邮箱助手配置过：应用专用密码在钥匙串里
 "$TESTBIN" edit "c=$H/.cca/config.json" 'c["mail"]={"user": "inbox@example.com"}'
@@ -4681,7 +4769,7 @@ ok "uninstall：缓存目录里解出来的辅助程序（cca-helper 整个目�
 ok "uninstall：界面 App 留在 ~/Library 里的缓存、窗口状态、设置也删掉（设置先 defaults delete），别的 App 的不动" '[ ! -e "$H/Library/Caches/local.cca.app" ] && [ ! -e "$H/Library/Saved Application State/local.cca.app.savedState" ] && [ ! -e "$H/Library/HTTPStorages/local.cca.app" ] && [ ! -e "$H/Library/Preferences/local.cca.app.plist" ] && [ -f "$H/Library/Preferences/com.example.other.plist" ] && grep -qx "delete local.cca.app" "$T/defaults.log"'
 ok "uninstall：~/.local/bin 里还有别的命令时，shell 启动文件里 cca 加的那两行留着、说一声" 'cmp -s "$T/zshrc.before" "$H/.zshrc" && [ -f "$H/.local/bin/keepme" ] && printf "%s" "$out" | grep -q "/.zshrc 里把 ~/.local/bin 加进 PATH 的那两行留着"'
 ok "restore：本机还原（cca、cxa、aga 都删掉，确认清单里说了），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ "$ag_pre" = cca ] && [ ! -L "$H/.local/bin/aga" ] && printf "%s" "$out" | grep -q "删除 ~/.local/bin 里的 cca、cxa、aga，" && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
-ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
+ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex、Antigravity 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ "$refs_agy" = 1 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-|agy-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 ok "restore：macOS 26 以下（内核由 cca 在后台托管）也删掉 crontab 里开机起内核的那一行，别的行留着" '! grep -qF "# cca-core" "$T/crontab" && grep -qx "0 3 \* \* \* echo user-job" "$T/crontab"'
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'

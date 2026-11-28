@@ -631,7 +631,8 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
         check("\(n) can_why.\(k) 对应一个不可用的按钮", off)
     }
     if let can = ra["can"] as? [String: Any], can["billing"] != nil {
-        check("\(n) 账单页的条件和网页版一样（Antigravity 没有账单页）", a.can.billing == (a.can.web && t.id != .agy))
+        // Antigravity 的（开发者计划的权益页）3.8.0-beta.3 起才有：以前的 cca 给的总是 false
+        check("\(n) 账单页的条件和网页版一样", a.can.billing == a.can.web || (t.id == .agy && !a.can.billing))
     }
     if let can = ra["can"] as? [String: Any], can["limit_resets"] != nil {
         check("\(n) 用量页只有 Claude 账号有，其余条件和网页版一样", a.can.limitResets == (t.id == .claude && a.can.web))
@@ -690,7 +691,19 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
     if let raw = ra["usage_weeks"], !isNull(raw) {
         usageWeeksInvariants(n + " usage_weeks", raw as? [String: Any] ?? [:], a.usageWeeks)
     }
-    // 折合金额（PROTOCOL 2.2）：只给 can.cost 为真的账号（Claude、Codex 的官方账号，工具的 features.cost），没有记录时为 null
+    if let raw = ra["usage_weeks_groups"], !isNull(raw) {
+        // Antigravity 各组的每周用量：只给 agy 的官方账号；不空，每组有不重复的 id、组名，其余和 usage_weeks 一样
+        let list = raw as? [[String: Any]] ?? []
+        let groups = a.usageWeeksGroups ?? []
+        check("\(n) usage_weeks_groups 是不空的对象数组，每组都解码了", !list.isEmpty && list.count == groups.count, "\(list.count) vs \(groups.count)")
+        check("\(n) usage_weeks_groups 只给 Antigravity 的官方账号", t.id == .agy && a.kind != .api)
+        check("\(n) usage_weeks_groups 的 id 不空、不重复", Set(groups.map(\.id)).count == groups.count && groups.allSatisfy { !$0.id.isEmpty })
+        check("\(n) usage_weeks_groups 的组名是字符串", list.allSatisfy { $0["name"] is String })
+        for (i, g) in zip(list, groups).enumerated() {
+            usageWeeksInvariants("\(n) usage_weeks_groups[\(i)]", g.0, g.1.weeks)
+        }
+    }
+    // 折合金额（PROTOCOL 2.2）：只给 can.cost 为真的账号（Claude、Codex、Antigravity 的官方账号，工具的 features.cost），没有记录时为 null
     if let can = ra["can"] as? [String: Any], can["cost"] != nil {
         check("\(n) can.cost 是布尔", isBool(can["cost"]))
         if a.can.cost { check("\(n) 有折合金额的是官方账号、工具有折合金额", !a.isAPI && t.features.cost) }
@@ -839,8 +852,8 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
             check("\(name) agy 的 cli_prefix 是 [agy]", t.cliPrefix == ["agy"])
             // 3.6.10 及以前的 cca 给的 features.usage 是 false（查不了用量：unsupported、usage 是 null），以后的是 true
             check("\(name) agy 没有桌面 App、第三方 API 账号", t.features.app == false && t.features.api == false)
-            check("\(name) agy 的账号都是官方账号，开不了 App，没有账单页、用量页、每周用量的统计",
-                  t.accounts.allSatisfy { !$0.isAPI && !$0.can.app && $0.canWhy["app"] == .unsupported && !$0.can.billing && !$0.can.limitResets
+            check("\(name) agy 的账号都是官方账号，开不了 App，没有用量页；每周用量按组记（usage_weeks_groups），usage_weeks 是 null",
+                  t.accounts.allSatisfy { !$0.isAPI && !$0.can.app && $0.canWhy["app"] == .unsupported && !$0.can.limitResets
                       && $0.usageWeeks == nil })
             check("\(name) agy 的用量：features.usage 是 false 时都查不了（unsupported）；是 true 时不说 unsupported，有的话是几组额度（没有 5 小时、本周这些窗口）",
                   t.features.usage

@@ -207,11 +207,11 @@ pub fn cmd_nodes_import(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 出口的地区代码在不能用的地区（RESTRICTED）里时打印地区名、退出码 0；不在时退出码 1
+/// 出口的地区代码在当前工具不能用的地区（`Tool.restricted`）里时打印地区名、退出码 0；不在时退出码 1
 pub fn cmd_restricted(args: &[String]) -> R<()> {
     arity("cmd_restricted", args, 0, 1)?;
     let loc = text::strip(arg(args, 0, "")).to_uppercase();
-    match RESTRICTED.iter().find(|(cc, _)| *cc == loc) {
+    match t().restricted.iter().find(|(cc, _)| *cc == loc) {
         Some((_, name)) => {
             out!("{name}");
             Ok(())

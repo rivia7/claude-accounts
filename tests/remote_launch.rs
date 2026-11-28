@@ -26,6 +26,7 @@ pub const MODULE: Module = Module {
         case!(a_phone_launches_a_session),
         case!(what_the_launcher_refuses),
         case!(what_changed_on_the_host),
+        case!(an_agy_template_takes_the_line_as_an_option),
         case!(a_machine_launches_a_session),
     ],
 };
@@ -56,7 +57,16 @@ fn template(a: &Device, name: &str, dir: &str, args: &[&str]) -> (String, String
 
 /// 同 [`template`]，归属 team 这个 Team（名字或者编号）
 fn template_in(a: &Device, name: &str, dir: &str, args: &[&str], team: Option<&str>) -> (String, String) {
-    let mut argv = vec!["remote-template", "add", name, "claude", dir];
+    template_add(a, "claude", name, dir, args, team)
+}
+
+/// 同 [`template`]，是 tool（claude、codex、agy）的模板
+fn template_for(a: &Device, tool: &str, name: &str, dir: &str, args: &[&str]) -> (String, String) {
+    template_add(a, tool, name, dir, args, None)
+}
+
+fn template_add(a: &Device, tool: &str, name: &str, dir: &str, args: &[&str], team: Option<&str>) -> (String, String) {
+    let mut argv = vec!["remote-template", "add", name, tool, dir];
     if let Some(t) = team {
         argv.extend(["--team", t]);
     }
@@ -470,6 +480,45 @@ fn what_changed_on_the_host(t: &mut Ctx) {
 }
 
 /// a 显示配对码、b（真的辅助程序，另一台电脑）输入：a 的配对表里 b 能看和操作（显示配对码的这一头默认这样）。返回配对编号
+/// Antigravity 的模板：开场白不接在 `--` 后面（agy 不认参数里的话：unexpected argument），是一项 `--prompt-interactive=开场白`；
+/// 参数里已经有 -i 的不能带开场白
+fn an_agy_template_takes_the_line_as_an_option(t: &mut Ctx) {
+    let fx = Base::new(t);
+    let (a, b) = (fx.device("box"), fx.device("phone"));
+    fx.machines(&[&a, &b]);
+    let peer = phone(&fx, &a, &b);
+    a.ok(&["remote-allow", &peer.pid, "launch", "on"]);
+    // 这台机器自己的 agy 账号 carol（会话走加入的第一个 Team 的服务器，就是这一台）
+    fsx::write_json(&a.cca.join("agy.json"), &obj! { "carol(carol@example.com)" => "US-A" });
+    let work = relay::work(&a);
+    let dir = work.to_str().expect("UTF-8");
+    let (id, digest) = template_for(&a, "agy", "问问 agy", dir, &["--model", "gemini-x"]);
+    let (iid, idigest) = template_for(&a, "agy", "带话", dir, &["-i", "说中文"]);
+    let _l = launcher(&a);
+    let (lsid, doc) = wait_for("启动器的说明", secs(30), || peer.launcher().filter(|(_, d)| d["t"].list().len() == 2));
+    let rows: Vec<Value> = doc["t"].list().iter().map(|r| cols(r, &["n", "k", "l"])).collect();
+    assert_eq!(rows, [list!["问问 agy", "agy", true], list!["带话", "agy", false]]);
+    let carol = account_id(&doc, "carol");
+    // 参数里已经有 -i 的带了开场白：不起
+    let got = peer.launch(&lsid, &ask_as(&iid, &idigest, Some("再说一句"), &carol));
+    assert_eq!(refused(&got), ("bad".to_string(), true), "{got}");
+    std::thread::sleep(GAP);
+    let got = peer.launch(&lsid, &ask_as(&id, &digest, Some("-看看 README"), &carol));
+    assert_eq!((got["v"].i64(), got["ok"].as_bool()), (1, Some(true)), "{got}");
+    let sid = got["sid"].str().to_string();
+    let found = wait_for("新会话", secs(30), || peer.sessions().into_iter().find(|s| s["sid"].str() == sid));
+    assert_eq!(cols(&found, &["tool", "name", "cwd"]), list!["agy", "carol", "~/work"]);
+    let (s, ch) = peer.attach(&sid);
+    let mut r = Reader::new(s, ch.expect("握手：宿主的证明对得上"));
+    r.send(&frame(HELLO, &[1, 0, 0, 200, 0, 30]));
+    // 客户端（cca agy）收到的：工具、账号、--、模板的参数，开场白是一项 --prompt-interactive=…（以 - 开头的也不会被当成选项）
+    let want = "args=['agy', '@carol(carol@example.com)', '--', '--model', 'gemini-x', '--prompt-interactive=-看看 README']>";
+    r.until(|out| has(out, want));
+    r.send(&frame(INPUT, b"exit 0\n"));
+    assert!(has(r.until(|out| has(out, "<EXIT")), "<EXIT 0>"));
+    wait_for("会话从列表里没了", secs(30), || !a.ok(&["remote-list", "--local"]).contains(&sid[..8]));
+}
+
 fn machine(a: &Device, b: &Device) -> String {
     let mut p = Popen::spawn(&mut relay::helper_cmd(a, &["remote-pair-show"]));
     let line = p.out_line();

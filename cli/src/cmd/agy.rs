@@ -311,6 +311,32 @@ pub fn agy_week(rl: &Dict, now: f64) -> Option<Dict> {
     least.map(|(_, _, d)| d)
 }
 
+/// 每周用量按组记（usage.rs 的 `groups_add`）：各组的本周额度（没停用、认得出是 weekly、有剩余比例的第一个桶），一组一项：
+/// 认这一组的 id（那个桶的 id，没有时是组名；最多 64 个字）、agy 给的组名、照 Claude、Codex 写成的 `{"seven_day": {utilization, resets_at}}`。
+/// 没有本周额度的组不在里面；两组认出的 id 一样时只要前一组
+pub fn agy_weeklies(rl: &Dict) -> Vec<(String, String, Dict)> {
+    let cut = |s: Option<std::rc::Rc<str>>| s.map(|s| text::strip(&s).chars().take(64).collect::<String>()).unwrap_or_default();
+    let mut out: Vec<(String, String, Dict)> = Vec::new();
+    for g in dicts(rl, "groups") {
+        let name = cut(g.str("name"));
+        let Some(b) = dicts(&g, "buckets").into_iter().find(|b| {
+            !b.truthy("disabled")
+                && window_of(b).map(|i| WINDOWS[i].3) == Some("seven_day")
+                && finite(&b.get("remaining_fraction")).is_some()
+        }) else {
+            continue;
+        };
+        let id = Some(cut(b.str("id"))).filter(|s| !s.is_empty()).unwrap_or_else(|| name.clone());
+        if id.is_empty() || out.iter().any(|(x, _, _)| *x == id) {
+            continue;
+        }
+        let v = bucket_view(&b, 0.0);
+        let week = dict! { "utilization" => v.at("utilization"), "resets_at" => v.at("resets_at") };
+        out.push((id, name, dict! { "seven_day" => week }));
+    }
+    out
+}
+
 /// 表格、菜单里一个桶的名字：组名和桶名（一样、一个包含另一个、只有一个时只写一个）
 fn label(group: &V, bucket: &V) -> String {
     let (g, b) = (text::strip(group.as_str().unwrap_or("")), text::strip(bucket.as_str().unwrap_or("")));
@@ -645,6 +671,56 @@ pub(crate) fn agy_interactive(args: &[String]) -> bool {
     agy_session(args, true)
 }
 
+/// 远程启动的开场白交给 agy 的选项（remote/template.rs 的 `line_args`）：agy 不认参数里的一句话（1.5.18：`agy -- 一句话` 报
+/// unexpected argument、退出码 2；话只能经 -p / --print、-i / --prompt-interactive 或者标准输入给），交互的会话带开场白是
+/// `--prompt-interactive=开场白`（写成一项：开场白以 - 开头也不会被当成选项）
+pub(crate) const AGY_LINE_FLAG: &str = "--prompt-interactive";
+
+/// 远程启动能不能给这次会话加一句开场白（[`AGY_LINE_FLAG`]）：参数里已经有 -i / --prompt-interactive 的不给（已经有头一句话了，和
+/// Claude Code、Codex 参数里已经有一句话的一样），有不是选项的参数或者 `--` 的也不给（agy 不认它们，本来就起不来）；打印模式这些不是
+/// 交互的会话，也不给
+pub(crate) fn agy_line_ok(args: &[String]) -> bool {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let Some(flag) = a.strip_prefix("--").or_else(|| a.strip_prefix('-')).filter(|f| !f.is_empty()) else {
+            return false;
+        };
+        let (name, inline) = flag.split_once('=').map_or((flag, false), |(n, _)| (n, true));
+        if matches!(name, "i" | "prompt-interactive") || AGY_ONE_SHOT.contains(&name) {
+            return false;
+        }
+        if !inline && AGY_VALUES.iter().any(|v| v.trim_start_matches('-') == name) {
+            it.next();
+        }
+    }
+    true
+}
+
+/// agy 的选项名（不带 -、--、=值），认到第一个不是选项的参数（或者 `--`）为止；带值的（settings.rs 的 AGY_VALUES）跳过它的值
+fn agy_flags(args: &[String]) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let Some(flag) = a.strip_prefix("--").or_else(|| a.strip_prefix('-')).filter(|f| !f.is_empty()) else { break };
+        let (name, inline) = flag.split_once('=').map_or((flag, false), |(n, _)| (n, true));
+        out.push(name);
+        if !inline && AGY_VALUES.iter().any(|v| v.trim_start_matches('-') == name) {
+            it.next();
+        }
+    }
+    out
+}
+
+/// 这一次是不是 agy 干活的会话（凭证防护只加给它们）：交互的会话（`agy_interactive`，自己带了 --settings 的也算），或者打印模式
+/// （-p / --print / --prompt：问一句、答完就退出）。--version、--help、子命令不是
+fn agy_agent(args: &[String]) -> bool {
+    let flags = agy_flags(args);
+    if flags.iter().any(|f| matches!(*f, "version" | "help" | "h")) {
+        return false;
+    }
+    agy_interactive(args) || flags.iter().any(|f| matches!(*f, "p" | "print" | "prompt"))
+}
+
 fn agy_session(args: &[String], own_settings: bool) -> bool {
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -686,26 +762,49 @@ fn statusline_for(user: Option<&V>, base: &str) -> Option<Dict> {
     Some(line)
 }
 
-/// 启动 agy 时只这一次加在用户参数前面的（`py launch-args`，见 accounts.rs 的 `cmd_launch_args`）：交互的会话带上 cca 的状态栏
-/// 命令（`--settings` 里的 statusLine），用来记下套餐：agy 1.5 的登录文件里没有档位了，只有状态栏的 JSON 里有（plan_tier）。
-/// 共享的 settings.json 读不了、不是 JSON 对象时不加：不知道用户配了什么，别把它的状态栏盖掉
-pub fn agy_launch_args(key: &str, args: &[String]) -> Vec<String> {
-    if !agy_takes_statusline(args) {
-        return Vec::new();
+/// 启动 agy 时只这一次加在用户参数前面的（`py launch-args`，见 accounts.rs 的 `cmd_launch_args`）和启动时说的一句（凭证挡不住的
+/// 原因），都在一个 --settings 里（agy 只认一个；它整个顶掉 settings.json 里同名的顶层键，别的照 settings.json）——
+/// - 干活的会话（交互的、打印模式：`agy_agent`）带上 permissions：用户自己的那一份，deny 加上 ~/.cca 里的登录凭证（guard.rs 的
+///   `agy_permissions`）
+/// - 交互的会话再带上 cca 的状态栏命令（statusLine），用来记下套餐：agy 1.5 的登录文件里没有档位了，只有状态栏的 JSON 里有（plan_tier）
+///
+/// 自己带了 --settings 的什么都不加（用户的那一份原样生效），说一句；共享的 settings.json 读不了、不是 JSON 对象时也不加（不知道
+/// 用户配了什么，别把它的状态栏、权限盖掉），说一句
+pub fn agy_launch_args(key: &str, args: &[String]) -> (Vec<String>, Option<String>) {
+    if !agy_agent(args) {
+        return (Vec::new(), None);
+    }
+    let note = |why: &str| Some(format!("~/.cca 里的登录凭证这次没给 Antigravity 挡住：{why}"));
+    if agy_flags(args).contains(&"settings") {
+        return (Vec::new(), note("这次带了自己的 --settings（agy 只认一个）"));
     }
     let user = match std::fs::read(path::join_all(&[&agy().master, "antigravity-cli", "settings.json"])) {
         Ok(raw) => match json::loads_file_bytes(&raw).ok().and_then(|v| v.as_dict()) {
-            Some(d) => d.get("statusLine"),
-            None => return Vec::new(),
+            Some(d) => d,
+            None => return (Vec::new(), note("共享的 settings.json 不是 JSON 对象")),
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return Vec::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Dict::new(),
+        Err(_) => return (Vec::new(), note("共享的 settings.json 读不了")),
     };
-    // 会话标记：这一次启动（一个 agy 进程）的状态记在它名下（`agy_turn`：和上一次比才看得出做完了）
-    let base = format!("{} _agy-statusline {} {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, agy())), token_hex(8));
-    statusline_for(user.as_ref(), &base).map_or_else(Vec::new, |line| {
-        vec!["--settings".to_string(), json::dumps(&V::Dict(dict! { "statusLine" => line }), json::LINE)]
-    })
+    let out = Dict::new();
+    if agy_takes_statusline(args) {
+        // 会话标记：这一次启动（一个 agy 进程）的状态记在它名下（`agy_turn`：和上一次比才看得出做完了）
+        let base = format!("{} _agy-statusline {} {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, agy())), token_hex(8));
+        if let Some(line) = statusline_for(user.get("statusLine").as_ref(), &base) {
+            out.set("statusLine", line);
+        }
+    }
+    let said = match super::guard::agy_permissions(user.get("permissions")) {
+        Ok(p) => {
+            out.set("permissions", p);
+            None
+        }
+        Err(why) => note(&why),
+    };
+    if out.is_empty() {
+        return (Vec::new(), said);
+    }
+    (vec!["--settings".to_string(), json::dumps(&V::Dict(out), json::LINE)], said)
 }
 
 /// `cca _agy-statusline 账号目录名 会话标记 [--then 命令]`：cca 启动的 agy 交互会话里状态栏的命令（`agy_launch_args` 经 --settings

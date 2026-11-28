@@ -93,8 +93,11 @@ private struct WeekBar: View {
 
 /// 账号页的「每周用量」（官方账号，在「用量」下面）：最近 12 周每周用到这一周额度的百分之几。Claude、OpenAI 都不给以前的用量，
 /// 这是 cca 每次查用量时记下的，所以图从开始记的那一周起一周一周长出来。下面一行是统计，鼠标指着一周时换成那一周的细节。
+/// Antigravity 的额度分几组，每组一节（`group`：标题是「每周用量 · 组名」，cca 的 usage_weeks_groups）。
 struct WeeklyUsageSection: View {
     let account: Account
+    /// Antigravity 的一组；别的工具、还没有记录的 Antigravity 账号是 nil（用 usage_weeks）
+    var group: GroupWeeks?
     /// 图的右边留多宽（WeeklyChart 的 gutter）：账号页给下面「折合金额」的大图的刻度
     var gutter: [String] = []
     /// 鼠标指着的那一周（命令行工具编不了 @State 宏：State 类型直接用）
@@ -104,8 +107,8 @@ struct WeeklyUsageSection: View {
         TimelineView(.periodic(from: .now, by: 60)) { ctx in
             let now = ctx.date.timeIntervalSince1970
             VStack(alignment: .leading, spacing: 12) {
-                SectionHeader("每周用量") {
-                    if let since = account.usageWeeks?.sinceEpoch {
+                SectionHeader(group.map { "每周用量 · " + $0.displayName } ?? "每周用量") {
+                    if let since = weeks?.sinceEpoch {
                         Text(Texts.weeksSince(since, now: now)).font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -114,9 +117,12 @@ struct WeeklyUsageSection: View {
         }
     }
 
+    /// 这一节的每周用量
+    private var weeks: UsageWeeks? { group?.weeks ?? account.usageWeeks }
+
     @ViewBuilder
     private func content(now: Double) -> some View {
-        if let uw = account.usageWeeks, !uw.weeks.isEmpty {
+        if let uw = weeks, !uw.weeks.isEmpty {
             let hovered = uw.weeks.first { $0.endEpoch == hover.wrappedValue }
             VStack(alignment: .leading, spacing: 10) {
                 WeeklyChart(weeks: uw.weeks, domain: WeeklyChart.domain([uw.weeks], now: now), now: now, hover: hover.projectedValue,
@@ -142,7 +148,7 @@ struct WeeklyUsageSection: View {
             .padding(16)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         } else {
-            Text(account.usageWeeks == nil ? "还没有记录：每次查询用量时会记录本周的用量。" : "最近 12 周没有记录。")
+            Text(weeks == nil ? "还没有记录：每次查询用量时会记录本周的用量。" : "最近 12 周没有记录。")
                 .foregroundStyle(.secondary)
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)

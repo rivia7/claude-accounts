@@ -446,7 +446,7 @@ func costUnitTests() {
               && Texts.costNoUsage(.device("SHA256:x"), total: t, granularity: .day) == "最近 30 天没有用量。")
         check("折合金额页一个账号都不列时", Texts.costNoAccounts(.device(aliceMini), total: t) == "alice-mini 最近没有用过这里的账号。"
               && Texts.costNoAccounts(.device("SHA256:x"), total: t) == "那台设备最近没有用过这里的账号。"
-              && Texts.costNoAccounts(.all, total: t).hasPrefix("还没有 Claude、ChatGPT 账号。") && Texts.costNoAccounts(.me, total: nil) == Texts.costNoAccounts(.all, total: t))
+              && Texts.costNoAccounts(.all, total: t).hasPrefix("还没有 Claude、ChatGPT、Antigravity 账号。") && Texts.costNoAccounts(.me, total: nil) == Texts.costNoAccounts(.all, total: t))
         check("合计那一块的读屏标签", Texts.costTotalLabel(.all, total: t) == "所有账号的折合金额"
               && Texts.costTotalLabel(.me, total: t) == "所有账号在这台设备上的折合金额"
               && Texts.costTotalLabel(.device(aliceMini), total: t) == "所有账号在 alice-mini 上的折合金额")

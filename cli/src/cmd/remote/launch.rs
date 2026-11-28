@@ -8,7 +8,8 @@
 //!   顶掉原来那一条），把模板的说明（`template::launch_doc`）封给每个允许的手机（ANNOUNCE；密钥和会话的说明不一样，旧的 App 解不开、
 //!   当它不存在）。手机接进来（JOIN）分出一个子进程：握手、等它说起哪个（LAUNCH）、现读配对表和模板再查一遍、起会话、回话
 //!   （LAUNCHED），在 `launch.log` 记一行（不记开场白）
-//! - 起的会话：`remote-host --headless --sid 编号 --size 列x行 工具 账号键 名字 -- cca [codex|agy] @账号键 -- 模板的参数… [-- 开场白]`，
+//! - 起的会话：`remote-host --headless --sid 编号 --size 列x行 工具 账号键 名字 -- cca [codex|agy] @账号键 -- 模板的参数… [开场白]`
+//!   （开场白：claude、codex 是 `-- 开场白`，agy 是 `--prompt-interactive=开场白`，template.rs 的 `line_args`），
 //!   账号是手机挑的（LAUNCH 的 `a`：说明里列给它的账号的编号），环境只给 `KEEP_ENV` 这几个，当前目录是模板的文件夹，自己一个会话
 //!   （setsid）。bash 看到 `CCA_REMOTE_HOSTED` 不再套一层宿主
 //!
@@ -694,7 +695,7 @@ fn spawn_session(t: &Template, key: &str, name: &str, ask: &Ask) -> Option<Strin
     argv.extend([format!("@{key}"), "--".into()]);
     argv.extend(t.args.iter().cloned());
     if let Some(l) = &ask.line {
-        argv.extend(["--".into(), l.clone()]);
+        argv.extend(t.line_args(l));
     }
     let mut env: Vec<(String, String)> = proc::environ().into_iter().filter(|(k, _)| KEEP_ENV.contains(&k.as_str())).collect();
     env.push(("TERM".into(), "xterm-256color".into()));

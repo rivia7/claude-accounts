@@ -303,7 +303,7 @@
   `remote-tabs-list`（两个接着时回到会话列表）
 
 没做的、知道的不足：
-- 真的 Claude Code / Codex 界面在 SwiftTerm 里画得对不对还没看过（演示数据是一屏普通的输出；鼠标、同步输出、kitty 键盘协议、宽字符、
+- 真的 Claude Code / Codex / Antigravity 界面在 SwiftTerm 里画得对不对还没看过（演示数据是一屏普通的输出；鼠标、同步输出、kitty 键盘协议、宽字符、
   输入法这些要拿真的界面试）。字体、配色先用了系统等宽字体、黑底和系统终端的 16 色，没有设置项
 - 会话是在别的终端里启动的，里面的程序是照那个终端的底色选的颜色。这里始终是黑底，对得上多数终端；会话是在浅色的终端里启动的时候，
   接进来有的字不好认（换任何一个深色的终端接入都一样）
@@ -498,6 +498,7 @@ Team 的服务器不用更新）。同一天（3.8.0-beta.2）又加了端口池
   - `usage`（没有是 null）：用量条目（PROTOCOL 3.1）里手机要的：`source`、`fetched_epoch`、`stale`、`error_code`（只给原因码：说明里有端口号这些）、
     `five_hour`、`seven_day`（`{utilization, resets_epoch, reset}`）、`model_scoped`、`use_first`、`reset_credits`（Codex）、`quota_groups`（Antigravity）
   - `weeks`（没有是 null）：每周用量（PROTOCOL 2.2 的 `usage_weeks`）：`{since_epoch, weeks:[{start_epoch, end_epoch, used_percent, resets, current, partial}], summary}`
+  - `weeks_groups`（Antigravity 按组记的每周用量，PROTOCOL 2.2 的 `usage_weeks_groups`；没有时不带，`groups_of`）：最多 4 组，每组 `{id, name}` 加上 `weeks` 那几项；手机的账号页每组一节、用量统计页每组一行
   - `app`、`cli`、`since`（只在在用时有，`row_of`）：桌面 App 开着（true）、命令行里经 cca 启动的会话有几个、最早那个从什么时候开始（总览的卡片、账号页那一句）
   - `cost`（还没有记录、折合金额关着时没有，`cost_of`）：账号的折合金额（PROTOCOL 2.2 的 `cost`），金额都是美分的整数：
     `{"since","weeks":[…],"week_end","week_hours":[…],"days":[…],"day_end","sum":[按周, 按天],"average":[…],"average_n":[…],"cache_hit":[…],"sync"?,"missing"?,"models"?,"devices"?}`。
@@ -519,7 +520,7 @@ Team 的服务器不用更新）。同一天（3.8.0-beta.2）又加了端口池
 - `team`：这个配对所在的 Team（PROTOCOL 4.14 的 `config.teams` 里编号是这台服务器的那一项，`team_of`）：
   `{"name","role","state","seq","accounts","device","host","coadmin"?,"error"?,"joined"?,"update"?}`（`error` 最多 160 个字，`update` 是服务器要更新的原因）
 - 太大（密文超过 `STATUS_BLOB`）：一级一级少放（`seal_doc`）：先不带折合金额里按模型、按设备的（外面的 `cost` 写 `"brief": true`），再不带每周用量
-  （各账号的 `weeks` 是 null，外面写 `"weeks": false`：手机照它说那台电脑上的账号太多、每周用量没放上来，不说成还没有记录），再不带折合金额（各账号没有
+  （各账号的 `weeks` 是 null、不带 `weeks_groups`，外面写 `"weeks": false`：手机照它说那台电脑上的账号太多、每周用量没放上来，不说成还没有记录），再不带折合金额（各账号没有
   `cost`，外面的 `cost` 是 `false`，手机同样照实说），还放不下再一个个少放账号（`more` 是少放了几个）
 
 **电脑那头另查的**（3.8.0-beta.2）：Mac App 开着时页顶、总览上才有的那几样，手机照 Mac App 开着时的样子说（App 关着时这几样 Mac 上也看不到：

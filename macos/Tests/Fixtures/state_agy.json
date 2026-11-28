@@ -373,7 +373,7 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "billing": false,
+            "billing": true,
             "limit_resets": false,
             "policy_lock": false,
             "devices": false,
@@ -496,6 +496,75 @@
             "quota_description": "Quota for Antigravity models"
           },
           "usage_weeks": null,
+          "usage_weeks_groups": [
+            {
+              "id": "gemini-pro-week",
+              "name": "Gemini Pro",
+              "since_epoch": 1790650000,
+              "weeks": [
+                {
+                  "start_epoch": 1790640000,
+                  "end_epoch": 1791244800,
+                  "used_percent": 48,
+                  "resets": 0,
+                  "last_epoch": 1791100000,
+                  "current": false,
+                  "partial": true
+                },
+                {
+                  "start_epoch": 1791244800,
+                  "end_epoch": 1791849600,
+                  "used_percent": 66,
+                  "resets": 0,
+                  "last_epoch": 1791800000,
+                  "current": false,
+                  "partial": false
+                },
+                {
+                  "start_epoch": 1791849600,
+                  "end_epoch": 1792454400,
+                  "used_percent": 100,
+                  "resets": 0,
+                  "last_epoch": 1792400000,
+                  "current": false,
+                  "partial": false
+                },
+                {
+                  "start_epoch": 1792454400,
+                  "end_epoch": 1793059200,
+                  "used_percent": 81,
+                  "resets": 0,
+                  "last_epoch": 1793050000,
+                  "current": false,
+                  "partial": false
+                },
+                {
+                  "start_epoch": 1793059200,
+                  "end_epoch": 1793664000,
+                  "used_percent": 57,
+                  "resets": 0,
+                  "last_epoch": 1793650000,
+                  "current": false,
+                  "partial": false
+                },
+                {
+                  "start_epoch": 1793664000,
+                  "end_epoch": 1794268800,
+                  "used_percent": 75,
+                  "resets": 0,
+                  "last_epoch": 1794041998,
+                  "current": true,
+                  "partial": false
+                }
+              ],
+              "summary": {
+                "weeks": 5,
+                "average_percent": 70,
+                "maxed": 1,
+                "under_half": 1
+              }
+            }
+          ],
           "health": null
         },
         {
@@ -537,7 +606,7 @@
             "usage": false,
             "check": true,
             "cli": true,
-            "billing": false,
+            "billing": true,
             "limit_resets": false,
             "policy_lock": false,
             "devices": false,

@@ -127,12 +127,12 @@ aga @工作         # 用这个账号启动 agy（aga 就是 cca agy）
 - **桌面 App 多开**：`cca app 工作` 用这个账号自己的资料和出口打开 Claude App，`cca codex app 工作` 打开 ChatGPT App。cca 还会在 `~/Applications` 里给每个账号放一个启动器（比如「Claude 工作」），从启动台、聚焦搜索里也能打开。你原来的 App 不受影响。
 - **出门在外**：连不上路由器时，cca 自动改走自带的代理（mihomo 内核），每个账号照样走自己的节点，不改系统代理和 DNS。可以出门前先运行 `cca local setup` 配好，第一次在外面启动时 cca 也会问。在家里打开的 Claude Code、网页版和 App 走的是路由器，出门后要关掉，用 cca 重新打开。
 - **用自己的代理**：买了静态 IP 这类代理，运行 `cca node use 工作` 粘贴链接，这个账号就改走它（Team 固定了节点的账号除外）。用着路由器的话，要重启一次 OpenClash / ShellCrash 才用得上（约 20 秒），cca 会先问你。
-- **用量统计和折合金额**：App 里能看 Claude、ChatGPT 账号最近 12 周每周用了多少额度；还能把每个账号用掉的 token 按官方 API 的价格折成美元，看哪个账号用得多（只是折算，不是实际花费）。
+- **用量统计和折合金额**：App 里能看 Claude、ChatGPT、Antigravity 账号最近 12 周每周用了多少额度（Antigravity 的额度分几组，每组各算各的）；还能把每个账号用掉的 token 按官方 API 的价格折成美元，看哪个账号用得多（只是折算，不是实际花费）。
 - **远程会话**：运行 `cca remote on` 之后，在终端里启动的会话不怕终端关掉、SSH 断开，用 `cca remote attach` 接回去（离开时先按 `Ctrl-\` 再按 `d`）。同一个 Team 里的两台机器配对（`cca remote pair` / `cca remote join`）以后，还能在另一台上接着用：经 Team 的服务器中转，内容两头加密，服务器看不到。在 iPhone 上的 cca App、配对过的另一台机器上还能照这台机器上的模板新建会话、起的时候挑用这台机器上的哪个账号（`cca remote template add` 建模板，`cca remote allow 手机或者那台机器的名字 launch on` 打开；那台机器上用 `cca remote launch`）。Mac 上在 App 的「远程会话」页里操作。
 - **做完了、在等你的通知**：cca 启动的 Codex、Antigravity 会话做完一轮、要你确认时，这台 Mac 上弹一个通知（不要的话在 `~/.cca/config.json` 里写 `"popup": false`）。会话放在远程会话里时，这些和 Claude Code 的一样推给接着它的另一台机器和手机。
 - **Linux 服务器**：用同一行命令安装（x86_64 或 arm64，要 OpenSSH 8.1 以上，缺别的会告诉你怎么装），用命令行。直连不通的服务器用 cca 自带的代理。登录时 `cca login 工作` 会给出一行命令，在 Mac 上运行它打开登录页，再把验证码贴回服务器。
 - **邮箱助手**（只在 Mac 上，只给 Claude 账号用）：把各个 Claude 账号的邮箱转发到同一个 Gmail，运行 `cca mail setup`（要 Gmail 的应用专用密码，只读不改）。登录时登录邮件一到，cca 就在这个账号的 Chrome 里打开里面的链接。
-- **客户端更新**：App 的「客户端更新」页检查 Claude、ChatGPT 桌面 App 和 Claude Code、Codex 的新版本，验过签名、你确认以后再装。
+- **客户端更新**：App 的「客户端更新」页检查 Claude、ChatGPT 桌面 App 和 Claude Code、Codex、Antigravity 的新版本，验过签名、你确认以后再装。
 
 ## Team
 

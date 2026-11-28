@@ -375,7 +375,7 @@ struct FailCode: KnownValues {
     static let keychainUnavailable = FailCode(rawValue: "keychain_unavailable")
     /// 这种账号没有这个功能（Antigravity 账号：桌面 App、第三方 API 账号、控制台的账单页、重置次数；旧版 cca 的查用量）。
     static let unsupported = FailCode(rawValue: "unsupported")
-    /// 统计折合金额（`cca cost sync --json`，PROTOCOL 3.5）：没统计成（message 是原因）/ 用不了（关掉了、没有 Claude / Codex 的官方账号）。
+    /// 统计折合金额（`cca cost sync --json`，PROTOCOL 3.5）：没统计成（message 是原因）/ 用不了（关掉了、没有 Claude、Codex、Antigravity 的官方账号）。
     static let costUnavailable = FailCode(rawValue: "cost_unavailable")
     static let costOff = FailCode(rawValue: "cost_off")
     /// 邮箱助手：连不上 Gmail（网络 / 代理 / 证书 / 认证，`cca mail setup`，PROTOCOL 4.11）。
@@ -428,7 +428,7 @@ struct ConsentItem: KnownValues {
     static let keyForget = ConsentItem(rawValue: "key_forget")
     /// 辅助安装直连不通：经内置代理的一个节点装 claude / codex / agy 命令（范围是节点名，默认同意；App 平时把 install-cli 交给终端）。
     static let installProxy = ConsentItem(rawValue: "install_proxy")
-    /// `cca settings fix`：先备份共享的 ~/.claude/settings.json，再去掉会盖掉各账号设置的几项（范围是这次要改的摘要，默认同意；App 不运行这条命令）。
+    /// `cca settings fix`、`cca agy settings fix`：先备份共享的 ~/.claude/settings.json（Antigravity 是 ~/.gemini/antigravity-cli/settings.json），再去掉会盖掉各账号设置的几项（范围是这次要改的摘要，默认同意；App 不运行这条命令）。
     static let settingsFix = ConsentItem(rawValue: "settings_fix")
     /// `cca remote pair`：这台机器显示配对码，输入它的那台机器之后能看和操作这台机器上开着远程会话的会话
     /// （范围为空，默认同意；现在只在终端里问，App 里的入口和远程会话的终端一起做）。

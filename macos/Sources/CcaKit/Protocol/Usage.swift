@@ -210,7 +210,10 @@ struct QuotaGroup: Decodable, Sendable, Equatable {
 extension QuotaGroup {
     /// 界面上的组名：agy 给的是英文（Gemini Models、Claude and GPT models），App 里不放没翻译的英文——
     /// “… models” 写成“… 模型”、“ and ”写成顿号；剩下的是模型的名字（Gemini Flash），照写；没有名字为“额度”。
-    var displayName: String {
+    var displayName: String { Self.displayName(name) }
+
+    /// 组名的译法（额度的组、每周用量的组 `GroupWeeks` 共用）
+    static func displayName(_ name: String?) -> String {
         guard var n = name?.trimmingCharacters(in: .whitespaces), !n.isEmpty else { return "额度" }
         for suffix in [" models", " model"] where n.lowercased().hasSuffix(suffix) {
             n = String(n.dropLast(suffix.count)) + " 模型"
@@ -369,6 +372,36 @@ struct UsageWeeks: Decodable, Sendable, Equatable {
 
     /// 还没过完的这一周（cca 标的 `current`）
     var current: UsageWeek? { weeks.last(where: \.current) }
+}
+
+/// `usage_weeks_groups[]`（PROTOCOL 2.2）：Antigravity 一组额度的每周用量。agy 的额度分几组（一类模型一组），各有各的本周额度和
+/// 重置时间，cca 每组各记一份：和 `usage_weeks` 一样的几项，多了认这一组的 `id` 和 agy 给的组名 `name`（英文，界面上照
+/// `QuotaGroup.displayName` 一样翻译）。没有 id 的组不要（lossyArray 跳过）。
+struct GroupWeeks: Decodable, Sendable, Equatable, Identifiable {
+    var id: String
+    var name: String?
+    var weeks: UsageWeeks
+
+    enum CodingKeys: String, CodingKey { case id, name }
+
+    init(id: String, name: String?, weeks: UsageWeeks) {
+        self.id = id
+        self.name = name
+        self.weeks = weeks
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = c.string(.id), !id.isEmpty else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "group weeks without id"))
+        }
+        self.id = id
+        name = c.string(.name)
+        weeks = try UsageWeeks(from: decoder)
+    }
+
+    /// 界面上的组名（Gemini 模型、Claude、GPT 模型）
+    var displayName: String { QuotaGroup.displayName(name) }
 }
 
 /// 一周（`usage_weeks.weeks[]`）：从 `start_epoch` 到 `end_epoch`（中间重置后重新计时的，到下一周开始时为止）。

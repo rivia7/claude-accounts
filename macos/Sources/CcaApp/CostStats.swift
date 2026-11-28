@@ -60,8 +60,8 @@ struct CostStatsPage: View {
 }
 
 /// 折合金额页的内容：顶上是所有账号加起来的（cca 给的 `cost_total`，本机时是它的 `me`，另一台设备时是 `devices` 里那一台的：
-/// 按周是本周、平均每周、近 12 周合计；按日是今天、平均每天、近 30 天合计和最近 30 天每天一根柱子；启用了两种工具时分开列），
-/// 下面每个账号一行，和用量统计一样按 Claude、ChatGPT 分组、按用户排的顺序：名字、小柱子（最近 12 周每周一根或者最近 30 天每天一根，
+/// 按周是本周、平均每周、近 12 周合计；按日是今天、平均每天、近 30 天合计和最近 30 天每天一根柱子；启用了两种以上的工具时分开列），
+/// 下面每个账号一行，按工具分组（Claude、ChatGPT、Antigravity，和总览一样）、按用户排的顺序：名字、小柱子（最近 12 周每周一根或者最近 30 天每天一根，
 /// 所有行同一个时间范围、同一个纵轴，高低才能比）、平均、本周（今天）、合计；看所有设备时，有两台以上设备的账号下面缩进列出各台设备，
 /// 看另一台设备时只列它用过的账号（cca 给的 `used`）。点一行打开账号页的「折合金额」。数字都是 cca 给的，App 只排版。
 struct CostStatsContent: View {
@@ -133,7 +133,7 @@ struct CostStatsContent: View {
                 }
                 table
             } else {
-                Text("没有可折算的账号：还没有 Claude、ChatGPT 官方账号，或已在 config.json 中关闭了折合金额（\"cost\": false）。")
+                Text("没有可折算的账号：还没有 Claude、ChatGPT、Antigravity 官方账号，或已在 config.json 中关闭了折合金额（\"cost\": false）。")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -291,7 +291,7 @@ private struct CostTotalTile: View {
         v.map { Texts.money($0, currency: total.currency) } ?? "—"
     }
 
-    /// 三个数（和缓存命中率）：上面一行是说明，下面是金额；分开列时左边多一栏写合计、Claude、ChatGPT
+    /// 三个数（和缓存命中率）：上面一行是说明，下面是金额；分开列时左边多一栏写合计和各个工具（Claude、ChatGPT、Antigravity）
     private func figures(_ part: CostTotalPart?) -> some View {
         let split = tools.count >= 2
         let titles = titles

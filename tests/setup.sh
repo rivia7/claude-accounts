@@ -905,30 +905,41 @@ S
 # 像真的 codex 那样写 CODEX_HOME 里的文件和会话库，退出码 3。codex_noflags：这个版本不认识 cca 要关的两个开关；codex_nocfg：
 # 不认识 -c tui.notification_method 的值（像以前的版本：配置读不了，报错退出）；codex_notify：会话结束时像一轮做完了，起
 # -c notify=[…]（最后一个算，像 codex）的命令，最后一个参数是这个文件里的 JSON（cca-test codex-notify 起、等它结束，codex.log 里记 NOTIFY rc=…）；
-# codex_osc：会话里像 tui.notifications 设成 osc9 时在等你，往终端里写一条通知（OSC 9，字是这个文件的内容）
+# codex_osc：会话里像 tui.notifications 设成 osc9 时在等你，往终端里写一条通知（OSC 9，字是这个文件的内容）；codex_perm：这个版本
+# 认权限配置（像 0.172.0）：-c default_permissions 选的不是内置的（: 开头）、又没有 -c permissions.<名字>.… 定义它时报错退出（codex.log 里记
+# PERM-REJECT 名字；没有这个文件时像旧版本，不认、照常运行）；带着 -c default_permissions 的 features list 在 codex.log 里记成 FEATURES-PERM（和问别的分开数）
 cat > "$T/bin/codex" <<'S'
 #!/bin/bash
 LOG="$CCA_T/codex.log"
 echo "ARGS: $*" >> "$LOG"
 echo "ENV: CODEX_HOME=${CODEX_HOME-unset} CODEX_SQLITE_HOME=${CODEX_SQLITE_HOME-unset} https_proxy=${https_proxy-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} NO_PROXY=${NO_PROXY-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} OPENAI_API_KEY=${OPENAI_API_KEY-unset} OPENAI_BASE_URL=${OPENAI_BASE_URL-unset} CODEX_ACCESS_TOKEN=${CODEX_ACCESS_TOKEN-unset} CODEX_API_KEY=${CODEX_API_KEY-unset} CODEX_CA_CERTIFICATE=${CODEX_CA_CERTIFICATE-unset} ALL_PROXY=${ALL_PROXY-unset} BROWSER=${BROWSER-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
-args=("$@"); i=0
+args=("$@"); i=0; perm=""; perms=" "
 while [ $i -lt ${#args[@]} ]; do   # 跳过 cca 加在前面的全局参数
 	case "${args[$i]}" in
 		--no-daemon) i=$((i + 1)) ;;
 		--disable|--enable|-c)
 			if [ "${args[$i]}" = --disable ] && [ -f "$CCA_T/codex_noflags" ]; then echo "Error: Unknown feature flag: ${args[$((i + 1))]}" >&2; exit 1; fi
 			if [ "${args[$i]}" = -c ] && [ -f "$CCA_T/codex_nocfg" ]; then case "${args[$((i + 1))]}" in tui.notification_method=*) echo "Error: failed to load bootstrap configuration" >&2; exit 1 ;; esac; fi
+			if [ "${args[$i]}" = -c ]; then
+				case "${args[$((i + 1))]}" in
+					default_permissions=*) perm="${args[$((i + 1))]#default_permissions=}"; perm="${perm//\"/}" ;;
+					permissions.*) p="${args[$((i + 1))]#permissions.}"; perms="$perms${p%%.*} " ;;
+				esac
+			fi
 			i=$((i + 2)) ;;
 		*) break ;;
 	esac
 done
+if [ -n "$perm" ] && [ -f "$CCA_T/codex_perm" ]; then
+	case "$perm" in :*) ;; *) case "$perms" in *" $perm "*) ;; *) echo "PERM-REJECT $perm" >> "$LOG"; echo "Error: failed to load configuration" >&2; exit 1 ;; esac ;; esac
+fi
 sub="${args[$i]:-}"
 [ $i -gt 0 ] && case "$sub" in --version|--help) sub=session ;; esac   # 前面带着 cca 的参数：是启动会话（参数原样交给 codex），不是 cca 在探测
 case "$sub" in
 	--version) echo "codex-cli 0.161.0"; exit 0 ;;
 	--help) echo "      --no-daemon"; echo "          Run without the shared background server"; exit 0 ;;
 	features)
-		echo "FEATURES ${args[*]:$((i + 1))} @ $CODEX_HOME" >> "$LOG"
+		echo "FEATURES${perm:+-PERM} ${args[*]:$((i + 1))} @ $CODEX_HOME" >> "$LOG"
 		case "${args[$((i + 1))]:-}" in
 			list)
 				echo "daemon_auto_start                        stable             true"

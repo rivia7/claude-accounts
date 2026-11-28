@@ -349,7 +349,21 @@ fn against_the_spec(t: &mut Ctx) {
             ],
         )],
     );
-    let gem = row('e', "gem", "agy", "logged_in", gem_usage);
+    // Antigravity 每组额度各记一份每周用量（status.rs 的 groups_of：weeks_groups）；没有 id 的组手机不要
+    let gem = patched(
+        row('e', "gem", "agy", "logged_in", gem_usage),
+        &[(
+            "weeks_groups",
+            list![
+                obj! {
+                    "id" => "gemini-weekly", "name" => "Gemini Models", "weeks" => list![week(now - 4.0 * 86400.0, 52.0, true)],
+                    "summary" => obj! { "weeks" => 0.0, "average_percent" => Value::Null, "maxed" => 0.0, "under_half" => 0.0 }
+                },
+                obj! { "name" => "no id", "weeks" => list![] },
+                obj! { "id" => "3p-weekly", "name" => "Claude and GPT models", "weeks" => list![] }
+            ],
+        )],
+    );
     let fay = row(
         'f',
         "fay",
@@ -411,6 +425,7 @@ fn against_the_spec(t: &mut Ctx) {
                     id('e') => list![list!["seven_day", now + 4000.0]]
                 },
                 "near" => list!["hal"], "groups" => list!["Gemini 模型", "Claude、GPT 模型"],
+                "group_weeks" => list!["Gemini 模型", "Claude、GPT 模型"],
                 "first" => obj! { "aid" => "ab".repeat(16), "color" => "#7C3AED", "badge" => "AL", "plan" => "Max", "tier" => "premium", "five_resets" => now + 3600.0 }
             }
         },

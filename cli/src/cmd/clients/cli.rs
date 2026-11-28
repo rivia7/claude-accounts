@@ -1,4 +1,4 @@
-//! 终端工具（命令行的 Claude Code、Codex）：只查版本，更新用它们自己的 update 命令（`cu_cli_run` 到 `cu_cli_install`）。
+//! 终端工具（命令行的 Claude Code、Codex、agy）：只查版本，更新用它们自己的 update 命令（`cu_cli_run` 到 `cu_cli_install`）。
 
 use super::feed::cu_cli_latest;
 use super::pyv::*;
@@ -14,7 +14,7 @@ use crate::py::time::time;
 use crate::py::{path, text, uni, R};
 use crate::{dict, re};
 
-/// 运行 claude / codex：也从空环境开始（不带账号、代理、API key）。HOME 是真的：官方更新命令要往 ~/.local、~/.codex 里装；
+/// 运行 claude / codex / agy：也从空环境开始（不带账号、代理、API key）。HOME 是真的：官方更新命令要往 ~/.local、~/.codex 里装；
 /// PATH 里要有 ~/.local/bin：codex 的安装脚本发现它不在 PATH 里，会去改用户的 shell 配置文件
 fn cu_cli_run(args: &[String], folder: &str, timeout: f64) -> R<Done> {
     let home = home();

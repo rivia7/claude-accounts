@@ -231,6 +231,10 @@ if let st = v["status"] as? [String: Any] {
     let gem = s?.accounts.first { $0.tool == "agy" }
     check(gem?.usage?.quotaGroups.map(\.displayName) == w["groups"] as? [String] && gem?.usage?.hasQuota == true
           && gem?.usage?.quotaMost(.fiveHour, now: now)?.group == "Gemini 模型", "Antigravity 的几组：\(gem?.usage?.quotaGroups.map(\.displayName) ?? [])")
+    check(gem?.weeksGroups?.map(\.displayName) == w["group_weeks"] as? [String] && gem?.weeksGroups?.map(\.id) == ["gemini-weekly", "3p-weekly"]
+          && gem?.weeksGroups?.first?.weeks.weeks.first?.usedPercent == 52 && gem?.weeksGroups?.first?.weeks.weeks.first?.current == true
+          && gem?.weeksGroups?.last?.weeks.weeks.isEmpty == true && s?.accounts.first?.weeksGroups == nil,
+          "Antigravity 每组的每周用量（没有 id 的不要，别的工具没有）：\(String(describing: gem?.weeksGroups))")
     // 在用什么、折合金额（status.rs 的 row_of、cost_of）：按周、按天的起止照最后一项结束的时间和各项的小时数首尾相接推出来
     let wc = w["cost"] as? [String: Any] ?? [:]
     let we = jsonNumber(wc["week_end"]) ?? 0, de = jsonNumber(wc["day_end"]) ?? 0

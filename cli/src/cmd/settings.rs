@@ -765,7 +765,7 @@ pub fn cmd_launch_check(args: &[String]) -> R<()> {
     settings_check_result(&launch_settings_problems(args)?)
 }
 
-// ---- 共享设置的说明和修复（bash 的 settings_warn、cca settings fix；这一节只给 Claude，Codex、agy 的说明在后面）----
+// ---- 共享设置的说明和修复（bash 的 settings_warn、cca settings fix；说明这一节只给 Claude，Codex、agy 的在后面；fix 给 Claude、agy）----
 
 /// 会盖掉账号自己设置的一类
 struct SettingsKind {
@@ -952,7 +952,7 @@ pub fn settings_explain(bad: &[String]) -> Vec<String> {
     head
 }
 
-// ---- Codex、agy 的说明（settings_warn；没有 settings fix：TOML 改写会丢注释，照说的手动改）----
+// ---- Codex、agy 的说明（settings_warn；Codex 没有 settings fix：TOML 改写会丢注释，照说的手动改；agy 的在上面：agy_fix_plan）----
 
 /// Codex、agy 会盖掉账号的一类：认哪几个名字（名字是标签最后那一段：config.toml 的键、.env 的变量、--enable 的值）
 struct ToolKind {
@@ -1151,14 +1151,12 @@ pub fn tool_settings_explain(tool: &Tool, bad: &[String]) -> Vec<String> {
             tool_effects(&groups)
         ));
         let api = groups.iter().any(|(k, _)| k.name == "接口地址");
-        head.push(format!(
-            "删掉这几项再用 {cmd} 启动{}",
-            if api && tool.kind == Kind::Codex {
-                format!("（第三方 API 用 {cmd} add api 加成单独的账号）。")
-            } else {
-                "。".into()
-            }
-        ));
+        head.push(match tool.kind {
+            // agy 的是 JSON：cca agy settings fix 照 Claude 的那样改（先整份备份）
+            Kind::Agy => format!("运行 {cmd} settings fix 修复：先把整份文件备份在旁边，再只去掉这几项，别的设置不动。"),
+            _ if api => format!("删掉这几项再用 {cmd} 启动（第三方 API 用 {cmd} add api 加成单独的账号）。"),
+            _ => format!("删掉这几项再用 {cmd} 启动。"),
+        });
     }
     head.extend(rest);
     head
@@ -1210,6 +1208,9 @@ pub fn settings_fix_keys(data: &Dict) -> (Vec<String>, Vec<String>) {
 
 /// 要去掉的几项按类说：['env.A、env.B（第三方 API）', …]
 fn settings_fix_parts(drop_env: &[String], drop_top: &[String]) -> Vec<String> {
+    if t().kind == Kind::Agy {
+        return vec![format!("{}（{}）", drop_top.join("、"), AGY_KINDS[0].name)];
+    }
     let bad: Vec<String> = drop_env
         .iter()
         .filter(|k| imatch(&SETTINGS_BAD, k))
@@ -1246,26 +1247,20 @@ pub struct SettingsFix {
     pub drop_top: Vec<String>,
 }
 
-/// cca settings fix 要改的。只改共享的 ~/.claude/settings.json、settings.local.json（项目设置、启动参数给的不改）；
-/// 有一份读不了、不是 JSON 的，返回 Err(说明)，整个都不改
+/// cca settings fix 要改的。Claude 只改共享的 ~/.claude/settings.json、settings.local.json，agy 只改共享的
+/// ~/.gemini/antigravity-cli/settings.json（[`agy_fix_plan`]）；项目设置、启动参数给的不改。有一份读不了、不是 JSON 的，返回 Err(说明)，
+/// 整个都不改
 pub fn settings_fix_plan() -> Result<Vec<SettingsFix>, String> {
+    match t().kind {
+        Kind::Claude => {}
+        Kind::Agy => return agy_fix_plan(),
+        // bash 不让走到这里（unsupported）：TOML 改写会丢注释
+        Kind::Codex => return Err("Codex 的共享设置 cca 不改：照 cca codex settings 说的手动改".into()),
+    }
     let mut plan = Vec::new();
     for name in ["settings.json", "settings.local.json"] {
         let file = path::join(&claude().master, name);
-        let raw = match std::fs::read(&file) {
-            Ok(raw) => raw,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                if path::lexists(&file) {
-                    return Err(format!("{} 是个指向不存在的文件的链接，cca 不改它", home_tilde(&file)));
-                }
-                continue;
-            }
-            Err(_) => return Err(format!("{} 读不了，cca 不改它", home_tilde(&file))),
-        };
-        let data = std::str::from_utf8(&raw).ok().and_then(|text| json_loads(text).ok()).and_then(|data| data.as_dict());
-        let Some(data) = data.filter(|data| matches!(data.get("env"), None | Some(V::Dict(_)))) else {
-            return Err(format!("{} 不是合法的 JSON 设置，cca 不改它：先把它改对（或者挪走）再试", home_tilde(&file)));
-        };
+        let Some((raw, data)) = fix_read(&file, |data| matches!(data.get("env"), None | Some(V::Dict(_))))? else { continue };
         let (drop_env, drop_top) = settings_fix_keys(&data);
         if !drop_env.is_empty() || !drop_top.is_empty() {
             let new = Dict::from_pairs(data.items().into_iter().filter(|(k, _)| !drop_top.iter().any(|d| **d == **k)));
@@ -1283,6 +1278,39 @@ pub fn settings_fix_plan() -> Result<Vec<SettingsFix>, String> {
         }
     }
     Ok(plan)
+}
+
+/// cca settings fix 读一份共享的设置：没有这个文件是 Ok(None)；是个指向不存在的文件的链接、读不了、不是 JSON 对象（或者 ok 说
+/// 不对）是 Err(说明)：整个都不改
+fn fix_read(file: &str, ok: impl Fn(&Dict) -> bool) -> Result<Option<(Vec<u8>, Dict)>, String> {
+    let raw = match std::fs::read(file) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if path::lexists(file) {
+                return Err(format!("{} 是个指向不存在的文件的链接，cca 不改它", home_tilde(file)));
+            }
+            return Ok(None);
+        }
+        Err(_) => return Err(format!("{} 读不了，cca 不改它", home_tilde(file))),
+    };
+    let data = std::str::from_utf8(&raw).ok().and_then(|text| json_loads(text).ok()).and_then(|data| data.as_dict());
+    let Some(data) = data.filter(|data| ok(data)) else {
+        return Err(format!("{} 不是合法的 JSON 设置，cca 不改它：先把它改对（或者挪走）再试", home_tilde(file)));
+    };
+    Ok(Some((raw, data)))
+}
+
+/// cca agy settings fix 要改的：只改共享的 ~/.gemini/antigravity-cli/settings.json，去掉 Google Cloud 项目那几项（顶层的
+/// AGY_SETTINGS_BAD，和 agy_settings_problems 同一套）；启动参数给的（--settings）不改
+fn agy_fix_plan() -> Result<Vec<SettingsFix>, String> {
+    let file = path::join_all(&[&agy().master, "antigravity-cli", "settings.json"]);
+    let Some((raw, data)) = fix_read(&file, |_| true)? else { return Ok(Vec::new()) };
+    let drop_top: Vec<String> = AGY_SETTINGS_BAD.iter().filter(|k| data.has(k)).map(|k| k.to_string()).collect();
+    if drop_top.is_empty() {
+        return Ok(Vec::new());
+    }
+    let new = Dict::from_pairs(data.items().into_iter().filter(|(k, _)| !drop_top.iter().any(|d| **d == **k)));
+    Ok(vec![SettingsFix { path: file, raw, new, drop_env: Vec::new(), drop_top }])
 }
 
 /// 这次要改的摘要：同意的范围（界面 App 同意后带着它重跑；文件变了就对不上，重新问）
@@ -1327,7 +1355,7 @@ pub fn settings_backup(file: &str, raw: &[u8]) -> io::Result<String> {
     Err(io::Error::new(io::ErrorKind::AlreadyExists, file.to_string()))
 }
 
-/// py settings-fix plan | apply 摘要（cca settings fix）。plan：第一行是摘要（同意的范围），后面是给人看的说明；没有要改的
+/// py settings-fix plan | apply 摘要（cca settings fix、cca agy settings fix）。plan：第一行是摘要（同意的范围），后面是给人看的说明；没有要改的
 /// 退出码 3。apply：拿着 sync.lock（py link 也在锁里改共享的配置）照同一个摘要改，每份先整份备份在旁边再原子替换（是链接的照旧
 /// 写到它指向的文件）；摘要对不上（刚被改过）退出码 2，什么都不动。读不了、不是 JSON、写不了：退出码 4，stdout 是说明
 pub fn cmd_settings_fix(args: &[String]) -> R<()> {
@@ -1349,7 +1377,7 @@ pub fn cmd_settings_fix(args: &[String]) -> R<()> {
             out!("{} 里要去掉：{}。", home_tilde(&fix.path), settings_fix_parts(&fix.drop_env, &fix.drop_top).join("；"));
         }
         out!("别的设置不动；改之前先把整份原文备份在旁边（文件名后面加 .cca-backup-日期时间，只有你自己能读）。");
-        out!("改了以后，不经 cca、直接运行 claude 也不再用这几项；想恢复原样，把备份拷回去就行。");
+        out!("改了以后，不经 cca、直接运行 {} 也不再用这几项；想恢复原样，把备份拷回去就行。", t().name);
         return Ok(());
     }
     // (路径, 备份, 去掉了几项)
@@ -1521,7 +1549,7 @@ mod tests {
             [
                 format!("{a}/antigravity-cli/settings.json 里设置了 Google Cloud 项目（gcp.project、gcp.location）。"),
                 "这份设置所有账号共用，带着它启动的话所有账号都会记到同一个 Google Cloud 项目上，所以 cca 没有继续。".to_string(),
-                "删掉这几项再用 cca agy 启动。".to_string(),
+                "运行 cca agy settings fix 修复：先把整份文件备份在旁边，再只去掉这几项，别的设置不动。".to_string(),
             ]
         );
         assert!(tool_settings_explain(ag, &s(&["antigravity-cli/settings.json:unreadable"]))[0].contains("不是合法的 JSON"));

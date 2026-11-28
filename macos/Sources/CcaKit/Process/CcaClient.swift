@@ -38,7 +38,7 @@ enum CcaCommand: Sendable, Hashable {
     case update(String)
     /// 检查更新（`cca update --check --json`，PROTOCOL 5.1）：只读、要联网，stdout 是 kind=update 的文档；查不了时看 fail 事件。
     case updateCheck
-    /// 客户端（Claude、ChatGPT 桌面版，终端里的 Claude Code、Codex）更新：检查不安装，安装需经过绑定 token 的 consent。
+    /// 客户端（Claude、ChatGPT 桌面版，终端里的 Claude Code、Codex、Antigravity）更新：检查不安装，安装需经过绑定 token 的 consent。
     /// install：用户允许了自动更新（ClientUpdatesDoc.autoInstall），这次检查可能顺带装上：要跑完为止（runsToCompletion）。
     case clientCheck(force: Bool, install: Bool = false)
     case clientMode(automatic: Bool)

@@ -16,7 +16,7 @@
 use super::far::{aid_of, clean, short_name, team_salt};
 use super::status::account_tag;
 use super::{launch, local, peers, relay};
-use crate::cmd::agy::agy_interactive;
+use crate::cmd::agy::{agy_interactive, agy_line_ok, AGY_LINE_FLAG};
 use crate::cmd::codex::codex_interactive;
 use crate::cmd::hub::{HubKind, TeamTag};
 use crate::cmd::settings::{home_tilde, launch_settings_problems_in, CLAUDE_VALUES, CODEX_VALUES};
@@ -160,14 +160,24 @@ impl Template {
         sha256_hex(json::dumps(&V::List(doc), json::Fmt::new().utf8().compact()))[..16].to_string()
     }
 
-    /// 能不能带开场白（接在参数后面：`-- 开场白`，工具当它是头一句话）：Claude Code、Codex 认；agy 还没核对过，先不给。参数里
-    /// 已经有一句话的（[`has_words`]）也不给：再接一句的话，Claude Code 只拿头一句、手机给的那句不理（2.1.332：多出来的参数
-    /// 它不拦也不用），Codex 起不来（0.172.0：unexpected argument）
+    /// 能不能带开场白（怎么接见 [`Template::line_args`]）。参数里已经有一句话的（[`has_words`]）不给：再接一句的话，Claude Code
+    /// 只拿头一句、手机给的那句不理（2.1.332：多出来的参数它不拦也不用），Codex 起不来（0.172.0：unexpected argument）；agy 的参数里
+    /// 本来就不能有话，已经有 -i 的不给（agy.rs 的 `agy_line_ok`）
     pub fn line_ok(&self) -> bool {
         match self.tool.as_str() {
             "claude" => !has_words(&self.args, CLAUDE_VALUES),
             "codex" => !has_words(&self.args, CODEX_VALUES),
+            "agy" => agy_line_ok(&self.args),
             _ => false,
+        }
+    }
+
+    /// 开场白接在参数后面的那几项（[`Template::line_ok`] 的才接）：Claude Code、Codex 是 `-- 开场白`（工具当它是头一句话）；agy 不认
+    /// 参数里的话（1.5.18：unexpected argument），是一项 `--prompt-interactive=开场白`
+    pub fn line_args(&self, line: &str) -> Vec<String> {
+        match self.tool.as_str() {
+            "agy" => vec![format!("{AGY_LINE_FLAG}={line}")],
+            _ => vec!["--".into(), line.to_string()],
         }
     }
 
@@ -692,7 +702,16 @@ mod tests {
     fn opening_lines() {
         assert!(tpl("claude", &[]).line_ok());
         assert!(tpl("codex", &["--model", "x"]).line_ok());
-        assert!(!tpl("agy", &[]).line_ok(), "agy 还没核对过");
+        assert!(tpl("agy", &[]).line_ok() && tpl("agy", &["--model", "x", "-c", "--mode=plan", "-r", "abc"]).line_ok());
+        for no in
+            [&["-i", "x"][..], &["--prompt-interactive=x"], &["-prompt-interactive", "x"], &["--", "x"], &["说中文"], &["-p", "x"]]
+        {
+            assert!(!tpl("agy", no).line_ok(), "agy 参数里已经有话、不是交互的会话：{no:?}");
+        }
+        assert!(!tpl("agy", &["--model", "x", "y"]).line_ok(), "选项的值后面还有一句话");
+        assert_eq!(tpl("agy", &["--model", "x"]).line_args("-看看 README"), ["--prompt-interactive=-看看 README"]);
+        assert_eq!(tpl("codex", &[]).line_args("看看"), ["--", "看看"]);
+        assert_eq!(tpl("claude", &[]).line_args("-p"), ["--", "-p"]);
         assert!(!tpl("claude", &["--", "x"]).line_ok(), "已经带着 --");
         assert!(!tpl("claude", &["--model", "opus", "说中文"]).line_ok(), "参数里已经有一句话");
         assert!(tpl("claude", &["--append-system-prompt", "说中文", "--model=opus", "-c"]).line_ok(), "选项的值不是话");

@@ -271,6 +271,26 @@ fn weeks_of(w: &Dict) -> Dict {
     dict! { "since_epoch" => num(w, "since_epoch"), "weeks" => weeks, "summary" => summary }
 }
 
+/// Antigravity 的每周用量最多给几组（agy 现在给两组）
+const GROUP_WEEKS: usize = 4;
+
+/// Antigravity 各组的每周用量（PROTOCOL 2.2 的 `usage_weeks_groups`）：一组一项，认这一组的 id、agy 给的组名（手机照 Mac App 的译法显示），
+/// 加上 weeks_of 的几项；不是对象、没有 id 的不要
+fn groups_of(l: &List) -> List {
+    let out = List::new();
+    for g in l.items() {
+        let Some(g) = g.as_dict() else { continue };
+        let id = far::clean(&g.str("id").map(|s| s.to_string()).unwrap_or_default(), 64);
+        if id.is_empty() || out.len() >= GROUP_WEEKS {
+            continue;
+        }
+        let d = dict! { "id" => id, "name" => far::clean(&g.str("name").map(|s| s.to_string()).unwrap_or_default(), 64) };
+        d.update(&weeks_of(&g));
+        out.push(d);
+    }
+    out
+}
+
 /// 按模型的最多给几个（cca 排好的先后：手机上其余的照合计减出来，算「其他」）、按设备的最多给几台
 const COST_MODELS: usize = 3;
 const COST_DEVICES: usize = 6;
@@ -811,6 +831,10 @@ fn row_of(a: &Dict, tool: &str, name: &str) -> Dict {
         "usage" => a.dict("usage").map_or(V::None, |u| V::Dict(usage_of(&u))),
         "weeks" => a.dict("usage_weeks").map_or(V::None, |w| V::Dict(weeks_of(&w))),
     };
+    // Antigravity 的每周用量分组（usage_weeks_groups）：有才写
+    if let Some(l) = a.list("usage_weeks_groups") {
+        d.set("weeks_groups", groups_of(&l));
+    }
     // 在用什么（总览的卡片左上角）：桌面 App 开着、命令行里几个会话、最早那个从什么时候开始的；没在用的不写
     if running("app") {
         d.set("app", true);
@@ -914,6 +938,7 @@ fn doc_for(p: &[u8], accts: &[&Acct], cx: &Ctx, fit: Fit) -> Dict {
         }
         if !fit.weeks {
             row.set("weeks", V::None);
+            row.pop("weeks_groups");
         }
         match (&a.cost, fit.cost) {
             (Some((full, _)), CostFit::Full) => row.set("cost", full),
@@ -1401,6 +1426,50 @@ mod tests {
     fn accts_of(list: &[Dict]) -> Vec<Acct> {
         let tool = dict! { "id" => "claude", "label" => "Claude Code", "accounts" => V::List(List::from_vec(list.iter().map(|d| V::Dict(d.clone())).collect())) };
         accounts(&dict! { "tools" => V::List(List::from_vec(vec![V::Dict(tool)])) }, NOW)
+    }
+
+    #[test]
+    fn group_weeks_for_the_phone() {
+        // Antigravity 的每周用量分组（usage_weeks_groups → weeks_groups）：组的 id、名字和 weeks_of 的几项（不带 last_epoch）；
+        // 不是对象、没有 id 的不要；没有的账号不写；太长、不带每周用量时一起不带
+        let week = V::Dict(dict! {
+            "start_epoch" => 1.0, "end_epoch" => 2.0, "used_percent" => 40, "resets" => 0, "last_epoch" => 2.0, "current" => true, "partial" => false,
+        });
+        let group = |id: &str, name: &str| {
+            V::Dict(dict! {
+                "id" => id, "name" => name, "since_epoch" => 1.0, "weeks" => V::List(List::from_vec(vec![week.clone()])),
+                "summary" => dict! { "weeks" => 0, "average_percent" => V::None, "maxed" => 0, "under_half" => 0 },
+            })
+        };
+        let a = acct(w(10.0, Some(NOW + 60.0)), w(20.0, Some(NOW + 86400.0)));
+        a.set(
+            "usage_weeks_groups",
+            V::List(List::from_vec(vec![
+                group("gemini-weekly", "Gemini Models"),
+                V::from("bad"),
+                group("", "no id"),
+                group("3p-weekly", "Claude and GPT models\u{202e}"),
+            ])),
+        );
+        let accts = accts_of(&[a, acct(w(10.0, None), w(20.0, None))]);
+        let refs: Vec<&Acct> = accts.iter().collect();
+        let doc = doc_for(&P, &refs, &cx(None), full(2));
+        let rows = doc.list("accounts").unwrap();
+        let row = rows.get(0).unwrap().as_dict().unwrap();
+        let g = row.list("weeks_groups").unwrap();
+        let ids: Vec<String> = g.items().iter().map(|x| x.as_dict().unwrap().str("id").unwrap().to_string()).collect();
+        assert_eq!(ids, ["gemini-weekly", "3p-weekly"]);
+        let g0 = g.get(0).unwrap().as_dict().unwrap();
+        assert_eq!(g0.str("name").as_deref(), Some("Gemini Models"));
+        assert!(g0.get("since_epoch").is_some() && g0.dict("summary").is_some());
+        let wk = g0.list("weeks").unwrap().get(0).unwrap().as_dict().unwrap();
+        assert!(wk.get("last_epoch").is_none() && wk.get("used_percent").is_some());
+        assert!(!g.get(1).unwrap().as_dict().unwrap().str("name").unwrap().contains('\u{202e}'), "名字照别的字段一样清理");
+        assert!(rows.get(1).unwrap().as_dict().unwrap().get("weeks_groups").is_none(), "没有的账号不写");
+        let lean = doc_for(&P, &refs, &cx(None), Fit { weeks: false, cost: CostFit::Off, n: 2 });
+        let lrow = lean.list("accounts").unwrap().get(0).unwrap().as_dict().unwrap();
+        assert!(lrow.get("weeks_groups").is_none() && lrow.get("weeks").is_some_and(|w| w.is_none()));
+        assert!(accts[0].row.list("weeks_groups").is_some(), "少放的是给这一个配对的那一份，不改账号本身");
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! - 第三方 API 账号的：服务名 cca-api-账号目录名（Codex 账号是 cca-codex-api-账号目录名），账户名是接口地址的域名——地址换成
 //!   别的服务商，旧 key 就取不到，不会被发过去。账号表里写了 key 字段时用表里的。
 //! - 官方账号记下备查的（控制台里建的 API key；cca 绝不拿它登录或启动账号，那样会变成按量计费）：服务名 cca-ref-账号目录名
-//!   （Codex 是 cca-codex-ref-），账户名是 REF_ACCT。
+//!   （Codex 是 cca-codex-ref-，agy 是 cca-agy-ref-），账户名是 REF_ACCT。
 //!
 //! cca 存过 key 的账号记在 config.json 的 api_keys / ref_keys：删账号（包括在 cca edit 里删、直接改账号表删）后据此清掉钥匙串里的
 //! key；key_hints 记着每个 key 的掩码（key_hint）和存的时候的域名：_gui state 照它显示，不读钥匙串。
