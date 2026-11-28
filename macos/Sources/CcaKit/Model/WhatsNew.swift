@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.8.0-beta.2", title: "iPhone 上也看得到端口的问题和 Mac 页顶的提示", points: [
+            .init(symbol: "iphone",
+                  text: "iPhone 上的 cca App 也说账号的出口有问题、端口无法连接、路由器选错了节点，和 Mac 总览上的一样（后两样要这台 Mac 上的 cca App 开着时才查）。"),
+            .init(symbol: "exclamationmark.triangle",
+                  text: "Mac 页顶的提示手机上也有：账号表有错误、共享设置有问题、cca 有新版本、后台刷新用量要你同意或者没成功、内置代理停了，并写着在 Mac 上点哪个。"),
+            .init(symbol: "pause.circle",
+                  text: "电脑睡着了、会话被挂起时，Mac 和手机上别的机器的会话、新建会话都说「无响应」，和离线分开。"),
+            .init(symbol: "arrow.down.circle",
+                  text: "这台 Mac 上的 cca 和 iPhone 上的 App 都要更新；「无响应」还要 Team 的服务器更新到这一版，没更新时照旧说离线。"),
+        ]),
         ReleaseNote(version: "3.8.0-beta.1", title: "iPhone 上的 App 照 Mac 上的改，能同时接着几个会话", points: [
             .init(symbol: "iphone",
                   text: "iPhone 上的 cca App：账号页名字下面标出工具、套餐和登录状态，最下面一句话说下一步怎么做；底下的标签用数字标出要处理的账号、开着的终端。"),
