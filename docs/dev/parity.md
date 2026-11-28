@@ -39,7 +39,7 @@
 | 邮箱助手（登录邮件里的链接） | ✓ | ✗ | — |
 | 远程会话（会话宿主、接入、手机） | ✓ | ✓ | ✓ |
 | 做完了 / 在等你推给接着它的地方 | ✓（cca 带的钩子） | ✓（notify；在等你只在宿主里） | ✓（状态栏的命令） |
-| 这台 Mac 上弹通知（`popup`） | ✗（靠 Claude Code 自己和用户的钩子） | ✓ | ✓ |
+| 这台 Mac 上弹通知（`popup`） | ✓（cca 带的钩子；用户自己的钩子已经会弹的那一种不弹） | ✓ | ✓ |
 | 远程启动（模板） | ✓ | ✓ | ✓ |
 | 远程启动带开场白（`line`） | ✓（`-- 开场白`） | ✓（同左） | ✓（`--prompt-interactive=开场白`，launch.md） |
 | Team：账号表、别名、固定节点、给了马上加进来 | ✓ | ✓（马上加进来：3.7.13 起） | ✓（同左） |
@@ -76,7 +76,6 @@
 - Antigravity：几组额度（`quota_groups`）、状态栏的命令记套餐、登录存成文件的探测（`agy_probe`）
 
 ## 反过来：Claude 比另两种少的
-- 这台 Mac 上弹「做完了 / 在等你」（`popup`）只给 Codex、agy 的会话：Claude Code 的靠它自己和用户的钩子（remote.md：宿主不为 `NOTIFY_REQ` 弹）。要不要 cca 也弹，问维护者
 - 登录失效：Claude Code 的 `get_usage` 分不清是失效还是网络（`nolimits`，usage.md），Codex、agy 都说得清。上游
 
 ## 文案

@@ -10,7 +10,8 @@
 //!                                （{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "timeout": 10, "command": "… _session-start 目录名"}]}]}}：
 //!                                三层都没有别的键、别的项；command 照 shlex 拆开，第一段（cca 的路径）不看）。是：打出去掉
 //!                                “ --settings {…}” 的那一行；不是、或者这一行根本没有 --settings：打出 BAD。退出码都是 0。
-//!                                什么都不写。（10c 的 hookless）
+//!                                什么都不写。cca 自己带的「做完了 / 在等你」那三个钩子（notifyless 认的那样：这台 Mac 上弹通知、
+//!                                远程会话开着时带着）在的话先拿掉再看。（10c 的 hookless）
 //! notifyless ARGS行              同一行里 --settings 的 hooks 最后是不是正好接着 cca 自己带的「做完了 / 在等你」那三个钩子（远程会话
 //!                                开着时："Stop": […], "PermissionRequest": […], "Notification": [{"matcher": "permission_prompt|…", "hooks": […]}]，
 //!                                每一项都是 {"type": "command", "command": "… _remote-hook", "timeout": 10}；cca 的路径不看）。是：打出
@@ -468,6 +469,9 @@ fn hook_only(settings: &str, name: &str) -> Result<bool, Hook> {
 
 fn hookless(a: &[String], out: &mut String) -> R<i32> {
     let (line, name) = (arg(a, 0)?, arg(a, 1)?);
+    // cca 自己的「做完了 / 在等你」那三个钩子在的话先拿掉（notifyless 那样）
+    let stripped = strip_notify(line.trim_end_matches('\n'));
+    let line = stripped.as_deref().unwrap_or(line);
     // 原来的正则：^(.*?) --settings (\{"hooks": .*?\}\]\}\]\}\})( .*)?$ 。Python 的 $ 在结尾、在结尾那个换行的前面都算：
     // 这里写成 \n?\z（. 两边都不认换行）
     let rx = regex::Regex::new(r#"^(.*?) --settings (\{"hooks": .*?\}\]\}\]\}\})( .*)?\n?\z"#).expect("写死的正则");
@@ -552,23 +556,22 @@ fn without_notify(settings: &Value) -> Option<Obj> {
     Some(rest)
 }
 
+/// ARGS 那一行拿掉 --settings 里 cca 自己的那三个钩子（`without_notify`）以后的样子；没有 --settings、里面不是正好接着那三个是 None
+fn strip_notify(line: &str) -> Option<String> {
+    let at = line.find(" --settings {")?;
+    let start = at + " --settings ".len();
+    let n = object_len(&line[start..])?;
+    let rest = without_notify(&json::parse(&line[start..start + n]).ok()?)?;
+    let (head, tail) = (&line[..at], &line[start + n..]);
+    Some(if rest.is_empty() {
+        format!("{head}{tail}")
+    } else {
+        format!("{head} --settings {}{tail}", json::dumps(&Value::Obj(rest), &Style::default().unicode()))
+    })
+}
+
 fn notifyless(a: &[String], out: &mut String) -> R<i32> {
-    let line = arg(a, 0)?.trim_end_matches('\n');
-    let shown = line
-        .find(" --settings {")
-        .and_then(|at| {
-            let start = at + " --settings ".len();
-            let n = object_len(&line[start..])?;
-            let rest = without_notify(&json::parse(&line[start..start + n]).ok()?)?;
-            let (head, tail) = (&line[..at], &line[start + n..]);
-            Some(if rest.is_empty() {
-                format!("{head}{tail}")
-            } else {
-                format!("{head} --settings {}{tail}", json::dumps(&Value::Obj(rest), &Style::default().unicode()))
-            })
-        })
-        .unwrap_or_else(|| "BAD".to_string());
-    out.push_str(&shown);
+    out.push_str(&strip_notify(arg(a, 0)?.trim_end_matches('\n')).unwrap_or_else(|| "BAD".to_string()));
     out.push('\n');
     Ok(0)
 }
@@ -1040,6 +1043,22 @@ mod tests {
             r#"ARGS: --settings {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "timeout": 10, "command": 5}]}]}}"#;
         assert_eq!(raised(hookless, &[line, name]), "AttributeError: 'int' object has no attribute 'read'");
         assert_eq!(raised(hookless, &[line]), "IndexError: list index out of range");
+    }
+
+    #[test]
+    fn hookless_takes_out_the_notify_hooks_first() {
+        let name = "alice-example-com-fc2398";
+        let start = r#""SessionStart": [{"hooks": [{"type": "command", "command": "/p/cca _session-start alice-example-com-fc2398", "timeout": 10}]}]"#;
+        let h = r#"{"type": "command", "command": "/p/cca _remote-hook", "timeout": 10}"#;
+        let m = "permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt";
+        let notify = format!(
+            r#""Stop": [{{"hooks": [{h}]}}], "PermissionRequest": [{{"hooks": [{h}]}}], "Notification": [{{"matcher": "{m}", "hooks": [{h}]}}]"#
+        );
+        let line = |hooks: &str| format!("ARGS: --add-dir=/a --settings {{\"hooks\": {{{hooks}}}}} --version");
+        assert_eq!(done(hookless, &[&line(&format!("{start}, {notify}")), name]), "ARGS: --add-dir=/a --version\n");
+        assert_eq!(done(hookless, &[&line(&notify), name]), "BAD\n", "只有那三个、没有记下会话的：不是");
+        let odd = notify.replace("_remote-hook", "_remote-hook --x");
+        assert_eq!(done(hookless, &[&line(&format!("{start}, {odd}")), name]), "BAD\n", "不是正好那三个：照旧不认");
     }
 
     #[test]

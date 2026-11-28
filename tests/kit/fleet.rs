@@ -105,7 +105,7 @@ exit 0
 /// 后台起的 cca（记下 key 以后的 _key-sync 这些）：只记一笔（自己的进程号、参数），不真的起
 pub const SELF: &str = r#"echo "$$ $*" >> "$HOME/kicks.log"
 "#;
-/// 假的 osascript：测试里不弹真的通知（cca 启动的 Codex、Antigravity 会话做完了、在等你时这台 Mac 上弹的，cli 的
+/// 假的 osascript：测试里不弹真的通知（cca 启动的 Claude Code、Codex、Antigravity 会话做完了、在等你时这台 Mac 上弹的，cli 的
 /// remote/popup.rs）。参数记进 ~/osascript.log（一行 `OSA [参数]…`），stdin 上的脚本读掉不要
 pub const OSASCRIPT: &str = r#"{ printf 'OSA'; printf ' [%s]' "$@"; echo; } >> "$HOME/osascript.log"
 [ "${1:-}" = - ] && cat > /dev/null

@@ -704,13 +704,14 @@ fn pair_list_attach(t: &mut Ctx) {
 /// cca 自己带的 Claude Code 钩子（remote-hook，cli/src/cmd/remote/hook.rs）：会话里的 Claude Code 照钩子的输入（stdin 上的 JSON）
 /// 调它，别的机器上接着的那一端弹出来——做完了（最后一条回复的第一行）、问了一阵没人答（PermissionRequest 时记下的那一句，
 /// Notification 的 permission_prompt 来了才推）、别的在等你的（Claude Code 的原话）。副标题是账号的别名（CCA_ACCOUNT）和项目的
-/// 文件夹。后台任务还在跑的“做完了”不推；用户自己的钩子（cca remote notify）为同一件事推的一模一样的那条不再推；会话外面调的
-/// 什么都不做。服务器看不到通知里的字
+/// 文件夹。后台任务还在跑的“做完了”不推；用户自己的钩子（cca remote notify）为同一件事推的一模一样的那条不再推。交互的会话
+/// （CLAUDE_CODE_ENTRYPOINT 是 cli）这台 Mac 上也弹（假的 osascript 记下；会话外面调的不推、照弹）。服务器看不到通知里的字
 fn cca_hooks_reach_the_other_machine(t: &mut Ctx) {
     let (fx, mut a, b, asked) = client_fx(t);
     let work = relay::work(&a).to_str().expect("临时目录的路径是 UTF-8").to_string();
     a.env.insert("CCA_ACCOUNT".into(), "工作(alice@example.com)".into());
     a.env.insert("CLAUDE_PROJECT_DIR".into(), work);
+    a.env.insert("CLAUDE_CODE_ENTRYPOINT".into(), "cli".into());
     let mut h = session(&a);
     pair(&a, &b);
     let row = asked.listed(&b, "laptop 列出 box 上的会话").remove(0);
@@ -775,9 +776,28 @@ fn cca_hooks_reach_the_other_machine(t: &mut Ctx) {
     assert_eq!(shown.matches("改好了 两处").count(), 1, "{shown:?}");
     assert!(!shown.contains("不该推"), "后台任务还在跑：做完了会叫醒会话，那时再说");
     assert!(!has(h.out(), "777;notify"), "启动它的终端上没有（这台机器上的钩子自己会弹）");
-    // 不在宿主里（界面 App 里启动的会话也带着这几个钩子）：什么都不做，总是成功
+    // 不在宿主里（界面 App 里启动的会话也带着这几个钩子）：不推，这台 Mac 上照弹；没有输入的什么都不做。总是成功、什么都不打印
+    let outside = r#"{"hook_event_name": "Stop", "session_id": "s-4", "last_assistant_message": "外面的"}"#;
+    let r = a.run_with(&["remote-hook"], outside, &[]);
+    assert_eq!((r.code, r.out.as_str(), r.err.as_str()), (0, "", ""));
     let r = a.run(&["remote-hook"]);
     assert_eq!((r.code, r.out.as_str(), r.err.as_str()), (0, "", ""));
+    // 弹通知只有 macOS 上有（popup::on）：别的系统上（linux.sh 的宿主机）一个都不弹
+    let popped = fsx::try_read_text(a.home.join("osascript.log")).unwrap_or_default();
+    let pops: Vec<&str> = popped.lines().filter(|l| l.starts_with("OSA ")).collect();
+    let want: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "OSA [-] [Claude Code 做完了] [工作 · work] [改好了 两处] [Glass]",
+            "OSA [-] [Claude Code 要你确认] [工作 · work] [运行：清掉编译的] [Ping]",
+            "OSA [-] [Claude Code 在等你] [工作 · work] [github 要你填一个值] [Ping]",
+            "OSA [-] [Claude Code 在等你] [工作 · work] [后台的会话要你回答] [Ping]",
+            "OSA [-] [Claude Code 做完了] [工作 · work] [外面的] [Glass]",
+        ]
+    } else {
+        &[]
+    };
+    assert_eq!(pops, want, "这台 Mac 上弹的：后台任务还在跑的、刚问还没到时候的不弹");
+    assert!(!has(&v.out()[m..], "外面的"), "会话外面调的不推");
     h.send("exit 0\n");
     assert_eq!((h.wait(), v.wait()), (0, 0));
     let seen = fx.sniff.snapshot();

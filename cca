@@ -8741,7 +8741,8 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
 EOF
 	[ -z "$mac" ] || cat >&2 <<EOF
                              dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）、
-                             popup（设成 false：cca 启动的 Codex、Antigravity 会话做完了、在等你时不在这台 Mac 上弹通知）、
+                             popup（设成 false：cca 启动的 Claude Code、Codex、Antigravity 会话做完了、在等你时不在这台 Mac 上弹通知；
+                             你自己的 Claude Code 钩子已经弹了的那一种，cca 本来就不弹）、
                              mail（cca mail setup 写的；auto 设成 false：登录时不再自动打开登录邮件里的链接）
 EOF
 }
@@ -8768,7 +8769,7 @@ main() {
 		_session-start)   # Claude Code 的 SessionStart hook（启动时经 --settings 带上的；--desktop：cca cost hook 加在共享设置里的，Claude App 里的会话）：会话 id 记进账号目录（--desktop 带着 App 登录的账号记进 cost/），折合金额按它认账号。stdout 会进 Claude 的上下文：什么都不说，总是成功
 			shift
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
-		_remote-hook)   # cca 自己带的 Claude Code 钩子（远程会话开着时经 --settings 带上的 Stop、PermissionRequest、Notification）：做完了、在等你时推一条通知给接着这个会话的各处（辅助程序的 remote-hook，stdin 是钩子的输入）。Stop 的退出码 2 会拦着 Claude Code 不让停：什么都不说，总是成功。
+		_remote-hook)   # cca 自己带的 Claude Code 钩子（远程会话开着、这台 Mac 上弹通知时经 --settings 带上的 Stop、PermissionRequest、Notification）：做完了、在等你时推一条通知给接着这个会话的各处、这台 Mac 上弹一个（辅助程序的 remote-hook，stdin 是钩子的输入）。Stop 的退出码 2 会拦着 Claude Code 不让停：什么都不说，总是成功。
 			                # --codex [--then 用户的 notify] JSON：cca 经 -c notify 交给 Codex 的（一轮做完了，JSON 是 Codex 给的；codex_launch_args）
 			shift
 			py remote-hook "$@" >/dev/null 2>&1 || : ;;

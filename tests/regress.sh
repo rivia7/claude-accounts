@@ -615,8 +615,13 @@ rs_pty() {   # rs_pty 环境…：在真的终端里（script，不设 CCA_TTY�
 }
 rs_last() { grep "^$1:" claude.log | tail -n 1; }   # 假 claude 最近一次记下的参数（ARGS）、环境（ENV）
 rs_pty CCA_REMOTE=
+rs_pop=$(rs_last ARGS)
+# 下面比参数都拿 popup 关着的那一次做底（popup 开着时 cca 带上自己弹通知的那三个钩子，见这一节最后），这一节完了拿掉
+edit_table 'j["popup"] = False' "$H/.cca/config.json"; : > claude.log
+rs_pty CCA_REMOTE=
 rs_args=$(rs_last ARGS); rs_env=$(rs_last ENV)
-ok "开关没开、在终端里：照原样直接运行（没有会话目录），退出码透传；不带 cca 自己的「做完了 / 在等你」钩子（参数里没有 _remote-hook；--settings 里照旧只有记下会话的那一个）" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -n "$rs_env" ] && [ ! -e "$H/.cca/remote" ] && ! printf "%s" "$rs_args" | grep -q -- "_remote-hook" && [ "$("$TESTBIN" fx hookless "$rs_args" "$(basename "$AD")")" != BAD ]'
+ok "开关没开、在终端里：照原样直接运行（没有会话目录），退出码透传；config.json 的 popup 是 false 时不带 cca 自己的「做完了 / 在等你」钩子（参数里没有 _remote-hook；--settings 里照旧只有记下会话的那一个）" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -n "$rs_env" ] && [ ! -e "$H/.cca/remote" ] && ! printf "%s" "$rs_args" | grep -q -- "_remote-hook" && [ "$("$TESTBIN" fx hookless "$rs_args" "$(basename "$AD")")" != BAD ]'
+ok "popup 开着（macOS 上的默认）：远程会话没开也带上那三个钩子（这台 Mac 上弹 Claude Code 的「做完了 / 在等你」），别的参数一样" '[ "$("$TESTBIN" fx notifyless "$rs_pop")" = "$rs_args" ] && printf "%s" "$rs_pop" | grep -q -- "_remote-hook"'
 : > claude.log
 run CCA_REMOTE=1 cca @alice --version >/dev/null 2>&1; rc=$?
 ok "CCA_REMOTE=1、不在终端里（界面 App、脚本）：照原样直接运行；开关开着就带上 cca 自己的「做完了 / 在等你」钩子（--settings 里的 Stop、PermissionRequest、Notification，回调 cca _remote-hook：不在宿主里时它什么都不做），别的参数一样" '[ $rc -eq 3 ] && [ "$("$TESTBIN" fx notifyless "$(rs_last ARGS)")" = "$rs_args" ] && [ ! -e "$H/.cca/remote" ]'
@@ -686,6 +691,43 @@ out=$(run cca remote bogus 2>&1); rc=$?
 ok "cca remote 不认识的子命令：说用法，不当成给 claude 的参数" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "用法：cca remote \[status|on|off|list|attach" && ! grep -q "ARGS: .*bogus" claude.log'
 ok "cca help 里有远程会话的说明" 'run cca help 2>&1 | grep -q "cca remote attach \[-r\] \[编号\]"'
 rm -rf "$H/.cca/remote" "$T"/rs.*
+edit_table 'j.pop("popup")' "$H/.cca/config.json"
+# Claude Code 的「做完了 / 在等你」这台 Mac 上也弹（docs/dev/remote.md「cca 自己带的钩子」）：照 Claude Code 给钩子的输入（stdin 上的
+# JSON）调 cca _remote-hook，不在会话宿主里。只给交互的会话（CLAUDE_CODE_ENTRYPOINT 是 cli）弹，用户自己的钩子已经会弹的那一种不弹。
+# 用户的钩子脚本放在 ~/.claude 外面（$H/hooktest）：hooks 也是共享的目录，主目录里有了它，以后每次启动都多带一个 --add-dir
+mkdir -p "$T/proj/.claude/hooks" "$H/hooktest"; cp "$H/.claude/settings.json" "$T/ch-settings.bak"; : > osascript.log
+ch() {   # ch 输入的JSON [环境…]：像 Claude Code 那样调钩子（打印的和退出码写进 $T/ch.out），打印这一次弹了几个（osascript.log 里多了几行 OSA）
+	local n0; n0=$(grep -c '^OSA ' osascript.log); printf '%s' "$1" > "$T/ch.json"; shift
+	run CCA_ACCOUNT='alice(alice@example.com)' CLAUDE_PROJECT_DIR="$T/proj" CLAUDE_CONFIG_DIR="$AD/claude" CLAUDE_CODE_ENTRYPOINT=cli "$@" cca _remote-hook < "$T/ch.json" > "$T/ch.out" 2>&1
+	echo "rc=$?" >> "$T/ch.out"
+	echo $(($(grep -c '^OSA ' osascript.log) - n0))
+}
+n1=$(ch '{"hook_event_name": "Stop", "session_id": "s-1", "last_assistant_message": "**改好了** 两处\n细节", "background_tasks": [], "session_crons": []}')
+ok "Claude Code 一轮做完了：这台 Mac 上弹「Claude Code 做完了」（副标题是账号 · 项目的文件夹，正文是最后一条回复的第一行，声音 Glass）；钩子什么都不打印，退出码 0" '[ "$n1" = 1 ] && grep -qxF "OSA [-] [Claude Code 做完了] [alice · proj] [改好了 两处] [Glass]" osascript.log && [ "$(cat "$T/ch.out")" = rc=0 ]'
+n1=$(ch '{"hook_event_name": "Stop", "session_id": "s-1", "last_assistant_message": "还没完", "background_tasks": [{"type": "shell"}], "session_crons": []}')
+n2=$(ch '{"hook_event_name": "PermissionRequest", "session_id": "s-2", "tool_name": "Bash", "tool_input": {"command": "rm -rf build", "description": "清掉编译的"}}')
+n3=$(ch '{"hook_event_name": "Notification", "session_id": "s-2", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}')
+n4=$(ch '{"hook_event_name": "Notification", "session_id": "s-3", "notification_type": "elicitation_dialog", "message": "**github** 要你填一个值"}')
+ok "还有后台任务在跑的做完了不弹；要你确认时先记下要说的话，Claude Code 过一会儿发的 Notification（permission_prompt）来了才弹「Claude Code 要你确认」（声音 Ping），弹了就删掉记下的；别的在等你的照原话弹「Claude Code 在等你」" '[ "$n1$n2$n3$n4" = 0011 ] && grep -qxF "OSA [-] [Claude Code 要你确认] [alice · proj] [运行：清掉编译的] [Ping]" osascript.log && grep -qxF "OSA [-] [Claude Code 在等你] [alice · proj] [github 要你填一个值] [Ping]" osascript.log && [ ! -e "$H/.cca/remote/ask/s-2" ]'
+stop='{"hook_event_name": "Stop", "session_id": "s-4", "last_assistant_message": "好了"}'
+ask='{"hook_event_name": "Notification", "session_id": "s-5", "notification_type": "elicitation_dialog", "message": "要你填一个值"}'
+n1=$(ch "$stop" CLAUDE_CODE_ENTRYPOINT=sdk-cli); n2=$(ch "$stop" CLAUDE_CODE_ENTRYPOINT=)
+edit_table 'j["popup"] = False' "$H/.cca/config.json"; n3=$(ch "$stop"); edit_table 'j.pop("popup")' "$H/.cca/config.json"
+ok "打印模式（CLAUDE_CODE_ENTRYPOINT 是 sdk-cli）、看不出是哪种会话的、config.json 的 popup 是 false：都不弹，照样什么都不打印" '[ "$n1$n2$n3" = 000 ] && [ "$(cat "$T/ch.out")" = rc=0 ]'
+# 用户自己的钩子已经会弹的那一种：共享的 settings.json（账号目录里的 settings.json 链到它）里 Stop 跑的脚本里有 osascript
+printf '#!/bin/sh\nosascript -e "display notification \\"好了\\""\n' > "$H/hooktest/done.sh"
+"$TESTBIN" edit "j=$H/.claude/settings.json" 'j.setdefault("hooks", {})["Stop"] = [{"hooks": [{"type": "command", "command": "/bin/sh \"$HOME/hooktest/done.sh\""}]}]'
+n1=$(ch "$stop"); n2=$(ch "$ask")
+ok "用户自己的钩子已经会弹做完了（共享的 settings.json 里 Stop 跑的脚本里有 osascript）：cca 不再弹做完了，在等你的照弹" '[ "$n1$n2" = 01 ] && [ -L "$AD/claude/settings.json" ]'
+"$TESTBIN" edit "j=$H/.claude/settings.json" 'j["hooks"]["Stop"] = [{"hooks": [{"type": "command", "command": "echo done >> \"$HOME/stop.log\""}]}]'
+n1=$(ch "$stop")
+printf '#!/bin/sh\nterminal-notifier -message hi\n' > "$T/proj/.claude/hooks/ping.sh"
+printf '{"hooks": {"Notification": [{"matcher": "elicitation_dialog|permission_prompt", "hooks": [{"type": "command", "command": "\\"$CLAUDE_PROJECT_DIR\\"/.claude/hooks/ping.sh"}]}]}}' > "$T/proj/.claude/settings.local.json"
+n2=$(ch "$ask"); n3=$(ch '{"hook_event_name": "PermissionRequest", "session_id": "s-6", "tool_name": "Write", "tool_input": {"file_path": "/a/b.rs"}}'); n4=$(ch "$stop")
+printf '{"hooks": {"Notification": [{"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "\\"$CLAUDE_PROJECT_DIR\\"/.claude/hooks/ping.sh"}]}]}}' > "$T/proj/.claude/settings.local.json"
+n5=$(ch "$stop"); n6=$(ch "$ask")
+ok "不弹通知的钩子不算（照弹）；项目的 .claude/settings.local.json 里认在等你那几种的 Notification 跑的脚本会弹：cca 不再弹在等你（要你确认时也不记那一句），做完了照弹；认 idle_prompt 的算作会弹做完了" '[ "$n1$n2$n3$n4$n5$n6" = 100101 ] && [ ! -e "$H/.cca/remote/ask/s-6" ]'
+cp "$T/ch-settings.bak" "$H/.claude/settings.json"; rm -rf "$T/proj" "$T"/ch.* "$T/ch-settings.bak" "$H/hooktest" "$H/.cca/remote"
 
 fi
 if sect 4; then
@@ -929,7 +971,7 @@ kc() { local d; d=$(kcd "$1" "${2:-}"); [ -n "$d" ] && cat "$d"/* 2>/dev/null; }
 kch() { local d; d=$(kcd "$1"); [ -n "$d" ] && ls "$d"; }   # 存它的服务商（接口的域名）
 lastline() { grep "^$1: " "${2:-claude.log}" | tail -n 1; }   # [日志]
 lastenv() { grep "^ENV: " claude.log | tail -n 1; }   # 最后一次启动 claude 的环境变量那一行
-hookless() {   # hookless "ARGS 那一行" 账号目录：--settings 是记下会话的 hook（只有 SessionStart 回调 cca _session-start 这个账号目录名）时打印去掉它的那一行，别的打印 BAD
+hookless() {   # hookless "ARGS 那一行" 账号目录：--settings 是记下会话的 hook（只有 SessionStart 回调 cca _session-start 这个账号目录名）时打印去掉它的那一行，别的打印 BAD。cca 自己的「做完了 / 在等你」那三个钩子（这台 Mac 上弹通知时带着）先去掉
 	"$TESTBIN" fx hookless "$1" "$(basename "$2")"   # 三层都没有别的键、别的项；command 照 shlex 拆开，第一段（cca 的路径）不看：目录名没有要引的字符时不带引号（和 shlex.quote 一样）
 }
 S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
@@ -983,7 +1025,7 @@ ok "启动前给交给 Claude Code 的每个 --add-dir 记上信任过（不然�
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a3=$(lastline ARGS)
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; s3=$(lastline SETTINGS); a4=$(lastline ARGS)
 "$TESTBIN" edit --indent 2 --unicode "c=$H/.cca/config.json" "c.pop('cost')"
-ok "折合金额关掉了（config.json 的 cost 是 false）：不带记下会话的 hook（官方账号没有 --settings，第三方 API 账号的 --settings 里没有 hooks）" '[ "$a3" = "ARGS: --add-dir=${AAD} $SD $P1 --version" ] && printf "%s" "$s3" | grep -q "ANTHROPIC_BASE_URL" && ! printf "%s" "$a4" | grep -q "SessionStart"'
+ok "折合金额关掉了（config.json 的 cost 是 false）：不带记下会话的 hook（官方账号的 --settings 里只剩 cca 自己弹通知的那三个钩子，第三方 API 账号的 hooks 里没有 SessionStart）" '[ "$("$TESTBIN" fx notifyless "$a3")" = "ARGS: --add-dir=${AAD} $SD $P1 --version" ] && printf "%s" "$s3" | grep -q "ANTHROPIC_BASE_URL" && ! printf "%s" "$a4" | grep -q "SessionStart"'
 out=$(run CCA_TTY="$(ans)" cca @alice -p hi 2>&1); rc=$?; h1=$(lastline HOOK)
 out2=$(run CCA_TTY="$(ans)" cca @kimi -p hi 2>&1); rc2=$?; h2=$(lastline HOOK)
 ok "Claude Code 开始会话时跑 --settings 里的 SessionStart hook：回调 cca _session-start，会话 id 记进这个账号目录的 sessions.jsonl（600）；hook 什么都不打印（stdout 会进 Claude 的上下文）、退出码 0；第三方 API 账号也记（统计时它的会话不算）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && printf "%s" "$h1" | grep -q " rc=0 stdout=0 stderr=0 " && printf "%s" "$h2" | grep -q " rc=0 stdout=0 stderr=0 " && grep -qF "\"sid\":\"${h1##*sid=}\"" "$AAD/sessions.jsonl" && grep -qF "\"sid\":\"${h2##*sid=}\"" "$KAD/sessions.jsonl" && [ "$(stat -f %Lp "$AAD/sessions.jsonl")" = 600 ] && ! grep -qF "${h1##*sid=}" "$KAD/sessions.jsonl"'

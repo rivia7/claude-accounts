@@ -64,11 +64,12 @@
   `RemoteNotifier`）。iOS 的 App 直接认 `NOTIFY`（CcaRemoteKit 的 `Note`、`NoteBudget`，和这里一样清理、限流），在前台时也弹（docs/dev/ios.md「App」的
   `Notifier`）；App 被挂起（锁屏、切到别的 App）、没开着时经推送到（APNs，docs/dev/push.md：宿主封给手机，Team 的服务器转给维护者的服务器上的推送网关）。网页端（手机）还不弹：页面不认这个帧，照旧
 - cca 自己带的钩子（`hook.rs`，辅助程序的 `remote-hook`；bash 的 `_remote-hook` 原样交给它、什么都不打印、总是成功）：远程会话开着时
-  （`manage.rs` 的 `hooks_on`：`CCA_REMOTE` 有值时照它，没有时看 config.json 的 `remote`），cca 启动 Claude Code 时经 `--settings` 带上
+  （`manage.rs` 的 `hooks_on`：`CCA_REMOTE` 有值时照它，没有时看 config.json 的 `remote`）或者这台 Mac 上弹通知时（`popup::on`：macOS 上
+  config.json 的 `popup` 不是 false），cca 启动 Claude Code 时经 `--settings` 带上
   `Stop`、`PermissionRequest`、`Notification` 三个钩子（matcher 是 `MATCHER`：`permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt`；
   `idle_prompt` 不要，Stop 已经说了），命令都是 `<cca> _remote-hook`、超时 10 秒（`accounts.rs` 的 `claude_hooks` 把它们和记下会话的 SessionStart
   并成一份，官方、第三方 API 账号都带；Claude Code 只认最后一个 `--settings`，见 isolation.md）。启动时不看在不在终端里（界面 App 里启动的、
-  `CCA_REMOTE=1` 但不在终端里的也带上）：钩子里照进程往上找宿主（`host_of_me`，和 `cca remote notify` 同一个），找不到就什么都不做；stdin 是终端时不读。
+  `CCA_REMOTE=1` 但不在终端里的也带上）：钩子里照进程往上找宿主（`host_of_me`，和 `cca remote notify` 同一个），找到了推给接着它的各处；stdin 是终端时不读。
   总是退出码 0、什么都不打印：Stop 的钩子退出码 2 会拦着 Claude Code 不让它停，有的钩子的 stdout 会进 Claude 的上下文。照维护者本机原来的那两个
   个人钩子（`cca-notify-done.sh`、`cca-notify-ask.sh`）写的，字一模一样：
   - Stop：还有后台任务（`background_tasks`；Claude Code 自己的 `dream`、`auto_mode_scan` 不算：做完不叫醒会话）、到点会醒来的（`session_crons`）时不推
@@ -81,8 +82,18 @@
   - Notification：`permission_prompt` 时拿 120 秒以内记下的那一句；没有（或者是别的几种）时「Claude Code 在等你」+ Claude Code 的原话（空的、
     "Claude needs your permission…" 换成「要你确认一个操作」）。记下的那一句用没用都删掉：马上答了的那次留下的不拿来配别的通知
   - 副标题：`CCA_ACCOUNT`（bash 给会话设的「别名(邮箱)」）括号前那一段 · 项目文件夹的名字（`CLAUDE_PROJECT_DIR`，没有时是钩子输入里的 `cwd`）
+  - 这台 Mac 上弹（和 Codex、agy 的同一个 `popup.rs`，见下面「推到哪」）：只给交互的会话（`CLAUDE_CODE_ENTRYPOINT` 是 `cli`；打印模式是 `sdk-cli`，
+    继承来的 `cli` 在打印模式里 Claude Code 自己改成 `sdk-cli`（照 2.1.332 的代码），没有这个变量的不弹；cca 查用量带 `--safe-mode`，不跑钩子），在不在宿主里都弹，等 osascript 弹完（最多 3 秒，`POP_WAIT`）再退出。用户自己的钩子已经会弹的那一种不弹
+    （`user_pops`，不然一件事弹两次）：看 Claude Code 读的用户的 `$CLAUDE_CONFIG_DIR/settings.json`（cca 启动的会话里链到共享的 ~/.claude/settings.json）、
+    项目的 `.claude/settings.json`、`.claude/settings.local.json` 里 command 那种钩子——做完了看 `Stop` 和认 `idle_prompt` 的 `Notification`，在等你看
+    `PermissionRequest` 和认 `MATCHER` 里那几种的 `Notification`（matcher 照 Claude Code：空的、`*` 都认，只有字母、数字、`_`、`|` 的按 `|` 逐个比，
+    别的当正则）。命令里、或者命令提到的脚本里有 `osascript`、`notif`（notify、notification、terminal-notifier、notify-send）、`alerter` 的算会弹；脚本是
+    命令里像路径的那几段（照 sh 去掉引号，`~`、`$HOME`、`$CLAUDE_PROJECT_DIR`、`$CLAUDE_CONFIG_DIR` 换成真的；只读普通文件的前 256 KB，有 NUL 的程序文件
+    不看：/bin/bash 里就有 notify 这个词）。维护者的 `cca-notify-*.sh` 名字里就有：它们在的时候 cca 不弹，删掉以后 cca 弹。系统级的 managed-settings.json、
+    插件带的钩子不看：那样弹了两次的，把 `popup` 设成 false。不在宿主里、用户自己的钩子会弹在等你时，PermissionRequest 不记那一句
+  - Claude Code 自己往终端里写的提醒（它的通知设置，iTerm2、Ghostty 这些认得的终端会弹）和 cca 弹的会不会一起来：没在真的终端里核对
   - 个人钩子还在调 `cca remote notify` 的话，同一件事会来两条一模一样的：宿主 10 秒以内只推一次（`NOTE_SAME`）。装了带这些钩子的版本以后，个人钩子里调它的那一行可以去掉
-- Codex、Antigravity 的通知（「做完了 / 在等你」，和上面 Claude Code 的是同一种 `NOTIFY`，字照那几种写；另外在这台 Mac 上弹一个）：
+- Codex、Antigravity 的通知（「做完了 / 在等你」，和上面 Claude Code 的是同一种 `NOTIFY`，字照那几种写；和它一样在这台 Mac 上也弹一个）：
   - Codex：交互的会话（`codex.rs` 的 `codex_interactive`：用户参数里头一个不是选项的不是 `CODEX_BATCH` 里的子命令，前面没有 --version、--help；
     resume、fork、agents 算，带值的选项照 `CODEX_VALUES` 跳过它的值）启动时在用户参数前面加 `-c notify=["<cca>", "_remote-hook", "--codex"]`
     （`codex_launch_args`，经 bash 的 `py launch-args 键 [--hosted] -- 用户参数` 进 `LAUNCH_ARGS`；用户自己的 -c 排在后面，同名的照用户的）：一轮做完了
@@ -127,7 +138,7 @@
   - 推到哪：`hook.rs` 的 `deliver`——在会话宿主里时（`host_of_me`）推给接着它的各处（`NOTIFY_REQ`），这台 Mac 上弹一个（`popup.rs`：
     `osascript -` 从 stdin 读脚本、字经参数（不拼进脚本：会话里的程序写的字也注入不了），`display notification`，做完了是 Glass、别的是 Ping；
     通知中心里归在「脚本编辑器」名下，第一次可能要在系统设置里允许它）。宿主自己认出来的（Codex 的 OSC 9）宿主弹（`popups`：主循环里收尸，
-    10 秒还没完的结束掉，`POPUP_MAX`）。宿主不为 `NOTIFY_REQ` 弹：Claude Code 的由用户自己的钩子弹，Codex、agy 的 `deliver` 弹过了。
+    10 秒还没完的结束掉，`POPUP_MAX`）。宿主不为 `NOTIFY_REQ` 弹：Claude Code 的钩子（`cmd_remote_hook`）、Codex、agy 的 `deliver` 自己弹过了。
     config.json 的 `popup` 设成 false 时都不弹（每次现读，`popup::on`）；不是 macOS 时不弹。副标题和 Claude Code 的一样（`subtitle`：
     `CCA_ACCOUNT` 括号前那一段 · 文件夹的名字；Codex 是 notify 的 `cwd`、宿主的工作目录，agy 是状态栏 JSON 的 `cwd`）
   - 没核对过的（要登录了的真会话，每次另问）：真的 Codex 写出来的 OSC 9 的字、notify 的 JSON；agy 真的状态先后（一轮中途会说 idle 是拿日志和
@@ -622,8 +633,11 @@ Team 的服务器不用更新）。同一天（3.8.0-beta.2）又加了端口池
   没有自动的测试（要通知的权限和真人点）
 - cca 自己带的钩子：`tests/remote_relay.rs` 的 `cca_hooks_reach_the_other_machine`（会话里的程序照 Claude Code 的样子把钩子的输入写进 stdin 调
   `remote-hook`：`cca-test fake-client` 的 `runin`；laptop 上接着的那一端收到做完了、要你确认、在等你，后台任务还在跑的不推，照个人钩子的写法调的
-  `remote-notify` 那一条不重复，会话外面调什么都不做，服务器看不到通知里的字）；`cargo test` 的 `remote::hook`：文字的规则；回归 3e：开关开着、
-  `CCA_REMOTE=1` 时启动参数里多了这三个钩子（`cca-test fx notifyless` 认出、去掉以后和没开时一样），`CCA_REMOTE=0` 时没有
+  `remote-notify` 那一条不重复；带着 `CLAUDE_CODE_ENTRYPOINT=cli` 时这台 Mac 上的假 osascript 也记下弹了（不是 macOS 时一个都不弹），会话外面调的不推、照弹；
+  服务器看不到通知里的字）；`cargo test` 的 `remote::hook`：文字的规则、`matchers`、`users_own_popups`（认用户自己会弹的钩子）；回归 3e：开关开着、
+  `CCA_REMOTE=1` 时启动参数里多了这三个钩子（`cca-test fx notifyless` 认出、去掉以后和没开时一样），`CCA_REMOTE=0` 时没有（这几条拿 popup 关着的那一次做底；
+  popup 开着时远程会话没开也带，`fx hookless` 也先去掉它们）；这一节最后照 Claude Code 给钩子的输入直接调 `cca _remote-hook`：做完了、要你确认、在等你各弹一次
+  （字、副标题、声音），后台任务还在跑的、打印模式、popup 是 false 的不弹，用户自己的钩子（共享的 settings.json、项目的 settings.local.json）已经会弹的那一种不弹
 - Codex、Antigravity 的通知：`tests/remote_relay.rs` 的 `codex_notes_reach_the_other_machine`（宿主当它是 codex 的会话：`cca-test fake-client`
   的 `osc` 写 OSC 9，laptop 上收到推出去的那一条、收不到原来的序列；这台 Mac 上的假 osascript（`kit::fleet` 的 `OSASCRIPT`：suite 里的设备都有，
   不弹真的）记下弹了，弹着时不给启动它的终端；`remote-hook --codex` 推「Codex 做完了」；`Agent turn complete` 不推；popup 是 false 时、不是 macOS 时（linux.sh 的宿主机：不弹）序列照给

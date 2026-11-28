@@ -12,9 +12,9 @@ paths:
   - "ios/CcaRemoteKit/Sources/CcaRemoteKit/Push.swift"
 ---
 
-# Codex、Antigravity 通知的成对修改
+# Codex、Antigravity 通知（和这台 Mac 上弹的）的成对修改
 
-从根目录 CLAUDE.md「要一起改的」分出来的，只跟 Codex、Antigravity 会话的「做完了 / 在等你」有关（Claude Code 的钩子在 remote.md）。读到上面 `paths` 里的文件时自动加载；只改 `cca` 里 bash 那一侧（`_remote-hook`、开头交给辅助程序的 `_agy-statusline`、`run_account` 的 `LAUNCH_ARGS`）时，自己先来读这一份。怎么实现、怎么测见 docs/dev/remote.md「Codex、Antigravity 的通知」。
+从根目录 CLAUDE.md「要一起改的」分出来的，只跟 Codex、Antigravity 会话的「做完了 / 在等你」、三种工具在这台 Mac 上弹的通知有关（Claude Code 的钩子本身在 remote.md）。读到上面 `paths` 里的文件时自动加载；只改 `cca` 里 bash 那一侧（`_remote-hook`、开头交给辅助程序的 `_agy-statusline`、`run_account` 的 `LAUNCH_ARGS`）时，自己先来读这一份。怎么实现、怎么测见 docs/dev/remote.md「Codex、Antigravity 的通知」。
 
 - Codex 的 notify：`codex.rs` 的 `codex_launch_args` 写的 `-c notify=[<cca>, "_remote-hook", "--codex"(, "--then", 用户的)]` ↔ bash 的 `_remote-hook`（`shift` 以后原样交给 `py remote-hook`）↔ `hook.rs` 的 `cmd_remote_hook` / `codex_hook`（`--codex [--then JSON] 载荷`）↔ 假 codex（`tests/setup.sh` 的 `codex_notify`、`cca-test codex-notify`）：开着的会话的命令行里写着这条命令，改名、改参数的话旧的写法也要一直认
 - Codex 在等你：`CODEX_NOTIFY_TUI`（tui.* 那三项）↔ `vt.rs` 的 `osc_note_text`（认哪种序列）↔ `hook.rs` 的 `codex_osc_note`（认哪几句英文，Codex 换了写法跟着换）↔ `codex_probe` 探测时带的（`CODEX_NOTIFY_PROBE` + `CODEX_NOTIFY_TUI`：和启动时加的要是同一套，不然探测说认、启动时报错退出）↔ 假客户端的 `osc`、假 codex 的 `codex_osc` / `codex_nocfg`；`probe.json` 的 `notify`：探测的做法变了要让旧的缓存失效（读缓存时要求有这一项）
@@ -22,4 +22,5 @@ paths:
 - agy 的状态栏命令：`agy_launch_args` 写的 `<cca> _agy-statusline 账号目录名 会话标记 [--then 命令]` ↔ bash 开头那一行（找到辅助程序就交给 `agy-statusline`）↔ `cmd_agy_statusline`（也认没有会话标记的旧写法）↔ 假 agy 的 `statusline`（`agy_states` 的「状态 [ask] [task] [sub] [queued]」、`agy_title`）；`AGY_BUSY`、`turn_step` / `agy_bg` 用到的状态栏 JSON 的字段（`agent_state` 的取值、`tool_confirmation_pending`、`task_count`、`subagents` 的 `status`、`pending_input_count`、`conversation_title`、`cwd`）↔ agy 的文档
 - agy 排上的通知等一会儿再推：`spawn_waiter` 起的 `agy-turn-wait 账号目录名 会话标记 编号 done|failed|ask [会话宿主的编号]` ↔ `cmd_agy_turn_wait`（等着的进程还在跑时换了版本：新的辅助程序也要认旧的参数）；`agy-turns/<会话标记>` 的一行 JSON（`Turn::line` / `parse`，3.7.11 及以前的「状态 0|1 0|1」也认）；`AGY_DONE_WAIT`、`AGY_ASK_WAIT`、`CCA_AGY_NOTE_WAIT` ↔ docs/dev/remote.md ↔ 回归 10f2
 - 通知的字：`codex_done`、`codex_osc_note`、`agy_note` 的标题照 Claude Code 的那几种写（`done_text`、`ask_text`）；按标题结尾的「做完了」挑声音：`popup.rs` 的 `sound`、iOS 的 `NoteSound`（CcaRemoteKit 的 `Push.swift`，额度的通知照 `event` 挑）↔ 这几处的标题
-- 这台 Mac 上弹：config.json 的 `popup`（`popup::on`）↔ `cca help` 的配置说明（只在 macOS 上的那一段）↔ README（两份）↔ docs/dev/remote.md。测试里弹的都要到假的 osascript：回归沙箱的（`tests/setup.sh`）、suite 设备的（`kit::fleet` 的 `OSASCRIPT`）；新的测试夹具里起 cca 的 Codex / agy 会话、`remote-hook --codex`、宿主的 codex 会话时，PATH 上也放一个
+- 这台 Mac 上弹：config.json 的 `popup`（`popup::on`）↔ `cca help` 的配置说明（只在 macOS 上的那一段）↔ README（两份）↔ docs/dev/remote.md。测试里弹的都要到假的 osascript：回归沙箱的（`tests/setup.sh`）、suite 设备的（`kit::fleet` 的 `OSASCRIPT`）；新的测试夹具里起 cca 的 Codex / agy 会话、`remote-hook --codex`、宿主的 codex 会话、带着 `CLAUDE_CODE_ENTRYPOINT=cli` 调 `remote-hook` 时，PATH 上也放一个
+- Claude Code 在这台 Mac 上弹（`hook.rs` 的 `cmd_remote_hook`，只给 `CLAUDE_CODE_ENTRYPOINT` 是 cli 的）：`accounts.rs` 的 `claude_hooks` 带不带那三个钩子（远程会话开着或者 `popup_on`）↔ 回归 3e 的 `rs_pop`、`fx.rs` 的 `hookless`（先 `strip_notify`：popup 开着时官方账号的 `--settings` 里都有它们）；认用户自己会弹的钩子（`user_pops`：读哪几份设置、`NOTIFIER_WORDS`、matcher 的规矩、`words` 怎么找脚本）↔ docs/dev/remote.md「cca 自己带的钩子」↔ 回归 3e 最后那几条、`hook.rs` 的 `users_own_popups`

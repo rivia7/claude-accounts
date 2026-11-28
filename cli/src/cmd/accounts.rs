@@ -197,11 +197,12 @@ pub fn session_hook(key: &str) -> Option<Dict> {
     Some(dict! { "SessionStart" => crate::list![dict! { "hooks" => crate::list![hook] }] })
 }
 
-/// 经 --settings 交给 Claude Code 的全部 hooks：session_hook，远程会话开着时再加 cca 自己带的「做完了 / 在等你」
-/// （remote/hook.rs：Stop、PermissionRequest、Notification，回调 cca _remote-hook，推给接着这个会话的各处）。都没有是 None
+/// 经 --settings 交给 Claude Code 的全部 hooks：session_hook，再加 cca 自己带的「做完了 / 在等你」（remote/hook.rs：Stop、
+/// PermissionRequest、Notification，回调 cca _remote-hook）——远程会话开着时（推给接着这个会话的各处），或者这台 Mac 上弹通知时
+/// （popup.rs 的 `on`：macOS 上 config.json 的 popup 不是 false）。都没有是 None
 pub fn claude_hooks(key: &str) -> Option<Dict> {
     let hooks = session_hook(key).unwrap_or_default();
-    if super::remote::notify_hooks_on() {
+    if super::remote::notify_hooks_on() || super::remote::popup_on() {
         for (event, groups) in super::remote::notify_hooks().items() {
             hooks.set(event, groups);
         }

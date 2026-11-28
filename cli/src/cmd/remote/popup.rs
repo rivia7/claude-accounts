@@ -1,5 +1,6 @@
-//! 这台 Mac 上弹的通知：cca 启动的 Codex、Antigravity 会话做完了、在等你的时候（hook.rs 的 `deliver`，宿主认出的 Codex 的
-//! 通知序列）。Claude Code 的不归这里：用户自己的钩子会弹（docs/dev/remote.md「cca 自己带的钩子」）。
+//! 这台 Mac 上弹的通知：cca 启动的 Claude Code、Codex、Antigravity 会话做完了、在等你的时候（hook.rs 的 `cmd_remote_hook`、
+//! `deliver`，宿主认出的 Codex 的通知序列）。Claude Code 的：用户自己的钩子已经会弹的那一种不弹（hook.rs 的 `user_pops`，
+//! docs/dev/remote.md「cca 自己带的钩子」）。
 //!
 //! 用 `osascript` 的 display notification（通知中心里归在「脚本编辑器」名下，第一次可能要在系统设置里允许它发通知）。脚本从
 //! stdin 进、字经参数（不拼进脚本：launchers.rs 的那一套），字是会话里的程序写的也注入不了。config.json 的 `popup` 设成 false
@@ -43,12 +44,24 @@ pub fn show(n: &Note) -> Option<Child> {
     Some(child)
 }
 
+/// 和 `show` 一样，再等它弹完（最多 max 秒）才回来：Claude Code 的钩子（hook.rs）一退出，留在后面的进程就没人管了
+pub fn show_wait(n: &Note, max: f64) {
+    let Some(mut child) = show(n) else { return };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs_f64(max);
+    while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn sounds() {
+        assert_eq!(sound("Claude Code 做完了"), "Glass");
+        assert_eq!(sound("Claude Code 要你确认"), "Ping");
+        assert_eq!(sound("Claude Code 在问你"), "Ping");
         assert_eq!(sound("Codex 做完了"), "Glass");
         assert_eq!(sound("Antigravity 做完了"), "Glass");
         assert_eq!(sound("Codex 要你确认"), "Ping");
