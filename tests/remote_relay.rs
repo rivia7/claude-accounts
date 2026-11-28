@@ -806,22 +806,34 @@ fn codex_notes_reach_the_other_machine(t: &mut Ctx) {
         h.expect_since(back, at);
         at
     };
+    // 弹通知只有 macOS 上有（popup::on）：别的系统上（linux.sh 的宿主机）和 popup 关着一样，不弹，原来的序列照给启动它的终端
+    let mac = cfg!(target_os = "macos");
     let m = v.mark();
     let at = said(&mut h, "osc Approval requested: cargo test", "<osc>");
     v.expect_since(&osc("Codex 要你确认", "运行：cargo test"), m);
-    let pop = "OSA [-] [Codex 要你确认] [工作 · work] [运行：cargo test] [Ping]";
-    wait_for("这台 Mac 上弹了「Codex 要你确认」", WAIT, || popped().lines().any(|l| l == pop));
-    assert!(!has(&h.out()[at..], "\x1b]9;"), "弹了：启动它的终端不再给");
+    if mac {
+        let pop = "OSA [-] [Codex 要你确认] [工作 · work] [运行：cargo test] [Ping]";
+        wait_for("这台 Mac 上弹了「Codex 要你确认」", WAIT, || popped().lines().any(|l| l == pop));
+        assert!(!has(&h.out()[at..], "\x1b]9;"), "弹了：启动它的终端不再给");
+    } else {
+        assert!(has(&h.out()[at..], "\x1b]9;Approval requested: cargo test\x07"), "不弹：启动它的终端照给");
+    }
     // 一轮做完了：Codex 起 cca 给它的 notify，JSON 加在最后（会话里的钩子那样：客户端的子进程）
     let helper = relay::helper(&a);
     let done = r#"{"type":"agent-turn-complete","cwd":"/x/work","last-assistant-message":"**改好了**两处"}"#;
     said(&mut h, &format!("run {} remote-hook --codex {done}", helper.display()), "<ran 0>");
     v.expect_since(&osc("Codex 做完了", "改好了两处"), m);
-    let pop = "OSA [-] [Codex 做完了] [工作 · work] [改好了两处] [Glass]";
-    wait_for("这台 Mac 上弹了「Codex 做完了」", WAIT, || popped().lines().any(|l| l == pop));
-    // 用户自己又打开了一轮做完了的那一句：不推（notify 推过了），也不给接入方；这台 Mac 上弹着，启动它的终端也不给
+    if mac {
+        let pop = "OSA [-] [Codex 做完了] [工作 · work] [改好了两处] [Glass]";
+        wait_for("这台 Mac 上弹了「Codex 做完了」", WAIT, || popped().lines().any(|l| l == pop));
+    }
+    // 用户自己又打开了一轮做完了的那一句：不推（notify 推过了），也不给接入方；这台 Mac 上弹着时启动它的终端也不给，不弹时照给
     let at = said(&mut h, "osc Agent turn complete", "<osc>");
-    assert!(!has(&h.out()[at..], "\x1b]9;"), "弹着的时候不推的那一句也不给启动它的终端");
+    if mac {
+        assert!(!has(&h.out()[at..], "\x1b]9;"), "弹着的时候不推的那一句也不给启动它的终端");
+    } else {
+        assert!(has(&h.out()[at..], "\x1b]9;Agent turn complete\x07"), "不弹：不推的那一句启动它的终端照给");
+    }
     // 这台 Mac 上不弹的时候：照样推，序列照给启动它的终端（它认得的话自己会弹）
     fsx::write(a.cca.join("config.json"), r#"{"popup": false}"#);
     let at = said(&mut h, "osc Question: 用哪个库？", "<osc>");
@@ -832,7 +844,7 @@ fn codex_notes_reach_the_other_machine(t: &mut Ctx) {
     let shown = String::from_utf8_lossy(&v.out()[m..]).to_string();
     assert!(!shown.contains("\x1b]9;"), "接入方只收推出去的那一条：{shown:?}");
     assert!(!shown.contains("notify;Codex 在等你"), "一轮做完了的那一句没换成在等你：{shown:?}");
-    assert_eq!(popped().lines().filter(|l| l.starts_with("OSA ")).count(), 2, "{}", popped());
+    assert_eq!(popped().lines().filter(|l| l.starts_with("OSA ")).count(), if mac { 2 } else { 0 }, "{}", popped());
     h.send("exit 0\n");
     assert_eq!((h.wait(), v.wait()), (0, 0));
     let seen = fx.sniff.snapshot();

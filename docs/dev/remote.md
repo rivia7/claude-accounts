@@ -594,7 +594,7 @@ Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
   `CCA_REMOTE=1` 时启动参数里多了这三个钩子（`cca-test fx notifyless` 认出、去掉以后和没开时一样），`CCA_REMOTE=0` 时没有
 - Codex、Antigravity 的通知：`tests/remote_relay.rs` 的 `codex_notes_reach_the_other_machine`（宿主当它是 codex 的会话：`cca-test fake-client`
   的 `osc` 写 OSC 9，laptop 上收到推出去的那一条、收不到原来的序列；这台 Mac 上的假 osascript（`kit::fleet` 的 `OSASCRIPT`：suite 里的设备都有，
-  不弹真的）记下弹了，弹着时不给启动它的终端；`remote-hook --codex` 推「Codex 做完了」；`Agent turn complete` 不推；popup 是 false 时序列照给
+  不弹真的）记下弹了，弹着时不给启动它的终端；`remote-hook --codex` 推「Codex 做完了」；`Agent turn complete` 不推；popup 是 false 时、不是 macOS 时（linux.sh 的宿主机：不弹）序列照给
   启动它的终端；服务器看不到通知里的字）；`cargo test` 的 `remote::hook`（`codex_turns`、`codex_waits`、`agy_notes`）、`remote::vt` 的
   `notification_text`、`agy` 的 `turns`、`codex` 的 `interactive_codex`；回归 10f（假 codex：`$T/codex_notify` 一轮做完了起 notify、
   `$T/codex_osc` 往终端里写 OSC 9、`$T/codex_nocfg` 不认那几个 -c；交互的才加、用户自己的 notify 经 --then 接着起、popup 是 false、放进宿主时的
