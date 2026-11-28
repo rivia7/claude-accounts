@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.8.0-beta.4", title: "Claude Code 做完了、在等你时，这台 Mac 上也弹通知", points: [
+            .init(symbol: "bell.badge",
+                  text: "cca 启动的 Claude Code 会话做完一轮、要你确认或者在问你时，这台 Mac 上弹系统通知，和 Codex、Antigravity 的一样，不用开远程会话。"),
+            .init(symbol: "bell.slash",
+                  text: "你自己在 Claude Code 的钩子里已经弹了的那一种，cca 不再弹，一件事不会弹两次。"),
+            .init(symbol: "gearshape",
+                  text: "不想要的话，在 ~/.cca/config.json 里把 popup 设成 false，三种工具的都不弹。"),
+            .init(symbol: "arrow.down.circle",
+                  text: "这台 Mac 上的 cca 更新后，新开的 Claude Code 会话就有；iPhone 上的 App、Team 的服务器不用跟着更新。"),
+        ]),
         ReleaseNote(version: "3.8.0-beta.3", title: "ChatGPT、Antigravity 账号补上凭证防护和额度入口", points: [
             .init(symbol: "lock.shield",
                   text: "cca 启动 Codex（Mac、Linux 上都是）和 Antigravity 时也加上规则，挡住 cca 存的登录凭证和浏览器资料：各账号的登录、Team 的密钥，和 Claude Code 一样。"),
