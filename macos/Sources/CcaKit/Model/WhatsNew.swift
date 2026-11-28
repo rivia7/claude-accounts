@@ -20,6 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.7.13", title: "Claude、ChatGPT、Antigravity 账号一开始就都能加", points: [
+            .init(symbol: "person.badge.plus",
+                  text: "还没有账号时，配置向导先问加哪种，三种都列出来：这台 Mac 没装对应的命令也能先加，加好以后在账号页安装。"),
+            .init(symbol: "square.grid.2x2",
+                  text: "侧栏和总览里三种账号总是都列出来；还没有账号的那一组排在最后，点它就能添加。"),
+            .init(symbol: "person.3",
+                  text: "Team 给的 ChatGPT、Antigravity 账号同步时马上加进来，和 Claude 账号一样；用不着的删掉就不再加。"),
+            .init(symbol: "terminal",
+                  text: "终端里的 cca install 也一样：先问加哪种账号，那种的命令没装就问要不要装上。"),
+            .init(symbol: "arrow.down.circle",
+                  text: "更新这台设备上的 cca 就有；Team 的服务器、iPhone 上的 App 不用更新。"),
+        ]),
         ReleaseNote(version: "3.7.12", title: "手机上能结束远程新建的会话，模板要选归属的 Team", points: [
             .init(symbol: "stop.circle",
                   text: "照模板远程新建的会话，能在 iPhone 上的 cca App 里结束了：终端页右上角的「结束会话」（这台 Mac 给手机设的是「查看和操作」才有）。在终端里开的会话还是只能在这台 Mac 上结束。"),
