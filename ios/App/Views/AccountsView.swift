@@ -249,7 +249,8 @@ struct MachineHeader: View {
 }
 
 /// 一个账号的卡片（Mac App 总览的 DeskCard）：插画、名字和套餐、现在怎么样、5 小时和本周的小条。整张卡片点了进这个账号的那一页。
-/// 插画的左上角是在用什么（桌面 App、命令行里几个会话），左下角是还能重置几次额度，右下角是建议先用
+/// 插画的左上角是在用什么（桌面 App、命令行里几个会话），右上角是额度即将用完（Mac 那里还有出口、泄露的几样，手机上不知道），
+/// 左下角是还能重置几次额度和最早什么时候过期，右下角是建议先用
 private struct DeskCard: View {
     let peer: Peer
     let account: AccountStatus
@@ -264,6 +265,7 @@ private struct DeskCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 DeskScene(account: a, look: DeskLook(a, mood: m), animate: animate, now: now)
                     .overlay(alignment: .topLeading) { workBadge(a, m) }
+                    .overlay(alignment: .topTrailing) { if m.nearLimit { nearLimitBadge } }
                     .overlay(alignment: .bottomLeading) { resetBadge(a) }
                     .overlay(alignment: .bottomTrailing) { if m.useFirst != nil { useFirstBadge } }
                 info(a, m)
@@ -299,9 +301,10 @@ private struct DeskCard: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 moodMark(m)
-                Text(MoodLine.text(m, now: now))
+                // 灰字（和 Mac 一样：颜色只在前面的小记号上）；快用完了、建议先用是插画角上的标记
+                Text(Texts.mood(m, now: now))
                     .font(.caption)
-                    .foregroundStyle(MoodLine.color(m) == .secondary ? Color.secondary : MoodLine.color(m))
+                    .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -315,15 +318,25 @@ private struct DeskCard: View {
         Text(Texts.nonEmpty(a.name) ?? "账号").font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
     }
 
-    /// 状态前面的小记号：颜色只表达状态（在用是绿点；在用、又有问题时是问题的颜色）；额度用完是月亮，空闲不画
+    /// 状态前面的小记号（和 Mac App 的一样）：颜色只表达状态（在用是绿点；在用、又有问题时是问题的记号）；账号不符、登录失效是橙点，
+    /// 未登录是灰点，额度用完是灰色的月亮，空闲不画
     @ViewBuilder
     private func moodMark(_ m: AccountMood) -> some View {
         switch m.trouble {
-        case .usedUp?: Image(systemName: "moon.zzz.fill").font(.caption2).foregroundStyle(m.busy ? Color.orange : Color.secondary)
+        case .usedUp?: Image(systemName: "moon.zzz.fill").font(.caption2).foregroundStyle(.secondary)
         case .loggedOut?: Circle().fill(Color.gray).frame(width: 6, height: 6)
-        case .wrongAccount?, .expired?: Circle().fill(m.busy ? Color.red : Color.orange).frame(width: 6, height: 6)
+        case .wrongAccount?, .expired?: Circle().fill(Color.orange).frame(width: 6, height: 6)
         case nil: if m.busy { Circle().fill(Color.green).frame(width: 6, height: 6) }
         }
+    }
+
+    /// 右上角：额度即将用完（橙色，和 Mac App 右上角的标记一样）
+    private var nearLimitBadge: some View {
+        Image(systemName: "exclamationmark.circle.fill")
+            .font(.callout)
+            .foregroundStyle(.orange)
+            .background(Circle().fill(.background).padding(1))
+            .padding(4)
     }
 
     /// 左上角：在用什么（桌面 App、命令行里几个会话）
@@ -341,7 +354,7 @@ private struct DeskCard: View {
         }
     }
 
-    /// 左下角：还能重置几次额度，一张小票一次（太多了写 +N）
+    /// 左下角：还能重置几次额度，一张小票一次（太多了写 +N），旁边是最早什么时候过期（和 Mac App 一样）
     @ViewBuilder
     private func resetBadge(_ a: AccountStatus) -> some View {
         if let rc = a.usage?.resetCredits, let n = rc.availableCount, n > 0 {
@@ -349,6 +362,9 @@ private struct DeskCard: View {
             HStack(spacing: 3) {
                 ForEach(0..<drawn, id: \.self) { _ in Image(systemName: "ticket.fill") }
                 if n > drawn { Text("+\(n - drawn)").monospacedDigit() }
+                if let epoch = rc.nextExpiresEpoch {
+                    Text(Texts.expiryText(epoch: epoch, now: now)).lineLimit(1).padding(.leading, 2)
+                }
             }
             .sceneBadge()
         }
@@ -367,10 +383,12 @@ private struct DeskCard: View {
     private func label(_ a: AccountStatus, _ m: AccountMood) -> String {
         var parts = [Texts.nonEmpty(a.name) ?? "账号", a.isAPI ? "第三方 API" : Texts.department(a.tool)]
         if !a.plan.isEmpty { parts.append(Texts.planName(a.plan)) }
-        parts.append(MoodLine.text(m, now: now))
+        parts.append(Texts.mood(m, now: now))
+        if m.nearLimit { parts.append("额度即将用完") }
         if m.busy, a.appOpen || a.cliSessions > 0 { parts.append(Texts.working(a, now: now)) }
         if let f = m.useFirst { parts.append(Texts.useFirst(f, now: now)) }
-        if let rc = a.usage?.resetCredits, rc.availableCount != nil { parts.append(Texts.resetCredits(rc, now: now)) }
+        // 一次都不能重置的不念（Mac App 的 resetSummary 也不说）
+        if let rc = a.usage?.resetCredits, (rc.availableCount ?? 0) > 0 { parts.append(Texts.resetCredits(rc, now: now)) }
         return parts.joined(separator: "，")
     }
 }
@@ -388,15 +406,15 @@ private extension View {
     }
 }
 
-/// 「额度用完了，16:00 恢复」：状态照轻重上色（要动手的红色、用完了和快用完了橙色、建议先用绿色）；给了 prefix 的（第三方 API 账号）
-/// 前面是灰色的「第三方 API · 」
+/// 「额度用完了，16:00 恢复 · 即将用完」（新建会话里挑账号的那一行）：灰字，和 Mac App 一样不给状态上色（绿只表示在用，
+/// 颜色在头像、记号上）；给了 prefix 的（第三方 API 账号）前面是「第三方 API · 」
 struct MoodLine: View {
     let mood: AccountMood
     var prefix: String?
     let now: Double
 
     var body: some View {
-        let state = Text(Self.text(mood, now: now)).foregroundStyle(Self.color(mood))
+        let state = Text(Self.text(mood, now: now)).foregroundStyle(.secondary)
         Group {
             if let prefix {
                 Text("\(Text(prefix).foregroundStyle(.secondary))\(Text(" · ").foregroundStyle(.tertiary))\(state)")
@@ -415,10 +433,4 @@ struct MoodLine: View {
         return s
     }
 
-    static func color(_ m: AccountMood) -> Color {
-        if let t = m.trouble { return t.needsAttention ? .red : .orange }
-        if m.nearLimit { return .orange }
-        if m.useFirst != nil { return .green }
-        return .secondary
-    }
 }

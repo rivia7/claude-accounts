@@ -3,8 +3,9 @@ import SwiftUI
 
 /// 账号页的「折合金额」（Mac App 的 CostSection）：按官方 API 的价格把这个账号用掉的 token 折成美元（不是实际花费，几台设备加起来的）。
 /// 按周还是按天（和折合金额页同一个设置），一张柱状图（右边是纵轴的刻度；点一根柱子，下面那一行换成那一项的金额），图下面一行是
-/// 本周 / 平均 / 合计 / 缓存命中；开始时还没有记录的那一项颜色浅（图例）；按模型的（cca 排在前面的几个）、各台设备的（两台以上时）；
-/// 同步的状态。按谁的价格折算、价格表的日期、多久以前统计的一直写在最下面
+/// 本周 / 平均 / 合计 / 缓存命中；开始时还没有记录的那一项颜色浅（图例）；按模型的（cca 排在前面的几个，其余的算「其他」）、各台设备的
+/// （电脑放了才有：两台以上、或者有很久没同步上来的）；账号太多、电脑没放这两样时说一句；
+/// 同步的状态。从几月几日开始有记录、按谁的价格折算、价格表的日期、多久以前统计的一直写在最下面
 struct CostSection: View {
     @Environment(AppModel.self) private var model
     let account: AccountStatus
@@ -36,8 +37,9 @@ struct CostSection: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
             }
-            Text(([Texts.costFootnote([account.tool], pricesDate: host?.cost?.pricesDate)] + [Texts.costFreshness(host?.cost, now: now)].compactMap { $0 })
-                    .joined(separator: ""))
+            Text([account.cost?.sinceEpoch.map { Texts.costSince($0, tool: account.tool, now: now) },
+                  Texts.costFootnote([account.tool], pricesDate: host?.cost?.pricesDate), Texts.costFreshness(host?.cost, now: now)]
+                    .compactMap { $0 }.joined(separator: ""))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -66,11 +68,18 @@ struct CostSection: View {
             if bars.contains(where: { $0.partial && $0.cents > 0 }) { CostPartialLegend() }
             if let models = c.models, models.contains(where: { $0.cents(days: days) > 0 }) {
                 Divider()
-                CostModelList(models: models, days: days)
+                CostModelList(models: models, days: days, total: c.total(days: days))
             }
-            if c.devices.count >= 2 {
+            // 电脑只在用过它的设备有两台以上、或者有很久没同步上来的时才放（status.rs 的 cost_of），放了就列
+            if !c.devices.isEmpty {
                 Divider()
                 CostDeviceList(devices: c.devices, days: days, now: now)
+            }
+            if c.models == nil, host?.cost?.brief == true {
+                Text("电脑上的账号较多，按模型、按设备的金额没有上传（请在电脑上的 cca App 中查看）。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if !notes.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {

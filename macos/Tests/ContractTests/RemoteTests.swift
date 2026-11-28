@@ -164,9 +164,9 @@ func remoteProtocolTests() {
           && (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1}"#.utf8)))?.remoteWeb == nil)
     let withPhone = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(
         #"{"version":1,"kind":"remote","sessions":[],"peers":[{"id":"aa","name":"我的 iPhone","shown":true,"web":true},{"id":"bb","name":"box","shown":true}]}"#.utf8))
-    check("配对的是手机上的网页端：记着（旧版 cca 没有这个字段：不算）；那一行说它在浏览器里接入",
+    check("配对的是手机（iPhone 上的 cca App 扫的二维码）：记着（旧版 cca 没有这个字段：不算）；那一行说是用手机扫码配的",
           withPhone?.peers.map(\.web) == [true, false]
-          && Texts.remotePeerDetail(withPhone!.peers[0], now: 0).contains("手机在浏览器里接入")
+          && Texts.remotePeerDetail(withPhone!.peers[0], now: 0).contains("用手机扫码")
           && Texts.remotePeerDetail(withPhone!.peers[1], now: 0).contains("配对码是这台 Mac 显示的"))
 }
 

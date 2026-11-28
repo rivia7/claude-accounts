@@ -31,8 +31,19 @@ enum Texts {
         [cliProduct(s.tool), nonEmpty(s.name)].compactMap { $0 }.joined(separator: " · ")
     }
 
+    /// 说明里什么都没写的：会话编号的前 8 位（和 Mac App 的 short 一样）
     static func sessionTitle(_ s: RemoteSession) -> String {
-        nonEmpty(sessionTitle(s.info)) ?? "会话 \(s.sid.prefix(6))"
+        nonEmpty(sessionTitle(s.info)) ?? String(s.sid.prefix(8))
+    }
+
+    /// 菜单里、「已打开的终端」里的一个终端：「Claude Code · 工作 · Mac mini」
+    static func terminalTitle(_ s: RemoteSession, on p: Peer) -> String {
+        sessionTitle(s) + " · " + p.name
+    }
+
+    /// 开满了终端（AppModel.terminalLimit）：接不了新的，新建的会话也打不开它的终端
+    static func terminalsFull(launch: Bool) -> String {
+        "最多同时打开 \(AppModel.terminalLimit) 个终端：请先断开一个再" + (launch ? "新建会话" : "接入")
     }
 
     /// 会话的第二行：「~/srv/api · 已运行 2 小时 · 另有 1 处接入」
@@ -62,12 +73,9 @@ enum Texts {
         return "\(m / 1440) 天前"
     }
 
-    /// 配对过的电脑的第二行：「11 月 3 日配对 · 示例 Team」
+    /// 配对过的电脑的第二行（时间照 Mac App 的 remotePeerDetail 写：今天的只写钟点，昨天、周几、再早的写日期）：「昨天 09:12 配对 · 示例 Team」
     static func peerDetail(_ p: Peer, now: Double) -> String {
-        let c = Calendar.current.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: p.at))
-        let thisYear = Calendar.current.component(.year, from: Date(timeIntervalSince1970: now))
-        let day = c.year == thisYear ? "\(c.month ?? 0) 月 \(c.day ?? 0) 日" : "\(c.year ?? 0) 年 \(c.month ?? 0) 月 \(c.day ?? 0) 日"
-        return [day + "配对", p.team].compactMap { $0 }.joined(separator: " · ")
+        [pastTime(p.at, now: now) + " 配对", p.team].compactMap { $0 }.joined(separator: " · ")
     }
 
     // MARK: 账号（说法照 Mac App 的总览、账号页：macos/Sources/CcaKit/Model/Texts.swift，照实说、不用比喻）
@@ -147,12 +155,13 @@ enum Texts {
         }
     }
 
-    /// 用量是什么时候的（账号页「用量」右边）：10 分钟内查到的写「3 分钟前查询」，否则「缓存，2 小时前更新」，过时了的「数据已过时，…」
+    /// 用量是什么时候的（账号页「用量」右边，和 Mac App 的 UsageCard 一样）：10 分钟内查到的写「3 分钟前查询」，否则「缓存，2 小时前更新」，
+    /// 过时了的「数据已经过时，…」
     static func freshness(_ u: AccountUsage, now: Double) -> (text: String, fresh: Bool) {
         let age = u.fetchedEpoch.map { now - $0 }
-        if u.source == "live", let age, age < 600, !u.stale { return (agoPhrase(age) + "查询", true) }
+        if u.source == "live", let age, age < 600 { return (agoPhrase(age) + "查询", true) }
         let when = age.map { "，" + agoPhrase($0) + "更新" } ?? ""
-        return ((u.stale ? "数据已过时" : "缓存") + when, false)
+        return ((u.stale ? "数据已经过时" : "缓存") + when, false)
     }
 
     /// 一个账号的那句话（Mac App 的 Texts.mood）：在用时有问题，问题跟在后面（「在用 · 额度已用完，16:00 恢复」）
@@ -192,8 +201,23 @@ enum Texts {
 
     /// 在那台电脑上用这个账号开一个会话的命令
     static func launchCommand(_ a: AccountStatus) -> String {
-        let prefix = a.tool == "codex" ? "cca codex" : a.tool == "agy" ? "cca agy" : "cca"
-        return "\(prefix) @\(nonEmpty(a.name) ?? "账号")"
+        commandPrefix(a.tool) + " " + shellWord("@" + (nonEmpty(a.name) ?? "账号"))
+    }
+
+    /// 在那台电脑上登录、重新登录这个账号的命令（Mac App 的「登录…」「重新登录…」在终端里跑的就是它；cca login 认别名）
+    static func loginCommand(_ a: AccountStatus) -> String {
+        commandPrefix(a.tool) + " login " + shellWord(nonEmpty(a.name) ?? "账号")
+    }
+
+    private static func commandPrefix(_ tool: String) -> String {
+        tool == "codex" ? "cca codex" : tool == "agy" ? "cca agy" : "cca"
+    }
+
+    /// 命令里的一个词：带空格、引号这些 shell 认的字符的加上单引号
+    private static func shellWord(_ s: String) -> String {
+        let special = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "'\"\\$`!&|;<>()*?[]{}#~"))
+        guard s.unicodeScalars.contains(where: special.contains) else { return s }
+        return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     // MARK: 每周用量（cca 给的 usage_weeks，说法和 Mac App 的一样）

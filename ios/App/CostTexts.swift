@@ -167,9 +167,15 @@ extension Texts {
         return d.syncedEpoch.map { d.name + " " + pastTime($0, now: now) + " 之后的数据还没同步过来" } ?? d.name + " 最近的用量还没同步过来"
     }
 
-    /// 设备的叫法：放上来的那台「studio-mac（这台）」
+    /// 设备的叫法：放上来的那台电脑「studio-mac（这台电脑）」（Mac App 写「（这台）」，是那台 Mac 自己：在手机上读着像这台手机）。
+    /// 读屏念这一整句；界面上名字和后面的说明分开画（`CostDeviceName`：窄的时候只截名字）
     static func costDeviceName(_ d: CostDevice) -> String {
-        d.name + (d.me ? "（这台）" : "")
+        d.name + (costDeviceMark(d) ?? "")
+    }
+
+    /// 名字后面的说明：只有放上来的那台电脑有
+    static func costDeviceMark(_ d: CostDevice) -> String? {
+        d.me ? "（这台电脑）" : nil
     }
 
     /// 多久以前统计的（账号页「折合金额」最下面）：「电脑上 4 分钟前统计。」；正在做第一次统计、还没统计过时照实说
@@ -177,6 +183,16 @@ extension Texts {
         guard let h else { return nil }
         if h.scanning { return "电脑正在统计，首次需要读取全部会话记录。" }
         return h.updatedEpoch.map { "电脑上" + agoPhrase(now - $0) + "统计。" } ?? "电脑上还没有统计过。"
+    }
+
+    /// 从什么时候开始有记录，哪些会话算不进来（Mac App 的 costSince，那边在「显示细节」里；手机上写在账号页「折合金额」最下面）
+    static func costSince(_ epoch: Double, tool: String, now: Double) -> String {
+        let since = "从 " + dayText(epoch, now: now) + "开始有记录。"
+        switch tool {
+        case "codex": return since + "Codex 0.157 及以后的会话才带有账号信息，更早的无法统计。"
+        case "agy": return since + "只有用 cca 启动的 Antigravity 会话能识别账号，直接运行 agy 的会计入「无法识别账号」。"
+        default: return since
+        }
     }
 
     /// 还没有记录（这个账号在那台电脑上没用过，别的设备也没同步来）

@@ -994,8 +994,8 @@ struct Advice {
         case .exitBad(let r, let region):
             return Advice(level: .bad, text: "出口有问题：\(Texts.healthResult(r, region: region))。点「检测出口」重新检测。")
         case .quota(let windows):
-            // 用完的窗口比快用完的要紧
-            let w = windows.first(where: \.exhausted) ?? windows[0]
+            // 用完的窗口比快用完的要紧；用完了几个时说最晚恢复的那个（`blocking`：和工位上的几点恢复一样）
+            let w = windows.blocking ?? windows[0]
             let name = w.window == .fiveHour ? "5 小时" : "本周"
             if w.exhausted {
                 let back = w.resetsEpoch.map { "，" + Texts.backAt(epoch: $0, now: now) } ?? ""

@@ -54,6 +54,21 @@ enum PairPhase: Equatable {
     }
 }
 
+/// 「新建会话」那一页在哪台电脑上起；account：先选上的账号（账号页里点的「新建会话」：那个账号的编号，只列用得了它的模板）
+struct LaunchTarget: Identifiable, Equatable {
+    let peer: Peer
+    var account: String?
+
+    var id: String { peer.pid + "|" + (account ?? "") }
+}
+
+/// 弹出来说的一句话（Mac App 是右上角的提示）：标题、说明
+struct Notice: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
 /// App 的状态：配对过的电脑、它们上面的会话、配对、开着的终端。界面只读它、调它的方法
 @MainActor
 @Observable
@@ -67,20 +82,37 @@ final class AppModel {
     private(set) var fetchedAt: Date?
     /// 配对的那一页（nil 是没开）
     var pairing: PairPhase?
-    /// 开着的终端（推到导航里的那一页）
-    var terminal: TerminalSession? {
+    /// 开着的终端（照接入的先后）：显示着的那个之外的照样接着（和 Mac App 一样），从终端返回不断开，在「远程会话」页的
+    /// 「已打开的终端」里、终端页的菜单里断开。最多 terminalLimit 个
+    private(set) var terminals: [TerminalSession] = [] {
+        didSet {
+            // 「已关闭的会话也推送」关着时，服务器上登记的只推开着的这些会话：开了、关了一个跟着改
+            if oldValue.map(\.id) != terminals.map(\.id) { Pusher.shared.openChanged() }
+        }
+    }
+    /// 显示着的那个终端（推到导航里的那一页）；nil 是没在看终端。看着终端时不查列表
+    private(set) var terminal: TerminalSession? {
         didSet {
             guard oldValue !== terminal else { return }
-            // 开着的会话变了：「已关闭的会话也推送」关着时，服务器上登记的只推哪个会话跟着变；开着终端时不查列表
-            Pusher.shared.openChanged()
             updatePolling()
         }
     }
+    /// 最多同时开几个终端：每个都在会话那边占一处接入，断线时各自重试、都要问服务器（服务器给每台设备限了流），手机上来回切着看的
+    /// 也就几个。Mac App 是 100 个（remoteTerminalLimit：一台机器最多开的会话数）
+    nonisolated static let terminalLimit = 8
     /// 终端是从哪一页推进去的（账号页里点了这个账号的会话的，返回时回到账号页）
     private(set) var terminalTab: AppTab = .sessions
     var showSettings = false
-    /// 「新建会话」那一页开着的：在哪台电脑上起（nil 是没开）
-    var launchFor: Peer?
+    /// 「新建会话」那一页开着的：在哪台电脑上起、先选上哪个账号（nil 是没开）
+    var launchFor: LaunchTarget?
+    /// 正在等哪几台电脑回话（远程启动，配对的 pid）：「新建会话」那一页关了也照样等，起来了打开它的终端（和 Mac App 一样）
+    private(set) var launching: Set<String> = []
+    /// 没起成的原因（配对的 pid）：「新建会话」那一页上说；那一页已经关了的弹出来说（notice）
+    private(set) var launchFailure: [String: String] = [:]
+    /// 正在后台结束的会话（列表里点了「结束会话」、没开着它能操作的终端的，见 end）
+    private(set) var endingSessions: Set<String> = []
+    /// 要弹出来说的一句话：开满了终端接不了、关了「新建会话」那一页以后没起成、结束会话没成
+    var notice: Notice?
     /// 会话列表里会话的先后（拖动排的，CcaRemoteKit 的 SessionOrder）：记在 UserDefaults 里；演示模式的只在内存里，退出演示时丢掉
     private(set) var sessionOrder = SessionOrder()
     /// 会话列表在「排序」（List 的编辑状态：拖动右边的把手调整先后）
@@ -126,7 +158,8 @@ final class AppModel {
     init(demo: Bool = false) {
         let d = UserDefaults.standard
         appearance = AppearanceMode(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
-        tab = AppTab(rawValue: d.string(forKey: "tab") ?? "") ?? .sessions
+        // 没选过时打开总览（和 Mac App 一样是首页）；以后照上次看的那一页
+        tab = AppTab(rawValue: d.string(forKey: "tab") ?? "") ?? .overview
         accountTool = d.string(forKey: "accountTool") ?? "claude"
         accountPlan = d.string(forKey: "accountPlan") ?? ""
         costDays = d.bool(forKey: "costDays")
@@ -154,10 +187,14 @@ final class AppModel {
     }
 
     private func switchBackend(_ b: Backend) {
-        closeTerminal()
+        closeAllTerminals()
         pairTask?.cancel()
         pairing = nil
         launchFor = nil
+        launching = []
+        launchFailure = [:]
+        endingSessions = []
+        notice = nil
         backend = b
         peers = b.peers()
         listings = [:]
@@ -174,7 +211,7 @@ final class AppModel {
 
     // MARK: 会话
 
-    /// App 在前台、没开着终端时查列表（会话和账号的状态是同一次查到的）：马上查一次，之后每 15 秒一次
+    /// App 在前台、没在看终端时查列表（会话和账号的状态是同一次查到的；开着的终端在后面接着也查）：马上查一次，之后每 15 秒一次
     func updatePolling() {
         if foreground && terminal == nil {
             startPolling()
@@ -212,6 +249,10 @@ final class AppModel {
         loading = false
         listings = Dictionary(rows.map { ($0.peer.pid, $0) }, uniquingKeysWith: { a, _ in a })
         fetchedAt = Date()
+        // 开着的终端照新查到的说明更新（像能不能结束：刚远程启动的会话起的时候还不知道）
+        for t in terminals {
+            if let s = listings[t.peer.pid]?.sessions.first(where: { $0.sid == t.session.sid }) { t.adopt(s) }
+        }
     }
 
     func listing(_ p: Peer) -> PeerListing? { listings[p.pid] }
@@ -242,15 +283,33 @@ final class AppModel {
     /// 一台电脑放上来的账号的状态（那台电脑上的 cca、它所在的服务器都够新、放过一次以后才有）
     func status(_ p: Peer) -> HostStatus? { listings[p.pid]?.status }
 
+    /// 底下「总览」的角标（Mac App 侧栏总览那一行的「N 个要处理」）：各台电脑上要用户动手的账号（没登录、登错号、登录失效，在用的也算；
+    /// 额度用完只是等，不算）。全部工具、全部套餐都算，不跟着「总览」上面的切换、筛选走（Mac 的那一行也不跟）
+    var accountsNeedingAttention: Int {
+        let now = Date().timeIntervalSince1970
+        return peers.reduce(0) { n, p in
+            guard let s = status(p), !s.off else { return n }
+            return n + AccountCensus(s.accounts, now: now).needsAttention
+        }
+    }
+
+    /// 底下「远程会话」的角标（Mac App 侧栏那一行的「已接入 N 个」）：开着、还没断开的终端有几个。返回时不断开，这个数提醒还接着几个
+    var attachedCount: Int { terminals.filter { !$0.isClosed }.count }
+
+    /// 底下「共享与同步」的角标（Mac App 侧栏的「Team 要处理」）：在 Team 里被移除、记录没了、没同步成的电脑有几台
+    var teamsNeedingAttention: Int {
+        peers.filter { p in status(p).map { !$0.off && $0.team?.failing == true } ?? false }.count
+    }
+
     /// 「账号」页推进去的那个账号：哪台电脑、账号现在的状态（那台电脑后来没放它了是 nil）
     func account(_ ref: AccountRef) -> (peer: Peer, account: AccountStatus)? {
         guard let p = peers.first(where: { $0.pid == ref.pid }), let a = status(p)?.accounts.first(where: { $0.id == ref.id }) else { return nil }
         return (p, a)
     }
 
-    /// 打开一个账号的那一页（点了额度的通知）：关掉开着的终端，换到「总览」
+    /// 打开一个账号的那一页（点了额度的通知）：从显示着的终端退回来（开着的照样接着），换到「总览」
     func openAccount(peer pid: String, account id: String) {
-        closeTerminal()
+        hideTerminal()
         tab = .overview
         let ref = AccountRef(pid: pid, id: id)
         accountPath = [ref]
@@ -318,8 +377,8 @@ final class AppModel {
     }
 
     func unpair(_ p: Peer) {
-        if terminal?.peer.pid == p.pid { closeTerminal() }
-        if launchFor?.pid == p.pid { launchFor = nil }
+        for t in terminals where t.peer.pid == p.pid { closeTerminal(t) }
+        if launchFor?.peer.pid == p.pid { launchFor = nil }
         let b = backend
         Task {
             await b.unpair(p)
@@ -335,11 +394,47 @@ final class AppModel {
     /// 一台电脑的启动器：那台电脑让这台手机远程启动会话、它的启动器在服务器上登记着时才有
     func launcher(_ p: Peer) -> HostLauncher? { listings[p.pid]?.launcher }
 
+    /// 用得了这个账号的模板（账号页的「新建会话」）：3.7.10 起的 cca 看模板能挑的账号，旧版的看模板自己定的账号
+    func launchTemplates(on p: Peer, for account: AccountStatus) -> [LaunchTemplate] {
+        guard let l = launcher(p) else { return [] }
+        return l.info.templates.filter { t in
+            if let list = l.info.accounts(for: t) { return list.contains { LaunchSheet.same($0, account) } }
+            return !t.aid.isEmpty && t.aid == account.aid
+        }
+    }
+
+    /// 「新建会话」那一页点了「启动」：在 App 这里等回话（那一页关了也照样等，见 launching），没起成的原因交给那一页；那一页已经关了的
+    /// 弹出来说（和 Mac App 的 startRemoteLaunch 一样）
+    func startLaunch(_ t: LaunchTemplate, on peer: Peer, as account: LaunchAccount?, line: String?) {
+        guard !launching.contains(peer.pid) else { return }
+        launching.insert(peer.pid)
+        launchFailure[peer.pid] = nil
+        let b = backend
+        Task {
+            let why = await launch(t, on: peer, as: account, line: line)
+            guard b === backend else { return }
+            launching.remove(peer.pid)
+            guard let why else { return }
+            if launchFor?.peer.pid == peer.pid {
+                launchFailure[peer.pid] = why.text
+            } else {
+                notice = Notice(title: "没能在「\(peer.name)」上新建会话", message: why.text)
+            }
+        }
+    }
+
+    /// 「新建会话」那一页换了选择：上次没起成的原因不说了
+    func clearLaunchFailure(_ peer: Peer) {
+        launchFailure[peer.pid] = nil
+    }
+
     /// 请那台电脑照模板起一个会话（多大见 TerminalGrid）；account：挑的账号（那台电脑的 cca 让挑时，见 LaunchSheet；旧版的 cca 是 nil：
     /// 用模板自己定的）。起来了：关掉「新建会话」那一页，打开新会话的终端（fresh：服务器上可能还没有它），回 nil；没起成：回原因码和
-    /// 要说的那句话，列表过时了的（模板变了、没了，不让启动了，账号没了、改走别的 Team 了，要挑账号了，启动器不在了）顺手刷新
+    /// 要说的那句话，列表过时了的（模板变了、没了，不让启动了，账号没了、改走别的 Team 了，要挑账号了，启动器不在了）顺手刷新。
+    /// 终端已经开满了的不起（起了也打不开它的终端）
     func launch(_ t: LaunchTemplate, on peer: Peer, as account: LaunchAccount?, line: String?) async -> (code: String, text: String)? {
         guard let l = launcher(peer) else { return ("no_session", Texts.launchUnreached("no_session")) }
+        guard terminals.count < Self.terminalLimit else { return ("terminals", Texts.terminalsFull(launch: true)) }
         let size = TerminalGrid.forLaunch
         let b = backend
         let r = await b.launch(peer: peer, launcher: l, template: t, account: account, cols: size.cols, rows: size.rows, line: line)
@@ -348,11 +443,19 @@ final class AppModel {
         case .launched(let sid):
             let info = SessionInfo(machine: l.info.machine, tool: t.tool, name: account?.name ?? t.account, cwd: t.dir,
                                    since: Date().timeIntervalSince1970, viewOnly: false, aid: account?.aid ?? t.aid)
-            launchFor = nil
-            closeTerminal()
-            terminalTab = tab
-            terminal = TerminalSession(backend: b, peer: peer, session: RemoteSession(sid: sid, info: info, online: true, viewers: 0),
-                                       readOnly: false, fresh: true)
+            if launchFor?.peer.pid == peer.pid { launchFor = nil }
+            let s = TerminalSession(backend: b, peer: peer, session: RemoteSession(sid: sid, info: info, online: true, viewers: 0),
+                                    readOnly: false, fresh: true)
+            terminals.append(s)
+            show(s)
+            // 起的时候还不知道宿主给这个会话的说明（能不能在手机上结束：说明里的 end）：接上以后查一次列表（看着终端时不定时查）
+            Task {
+                for _ in 0..<90 where !s.isOpen && !s.isClosed {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                guard s.isOpen, b === backend else { return }
+                await fetch()
+            }
             return nil
         case .refused(let code, let text):
             if ["changed", "no_template", "denied", "other_hub", "no_account", "need_account"].contains(code) { refresh() }
@@ -365,22 +468,100 @@ final class AppModel {
 
     // MARK: 终端
 
-    /// 接入一个会话：终端推到现在这一页的导航里（账号页里点的，返回时回到账号页）
+    /// 接入一个会话，显示它的终端（推到现在这一页的导航里；账号页里点的，返回时回到账号页），别的终端照样接着。和 Mac App 的
+    /// attachRemote 一样：这个会话已经有一个还接着的终端、要的又是同一种接法（操作 / 只看）的，换过去就行，不再接一次；它的终端已经
+    /// 断开、结束了，或者要换一种接法：原地换成新的（原来的断开）。开满了（terminalLimit）说一声、不接
     func attach(_ s: RemoteSession, on peer: Peer, readOnly: Bool) {
-        closeTerminal()
-        terminalTab = tab
-        terminal = TerminalSession(backend: backend, peer: peer, session: s, readOnly: readOnly || s.info.viewOnly)
+        let viewing = readOnly || s.info.viewOnly
+        let old = openTerminal(for: s.sid, on: peer.pid)
+        if let old, !old.isClosed, old.readOnly == viewing {
+            old.adopt(s)
+            show(old)
+            return
+        }
+        if old == nil, terminals.count >= Self.terminalLimit {
+            notice = Notice(title: "无法接入", message: Texts.terminalsFull(launch: false))
+            return
+        }
+        let t = TerminalSession(backend: backend, peer: peer, session: s, readOnly: viewing)
+        if let old, let i = terminals.firstIndex(where: { $0 === old }) {
+            old.close()
+            terminals[i] = t
+        } else {
+            terminals.append(t)
+        }
+        show(t)
     }
 
-    func closeTerminal() {
-        terminal?.close()
+    /// 这个会话在 App 里开着的终端（断开了、结束了但还没关掉的也算）
+    func openTerminal(for sid: String, on pid: String) -> TerminalSession? {
+        terminals.first { $0.peer.pid == pid && $0.session.sid == sid }
+    }
+
+    /// 显示一个开着的终端：推到现在这一页的导航里（显示着别的终端时换成它）
+    func show(_ t: TerminalSession) {
+        guard terminals.contains(where: { $0 === t }) else { return }
+        terminalTab = tab
+        terminal = t
+        t.nudge()
+    }
+
+    /// 从终端返回：回到列表，终端照样接着
+    func hideTerminal() {
         terminal = nil
     }
 
-    /// 点了通知：回到那个会话的终端。正开着就不动；关了的重新接上（会话还在、那台电脑在线时）
+    /// 断开并关掉一个终端（不说是哪个就是显示着的那个；会话在电脑上照常运行），显示着的退回列表。会话已经结束了的，关掉时查一次列表
+    func closeTerminal(_ which: TerminalSession? = nil) {
+        guard let t = which ?? terminal, let i = terminals.firstIndex(where: { $0 === t }) else { return }
+        let ended = t.isClosed
+        t.close()
+        terminals.remove(at: i)
+        if terminal === t { terminal = nil }
+        if ended { refresh() }
+    }
+
+    private func closeAllTerminals() {
+        for t in terminals { t.close() }
+        terminals = []
+        terminal = nil
+    }
+
+    /// 结束一个远程启动的会话（列表里的「结束会话」，先问过一句）：开着它能操作、接着的终端时用那个终端结束；不然在后台接上它（不显示，
+    /// 照远程启动的大小），接上了就结束、断开。20 秒还没结束成（电脑没回应、接不上）说一声
+    func end(_ s: RemoteSession, on peer: Peer) {
+        guard s.info.canEnd, !endingSessions.contains(s.sid) else { return }
+        if let t = openTerminal(for: s.sid, on: peer.pid), t.canEnd, t.isOpen {
+            t.end()
+            return
+        }
+        endingSessions.insert(s.sid)
+        let b = backend
+        let t = TerminalSession(backend: b, peer: peer, session: s, readOnly: false)
+        let size = TerminalGrid.forLaunch
+        t.sized(cols: size.cols, rows: size.rows)
+        Task {
+            for _ in 0..<100 {
+                if !t.ending, t.isOpen { t.end() }
+                if t.isClosed || b !== backend { break }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            var why: String?
+            if case .closed(let w) = t.state { why = w }
+            let done = t.ending || why == "ended" || why == "gone"
+            t.close()
+            guard b === backend else { return }
+            endingSessions.remove(s.sid)
+            refresh()
+            guard !done else { return }
+            notice = Notice(title: "没能结束「\(Texts.sessionTitle(s))」", message: why.map(Texts.closed) ?? "电脑没有响应，请稍后再试")
+        }
+    }
+
+    /// 点了通知：回到那个会话的终端。开着它的终端（还接着的）就换过去；没开着、断了的接上（会话还在、那台电脑在线时）
     func reopen(peer pid: String, sid: String, readOnly: Bool) {
-        if let t = terminal, t.peer.pid == pid, t.session.sid == sid {
-            t.nudge()
+        if let t = openTerminal(for: sid, on: pid), !t.isClosed {
+            show(t)
             return
         }
         let b = backend
@@ -389,7 +570,7 @@ final class AppModel {
             for i in 0..<5 {
                 guard b === backend else { return }
                 if let p = peers.first(where: { $0.pid == pid }), let s = listings[pid]?.sessions.first(where: { $0.sid == sid }) {
-                    if s.online, terminal?.session.sid != sid { attach(s, on: p, readOnly: readOnly) }
+                    if s.online { attach(s, on: p, readOnly: readOnly) }
                     return
                 }
                 if i > 0 { try? await Task.sleep(for: .seconds(1)) }
@@ -402,8 +583,8 @@ final class AppModel {
     func becameActive() {
         Pusher.shared.sync()
         foreground = true
-        terminal?.nudge()
-        updatePolling()   // 没开着终端：马上查一次
+        for t in terminals { t.nudge() }
+        updatePolling()   // 没在看终端：马上查一次
     }
 
     func wentBackground() {
@@ -421,7 +602,8 @@ final class TerminalSession: Identifiable, Hashable {
 
     let id = UUID()
     let peer: Peer
-    let session: RemoteSession
+    /// 接着的会话（列表里新查到的说明照 adopt 换上：名字、能不能结束……）
+    private(set) var session: RemoteSession
     let readOnly: Bool
     private(set) var state: Attachment.State = .connecting
     private(set) var exitCode: Int32?
@@ -454,6 +636,12 @@ final class TerminalSession: Identifiable, Hashable {
     }
 
     var isOpen: Bool { state == .open }
+
+    /// 列表里新查到的这个会话的说明（同一个会话）：换上
+    func adopt(_ s: RemoteSession) {
+        guard s.sid == session.sid, s != session else { return }
+        session = s
+    }
 
     /// 这台手机结束得了这个会话（远程启动的、能操作的：宿主在会话的说明里说的；旧版的宿主不说）
     var canEnd: Bool { !readOnly && session.info.canEnd }

@@ -236,47 +236,85 @@ struct QuotaGroupsView: View {
     }
 }
 
-/// 列表里一个账号右边的几行小用量（Mac App 的 UsageStack）：5 小时、本周，各一个短条和百分比。没有 5 小时限制的套餐不画 5 小时那一行；
-/// Antigravity 写各组里用得最多的那个
+/// 列表里一个账号右边的几行小用量（Mac App 的 UsageStack、QuotaStack，一行是它的 MiniUsage）：5 小时、本周，分模型的每周额度
+/// （Claude 的 Fable）也各一行，和账号页的大块一一对应；没有 5 小时限制的套餐不画 5 小时那一行。还没有数据写「—」，过了重置时间写
+/// 「已重置」；百分比用量正常时是正文的颜色、到了 70% 是用量条的颜色，数据旧了是灰的。Antigravity 写各组里用得最多的那个（读屏说是
+/// 哪一组），窗口都认不出时写用得最多的那个额度
 struct MiniUsage: View {
     let usage: AccountUsage
     let now: Double
 
     var body: some View {
-        let rows = Self.rows(usage, now: now)
         VStack(alignment: .trailing, spacing: 4) {
-            ForEach(rows, id: \.label) { r in
-                let reset = r.window.isReset(now: now), p = reset ? 0 : r.window.utilization ?? 0
-                HStack(spacing: 5) {
-                    Text(r.label).font(.caption2).foregroundStyle(.secondary)
-                    Meter(fraction: p / 100, color: Palette.usage(percent: p), height: 4, dim: usage.stale).frame(width: 30)
-                    Text(Texts.percent(p)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary).fixedSize()
-                        .frame(minWidth: 32, alignment: .trailing)
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(r.spoken)
-                .accessibilityValue(Texts.percent(p))
+            ForEach(Array(Self.rows(usage, now: now).enumerated()), id: \.offset) { _, r in
+                line(r)
             }
         }
+    }
+
+    private func line(_ r: Row) -> some View {
+        let reset = r.window?.isReset(now: now) ?? false
+        let pct = r.window?.utilization
+        let value = pct.map { reset ? "已重置" : Texts.percent($0) } ?? "—"
+        let style: Color = {
+            guard let p = pct, !reset, !usage.stale else { return .secondary }
+            return p < 70 ? .primary : Palette.usage(percent: p)
+        }()
+        // 分模型的额度和本周总额度的关系、是哪一组：过了重置时间就不说（那是旧的）
+        let note = reset ? nil : r.note
+        return HStack(spacing: 5) {
+            Text(r.label).font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .frame(maxWidth: r.named ? 44 : nil, alignment: .trailing)
+            Meter(fraction: reset ? 0 : (pct ?? 0) / 100, color: Palette.usage(percent: pct ?? 0), height: 4, dim: usage.stale)
+                .frame(width: 30)
+            Text(value).font(.caption2.weight(.semibold).monospacedDigit()).foregroundStyle(style).fixedSize()
+                .frame(minWidth: 34, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(r.spoken)
+        .accessibilityValue((pct == nil ? "暂无数据" : value) + (note.map { "，" + $0 } ?? ""))
     }
 
     struct Row {
         let label: String
+        /// 读屏念的名字（「5 小时用量」）
         let spoken: String
-        let window: UsageWindow
+        let window: UsageWindow?
+        /// 读屏接在百分比后面念的：分模型的额度和本周总额度的关系（Texts.modelShare）、Antigravity 用得最多的是哪一组
+        var note: String?
+        /// 标签是模型名（比「5h」「周」宽：放不下时先缩小、再截断）
+        var named = false
     }
 
     static func rows(_ u: AccountUsage, now: Double) -> [Row] {
         guard u.source != "none" else { return [] }
-        if u.hasQuota {
-            return [(QuotaSlot.fiveHour, "5h", "5 小时用量"), (.sevenDay, "周", "本周用量")].compactMap { slot, label, spoken in
-                u.quotaMost(slot, now: now).map { Row(label: label, spoken: spoken, window: $0.window) }
-            }
-        }
+        if u.hasQuota { return quotaRows(u, now: now) }
         var out: [Row] = []
-        if !u.noFiveHourLimit, let w = u.fiveHour, w.utilization != nil { out.append(Row(label: "5h", spoken: "5 小时用量", window: w)) }
-        if let w = u.sevenDay, w.utilization != nil { out.append(Row(label: "周", spoken: "本周用量", window: w)) }
+        if !u.noFiveHourLimit { out.append(Row(label: "5h", spoken: "5 小时用量", window: u.fiveHour)) }
+        out.append(Row(label: "周", spoken: "本周用量", window: u.sevenDay))
+        // 按名字去重，没有百分比的不要（和账号页的大块、Mac App 的 modelQuotas 一样）
+        var seen = Set<String>()
+        for m in u.modelScoped where !m.name.isEmpty && m.window.utilization != nil && seen.insert(m.name.lowercased()).inserted {
+            out.append(Row(label: m.name, spoken: "\(m.name) 用量", window: m.window, note: Texts.modelShare(m, weekly: u.sevenDay),
+                           named: true))
+        }
         return out
+    }
+
+    /// Antigravity（Mac App 的 QuotaStack）：5 小时、本周各一行，写各组里用得最多的那个；窗口都认不出时写用得最多的那个额度（停用的、
+    /// 没有百分比的不算）
+    private static func quotaRows(_ u: AccountUsage, now: Double) -> [Row] {
+        let named: [(QuotaSlot, String, String)] = [(.fiveHour, "5h", "5 小时"), (.sevenDay, "周", "本周")]
+        let rows = named.compactMap { slot, label, spoken -> Row? in
+            guard let m = u.quotaMost(slot, now: now) else { return nil }
+            let several = Set(u.quotaBuckets(slot).map(\.group)).count > 1
+            return Row(label: label, spoken: spoken + "用量", window: m.window, note: several ? "用得最多的是 \(m.group)" : nil)
+        }
+        if !rows.isEmpty { return rows }
+        let all = u.quotaGroups.flatMap { g in g.buckets.filter { !$0.disabled && $0.used.utilization != nil }.map { (g, $0) } }
+        guard let (g, b) = all.max(by: { ($0.1.used.utilization ?? 0) < ($1.1.used.utilization ?? 0) }) else { return [] }
+        return [Row(label: "额度", spoken: "额度用量", window: b.used, note: g.displayName)]
     }
 }
 
@@ -303,7 +341,7 @@ struct WeeklySection: View {
                 VStack(alignment: .leading, spacing: 10) {
                     WeeklyChart(weeks: uw.weeks, now: now, picked: $picked)
                         .frame(height: 128)
-                    Text(hit.map { Texts.weekDetail($0, now: now) } ?? Texts.weeksSummary(uw.summary) ?? "本周结束后会显示第一周的统计。")
+                    Text(hit.map { Texts.weekDetail($0, now: now) } ?? Texts.weeksSummary(uw.summary) ?? "这一周过完就有第一周的统计。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

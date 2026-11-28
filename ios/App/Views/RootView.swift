@@ -3,7 +3,7 @@ import SwiftUI
 
 /// 最外面一层：没配对过时是欢迎页；配对过是底下五页，和 Mac App 侧栏的先后、叫法一样：总览（各台电脑上的账号，一个一张卡片）、
 /// 用量统计、折合金额、远程会话（可以接入的会话）、共享与同步（电脑所在的 Team）。前三页点一个账号推进它的那一页；
-/// 终端推进当时那一页的导航里（开着终端时底下那一排收起来），配对、设置、新建会话是弹出的一页
+/// 终端推进当时那一页的导航里（看着终端时底下那一排收起来；返回时终端照样接着），配对、设置、新建会话是弹出的一页
 struct RootView: View {
     @Environment(AppModel.self) private var model
 
@@ -23,6 +23,9 @@ struct RootView: View {
                                 .modifier(TerminalDestination(tab: .overview))
                         }
                     }
+                    // 角标照 Mac App 侧栏那几行右边的标签：总览「N 个要处理」、远程会话「已接入 N 个」、共享与同步「Team 要处理」
+                    // （这里是几台电脑）。标签栏的角标只有数字、只有一种颜色（Mac 上是橙的、绿的）
+                    .badge(model.accountsNeedingAttention)
                     Tab("用量统计", systemImage: "chart.bar", value: AppTab.stats) {
                         NavigationStack(path: $model.statsPath) {
                             UsageStatsView()
@@ -43,12 +46,14 @@ struct RootView: View {
                                 .modifier(TerminalDestination(tab: .sessions))
                         }
                     }
+                    .badge(model.attachedCount)
                     Tab("共享与同步", systemImage: "person.3", value: AppTab.sharing) {
                         NavigationStack {
                             SharingView()
                                 .modifier(TerminalDestination(tab: .sharing))
                         }
                     }
+                    .badge(model.teamsNeedingAttention)
                 }
             }
         }
@@ -59,21 +64,29 @@ struct RootView: View {
         .sheet(isPresented: $model.showSettings) {
             SettingsView()
         }
-        .sheet(item: $model.launchFor) { p in
-            LaunchSheet(peer: p)
+        .sheet(item: $model.launchFor) { t in
+            LaunchSheet(peer: t.peer, preferred: t.account)
+        }
+        // 开满了终端、关了「新建会话」那一页以后没起成、结束会话没成（Mac App 是右上角的提示）
+        .alert(model.notice?.title ?? "", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } }),
+               presenting: model.notice) { _ in
+            Button("好", role: .cancel) {}
+        } message: { n in
+            Text(n.message)
         }
     }
 }
 
-/// 开着的终端推在哪一页的导航里：从哪一页接入的就在哪一页（返回时回到那里）
+/// 显示着的终端推在哪一页的导航里：从哪一页接入的就在哪一页（返回时回到那里，终端照样接着）。换到另一个开着的终端时整页换掉
+/// （id：终端的视图跟着各自的 TerminalSession）
 private struct TerminalDestination: ViewModifier {
     @Environment(AppModel.self) private var model
     let tab: AppTab
 
     func body(content: Content) -> some View {
         content.navigationDestination(item: Binding(get: { model.terminalTab == tab ? model.terminal : nil },
-                                                     set: { if $0 == nil, model.terminalTab == tab { model.closeTerminal() } })) { t in
-            TerminalScreen(session: t)
+                                                     set: { if $0 == nil, model.terminalTab == tab { model.hideTerminal() } })) { t in
+            TerminalScreen(session: t).id(t.id)
         }
     }
 }

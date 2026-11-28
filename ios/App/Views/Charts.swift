@@ -109,6 +109,8 @@ enum CostChart {
     static let headroom = 0.9
     /// 日期之间至少隔这么宽（「11/30」放得下）
     static let dayLabelMinWidth = 34.0
+    /// 按周看时一项宽于这个才每一项都写日期（和 Mac App 的 weekLabelMinWidth 一样）；手机窄，不到它时隔一项写（Mac 那么窄时不写）
+    static let weekLabelMinWidth = 30.0
     /// 纵轴最高到多少的候选（乘 10 的几次方）：一半也是整齐的数（刻度是 0、一半、最高）
     static let topSteps: [Double] = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8]
 
@@ -147,9 +149,10 @@ enum CostChart {
         return x1 - x0 >= 1 ? (x0, x1) : nil
     }
 
-    /// 按周的日期：一周窄（不到 34 点）时隔一根写一个，从这一周往前数；中间重新计时、窄得放不下字的那一项不写
+    /// 按周的日期：一周宽到 weekLabelMinWidth（30 点）时每一项都写（和 Mac App 一样）；手机上一周多半更窄，这时隔一根写一个，
+    /// 从这一周往前数；中间重新计时、窄得放不下字的那一项不写
     static func weekLabel(_ text: String, _ p: SlotPlace) -> String? {
-        let every = p.fullWidth < 34 ? 2 : 1
+        let every = p.fullWidth < weekLabelMinWidth ? 2 : 1
         return (p.count - 1 - p.index) % every == 0 && p.width >= 16 ? text : nil
     }
 
@@ -162,7 +165,7 @@ enum CostChart {
     /// 表头的日期（用量统计页、折合金额页，和各行的小图同一个时间范围）：从今天往前每隔几周（按天看时每隔几天）一个。
     /// 挨着两头的往里挪到 edge；隔 2、3、4、6 周（按天 7、14 天）里取最密、又一个都不用跳过的。从右往左排，第一个是今天
     static func statsTicks(domain: ClosedRange<Double>, now: Double, width: Double, days: Bool = false,
-                           edge: Double = 16) -> [(epoch: Double, x: Double)] {
+                           edge: Double = 18) -> [(epoch: Double, x: Double)] {
         let span = domain.upperBound - domain.lowerBound
         guard span > 0, span.isFinite, now.isFinite, width > 2 * edge else { return [] }
         let start = days ? domain.upperBound - day / 2 : now
@@ -368,45 +371,78 @@ struct CostPartialLegend: View {
 }
 
 /// 按模型分开的金额（cca 排在前面的几个）：名字、一根细条（这一行的金额占这几行加起来的多少）、金额；按周看是近 12 周的，按天看是
-/// 30 天的，这一段里没有用量的不列；没有按模型记下的那一部分灰字
+/// 30 天的，这一段里没有用量的不列；按天看照 30 天的金额重新排（和 Mac App 的 modelRows 一样）。电脑只放前 3 个（status.rs 的
+/// COST_MODELS）：其余的照这个账号这一段的合计减出来，算「其他」（Mac 那边 cca 给全了，没有这一行）；没有按模型记下的那一部分在最后、灰字
 struct CostModelList: View {
     let models: [CostModel]
     let days: Bool
+    /// 这个账号这一段的合计（AccountCost.total）
+    let total: Int
+
+    /// 一行：名字、金额、多少美分（细条的长短）、灰字（其他、没按模型记下的）、读屏念的金额
+    private struct Entry {
+        let name: String
+        let money: String
+        let cents: Int
+        let dim: Bool
+        let spoken: String
+    }
 
     var body: some View {
-        let rows = models.filter { $0.cents(days: days) > 0 }
-        if !rows.isEmpty {
-            let total = rows.reduce(0) { $0 + $1.cents(days: days) }
+        let shown = models.filter { $0.cents(days: days) > 0 }
+        if !shown.isEmpty {
+            let rows = entries(shown)
+            let sum = rows.reduce(0) { $0 + $1.cents }
             VStack(alignment: .leading, spacing: 6) {
                 Text(Texts.costModelsTitle(days: days))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
                 VStack(alignment: .leading, spacing: 5) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, m in
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
                         HStack(spacing: 10) {
-                            Text(Texts.costModelName(m))
+                            Text(r.name)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                                .foregroundStyle(m.name == nil ? .secondary : .primary)
+                                .foregroundStyle(r.dim ? .secondary : .primary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            CostShareBar(fraction: total > 0 ? Double(m.cents(days: days)) / Double(total) : 0)
+                            CostShareBar(fraction: sum > 0 ? Double(r.cents) / Double(sum) : 0)
                                 .frame(width: 56)
-                            Text(Texts.costModelMoney(m, days: days))
-                                .foregroundStyle(m.name == nil ? .secondary : .primary)
+                            Text(r.money)
+                                .foregroundStyle(r.dim ? .secondary : .primary)
                                 .frame(minWidth: 72, alignment: .trailing)
                         }
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(Texts.costModelName(m))
-                        .accessibilityValue(Texts.costModelMoney(m, days: days) + (m.pricedAs.map { "，按 \($0) 的价格估算" } ?? ""))
+                        .accessibilityLabel(r.name)
+                        .accessibilityValue(r.spoken)
                     }
                 }
                 .font(.subheadline.monospacedDigit())
-                if let note = Texts.costEstimated(rows, days: days) {
+                if let note = Texts.costEstimated(shown, days: days) {
                     Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    /// 有名字的（按天看照金额重排）、其他、没按模型记下的
+    private func entries(_ shown: [CostModel]) -> [Entry] {
+        let named = shown.enumerated().filter { $0.element.name != nil }
+            .sorted { a, b in
+                guard days, a.element.days != b.element.days else { return a.offset < b.offset }
+                return a.element.days > b.element.days
+            }
+            .map(\.element)
+        func entry(_ m: CostModel) -> Entry {
+            let money = Texts.costModelMoney(m, days: days)
+            return Entry(name: Texts.costModelName(m), money: money, cents: m.cents(days: days), dim: m.name == nil,
+                         spoken: money + (m.pricedAs.map { "，按 \($0) 的价格估算" } ?? ""))
+        }
+        let listed = shown.reduce(0) { $0 + $1.cents(days: days) }
+        // 差几分钱的是四舍五入（合计是 cca 算好的，各项到分以后再加会差一两分），不算「其他」
+        let other = total - listed > shown.count ? total - listed : 0
+        let rest = other > 0 ? [Entry(name: "其他", money: Texts.money(cents: other), cents: other, dim: true, spoken: Texts.money(cents: other))] : []
+        return named.map(entry) + rest + shown.filter { $0.name == nil }.map(entry)
     }
 }
 
@@ -429,7 +465,7 @@ struct CostDeviceList: View {
                     let stale = Texts.costStale(d, now: now)
                     HStack(spacing: 10) {
                         HStack(spacing: 5) {
-                            Text(Texts.costDeviceName(d)).lineLimit(1).truncationMode(.middle)
+                            CostDeviceName(device: d)
                             if stale != nil { Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange) }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -444,6 +480,20 @@ struct CostDeviceList: View {
                 }
             }
             .font(.subheadline.monospacedDigit())
+        }
+    }
+}
+
+/// 设备的名字（窄的时候从中间截）和后面的「（这台电脑）」（不截：截掉了就看不出是哪台）
+struct CostDeviceName: View {
+    let device: CostDevice
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(device.name).lineLimit(1).truncationMode(.middle)
+            if let mark = Texts.costDeviceMark(device) {
+                Text(mark).lineLimit(1).fixedSize()
+            }
         }
     }
 }

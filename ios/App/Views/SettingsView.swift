@@ -92,7 +92,7 @@ struct SettingsView: View {
                     Button("完成") { model.showSettings = false }
                 }
             }
-            .confirmationDialog(unpairing.map { "取消与「\($0.name)」的配对？" } ?? "",
+            .confirmationDialog(unpairing.map { "取消和「\($0.name)」的配对？" } ?? "",
                                 isPresented: Binding(get: { unpairing != nil }, set: { if !$0 { unpairing = nil } }),
                                 titleVisibility: .visible) {
                 Button("取消配对", role: .destructive) {

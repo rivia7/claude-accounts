@@ -73,7 +73,7 @@ struct CcaApp: App {
             if let p = model.peers.first, let s = model.listing(p)?.sessions.first { model.attach(s, on: p, readOnly: false) }
         case "launch":
             // 新建会话：头一台有启动器的电脑
-            model.launchFor = model.peers.first { model.launcher($0) != nil }
+            model.launchFor = model.peers.first { model.launcher($0) != nil }.map { LaunchTarget(peer: $0) }
         case "sort":
             // 会话列表在「排序」
             model.sortingSessions = true

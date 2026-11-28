@@ -193,7 +193,7 @@ if let nt = v["note"] as? [String: Any] {
 }
 check(NoteCard(title: "", body: "", machine: "m", what: "w") == nil, "弹出来的字：标题、正文都是空的不弹")
 check(NoteCard(title: "", body: "改好了", machine: "", what: "")?.title == "远程会话"
-      && NoteCard(title: "", body: "改好了", machine: "", what: "")?.subtitle == "来自另一台电脑", "弹出来的字：没写标题、不知道哪台机器")
+      && NoteCard(title: "", body: "改好了", machine: "", what: "")?.subtitle == "来自「另一台机器」", "弹出来的字：没写标题、不知道哪台机器")
 check(NoteCard(title: "Claude Code 做完了", body: "", machine: "", what: "")?.sound == .done
       && NoteCard(title: "Codex 在等你", body: "改好了", machine: "", what: "")?.sound == .ask
       && NoteCard(title: "", body: "改好了", machine: "", what: "")?.sound == .ask

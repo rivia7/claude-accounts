@@ -1,8 +1,9 @@
 import CcaRemoteKit
 import SwiftUI
 
-/// 一个会话的终端：整页黑底的终端，顶上是哪个会话、在哪台电脑；断了、结束了在终端上面说一句，可以重新接入。
-/// 返回就是断开（会话在电脑上照常运行）；远程启动的会话右上角另有「结束会话」（先问一句）
+/// 一个会话的终端：整页黑底的终端，顶上是哪个会话、在哪台电脑（哪个 Team）；断了、结束了在终端上面说一句，可以重新接入。
+/// 返回时终端照样接着（会话列表里的「已打开的终端」，和 Mac App 页顶那一排一样）；右上角的菜单里换到别的开着的终端、换一种接法
+/// （只看 / 操作：重新接入）、断开（会话在电脑上照常运行）。远程启动的会话另有「结束会话」（先问一句）
 struct TerminalScreen: View {
     @Environment(AppModel.self) private var model
     let session: TerminalSession
@@ -17,7 +18,7 @@ struct TerminalScreen: View {
         }
         .background(Color(uiColor: TerminalSurface.background).ignoresSafeArea(edges: .bottom))
         .navigationBarTitleDisplayMode(.inline)
-        // 开着终端时底下那一排（会话、账号）收起来：返回就是断开，换不了页
+        // 看着终端时底下那一排（几页）收起来：返回到列表再换页
         .toolbar(.hidden, for: .tabBar)
         // 整页是黑底的终端：这一页的导航栏也是深色（App 是浅色时也一样，和 Mac App 里终端固定深色外观是一个道理）
         .toolbarColorScheme(.dark, for: .navigationBar)
@@ -27,7 +28,7 @@ struct TerminalScreen: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     HStack(spacing: 6) {
-                        StatusDot(kind: dot)
+                        StatusDot(kind: session.dot)
                         Text(Texts.sessionTitle(session.session)).font(.subheadline.weight(.semibold)).lineLimit(1)
                         if session.readOnly { Image(systemName: "eye").font(.caption).accessibilityLabel("只看") }
                     }
@@ -48,6 +49,9 @@ struct TerminalScreen: View {
                         .accessibilityHint("关掉电脑上的这个会话")
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                menu
+            }
         }
         .confirmationDialog("结束这个会话？", isPresented: $confirmingEnd, titleVisibility: .visible) {
             Button("结束会话", role: .destructive) { session.end() }
@@ -55,23 +59,46 @@ struct TerminalScreen: View {
         } message: {
             Text(Texts.endSessionWarning(session.session))
         }
-        .onDisappear {
-            // 返回（不是推到别的页）：断开
-            if model.terminal == nil || model.terminal?.id == session.id { session.close() }
-        }
     }
 
-    private var dot: StatusDot.Kind {
-        switch session.state {
-        case .open: return .on
-        case .connecting: return .pending
-        case .retrying: return .busy
-        case .closed: return .off
+    /// 右上角的菜单：换到别的开着的终端、换一种接法（那台电脑只让看的没有这一项）、断开（结束了、断了的是「关闭」）
+    private var menu: some View {
+        Menu {
+            let others = model.terminals.filter { $0 !== session }
+            if !others.isEmpty {
+                Section("切换到") {
+                    ForEach(others) { t in
+                        Button { model.show(t) } label: {
+                            Label(Texts.terminalTitle(t.session, on: t.peer), systemImage: t.readOnly ? "eye" : "terminal")
+                        }
+                    }
+                }
+            }
+            Section {
+                if !session.session.info.viewOnly, !session.isClosed {
+                    Button { model.attach(session.session, on: session.peer, readOnly: !session.readOnly) } label: {
+                        Label(session.readOnly ? "改成可以操作（重新接入）" : "改成只看（重新接入）", systemImage: session.readOnly ? "keyboard" : "eye")
+                    }
+                }
+                Button { model.closeTerminal(session) } label: {
+                    if session.isClosed {
+                        Label("关闭", systemImage: "xmark.circle")
+                    } else {
+                        Label { Text("断开"); Text("会话仍在电脑上运行") } icon: { Image(systemName: "xmark.circle") }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
         }
+        .accessibilityLabel("终端选项")
+        .accessibilityHint("切换到其他终端、改成只看或可以操作、断开")
     }
 
+    /// 哪台电脑、哪个 Team、哪个文件夹、终端的标题（和 Mac App 终端上面那一行一样）
     private var place: String {
-        [session.peer.name, Texts.nonEmpty(session.session.info.cwd), Texts.nonEmpty(session.title)].compactMap { $0 }.joined(separator: " · ")
+        [session.peer.name, session.peer.team.map { "「\($0)」" }, Texts.nonEmpty(session.session.info.cwd), Texts.nonEmpty(session.title)]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -112,5 +139,17 @@ struct TerminalScreen: View {
     private var canReconnect: Bool {
         guard case .closed(let why) = session.state else { return false }
         return !["ended", "gone", "unpaired", "refused", "version", "auth"].contains(why)
+    }
+}
+
+extension TerminalSession {
+    /// 状态点：接着是绿的；正在接是淡的；断了、在重新连接是橙圈；关了是灰圈
+    var dot: StatusDot.Kind {
+        switch state {
+        case .open: return .on
+        case .connecting: return .pending
+        case .retrying: return .busy
+        case .closed: return .off
+        }
     }
 }

@@ -345,7 +345,7 @@ fn against_the_spec(t: &mut Ctx) {
         "accounts" => list![alice, bob, carol, dave, gem, bad, fay, gus, hal, ivy],
         "cost" => obj! { "prices_date" => "2026-11-01", "updated" => now - 240.0, "unattributed" => 312, "brief" => true },
         "team" => obj! {
-            "name" => "示例 Team\u{202e}", "role" => "admin", "coadmin" => true, "state" => "error", "error" => "连不上服务器", "seq" => 12,
+            "name" => "示例 Team\u{202e}", "role" => "member", "coadmin" => true, "state" => "error", "error" => "连不上服务器", "seq" => 12,
             "accounts" => 3, "device" => "studio-mac", "host" => "team.example.com:18445", "joined" => now - 86400.0,
             "update" => "服务器不认 status_put"
         }

@@ -6,7 +6,7 @@ import UserNotifications
 /// 推送（APNs）：锁着屏、App 没开着时也收得到会话里的通知（做完了、在等你）。向 Apple 要这台手机的推送令牌，登记到配对的电脑所在的
 /// 每台服务器上（push_set）；会话里说一条通知时，宿主把它封给这个配对，经那台服务器、cca 的推送网关、Apple 送到这台手机，通知扩展
 /// （ios/Notify）拿通知密钥解开再弹出来。服务器、网关、Apple 都看不到里面。通知被关掉了（系统设置里）时把登记拿掉：服务器就不再推。
-/// 「已关闭的会话也推送」（设置里的开关，默认开着）关着时，登记里说只推 App 里开着的那个会话（sids），开着、关掉终端时跟着改。
+/// 「已关闭的会话也推送」（设置里的开关，默认开着）关着时，登记里说只推 App 里开着的那些会话（sids），开了、断开一个终端时跟着改。
 /// 设置里的「额度用完、恢复时通知」（默认开着，和 Mac App 的同名开关一样的说法）：登记里说也推额度的通知（usage）：配对的电脑上一个账号的 5 小时或本周的额度用完了、到了重置的
 /// 时间（恢复的那一条由服务器到点推：电脑睡着了也到）。见 docs/dev/ios.md「推送」
 @MainActor
@@ -22,8 +22,8 @@ final class Pusher {
     private(set) var allowed: Bool?
     /// 还没接推送网关的服务器（主机名）：那里配的电脑只在 App 开着、接着会话时才收得到通知
     private(set) var unsupported: [String] = []
-    /// 「已关闭的会话也推送」：开着（默认）时配对的电脑上的会话都推；关着时只推 App 里开着的那个会话（锁着屏、切到别的 App 也算开着），
-    /// 一个都没开着就都不推
+    /// 「已关闭的会话也推送」：开着（默认）时配对的电脑上的会话都推；关着时只推 App 里开着终端的那些会话（返回到列表、锁着屏、
+    /// 切到别的 App 也算开着，断开了才不算），一个都没开着就都不推
     var closedToo = UserDefaults.standard.object(forKey: "pushClosedToo") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(closedToo, forKey: "pushClosedToo")
@@ -104,7 +104,7 @@ final class Pusher {
         sync()
     }
 
-    /// App 里开着的会话变了（开了、关了一个终端）：只推开着的会话时，登记跟着改
+    /// App 里开着的会话变了（开了、断开一个终端）：只推开着的会话时，登记跟着改
     func openChanged() {
         if !closedToo { sync() }
     }
@@ -171,10 +171,9 @@ final class Pusher {
         return await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
-    /// App 里开着的、在这台服务器上的会话（只推开着的会话时登记的就是它们）
+    /// App 里开着终端的、在这台服务器上的会话（只推开着的会话时登记的就是它们）
     private func openSids(on s: ServerRef) -> [String] {
-        guard let t = model?.terminal, t.peer.server.url == s.url else { return [] }
-        return [t.session.sid]
+        (model?.terminals ?? []).filter { $0.peer.server.url == s.url }.map(\.session.sid)
     }
 
     private func syncNow(_ backend: Backend) async {

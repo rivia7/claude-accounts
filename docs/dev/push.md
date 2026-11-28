@@ -16,7 +16,7 @@ docs/dev/ios.md「推送」。
    P 派生的通知密钥解得开），控制连接上发 `PUSH`（`0x0a`，`{"pid","id","note"}`）给这个会话走的 Team 的服务器。手机这时接没接着都发：
    接着的那份（`NOTIFY`）和推来的那份带着同一个编号，手机上只弹先到的那一份
 3. Team 的服务器（`cli/src/server/push.rs`）：会话、配对对得上，配对的另一头是登记了推送的手机（`push_set`；登记里说了只推哪几个会话的——
-   `sids`，手机上「已关闭的会话也推送」关着时是 App 里开着的那个——得是其中一个，`remote.rs` 的 `push_job`），就 POST 给推送网关（`--push`，
+   `sids`，手机上「已关闭的会话也推送」关着时是 App 里开着的那些——得是其中一个，`remote.rs` 的 `push_job`），就 POST 给推送网关（`--push`，
    钉住 `--push-pin` 的公钥）。一条线程、有界的队列（中转的线程不等它，满了丢）；每台手机限流（`PHONE_BURST`、`PHONE_GAP`）；网关回 410
    （令牌没用了）就拿掉那个登记
 4. 推送网关（`cli/src/server/gateway.rs`、`gateway/apns.rs`、`gateway/h2.rs`）：签好令牌（JWT，ES256，45 分钟换一次）交给推送服务（HTTP/2，

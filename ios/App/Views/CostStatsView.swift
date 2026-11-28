@@ -60,6 +60,11 @@ struct CostStatsView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
+                            } else if hosts.contains(where: \.brief) {
+                                Label("有电脑上的账号较多，按设备的金额没有上传（请在电脑上的 cca App 中查看）。", systemImage: "info.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             Text(Texts.costFootnote(Pages.groups(rows).map(\.tool), pricesDate: hosts.map(\.pricesDate).max()))
                                 .font(.caption)
@@ -75,6 +80,7 @@ struct CostStatsView: View {
                                 CostGroup(group: g, scale: scale, now: now)
                             }
                         }
+                        UploadedLine(now: now)
                     }
                     Text("每个账号一行，一根竖条代表一周（或一天），颜色较浅的表示那一项开始时还没有记录；用过多台设备的账号会分设备列出。点击一行查看这个账号的柱状图。")
                         .font(.footnote)
@@ -98,11 +104,11 @@ struct CostStatsView: View {
         return all.compactMap { r in seen.insert(r.peer.pid).inserted ? r.host.cost : nil }
     }
 
-    /// 标题下面那一句：数字是什么、多久以前统计的（几台电脑时说最近的那一次）
+    /// 标题下面那一句：数字是什么、多久以前统计的（几台电脑时说最近的那一次；Mac App 的 costFreshness：都还没统计过时照实说）
     static func subtitle(_ hosts: [HostCost], now: Double) -> String {
         let what = "按官方 API 价格把每个账号用掉的 token 折算成美元，不是实际花费。"
         if hosts.contains(where: \.scanning) { return what + "电脑正在统计…" }
-        guard let at = hosts.compactMap(\.updatedEpoch).max() else { return what }
+        guard let at = hosts.compactMap(\.updatedEpoch).max() else { return what + (hosts.isEmpty ? "" : "电脑上还没有统计过。") }
         return what + "电脑上" + Texts.agoPhrase(now - at) + "统计。"
     }
 }
@@ -197,23 +203,18 @@ private struct CostTotalTile: View {
     }
 }
 
-/// 表头：小图的时间刻度（按日时每隔几天一个日期）、本周（今天）
+/// 表头（Mac App 的 CostStatsHeader：账号、时间刻度、平均、本周、合计）：两层，上面「账号」「平均每周 · 合计」对着名字和右上那两个数，
+/// 下面是小图的时间刻度（按日时每隔几天一个日期）和「本周」（「今天」）
 private struct CostHeader: View {
     let scale: CostScale
     let now: Double
 
     var body: some View {
-        HStack(spacing: StatsColumns.spacing) {
+        StatsHeaderLayers(right: scale.days ? "平均每天 · 合计" : "平均每周 · 合计") {
             // 按天看时最右边一根就是今天，右边那一栏写着「今天」：刻度上不再写一遍
             StatsTimeScale(domain: scale.domain, now: now, days: scale.days, today: !scale.days).frame(maxWidth: .infinity)
             Text(scale.days ? "今天" : "本周").frame(width: CostColumns.current, alignment: .trailing)
         }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .frame(height: 16)
-        .padding(.leading, StatsColumns.inset + StatsColumns.lead)
-        .padding(.trailing, StatsColumns.inset)
-        .accessibilityHidden(true)
     }
 }
 
@@ -285,6 +286,14 @@ private struct CostRow: View {
                     }
                     .padding(.leading, StatsColumns.lead)
                 }
+                // 名字后面的橙色三角是为什么（Mac App 鼠标指着时的提示里一条条列着；手机上没有指着，直接写在下面）
+                let warnings = notes.filter(\.warning)
+                if !warnings.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(warnings.enumerated()), id: \.offset) { _, n in CostNoteLine(note: n) }
+                    }
+                    .padding(.leading, StatsColumns.lead)
+                }
             }
             .padding(.horizontal, StatsColumns.inset)
             .padding(.vertical, 10)
@@ -343,7 +352,7 @@ struct CostDeviceLine: View {
         let d = device
         let stale = Texts.costStale(d, now: now)
         HStack(spacing: 5) {
-            Text(Texts.costDeviceName(d)).lineLimit(1).truncationMode(.middle)
+            CostDeviceName(device: d)
             if stale != nil {
                 Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
             }

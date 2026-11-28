@@ -1,6 +1,6 @@
 # 界面 App（macos/）
 
-App 只经 `macos/PROTOCOL.md` 写的接口和 cca 打交道：不读 `~/.cca` 里的文件、不解析中文、不在 Swift 里重算 cca 的规则。cca 那边的接口规矩（只能加字段、`CCA_RO`、事件、`consent`、提问会话）在 `docs/dev/gui-contract.md`，改接口前先读；界面怎么画（Logo、颜色、按钮、版心）写在 `macos/README.md`「界面的规矩」。各功能在 App 里的那一部分写在 `docs/dev/` 对应的那一份（用量和套餐档位在 usage.md、内置代理在 local-proxy.md、配置向导和表单在 onboarding.md、Team 在 team.md、检查更新和 `cca gui` 在 release.md）。
+App 只经 `macos/PROTOCOL.md` 写的接口和 cca 打交道：不读 `~/.cca` 里的文件、不解析中文、不在 Swift 里重算 cca 的规则。cca 那边的接口规矩（只能加字段、`CCA_RO`、事件、`consent`、提问会话）在 `docs/dev/gui-contract.md`，改接口前先读；界面怎么画（Logo、颜色、按钮、版心）写在 `macos/README.md`「界面的规矩」。各功能在 App 里的那一部分写在 `docs/dev/` 对应的那一份（用量和套餐档位在 usage.md、内置代理在 local-proxy.md、配置向导和表单在 onboarding.md、Team 在 team.md、检查更新和 `cca gui` 在 release.md）。iOS App 照这里的页面、口径、说法做（`ios/CLAUDE.md`「和 Mac App 对齐」）：这边加了、改了页面、字段、提示、通知，iOS 同一次跟上，这次不跟的写进 docs/dev/ios.md「和 Mac App 的对照」的「还没补的」。
 
 ## 命令
 - `bash macos/build.sh [--version V] [--arch universal|arm64|native] [--debug] [--out 路径.app]` — 编图形界面 cca App（默认 `macos/build/cca.app`，版本号取 `cca` 的 VERSION）；`bash macos/test.sh [夹具目录]` — App 的契约测试（解码 cca 的真实输出；源码、架构、编译器都没变时用上次编好的）。只要苹果的命令行工具，不用 Xcode

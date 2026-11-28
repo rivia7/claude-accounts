@@ -319,7 +319,8 @@ public final class RemoteClient: @unchecked Sendable {
                 }
                 // 都解不开的：不是这个配对的密钥封的（服务器、别人塞进来的），不显示
             }
-            sessions.sort { $0.info.since > $1.info.since }
+            // 先起的在前（和 cca 的 remote list 一样：Mac App 照它排；拖动排过的另外照 SessionOrder）
+            sessions.sort { $0.info.since < $1.info.since }
             let st = known[peer.pid] == nil ? nil : statusOf(peer.pid, p: p, row: status[peer.pid], now: now)
             return PeerListing(peer: peer, gone: known[peer.pid] == nil, sessions: sessions, failure: nil, status: st, statusServed: served,
                                launcher: launcher)

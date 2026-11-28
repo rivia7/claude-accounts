@@ -398,11 +398,12 @@ enum Texts {
         }
     }
 
-    /// 配对过的机器的第二行：「11 月 3 日配对 · 配对码是这台 Mac 显示的」
+    /// 配对过的机器的第二行：「11 月 3 日配对 · 配对码是这台 Mac 显示的」；手机（`web`：iPhone 上的 cca App 扫这台 Mac 的二维码，
+    /// 3.5.3 起的手机浏览器里的那一页也是它）是「11 月 3 日配对 · 用手机扫码」
     static func remotePeerDetail(_ p: RemotePeer, now: Double, calendar: Calendar = .current) -> String {
         var parts: [String] = []
         if let t = p.pairedEpoch { parts.append(pastTime(t, now: now, calendar: calendar) + " 配对") }
-        parts.append(p.web ? "手机在浏览器里接入" : p.shown ? "配对码是这台 Mac 显示的" : "配对码是它显示的")
+        parts.append(p.web ? "用手机扫码" : p.shown ? "配对码是这台 Mac 显示的" : "配对码是它显示的")
         return parts.joined(separator: " · ")
     }
 

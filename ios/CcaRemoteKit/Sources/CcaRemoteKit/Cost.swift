@@ -213,7 +213,12 @@ public struct HostTeam: Sendable, Equatable {
         update = j["update"] is String ? clean(j["update"], 160) : nil
     }
 
-    public var isAdmin: Bool { role == "admin" }
-    /// 建 Team 的那台（管理员、不是受托的）
-    public var isOwner: Bool { isAdmin && !coadmin }
+    /// 能管理这个 Team：建 Team 的那台（role 是 admin）和别的管理员（role 是 member、coadmin 是 true：建 Team 的那台给的），
+    /// 和 Mac App 的 TeamEntry 一样
+    public var isAdmin: Bool { role == "admin" || coadmin }
+    /// 建 Team 的那台（拿着根密钥）
+    public var isOwner: Bool { role == "admin" }
+    /// 要用户知道的（Mac App 的 TeamState.failing：侧栏「共享与同步」那一行的「Team 要处理」）：被移除了、记录没了、没同步成，
+    /// 和认不出的状态；ok、pending、local 不算
+    public var failing: Bool { !["ok", "pending", "local"].contains(state) }
 }

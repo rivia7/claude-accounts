@@ -52,6 +52,11 @@ struct AccountMood: Equatable {
 /// 点名（「账号」页顶上那一行，Mac App 的 OfficeCensus）：几个账号，几个在用、几个空闲、几个额度用完……
 struct AccountCensus: Equatable {
     var total = 0, working = 0, idle = 0, resting = 0, absent = 0, wrongPerson = 0, expired = 0
+    /// 在用、同时有要用户动手的问题的（算在「在用」里，不算进上面几样）
+    var workingTroubled = 0
+
+    /// 要用户动手的：没登录、登错号、登录失效（在用的也算；额度用完只是等，不算）。底下「总览」的角标照它（Mac App 侧栏「N 个要处理」）
+    var needsAttention: Int { absent + wrongPerson + expired + workingTroubled }
 
     init(_ all: [AccountStatus], now: Double) {
         total = all.count
@@ -59,6 +64,7 @@ struct AccountCensus: Equatable {
             let m = AccountMood(a, now: now)
             if m.busy {
                 working += 1
+                if m.trouble?.needsAttention == true { workingTroubled += 1 }
                 continue
             }
             switch m.trouble {

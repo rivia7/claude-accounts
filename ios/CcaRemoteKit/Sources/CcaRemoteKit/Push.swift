@@ -93,7 +93,8 @@ public func plainLine(_ s: String, max: Int) -> String {
 public struct NoteCard: Sendable, Equatable {
     public static let titleMax = 80
     public static let bodyMax = 240
-    public static let machineMax = 40
+    /// 机器名：和配对表里的名字一样长（RemoteClient.peerName），Mac App 不另截
+    public static let machineMax = 48
 
     public let title: String
     public let subtitle: String
@@ -107,7 +108,7 @@ public struct NoteCard: Sendable, Equatable {
         guard !t.isEmpty || !b.isEmpty else { return nil }
         let m = plainLine(machine, max: Self.machineMax), w = plainLine(what, max: Self.titleMax)
         self.title = t.isEmpty ? "远程会话" : t
-        subtitle = (m.isEmpty ? "来自另一台电脑" : "来自「\(m)」") + (w.isEmpty ? "" : " · \(w)")
+        subtitle = "来自「\(m.isEmpty ? "另一台机器" : m)」" + (w.isEmpty ? "" : " · \(w)")
         self.body = b
         self.sound = sound ?? NoteSound(title: t)
     }

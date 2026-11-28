@@ -29,7 +29,7 @@ struct HelloDoc: CcaDocument, Equatable {
     var remote: Int?
     /// 有 `cca remote end`（结束这台 Mac 上的一个会话，PROTOCOL 9.2）；旧版 cca 没有这个字段，App 不给「结束」
     var remoteEnd: Int?
-    /// 有 `cca remote pair --web`（和手机配对：手机在浏览器里接入，PROTOCOL 9.2）；旧版 cca 没有这个字段，App 不给「和手机配对…」
+    /// 有 `cca remote pair --web`（和手机配对：iPhone 上的 cca App 扫二维码，3.5.3 是手机浏览器里的那一页，PROTOCOL 9.2）；旧版 cca 没有这个字段，App 不给「和手机配对…」
     var remoteWeb: Int?
     /// 有远程启动（手机用这台 Mac 上的模板新建会话：`cca remote template`、`cca remote allow <配对的 id> launch on|off`，PROTOCOL 9.4）；
     /// 旧版 cca 没有这个字段，App 不显示模板、不给「允许远程启动」
