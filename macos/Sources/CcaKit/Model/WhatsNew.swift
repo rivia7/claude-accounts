@@ -20,6 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.8.0-beta.3", title: "ChatGPT、Antigravity 账号补上凭证防护和额度入口", points: [
+            .init(symbol: "lock.shield",
+                  text: "cca 启动 Codex（Mac、Linux 上都是）和 Antigravity 时也加上规则，挡住 cca 存的登录凭证和浏览器资料：各账号的登录、Team 的密钥，和 Claude Code 一样。"),
+            .init(symbol: "creditcard",
+                  text: "Antigravity 账号也有「在 Google 开发者计划里查看 API 额度」：用这个账号自己的浏览器打开权益页，领、看每月的 Google Cloud 额度。"),
+            .init(symbol: "globe",
+                  text: "出口检测照各家的不可用地区名单：缅甸能用 ChatGPT，摩尔多瓦不能用 Antigravity。"),
+            .init(symbol: "chart.bar.xaxis",
+                  text: "Antigravity 的每周用量按额度组分开记，用量统计页每组一行。"),
+            .init(symbol: "text.bubble",
+                  text: "远程新建 Antigravity 会话时也能带上开场白。"),
+        ]),
         ReleaseNote(version: "3.8.0-beta.2", title: "iPhone 上也看得到端口的问题和 Mac 页顶的提示", points: [
             .init(symbol: "iphone",
                   text: "iPhone 上的 cca App 也说账号的出口有问题、端口无法连接、路由器选错了节点，和 Mac 总览上的一样（后两样要这台 Mac 上的 cca App 开着时才查）。"),
