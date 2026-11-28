@@ -22,6 +22,11 @@ struct ReleaseNote: Equatable, Identifiable {
 
 enum WhatsNew {
     static let all: [ReleaseNote] = [
+        ReleaseNote(n: 3, date: "11 月 28 日", title: "Antigravity 也有每周用量", points: [
+            .init(symbol: "chart.bar.xaxis", text: "Antigravity 的账号页每组额度一张「每周用量」的图（比如「每周用量 · Gemini 模型」），和 Mac 上的一样。"),
+            .init(symbol: "list.bullet.rectangle", text: "「用量统计」里也列 Antigravity 的账号：每组额度一行，名字下面写着是哪一组。"),
+            .init(symbol: "arrow.down.circle", text: "电脑上的 cca 也要更新（3.8.0-beta.3 起）：它每次查用量时记下每组这一周用了多少，满一周后才有柱子。"),
+        ], art: "stats"),
         ReleaseNote(n: 2, date: "11 月 28 日", title: "账号的问题、电脑上的提示和 Mac 上的一样", points: [
             .init(symbol: "exclamationmark.triangle", text: "总览和账号页照 Mac 说账号的问题和下一步：出口有问题、端口无法连接、节点选错了；还能按 Team 筛。"),
             .init(symbol: "desktopcomputer", text: "电脑上 cca App 页顶的提示手机上也有：cca 有新版本、账号表或共享设置有问题、刷新用量要你同意或者没成功、内置代理停了。"),
