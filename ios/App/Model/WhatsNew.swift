@@ -22,12 +22,13 @@ struct ReleaseNote: Equatable, Identifiable {
 
 enum WhatsNew {
     static let all: [ReleaseNote] = [
-        ReleaseNote(n: 2, date: "11 月 28 日", title: "新手教程、提示卡片，提示会读出来", points: [
-            .init(symbol: "book", text: "第一次进来时有新手教程，讲各页怎么看；想再看一遍，点设置里的「新手教程」，每次更新了什么在「更新说明」里。"),
-            .init(symbol: "lightbulb", text: "总览、账号页、用量统计、折合金额的顶上有「这一页怎么看」：点「知道了」就不再出现，设置里能重新显示。"),
-            .init(symbol: "text.bubble", text: "没能接入、新建或结束会话时，底下浮出一句提示，几秒后自己消失；开着旁白（VoiceOver）时会读出来。"),
-            .init(symbol: "chart.bar.xaxis", text: "账号页上「每周用量」和「折合金额」两张图的同一周上下对齐；演示模式时每一页都写着「演示模式」。"),
-        ], art: "logo"),
+        ReleaseNote(n: 2, date: "11 月 28 日", title: "账号的问题、电脑上的提示和 Mac 上的一样", points: [
+            .init(symbol: "exclamationmark.triangle", text: "总览和账号页照 Mac 说账号的问题和下一步：出口有问题、端口无法连接、节点选错了；还能按 Team 筛。"),
+            .init(symbol: "desktopcomputer", text: "电脑上 cca App 页顶的提示手机上也有：cca 有新版本、账号表或共享设置有问题、刷新用量要你同意或者没成功、内置代理停了。"),
+            .init(symbol: "pause.circle", text: "电脑睡着了、会话被挂起时说「无响应」，和离线分开（Team 的服务器更新后才有）。"),
+            .init(symbol: "book", text: "有了新手教程和各页顶上的「这一页怎么看」，设置里能再看。"),
+            .init(symbol: "text.bubble", text: "没能接入、新建或结束会话时，底下浮出一句提示，开着旁白时会读出来。"),
+        ], art: "office"),
         ReleaseNote(n: 1, date: "11 月 28 日", title: "照 Mac 上的 App 改：账号页标出状态，能同时接着几个会话", points: [
             .init(symbol: "person.text.rectangle", text: "账号页名字下面标出工具、套餐和登录状态，再下面一句话说下一步怎么做；底下的标签用数字标出要处理的账号、开着的终端。"),
             .init(symbol: "rectangle.stack", text: "能同时接着几个会话（最多 8 个），在会话列表顶上或终端页的菜单里切换；菜单里也能改成只看或可以操作。"),
