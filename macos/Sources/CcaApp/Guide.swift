@@ -992,7 +992,8 @@ struct Advice {
         case .portDrift:
             return Advice(level: .warn, text: "路由器给这个账号选错了节点：点「同步路由器」就能修好。")
         case .exitBad(let r, let region):
-            return Advice(level: .bad, text: "出口有问题：\(Texts.healthResult(r, region: region))。点「检测出口」重新检测。")
+            // 第三方 API 账号的按钮叫「检测连接」（RouteSection）
+            return Advice(level: .bad, text: "出口有问题：\(Texts.healthResult(r, region: region))。点「\(a.isAPI ? "检测连接" : "检测出口")」重新检测。")
         case .quota(let windows):
             // 用完的窗口比快用完的要紧；用完了几个时说最晚恢复的那个（`blocking`：和工位上的几点恢复一样）
             let w = windows.blocking ?? windows[0]

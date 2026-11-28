@@ -5906,6 +5906,9 @@ cmd_usage() {   # cca [codex] usage [账号…] [--json]（CCA_USAGE_JOBS：最�
 		esac
 		shift
 	done
+	# App 起的（带着事件文件）：结束时记下这次刷新的结果，手机上这台电脑的一栏照它说（辅助程序的 remote-usage-poll；后台定时刷新时 App 带着
+	# 自己的进程号 CCA_USAGE_POLL，PROTOCOL 3.1）
+	[ -z "${CCA_EVENTS:-}" ] || trap 'py remote-usage-poll "$?" "${CCA_USAGE_POLL:-}" "$CCA_EVENTS" >/dev/null 2>&1' EXIT
 	need_bin
 	[ "$TOOL" != agy ] || agy_guard   # agy 的额度由 agy 自己查（打印模式的 /usage）：它读的登录要是账号自己目录里的那一份
 	if [ ${#wanted[@]} -gt 0 ]; then

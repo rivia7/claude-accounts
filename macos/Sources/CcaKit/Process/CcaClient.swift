@@ -168,7 +168,8 @@ enum CcaCommand: Sendable, Hashable {
     }
 
     var extraEnvironment: [String: String] {
-        if case .usagePoll = self { return ["CCA_USAGE_JOBS": "2"] }
+        // CCA_USAGE_POLL：这是后台定时刷新，值是 App 的进程号（cca 记下要同意、没查成，给手机上这台 Mac 的一栏；App 退出了就不算，PROTOCOL 3.1）
+        if case .usagePoll = self { return ["CCA_USAGE_JOBS": "2", "CCA_USAGE_POLL": String(ProcessInfo.processInfo.processIdentifier)] }
         return [:]
     }
 

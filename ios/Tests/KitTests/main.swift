@@ -255,6 +255,28 @@ if let st = v["status"] as? [String: Any] {
     }
     let bob = s?.accounts.first { $0.name == "bob" }
     check(bob != nil && bob?.cost == nil && bob?.appOpen == false && bob?.cliSessions == 0 && bob?.cliSince == nil, "没有折合金额、没在用的账号")
+    // 出口检测、为什么用不了、第三方 API 的模型、哪个 Team 给的、套餐过时（status.rs 的 net_of、why_of、row_of、usage_of）：清理过的样子，
+    // App 照它算的那几样（AccountMood 用的：算数的那一份、出口有问题、可能泄露）
+    let wm = st["want_more"] as? [String: Any] ?? [:]
+    let an = first?.net
+    check(an == AccountNet(result: "restricted", region: wm["region"] as? String, trust: 40, trustLabel: "可疑", dns: "leak", webrtc: "note",
+                           checkedEpoch: now - 101, atLaunch: true)
+          && an?.current != nil && an?.exitBad == true && an?.hasLeak == true, "出口检测：\(String(describing: an))")
+    check(first?.whyApp == "app_missing" && first?.whyCLI == "tool_missing" && first?.team == wm["team"] as? String
+          && first?.usage?.outdatedLoginPlan == wm["outdated"] as? String && first?.model == nil, "为什么用不了、Team、套餐过时：\(String(describing: first))")
+    check(bob?.net == AccountNet(result: "") && bob?.net?.checked == false && bob?.net?.current == nil && bob?.model == wm["model"] as? String
+          && bob?.team == nil && bob?.whyApp == nil && bob?.whyCLI == nil, "从没测过出口（{}）、第三方 API 的模型：\(String(describing: bob?.net))")
+    let carol = s?.accounts.first { $0.name == "carol" }
+    check(first?.port == "closed" && bob?.port == nil && carol?.port == nil, "端口池的实况：只认 closed、drift（\(String(describing: first?.port))）")
+    check(carol?.net?.checked == true && carol?.net?.stale == true && carol?.net?.applies == false && carol?.net?.current == nil
+          && carol?.net?.trust == 100 && carol?.net?.exitBad == false, "过时的、换了节点测的不算数（纯净度到 100 为止）：\(String(describing: carol?.net))")
+    check(s?.accounts.first { $0.name == "dave" }?.net == nil, "旧版的宿主不给 net")
+    // 那台电脑：cca 的版本、「远程会话」的开关、这台手机能不能操作、页顶的提示（host_of）
+    let probs = s?.problems ?? []
+    check(s?.ccaVersion == wm["cca"] as? String && s?.update == wm["update"] as? String && s?.remoteOn == true && s?.allow == "view"
+          && probs.map(\.code) == ["table_invalid", "settings_problems", "usage_consent", "core_down"]
+          && probs.map(\.tool) == ["claude", "codex", "codex", nil] && probs.first?.items == [] && probs.dropFirst().first?.items == wm["items"] as? [String],
+          "那台电脑那几样：\(String(describing: s?.ccaVersion)) \(String(describing: s?.update)) \(probs)")
     // 那台电脑的折合金额那几样（cost_meta）、这个配对所在的 Team（team_of）；放不下时不带的
     check(s?.cost?.pricesDate == "2026-11-01" && s?.cost?.updatedEpoch == now - 240 && s?.cost?.unattributed == 312 && s?.cost?.brief == true
           && s?.cost?.scanning == false && s?.costLeftOut == false && s?.weeksLeftOut == false, "折合金额那几样：\(String(describing: s?.cost))")
@@ -265,6 +287,8 @@ if let st = v["status"] as? [String: Any] {
     let lean = statusOpen(statusKeys(p), pid: pid, st["lean"], age: 0, received: now)
     check(lean != nil && lean?.cost == nil && lean?.costLeftOut == true && lean?.weeksLeftOut == true && lean?.team == nil,
           "放不下时不带折合金额、每周用量：\(String(describing: lean?.costLeftOut))")
+    check(lean?.ccaVersion == wm["cca"] as? String && lean?.update == wm["update"] as? String && lean?.remoteOn == true && lean?.allow == "view"
+          && lean?.problems.count == 4, "放不下时那台电脑那几样照样带着")
     check(statusOpen(statusKeys(p), pid: st["other_pid"] as? String ?? "", st["blob"], age: 0, received: now) == nil, "配对编号不对解不开")
     for bad in ["forged", "dir", "note", "v2"] {
         check(statusOpen(statusKeys(p), pid: pid, st[bad], age: 0, received: now) == nil, "账号的状态不认：\(bad)")

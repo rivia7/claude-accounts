@@ -61,6 +61,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("remote-forget", pair::cmd_remote_forget),
     Cmd::all("remote-hubs", pair::cmd_remote_hubs),
     Cmd::all("remote-status", status::cmd_remote_status),
+    Cmd::all("remote-usage-poll", status::cmd_remote_usage_poll),
     Cmd::all("remote-template", template::cmd_remote_template),
     Cmd::all("remote-launcher", launch::cmd_remote_launcher),
     Cmd::all("remote-launch", start::cmd_remote_launch),

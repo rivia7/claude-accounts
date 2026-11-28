@@ -73,6 +73,17 @@ enum Texts {
         return "\(m / 1440) 天前"
     }
 
+    /// 配对过的电脑的第三行：「cca 3.8.0（有新版本 3.8.1）· 只看」（那台电脑放上来的；旧版的 cca 不放版本、权限，是 nil）
+    static func peerHost(_ st: HostStatus?) -> String? {
+        guard let st else { return nil }
+        var parts: [String] = []
+        if let v = st.ccaVersion {
+            parts.append("cca " + v + (st.update.map { $0.contains("-beta.") ? "（有新的测试版 \($0)）" : "（有新版本 \($0)）" } ?? ""))
+        }
+        if st.allow == "view" { parts.append("只看") } else if st.allow == "control" { parts.append("可以操作") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     /// 配对过的电脑的第二行（时间照 Mac App 的 remotePeerDetail 写：今天的只写钟点，昨天、周几、再早的写日期）：「昨天 09:12 配对 · 示例 Team」
     static func peerDetail(_ p: Peer, now: Double) -> String {
         [pastTime(p.at, now: now) + " 配对", p.team].compactMap { $0 }.joined(separator: " · ")
@@ -176,8 +187,104 @@ enum Texts {
         case .loggedOut: return "未登录"
         case .wrongAccount: return "登录的不是这个账号"
         case .expired: return brief ? "登录已失效" : "登录已失效，请在电脑上重新登录"
+        case .portClosed: return "端口无法连接"
+        case .wrongNode: return "节点选错了"
+        case .exit(let r, let region): return healthResult(r, region: region)
         case .usedUp(let until): return "额度已用完" + (until.map { "，" + UsageText.backAt(epoch: $0, now: now) } ?? "")
         }
+    }
+
+    /// 出口检测的结果（Mac App 的 Texts.healthResult）
+    static func healthResult(_ r: String, region: String?) -> String {
+        switch r {
+        case "ok": return "出口正常"
+        case "low_purity": return "纯净度偏低"
+        case "restricted": return nonEmpty(region).map { "出口位于不支持的地区（\($0)）" } ?? "出口位于不支持的地区"
+        case "no_exit": return "无法获取出口 IP"
+        case "no_score": return "检测网站未给出评分"
+        case "port_closed": return "端口无法连接"
+        case "api_ok": return "接口连接正常"
+        case "api_unreachable": return "接口无法连接"
+        default: return "检测结果未知"
+        }
+    }
+
+    /// DNS / WebRTC 的泄露检测（Mac App 的 Texts.leak）
+    static func leak(_ s: String?, what: String) -> String {
+        switch s {
+        case "ok"?: return "\(what) 正常"
+        case "leak"?: return "\(what) 有泄露风险"
+        case "note"?: return "\(what) 有提示"
+        case "failed"?: return "\(what) 检测失败"
+        case nil: return "\(what) 未检测"
+        default: return "\(what) 未知"
+        }
+    }
+
+    /// 头条之外的小事（卡片右上角的标记），照 Diagnosis 的先后（Mac App 的 Texts.flags）
+    static func flags(_ fs: [AccountFlag], tool: String) -> [String] {
+        fs.map { f in
+            switch f {
+            case .nearLimit: return "额度即将用完"
+            case .noApp: return "未安装 " + appLabel(tool)
+            case .lowPurity: return "出口 IP 的纯净度偏低"
+            case .leak: return "DNS 或 WebRTC 可能泄露"
+            case .neverChecked: return "尚未检测出口"
+            }
+        }
+    }
+
+    /// Claude Code 记下的套餐过时了（Mac App 的 Texts.outdatedLoginPlan）
+    static func outdatedLoginPlan(_ old: String, current: String) -> String {
+        "Claude Code 记录的套餐仍是 \(old)" + (nonEmpty(current).map { "，账号现在是 \($0)" } ?? "")
+    }
+
+    /// 那台电脑上为什么用不了（Mac App 的 Texts.canWhy 里手机上说的那两样：没装桌面 App、没装这个工具的命令）
+    static func canWhy(_ code: String, tool: String) -> String {
+        switch code {
+        case "app_missing": return "那台电脑上未安装 " + appLabel(tool)
+        case "tool_missing": return "那台电脑上未安装 \(tool.isEmpty || tool == "claude" ? "claude" : tool) 命令"
+        default: return "那台电脑上暂不可用"
+        }
+    }
+
+    /// 按 Team 筛的一项（Mac App 的 Texts.teamFilter）
+    static func teamPick(_ p: AccountShelf.TeamPick) -> String {
+        switch p {
+        case .all: return "全部账号"
+        case .team(let name): return name
+        case .outside: return "不在 Team 里的"
+        }
+    }
+
+    /// 那台电脑上 cca 报的问题（Mac App 页顶的提示条，说法照它：账号表校验不过、共享设置里有会盖掉账号代理 / 接口 / 凭证的项、
+    /// 文件读不了、后台刷新用量要同意 / 没查成、内置代理停了）。账号表校验的说明、失败的原因里有账号表的键、路径，电脑不放上来；
+    /// 改要在电脑上改（写上命令、点哪个）
+    static func hostProblem(_ p: HostProblem) -> String {
+        let product = p.tool.map { toolName($0) }
+        let lead = product.map { $0 + "：" } ?? ""
+        switch p.code {
+        case "table_invalid":
+            guard let product else { return "账号表有错误" }
+            return "\(product) 的账号表校验未通过：启动账号会失败。请在电脑上编辑账号表（\(commandPrefix(p.tool ?? "")) edit）。"
+        case "settings_problems":
+            return "\(product ?? "cca") 的共享设置中有会覆盖账号代理、接口或凭证的项" + (p.items.isEmpty ? "" : "（" + p.items.joined(separator: "、") + "）")
+                + "。启动账号前 cca 会检查，可能需要先在电脑的终端中处理。"
+        case "config_unreadable": return lead + "无法读取 cca 的设置"
+        case "table_unreadable": return lead + "无法读取账号表"
+        case "account_unreadable": return lead + "无法读取账号的登录状态（按未登录处理）"
+        case "usage_consent": return "刷新 \(product ?? "cca") 的用量需要你的同意：请在电脑上的 cca App 里点「现在刷新」。"
+        case "usage_failed": return "后台刷新 \(product ?? "cca") 的用量失败：可以在电脑上的 cca App 里点「重试」查看原因。"
+        case "core_down": return "内置代理停了，稍后自动重启。"
+        default: return lead + "cca 报告了一个问题"
+        }
+    }
+
+    /// 那台电脑上的 cca 有新版本（Mac App 页顶的 UpdateBanner：「cca 有新版本 X」「cca 有新的测试版 X」）：更新要在电脑上做
+    static func hostUpdate(_ v: String) -> String {
+        let beta = v.contains("-beta.")
+        return (beta ? "cca 有新的测试版 \(v)" : "cca 有新版本 \(v)")
+            + "：请在电脑上的 cca App 里点「更新并重新打开」（或在终端运行 cca update\(beta ? " " + v : "")）。"
     }
 
     /// 账号是哪个工具的：「账号」页上面的工具切换、页头那一句（和 Mac App 侧栏的工具切换一样叫法：Claude、ChatGPT、Antigravity）
@@ -195,7 +302,7 @@ enum Texts {
     static func census(_ c: AccountCensus, tool: String) -> String {
         if c.total == 0 { return "还没有账号" }
         let rest = [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "未登录"), (c.wrongPerson, "账号不符"),
-                    (c.expired, "登录失效")]
+                    (c.expired, "登录失效"), (c.unwell, "有问题")]
         return (["\(c.total) 个 \(toolName(tool)) 账号"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 个\($0.1)" }).joined(separator: " · ")
     }
 
@@ -207,6 +314,11 @@ enum Texts {
     /// 在那台电脑上登录、重新登录这个账号的命令（Mac App 的「登录…」「重新登录…」在终端里跑的就是它；cca login 认别名）
     static func loginCommand(_ a: AccountStatus) -> String {
         commandPrefix(a.tool) + " login " + shellWord(nonEmpty(a.name) ?? "账号")
+    }
+
+    /// 在那台电脑上检测这个账号的出口的命令（Mac App 的「检测出口」「检测连接」跑的就是它）
+    static func checkCommand(_ a: AccountStatus) -> String {
+        commandPrefix(a.tool) + " check " + shellWord(nonEmpty(a.name) ?? "账号")
     }
 
     private static func commandPrefix(_ tool: String) -> String {

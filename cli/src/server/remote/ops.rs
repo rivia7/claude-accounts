@@ -7,7 +7,9 @@ use crate::py::obj::{Dict, V};
 use crate::py::time::monotonic;
 use crate::py::{num, R};
 use crate::server::wire::{self, Blob, Num};
-use crate::server::{API, GUEST_OPS, LATER_MAX, LATER_SPAN, PAIR_MSG, PAIR_TTL, PAIR_WAIT, PAIR_WAITERS, PUSH_BLOB, STATUS_BLOB};
+use crate::server::{
+    API, CTL_QUIET, GUEST_OPS, LATER_MAX, LATER_SPAN, PAIR_MSG, PAIR_TTL, PAIR_WAIT, PAIR_WAITERS, PUSH_BLOB, STATUS_BLOB,
+};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -479,6 +481,10 @@ impl Remote {
                         "viewers" => x.viewers,
                         "online" => x.conn.is_some(),
                     };
+                    // 控制连接还连着、宿主却有一阵没说话了（被挂起了、机器睡着了）：接不上。只在是的时候带（旧的服务器不给）
+                    if x.conn.is_some() && now - x.heard > CTL_QUIET {
+                        row.set("busy", true);
+                    }
                     Some(V::Dict(row))
                 })
                 .collect();

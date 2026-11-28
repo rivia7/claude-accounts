@@ -136,13 +136,23 @@ xcrun simctl launch "$UDID" "$BUNDLE" -demo >/dev/null
 sleep 6
 for mode in light dark; do
 	xcrun simctl ui "$UDID" appearance "$mode"
-	for screen in list accounts account stats cost account-cost sharing terminal pair settings launch sort; do
+	for screen in list accounts account stats cost account-cost sharing terminal pair settings launch sort tutorial whatsnew toast; do
 		shot "$screen" -screen "$screen"
 	done
 	# 总览换到 ChatGPT、只看 Pro 套餐的样子；折合金额按天看
 	shot accounts-codex -screen accounts -tool codex
 	shot accounts-pro -screen accounts -plan Pro
 	shot cost-days -screen cost -days
+	# 新手教程的最后一步；账号页不带提示卡片（每周用量、折合金额两张图对齐的样子）
+	shot tutorial-last -screen tutorial -step 4
+	shot account-notips -screen account -tips off
+	# 总览不带提示卡片（卡片上出口的问题、右上角的小标记、电脑报的问题）；出口有问题的账号（MacBook Air 上的「副号」）的那一页：
+	# 「下一步」那句话、「网络出口」一节、「远程会话」开关关着时会话那一节的说法
+	shot accounts-notips -screen accounts -tips off
+	shot account-exit -screen account -account 5 -tips off
+	# 总览换到 Antigravity（MacBook Air 一组最上面的「cca 有新版本」、路由器选错了节点的「Gemini」），那个账号的那一页
+	shot accounts-agy -screen accounts -tool agy -tips off
+	shot account-node -screen account -account 6 -tips off
 done
 xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
 xcrun simctl ui "$UDID" appearance light

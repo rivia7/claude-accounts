@@ -479,6 +479,10 @@ fn reconnect(f: &Far, srv: &Server, side: &mut Side, window: f64, flaps: u32) ->
                     missing = None;
                     "那台机器暂时没连着服务器".to_string()
                 }
+                Some(x) if x.busy => {
+                    missing = None;
+                    "那台机器上的这个会话没有回应（那台机器可能睡着了）".to_string()
+                }
                 Some(x) => {
                     missing = None;
                     let undialed = |_| Err(Miss { code: EXIT_RELAY, why: "这一次没问成服务器".into(), dialed: false });

@@ -255,13 +255,16 @@ fn against_the_spec(t: &mut Ctx) {
     };
     let alice_usage = patched(
         usage(win(100.0, now + 3600.0), win(41.0, now + 3.0 * 86400.0)),
-        &[(
-            "model_scoped",
-            list![obj! {
-                "name" => "Fable", "utilization" => 18.0, "resets_epoch" => now + 3.0 * 86400.0, "reset" => false,
-                "allowance_percent_of_weekly" => 50.0, "used_percent_of_weekly" => 9.0
-            }],
-        )],
+        &[
+            (
+                "model_scoped",
+                list![obj! {
+                    "name" => "Fable", "utilization" => 18.0, "resets_epoch" => now + 3.0 * 86400.0, "reset" => false,
+                    "allowance_percent_of_weekly" => 50.0, "used_percent_of_weekly" => 9.0
+                }],
+            ),
+            ("outdated_login_plan", Value::from("Max\u{202e}")),
+        ],
     );
     let week = |start: f64, used: f64, current: bool| {
         obj! {
@@ -299,6 +302,18 @@ fn against_the_spec(t: &mut Ctx) {
             ("color", Value::from("#7C3AED")),
             ("badge", Value::from("AL")),
             ("busy", Value::from(true)),
+            // 出口检测（status.rs 的 net_of）、为什么用不了（why_of）、哪个 Team 给的（team_name）
+            (
+                "net",
+                obj! {
+                    "result" => "restricted", "region" => "某地\u{202e}", "trust" => 40, "trust_label" => "可疑", "dns" => "leak", "webrtc" => "note",
+                    "at" => now - 101.0, "source" => "launch"
+                },
+            ),
+            ("why", obj! { "app" => "app_missing", "cli" => "tool_missing" }),
+            ("team", Value::from("示例 Team\u{202e}")),
+            // 端口池的实况里它的端口连不上（status.rs 的 live_of：那台电脑的界面 App 开着时才有）
+            ("port", Value::from("closed")),
             (
                 "weeks",
                 obj! {
@@ -309,8 +324,16 @@ fn against_the_spec(t: &mut Ctx) {
         ],
     );
     let bob_usage = patched(usage(win(100.0, now + 60.0), Value::Null), &[("error_code", Value::from("auth"))]);
-    let bob = row('b', "bob", "codex", "logged_in", bob_usage);
-    let carol = row('c', "carol", "claude", "logged_out", usage(win(100.0, now + 60.0), Value::Null));
+    // 从没测过出口（{}）；第三方 API 的模型
+    let bob = patched(
+        row('b', "bob", "codex", "logged_in", bob_usage),
+        &[("net", obj! {}), ("model", Value::from("model-x\u{202e}")), ("port", Value::from("weird"))],
+    );
+    // 过时了、换了节点测的出口（纯净度到 100 为止）
+    let carol = patched(
+        row('c', "carol", "claude", "logged_out", usage(win(100.0, now + 60.0), Value::Null)),
+        &[("net", obj! { "result" => "ok", "stale" => true, "applies" => false, "trust" => 140 })],
+    );
     let dave =
         row('d', "dave", "claude", "logged_in", usage(win(99.6, now + 600.0), obj! { "utilization" => 100.0, "reset" => true }));
     let gem_usage = patched(
@@ -344,6 +367,16 @@ fn against_the_spec(t: &mut Ctx) {
         "v" => 1, "machine" => "box\u{202e}", "more" => 3, "at" => now - 30.0,
         "accounts" => list![alice, bob, carol, dave, gem, bad, fay, gus, hal, ivy],
         "cost" => obj! { "prices_date" => "2026-11-01", "updated" => now - 240.0, "unattributed" => 312, "brief" => true },
+        // 电脑上 cca 的版本、「远程会话」的开关、这台手机能不能操作、页顶的提示（host_of；没有原因码的不要，共享设置的那几项清理过）
+        "cca" => "3.8.0\u{202e}", "update" => "3.8.1\u{202e}", "remote" => true, "allow" => "view",
+        "problems" => list![
+            obj! { "code" => "table_invalid", "tool" => "claude" },
+            obj! { "code" => "settings_problems", "tool" => "codex", "items" => list!["settings.json:OPENAI_BASE_URL", "", "x".repeat(80)] },
+            obj! { "tool" => "agy" },
+            // 后台查用量要同意（usage-poll）、内置代理停了（live_of）
+            obj! { "code" => "usage_consent", "tool" => "codex" },
+            obj! { "code" => "core_down" }
+        ],
         "team" => obj! {
             "name" => "示例 Team\u{202e}", "role" => "member", "coadmin" => true, "state" => "error", "error" => "连不上服务器", "seq" => 12,
             "accounts" => 3, "device" => "studio-mac", "host" => "team.example.com:18445", "joined" => now - 86400.0,
@@ -364,6 +397,11 @@ fn against_the_spec(t: &mut Ctx) {
             "note" => spec::note_seal(&p, &pid, &sdoc),
             "v2" => spec::status_seal(&p, &pid, &patched(sdoc.clone(), &[("v", Value::from(2))])),
             "lean" => spec::status_seal(&p, &pid, &lean),
+            // 新加的那几样清理过的样子（KitTests 里核对；放不下时那台电脑那几样照样带着）
+            "want_more" => obj! {
+                "region" => "某地", "team" => "示例 Team", "outdated" => "Max", "model" => "model-x", "cca" => "3.8.0", "update" => "3.8.1",
+                "items" => list!["settings.json:OPENAI_BASE_URL", "x".repeat(64)]
+            },
             "want" => obj! {
                 "machine" => "box", "more" => 3, "at" => now - 30.0,
                 "cost" => obj! { "week_end" => week_end, "day_end" => day_end, "cli_since" => now - 7200.5 },
@@ -1033,7 +1071,7 @@ fn accounts_reach_the_phone(t: &mut Ctx) {
     let gw = Gateway::start(&t.tmp("cca-push-"), Knobs::default());
     let push = vec!["--push".to_string(), gw.url(), "--push-pin".to_string(), gw.pin.clone()];
     let fx = Base::with(t, true, move |_| push);
-    let a = fx.device("box");
+    let mut a = fx.device("box");
     fx.machines(&[&a]);
     let g = Guest::new(&fx, "我的 iPhone");
     let out = pair(&a, &g).0;
@@ -1060,6 +1098,17 @@ fn accounts_reach_the_phone(t: &mut Ctx) {
     assert_eq!((team["role"].str(), team["accounts"].f64(), team["coadmin"].clone()), ("member", 1.0, Value::Bool(false)), "{st}");
     assert!(!team["name"].str().is_empty() && !team["host"].str().is_empty() && !team["state"].str().is_empty(), "{team}");
     assert_eq!((acct["app"].clone(), acct["cli"].f64(), acct["since"].is_null()), (Value::Bool(false), 0.0, true), "{acct}");
+    // alice 没测过出口（net 是 {}），是这个 Team 给的（status.rs 的 team_name）；这台手机能操作，box 的「远程会话」开关没开（host_of）。
+    // box 的 config.json 是空的、没有可选节点：账号表校验不过（Mac App 页顶也提示这一条），手机只拿到原因码，不带说明
+    assert_eq!(
+        (acct["net"]["checked"].clone(), acct["net"]["current"].clone()),
+        (Value::Bool(false), Value::Bool(false)),
+        "{acct}"
+    );
+    assert_eq!(acct["team"].str(), team["name"].str(), "{acct}");
+    assert_eq!((st["allow"].str(), st["remote"].clone()), ("control", Value::Bool(false)), "{st}");
+    assert_eq!(st["problems"], list![obj! { "code" => "table_invalid", "items" => list![], "tool" => "claude" }], "{st}");
+    assert!(!head.compact().contains("可选节点"), "不给账号表校验的说明：{head}");
     assert_eq!((acct["five_hour"]["utilization"].f64(), acct["seven_day"]["utilization"].f64()), (100.0, 41.0));
     let used = &acct["exhausted"];
     assert_eq!((used.list().len(), used[0][0].str(), used[0][1].f64()), (1, "five_hour", resets), "{acct}");
@@ -1099,6 +1148,43 @@ fn accounts_reach_the_phone(t: &mut Ctx) {
     let third = gw.sandbox.wait_seen(3, secs(30)).remove(2);
     assert_eq!(opened(&g, &fx, &third.body)["usage"]["event"].str(), "used_up");
     assert_eq!((gw.production.complaints(), gw.sandbox.complaints()), (Vec::<String>::new(), Vec::<String>::new()));
+    // 电脑那头另查的（status.rs 的 publish，remote.md「电脑那头另查的」）：上次检查更新查到的新版本（update/check.json）一直给；
+    // App 后台刷新用量没查成（remote/usage-poll.json：记下它的那个 App 还开着才算）只在 box 的界面 App 开着时给（watched：照进程认）
+    a.env.insert("CCA_VERSION".to_string(), "3.8.0".to_string());
+    let check = obj! { "kind" => "update", "cca_version" => "3.8.0", "latest" => "3.8.1", "available" => true, "generated_epoch" => fleet::now() };
+    fsx::write(a.cca.join("update").join("check.json"), json::dumps(&check, &Style::default()));
+    let app = FakeApp::start(&a.home);
+    let poll = obj! { "v" => 1, "tools" => obj! { "claude" => obj! { "failed" => app.0.pid() } } };
+    fsx::write(a.cca.join("remote").join("usage-poll.json"), json::dumps(&poll, &Style::default()));
+    relay::publish(&a);
+    let with_app = wait_for("手机看到新版本、后台刷新没查成", secs(30), || {
+        g.rows().into_iter().find(|r| r["pid"].str() == pid && r.get("sid").is_none() && r["status"]["update"].str() == "3.8.1")
+    });
+    let failed = obj! { "code" => "usage_failed", "items" => list![], "tool" => "claude" };
+    let invalid = obj! { "code" => "table_invalid", "items" => list![], "tool" => "claude" };
+    assert_eq!(with_app["status"]["problems"], list![invalid.clone(), failed], "{with_app}");
+    // 实况（cca _gui live）是 box 的假 cca 回的：什么都没有，账号不带 port
+    assert!(relay::only(&with_app["status"]["accounts"])["port"].is_null(), "{with_app}");
+    // App 退出了：没查成的那一条不算了，新版本照样说
+    drop(app);
+    relay::publish(&a);
+    let closed = wait_for("App 关了：手机上不再说后台刷新没查成", secs(30), || {
+        g.rows().into_iter().find(|r| r["pid"].str() == pid && r.get("sid").is_none() && r["status"]["problems"].list().len() == 1)
+    });
+    assert_eq!((closed["status"]["problems"].clone(), closed["status"]["update"].str()), (list![invalid], "3.8.1"), "{closed}");
+}
+
+/// 假的界面 App（status.rs 的 watched 照进程认：~/Applications/cca.app/Contents/MacOS/cca 在跑）：拷一份 /bin/sleep 过去起着，丢掉时停掉
+struct FakeApp(Child);
+
+impl FakeApp {
+    fn start(home: &Path) -> FakeApp {
+        let exe = home.join("Applications").join("cca.app").join("Contents").join("MacOS").join("cca");
+        std::fs::create_dir_all(exe.parent().expect("有上一层")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::copy("/bin/sleep", &exe).unwrap_or_else(|e| panic!("拷 /bin/sleep：{e}"));
+        let child = Cmd::new(&exe).arg("300").stdin(Stdio::Null).stdout(Stdio::Null).stderr(Stdio::Null).spawn();
+        FakeApp(child.unwrap_or_else(|e| panic!("起假的 App：{e}")))
+    }
 }
 
 /// 像通知扩展那样解开推来的那一份（ccaguest push-open；时区是 UTC，字里的钟点照它写）

@@ -379,6 +379,11 @@ enum Texts {
         return parts.joined(separator: " · ")
     }
 
+    /// 别的机器上的启动器起不了会话的原因（`state` 不是 ok：没有回应、没连着服务器）
+    static func launcherDown(_ machine: String, _ state: RemoteSessionState) -> String {
+        state == .busy ? "「\(machine)」没有回应（可能睡着了），暂时无法新建会话" : "「\(machine)」暂时未连接服务器，无法新建会话"
+    }
+
     /// 接不上的会话为什么接不上；接得上的是 nil
     static func remoteStateNote(_ s: RemoteSession) -> String? {
         switch s.state {

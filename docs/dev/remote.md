@@ -454,14 +454,18 @@
 ## 手机上的账号（3.7.5）
 
 iPhone 上的 cca App 除了接入会话，还照 Mac App 的侧栏有「总览」「用量统计」「折合金额」「共享与同步」几页（ios.md「App」）。总览：配对过的每台电脑上的账号现在怎样
-（在用 / 额度已用完 · 几点恢复 / 未登录 / 账号不符 / 登录失效 / 建议先用）、在用什么（桌面 App、命令行里几个会话）、套餐、5 小时 / 本周 / 按模型的额度、
+（在用 / 额度已用完 · 几点恢复 / 未登录 / 账号不符 / 登录失效 / 端口无法连接 / 节点选错了 / 出口有问题 / 建议先用，和 Mac App 一个口径）、在用什么（桌面 App、命令行里几个会话）、套餐、5 小时 / 本周 / 按模型的额度、
 Codex 还能重置几次、Antigravity 的几组额度，一个账号一张带插画的卡片；点进去是这个账号的每周用量、折合金额和它的会话（点一下接入）。页上照 Mac App
 侧栏那样按工具分开、能按套餐筛（套餐照 cca 给的原名，ios.md「App」的 `AccountsView`）。用量统计、折合金额把各台电脑上的官方账号放在一起比；
 共享与同步说每台电脑在这个配对所在的 Team 里怎样（配置同步了没有、是不是管理员、分给它几个账号）。
 额度用完了、到了重置的时候推一条通知（push.md「额度的通知」）。只看，不在手机上操作（登录、切换、重置额度都还在电脑上做）；只给手机
 （`peer.web`），cca 的设备之间不给。用户要的（2026-11-26）：像 Mac App 那样补全 iOS App，加上额度用完、到了新周期重置的通知；2026-11-27：总览、
 用量统计、折合金额、远程会话、共享与同步都放到 iOS 上，设计语言和 Mac 一致（折合金额、Team、在用什么是这时加进明文的：线上的格式、上限没变，
-Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
+Team 的服务器不用更新；随 3.7.9 发布）。2026-11-28 又加了出口检测的结果、为什么用不了、第三方 API 的模型、是哪个 Team 给的、套餐过时，
+和那台电脑的 cca 版本、「远程会话」的开关、这台手机能不能操作、Mac App 页顶的那几条提示（ios.md「和 Mac App 的对照」；同样只是明文里加的，
+Team 的服务器不用更新）。同一天（3.8.0-beta.2）又加了端口池的实况（端口连不上、节点选错了）、内置代理停了、App 后台刷新用量要同意 / 没查成、
+电脑上的 cca 有新版本（下面「电脑那头另查的」），会话列表、启动器的「无响应」（server/README.md 里 `relay_list` 给的 `busy`：要 Team 的服务器
+更新到 3.8.0 才有，旧的照旧只给 `online`，手机上照旧说「离线」）。线上的格式
 （密文、`status_put`、`relay_list` 的 `have` / `status`）在 server/README.md「账号的状态」，App 那一头在 ios.md「App」。Team 的服务器要 3.7.5
 （级别 2，team.md「服务器要更新」）：旧的不认 `status_put`，手机上那台电脑一栏说要管理员更新服务器。
 
@@ -478,9 +482,14 @@ Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
 - 记着的在 `~/.cca/remote/status.json`（600）：`{"v":1,"pids":{配对编号:{"sum","put","old","noted"}}}`，`noted` 是推过的“用完了”
   （`{账号编号/窗口: 这一轮的时间}`）；没有邮箱、名字。配对表里没有了的配对下一轮忘掉
 
-**明文**（v1，紧凑的 JSON；手机不认的项不管，样子不对的账号丢掉）：`{"v":1,"machine","accounts":[…],"more"?,"weeks"?,"cost"?,"team"?,"off"?,"at"}`
+**明文**（v1，紧凑的 JSON；手机不认的项不管，样子不对的账号丢掉）：`{"v":1,"machine","cca"?,"update"?,"remote"?,"allow"?,"problems"?,"accounts":[…],"more"?,"weeks"?,"cost"?,"team"?,"off"?,"at"}`
 - `machine`：和会话的说明里的一样（短主机名，`peers::machine_name`）；`at`：放的时间；`off`：不让接入了（`accounts` 是空的）
-- 一个账号：`{"id","aid"?,"tool","name","kind","login","plan","tier","busy","app"?,"cli"?,"since"?,"color"?,"badge"?,"usage","weeks","cost"?}`
+- 这台电脑的几样（`host_of`；少放账号时照样带着）：`cca`（cca 的版本）、`update`（有新版本：下面「电脑那头另查的」）、`remote`（「远程会话」的开关：之后启动的会话放不放进
+  会话宿主）、`allow`（这台手机在这台电脑上：`control` 能操作、`view` 只看）、`problems`（Mac App 页顶的那几条提示，`[{code, tool?, items?}]`，先后照 Mac 的 `TopBanners`：
+  各工具的 `errors`（像 `table_invalid`）、`settings_problems`（`code` 是 `settings_problems`，`items` 是共享设置里的项：来源和配置键，不带值，最多 6 项）、`_gui state` 的
+  `errors`，再是电脑那头另查的 `usage_consent`、`usage_failed`（带 `tool`）、`core_down`；同一个原因、同一个工具的只给一次，最多 8 条）。只给原因码，不给说明：说明里有
+  路径、账号表的键、端口号
+- 一个账号：`{"id","aid"?,"tool","name","kind","login","plan","tier","busy","app"?,"cli"?,"since"?,"color"?,"badge"?,"net","why"?,"model"?,"team"?,"port"?,"usage","weeks","cost"?}`
   - `id`：这个配对里的账号编号，`usage_tag(P, "acct\0" 工具 "\0" 账号目录名)`（`usage_tag(P, x)` 是 `hex(HMAC(P, "cca-remote/v1/usage\0" x))` 的前 16 个字符）：
     换别名不变，别的配对、服务器认不出是哪个账号。`aid`：会话的说明里的同一个账号摘要（这个 Team 的盐、账号表的键，`far::aid_of`），手机照它把会话
     放到账号下面
@@ -497,6 +506,13 @@ Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
     （各项四舍五入到分再加会差一两分）。`sync`：同步没成时 cca 给的状态（只给状态，不给说明：说明里有服务器地址）；`missing`：还有几台设备没算进来；
     `models`：前 3 个，`[模型名或 null（没按模型记下的那一部分）, 近 12 周, 近 30 天, 暂按哪个同系列模型的价格（cca 的价格表里还没有它时才有）]`；
     `devices`：用过它的设备有两台以上、或者有很久没同步上来的时才有，最多 6 台，`[名字, 这台是 1, 近 12 周, 近 30 天, 很久没同步上来是 1, 上次同步的时间或 null]`
+  - `net`（`net_of`）：出口检测（PROTOCOL 2.2 的 `health`）里手机要的，从没测过是 `{}`：`{result, region?, trust?, trust_label?, dns?, webrtc?, stale?, applies?, at?, source?}`
+    （`region` 是受限的地区，`dns`、`webrtc` 是泄露检测的结论；`stale` 只在过期时写 true、`applies` 只在不适用时写 false、`source` 只在启动时测的写 `launch`）；
+    不给出口 IP、运营商、说明。手机照它和 Mac App 的 `Diagnosis` 一个口径说「有问题」、不建议先用（ios.md「App」的 `AccountMood`）
+  - `why`（`why_of`，都用得了时没有）：为什么用不了（PROTOCOL 2.2 的 `can_why`）里的 `app`（`app_missing` 是没装桌面 App）、`cli`（`tool_missing` 是没装终端里的命令）
+  - `model`：第三方 API 账号的模型（不给接口的地址）；`team`：给它的 Team 的名字（Team 给的才有；这台电脑已经不在那个 Team 里的不写）；
+    `usage` 里另有 `outdated_login_plan`（套餐过时：Claude Code 登录时记下的套餐，PROTOCOL 3.1）
+  - `port`（端口池的实况里有问题时才有，下面「电脑那头另查的」）：`closed` 端口连不上（Mac App 的「端口无法连接」）、`drift` 路由器给它选错了节点（「节点选错了」）
 - `cost`：这台电脑的折合金额那几样（PROTOCOL 2.2 的 `cost_total`，`cost_meta`）：`{"prices_date","updated","scanning"?,"unattributed"?,"brief"?}`
   （`unattributed`：这台电脑近 30 天认不出是哪个账号的，美分，只算它自己的，几台电脑的加起来不重复；`brief`：各账号的 `cost` 没带 `models`、`devices`）；
   折合金额关着（`cost_total` 是 null）时没有这一项，手机的折合金额页不列这台电脑的账号
@@ -505,6 +521,21 @@ Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
 - 太大（密文超过 `STATUS_BLOB`）：一级一级少放（`seal_doc`）：先不带折合金额里按模型、按设备的（外面的 `cost` 写 `"brief": true`），再不带每周用量
   （各账号的 `weeks` 是 null，外面写 `"weeks": false`：手机照它说那台电脑上的账号太多、每周用量没放上来，不说成还没有记录），再不带折合金额（各账号没有
   `cost`，外面的 `cost` 是 `false`，手机同样照实说），还放不下再一个个少放账号（`more` 是少放了几个）
+
+**电脑那头另查的**（3.8.0-beta.2）：Mac App 开着时页顶、总览上才有的那几样，手机照 Mac App 开着时的样子说（App 关着时这几样 Mac 上也看不到：
+内置代理没人托管、没人在后台查用量）。都在 `status.rs` 的 `publish` 里并进去，`watched`（macOS 上是界面 App 开着：照进程认；Linux 上没有
+界面 App，总是算）不成立时一样都不给：
+- 端口池的实况、内置代理（`live_refresh`）：放完一轮以后，有手机的配对、`watched` 时另跑一次 `cca _gui live`（PROTOCOL 2.3，最多等 45 秒 `LIVE_WAIT`：在家要经 SSH 问
+  路由器）；上次查到有问题时隔 2 分钟（`LIVE_RECHECK`），不然隔 10 分钟（`LIVE_EVERY`）。结果记在 `status.json` 的 `live`（`{"at","ports":{编号: "closed" | "drift"},"core_down"}`，
+  编号是 sha256(工具 "\0" 账号表的键) 的前 16 个字符：文件里不写邮箱；没查成的只有 `at`），和记着的不一样时马上再放一轮（`status.again`）；过了半小时（`LIVE_STALE`）的不给。
+  `slots` 里 `closed`、`drift` 的账号带 `port`；`core_down`：走本机内核（`route` 是 local）、配好了却没在跑。`CCA_STATUS_LIVE=off` 不查（回归：它会在后台经 SSH 问路由器）
+- App 后台刷新用量要同意 / 没查成（`remote-usage-poll`）：App 带着事件文件起的 `cca usage` 结束时（bash `cmd_usage` 的 EXIT trap）照退出码和事件记下（`poll_end`，
+  和 Mac App 的 `finishUsage` 一个口径：成了两样都清掉；被信号停掉、取消的、要到终端里做的不动；要同意、没查成只在后台定时刷新时记——App 带着自己的进程号
+  `CCA_USAGE_POLL`，PROTOCOL 3.1——手动刷新的没查成弹框说过了，只清掉「没查成」）。记在 `~/.cca/remote/usage-poll.json`（600，`{"v":1,"tools":{工具:{"consent"|"failed": App 的进程号}}}`，
+  `usage-poll.lock` 锁着），记下它的 App 退出了就不算（Mac App 记在内存里，一样）；变了马上再放一轮
+- 有新版本（`update_of`）：`cca update --check`（App 一天查一次的就是它，PROTOCOL 5.1）每次查完把结果记在 `~/.cca/update/check.json`（600；`CCA_RO` 下不记；查到的变了马上
+  再放一轮），7 天内（`UPDATE_FRESH`）查的、比现在的新才给；开发模式（cca 旁边有 `.git`）不给，和 App 一样
+- 对不上的：Mac App 上点了「以后再说」的新版本提示手机上照样有（记在 App 的设置里，cca 不知道）
 
 **额度用完了。** 规则（`status.rs` 的 `exhausted`；和 Mac App 的 `Diagnosis.quotaPressure` 里用完了的那些、CcaRemoteKit 的 `AccountStatus.exhausted` 是同一条）：
 登录着、有用量（`source` 不是 none）、不是登录失效（`error_code` 不是 auth）；5 小时、本周两个窗口（Antigravity 是各组里这个窗口用得最少的那个：
@@ -520,7 +551,7 @@ Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
 `PeerListing.status`（`Status.swift` 的 `HostStatus`，折合金额、Team 在 `Cost.swift`：解开、核对样子）、`statusServed`（回的里面有没有 `status`：没有是旧的服务器）。没问到服务器时
 照手里那一份（界面上写着是多久以前的）。几台电脑上的同一个账号：总览照电脑各列各的；用量统计、折合金额照 `aid`（同一个 Team 的盐算的，几台电脑给的一样）
 只列一次，留有数据的、放得晚的那一份（iOS 的 `Pages.distinct`），没有 `aid` 的照列。折合金额页合计里「无法识别属于哪个账号」的是各台电脑的
-`unattributed` 加起来；按天的合计柱子照最晚结束的那一份的日子把各个账号的加到一起（几台电脑的时区不一样也对得上，`CostChart.sumDays`）。
+`unattributed` 加起来；按天的合计柱子照最晚结束的那一份的日子把各个账号的加到一起（几台电脑的时区不一样也对得上，`CostChart.sumDays`）。出口检测、那台电脑报的问题这些在手机上怎么说见 ios.md「App」（`AccountMood`、`Advice`、`NetSection`）。
 
 ## 一台设备 100 个会话（3.7.10）
 
@@ -583,8 +614,8 @@ Team 的服务器不用更新；随 3.7.9 发布）。线上的格式
 - 手机上的账号：`tests/web_relay.rs` 的 `app_guest_sees_accounts`（box 上真的辅助程序 `remote-status` 放，照文档写的访客 `relay_list` 带 `have` 取、
   拿配对的密钥解开：名字是别名、没有邮箱，账号摘要和会话的说明里的一样；没变的回 `same`、也不再放；额度用完了马上推、恢复的那一条服务器到点推、
   同一轮不再推；服务器、推送服务、box 记着的都没有明文；不让接入了盖掉）、`tests/ios_kit.rs` 的 `accounts_reach_the_phone`（同一条路，手机那一头是
-  CcaRemoteKit：列会话时带回账号、通知解开、字照手机的时区写，登记推送时不带 usage 就不推）；`cargo test` 的 `remote::status`（算不算用完、
-  Antigravity 看用得最少的那组、给手机的内容、一轮一轮和到点再推的、通知的字）和服务端的 `account_status`、`usage_notes`（`cli/src/server/remote/tests.rs`）
+  CcaRemoteKit：列会话时带回账号（另有出口检测、是哪个 Team 给的、box 的开关、这台手机能不能操作、box 报的问题）、通知解开、字照手机的时区写，登记推送时不带 usage 就不推）；`cargo test` 的 `remote::status`（算不算用完、
+  Antigravity 看用得最少的那组、给手机的内容（`health_why_and_team_for_the_phone`：出口检测只给结论、`can_why` 只给 app 和 cli、报的问题只给原因码，少放账号时照样带着）、一轮一轮和到点再推的、通知的字）和服务端的 `account_status`、`usage_notes`（`cli/src/server/remote/tests.rs`）
 - 通知：`pair_list_attach` 里会话中的程序（`cca-test fake-client` 的 `run`）运行 `remote-notify`，别的机器上接着的那一端收到 OSC 777，启动它的终端上没有；
   会话外面调是 65、没有字是 64。`cargo test` 的 `remote::attach::note_tests`：序列的写法、别人写的字怎么清理、不拆开一个字、限流。App 里弹出来、点通知回到终端
   没有自动的测试（要通知的权限和真人点）

@@ -43,6 +43,11 @@ final class DemoBackend: Backend {
                                   info: SessionInfo(machine: p.name, tool: "codex", name: "个人", cwd: "~/notes", since: t - 25 * 60, viewOnly: true,
                                                     aid: DemoAccounts.aid(2)),
                                   online: true, viewers: 1),
+                    // 电脑连着服务器，这个会话的宿主却没有回应（终端里被挂起了）：「无响应」，接不上
+                    RemoteSession(sid: String(repeating: "5", count: 32),
+                                  info: SessionInfo(machine: p.name, tool: "claude", name: "备用", cwd: "~/Projects/docs", since: t - 50 * 60, viewOnly: false,
+                                                    aid: DemoAccounts.aid(3)),
+                                  online: true, viewers: 0, busy: true),
                 ]
             case "b2":
                 sessions = [
@@ -64,7 +69,7 @@ final class DemoBackend: Backend {
     func launch(peer: Peer, launcher: HostLauncher, template: LaunchTemplate, account: LaunchAccount?, cols: Int, rows: Int,
                 line: String?) async -> LaunchResult {
         try? await Task.sleep(for: .milliseconds(900))
-        guard launcher.online else { return .failed(RemoteFailure("nohost")) }
+        guard launcher.usable else { return .failed(RemoteFailure("nohost")) }
         let sid = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
         let info = SessionInfo(machine: peer.name, tool: template.tool, name: account?.name ?? template.account, cwd: template.dir,
                                since: Date().timeIntervalSince1970, viewOnly: false, aid: account?.aid ?? template.aid, canEnd: true)
@@ -169,10 +174,22 @@ enum DemoAccounts {
             doc["cost"] = ["prices_date": "2026-11-01", "updated": (now - 240).rounded(), "unattributed": 312]
             doc["team"] = ["name": "示例 Team", "role": "admin", "state": "ok", "seq": 12, "accounts": 3, "device": "studio-mac", "host": host,
                            "joined": (now - 40 * 86400).rounded()]
+            // 电脑上 cca 的版本、「远程会话」的开关开着、这台手机能操作
+            doc["cca"] = "3.8.1"
+            doc["remote"] = true
+            doc["allow"] = "control"
         default:
             doc["cost"] = ["prices_date": "2026-11-01", "updated": (now - 3600).rounded()]
             doc["team"] = ["name": "示例 Team", "role": "member", "state": "pending", "seq": 11, "accounts": 3, "device": "macbook-air",
                            "host": host, "joined": (now - 9 * 86400).rounded()]
+            // 旧一点的 cca（有新版本：总览上一条提示）；「远程会话」的开关关着（之前起的会话照样接得上）；共享设置里有一项会盖掉账号的
+            // 接口、后台刷新 ChatGPT 的用量失败了（各在那个工具的总览上一条提示）
+            doc["cca"] = "3.8.0"
+            doc["update"] = "3.8.1"
+            doc["remote"] = false
+            doc["allow"] = "control"
+            doc["problems"] = [["code": "settings_problems", "tool": "claude", "items": ["settings.json:ANTHROPIC_BASE_URL"]],
+                               ["code": "usage_failed", "tool": "codex"]]
         }
         guard let d = try? JSONSerialization.data(withJSONObject: doc),
               let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return nil }
@@ -204,25 +221,29 @@ enum DemoAccounts {
     }
 
     /// 在用（Claude App 开着、终端里两个会话），Ultra：5 小时 42%，本周 63%（Fable 另外计），记了 11 周；折合金额用了两台设备，
-    /// 有一个新模型暂按同系列的价格估算
+    /// 有一个新模型暂按同系列的价格估算；Team 给的，启动时测过出口（正常）；Claude Code 记下的套餐还是升级前的 Max
     private static func work(_ now: Double) -> [String: Any] {
         let weekly = now + 3 * 86400 + 4 * 3600
         return ["id": id(1), "aid": aid(1), "tool": "claude", "name": "工作", "kind": "oauth", "login": "logged_in", "plan": "Ultra",
                 "tier": "premium", "busy": true, "app": true, "cli": 2, "since": (now - 2 * 3600 - 640).rounded(), "color": "#8E4EC6", "badge": "工",
+                "team": "示例 Team",
+                "net": ["result": "ok", "trust": 97, "trust_label": "极度纯净", "dns": "ok", "webrtc": "ok", "at": (now - 25 * 60).rounded(), "source": "launch"],
                 "cost": cost(160, weeks: 11, weekEnd: weekly, now: now, seed: 0.3, hit: [0.9741, 0.9752],
                              models: [("claude-opus-5-5", 0.66, nil), ("claude-sonnet-5-5", 0.30, nil), ("claude-haiku-5-6", 0.04, "claude-haiku-5-5")],
                              devices: [("studio-mac", true, 0.82, false, now - 240), ("lab-studio", false, 0.18, false, now - 1800)]),
                 "usage": usage(now, ["five_hour": window(42, in: 2 * 3600 + 13 * 60, now), "seven_day": window(63, in: weekly - now, now),
                                      "model_scoped": [window(18, in: weekly - now, now).merging(["name": "Fable", "allowance_percent_of_weekly": 50,
-                                                                                                 "used_percent_of_weekly": 9]) { $1 }]]),
+                                                                                                 "used_percent_of_weekly": 9]) { $1 }],
+                                     "outdated_login_plan": "Max"]),
                 "weeks": weeks([58, 74, 112, 81, 66, 47, 95, 70, 39, 88, 77], current: 63, end: weekly.rounded(), partial: [8], resets: [2: 1])]
     }
 
-    /// Codex，5 小时的额度用完了；还能重置额度 2 次
+    /// Codex，5 小时的额度用完了；还能重置额度 2 次；Team 给的
     private static func personal(_ now: Double) -> [String: Any] {
         let weekly = now + 4 * 86400 + 7 * 3600
         return ["id": id(2), "aid": aid(2), "tool": "codex", "name": "个人", "kind": "oauth", "login": "logged_in", "plan": "Plus",
-                "tier": "standard", "busy": false, "color": "#30A46C", "badge": "个",
+                "tier": "standard", "busy": false, "color": "#30A46C", "badge": "个", "team": "示例 Team",
+                "net": ["result": "ok", "trust": 88, "trust_label": "纯净", "dns": "ok", "webrtc": "ok", "at": (now - 3 * 3600 - 600).rounded(), "source": "check"],
                 "cost": cost(22, weeks: 6, weekEnd: weekly, now: now, seed: 1.1, hit: [0.9093, 0.9107],
                              models: [("gpt-6.2-astra", 0.74, nil), ("gpt-6.1-sol", 0.26, nil)]),
                 "usage": usage(now, ["five_hour": window(100, in: 65 * 60, now), "seven_day": window(71, in: weekly - now, now),
@@ -230,11 +251,11 @@ enum DemoAccounts {
                 "weeks": weeks([45, 62, 80, 57, 91], current: 71, end: weekly.rounded())]
     }
 
-    /// 空闲，本周快重置了、还剩不少：建议先用
+    /// 空闲，本周快重置了、还剩不少：建议先用；这台电脑自己的（不是 Team 给的），还没检测过出口
     private static func spare(_ now: Double) -> [String: Any] {
         let weekly = now + 20 * 3600
         return ["id": id(3), "aid": aid(3), "tool": "claude", "name": "备用", "kind": "oauth", "login": "logged_in", "plan": "Pro",
-                "tier": "standard", "busy": false, "color": "#0A84FF", "badge": "备",
+                "tier": "standard", "busy": false, "color": "#0A84FF", "badge": "备", "net": [String: Any](),
                 "cost": cost(7.5, weeks: 3, weekEnd: weekly, now: now, seed: 2.0, hit: [0.968, 0.9702],
                              models: [("claude-sonnet-5-5", 0.81, nil), ("claude-opus-5-5", 0.19, nil)]),
                 "usage": usage(now, ["five_hour": window(8, in: 4 * 3600 + 20 * 60, now), "seven_day": window(41, in: weekly - now, now),
@@ -242,11 +263,12 @@ enum DemoAccounts {
                 "weeks": weeks([33, 52], current: 41, end: weekly.rounded())]
     }
 
-    /// 登录失效了（用的是以前查到的）
+    /// 登录失效了（用的是以前查到的）；Team 给的，出口是两天前测的（过时了）
     private static func second(_ now: Double) -> [String: Any] {
         let weekly = now + 2 * 86400
         return ["id": id(4), "aid": aid(4), "tool": "claude", "name": "账号 2", "kind": "oauth", "login": "logged_in", "plan": "Max",
-                "tier": "advanced", "busy": false, "color": "#E5484D", "badge": "2",
+                "tier": "advanced", "busy": false, "color": "#E5484D", "badge": "2", "team": "示例 Team",
+                "net": ["result": "ok", "trust": 90, "trust_label": "纯净", "dns": "ok", "webrtc": "ok", "stale": true, "at": (now - 2 * 86400).rounded()],
                 "cost": cost(48, weeks: 4, weekEnd: weekly, now: now, seed: 2.7, hit: [0.9712, 0.9718],
                              models: [("claude-opus-5-5", 0.58, nil), ("claude-sonnet-5-5", 0.42, nil)],
                              devices: [("macbook-air", true, 0.64, false, now - 600), ("office-imac", false, 0.36, true, now - 3 * 86400 - 5 * 3600)]),
@@ -322,28 +344,32 @@ enum DemoAccounts {
         return (cal.dateInterval(of: .weekOfYear, for: d)?.end ?? d.addingTimeInterval(7 * 86400)).timeIntervalSince1970
     }
 
-    /// 第三方 API 账号：没有套餐、订阅的用量（头像是钥匙）
+    /// 第三方 API 账号：没有套餐、订阅的用量（头像是钥匙），卡片上写它的模型；接口连得上
     private static func api(_ now: Double) -> [String: Any] {
-        ["id": id(7), "tool": "claude", "name": "API", "kind": "api", "login": "api", "plan": "", "tier": "", "busy": false]
+        ["id": id(7), "tool": "claude", "name": "API", "kind": "api", "login": "api", "plan": "", "tier": "", "busy": false, "model": "model-x",
+         "net": ["result": "api_ok", "at": (now - 2 * 3600).rounded(), "source": "launch"]]
     }
 
-    /// ChatGPT 的 Go 套餐（entry），空闲
+    /// ChatGPT 的 Go 套餐（entry），这台电脑自己的；出口有问题（在不支持的地区，WebRTC 也可能泄露）
     private static func go(_ now: Double) -> [String: Any] {
         let weekly = now + 6 * 86400 + 2 * 3600
         return ["id": id(6), "aid": aid(6), "tool": "codex", "name": "副号", "kind": "oauth", "login": "logged_in", "plan": "Go",
                 "tier": "entry", "busy": false, "color": "#12A594", "badge": "副",
+                "net": ["result": "restricted", "region": "中国大陆", "trust": 12, "trust_label": "受限", "dns": "ok", "webrtc": "leak",
+                        "at": (now - 40 * 60).rounded(), "source": "launch"],
                 "cost": cost(2.4, weeks: 3, weekEnd: weekly, now: now, seed: 3.5, hit: [0.9001, 0.9023], models: [("gpt-6.1-sol", 1, nil)]),
                 "usage": usage(now, ["five_hour": window(23, in: 3 * 3600 + 40 * 60, now), "seven_day": window(18, in: weekly - now, now)]),
                 "weeks": weeks([26, 41], current: 18, end: weekly.rounded())]
     }
 
-    /// Antigravity：两组额度
+    /// Antigravity：两组额度；Team 给的，出口的纯净度偏低；路由器给它选错了节点（电脑上的界面 App 查到的）
     private static func gemini(_ now: Double) -> [String: Any] {
         func bucket(_ used: Double, _ seconds: Double, _ slot: String) -> [String: Any] {
             window(used, in: seconds, now).merging(["slot": slot]) { $1 }
         }
         return ["id": id(5), "tool": "agy", "name": "Gemini", "kind": "oauth", "login": "logged_in", "plan": "Google AI Pro",
-                "tier": "standard", "busy": false, "color": "#F76B15", "badge": "G",
+                "tier": "standard", "busy": false, "color": "#F76B15", "badge": "G", "team": "示例 Team", "port": "drift",
+                "net": ["result": "low_purity", "trust": 45, "trust_label": "一般", "dns": "ok", "webrtc": "ok", "at": (now - 5 * 3600).rounded(), "source": "check"],
                 "cost": cost(9, weeks: 6, weekEnd: calendarWeekEnd(now), now: now, seed: 4.2, hit: [0.95, 0.9521],
                              models: [("gemini-3-pro", 0.78, nil), ("gemini-3-flash", 0.22, nil)]),
                 "usage": usage(now, ["quota_groups": [
@@ -384,7 +410,7 @@ final class DemoLink: TerminalLink {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             guard !closed else { return }
-            if !session.online {
+            if !session.attachable {
                 onState(.closed("nohost"))
                 return
             }

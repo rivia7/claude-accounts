@@ -1,7 +1,8 @@
 import CcaRemoteKit
 import SwiftUI
 
-/// 设置：外观、这台手机叫什么、配对过的电脑（取消配对）、通知（推送）、演示模式、关于
+/// 设置：外观、这台手机叫什么、配对过的电脑（取消配对）、通知（推送）、演示模式、帮助（新手教程、更新说明、重新显示提示卡片：Mac App 的
+/// 「帮助」菜单）、关于。从这里打开的新手教程、更新说明弹在这一页上面
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var unpairing: Peer?
@@ -39,6 +40,10 @@ struct SettingsView: View {
                                 Text(p.name).lineLimit(1)
                                 Text(Texts.peerDetail(p, now: Date().timeIntervalSince1970) + " · 经 " + p.server.host)
                                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                // 那台电脑上 cca 的版本（有新版本时写上）、让不让这台手机操作（电脑放上来的账号状态里有：旧版的 cca 不放，这一行就没有）
+                                if let line = Texts.peerHost(model.status(p)) {
+                                    Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                }
                             }
                             Spacer(minLength: 6)
                             Button("取消配对") { unpairing = p }
@@ -80,6 +85,20 @@ struct SettingsView: View {
                 } footer: {
                     Text("演示模式中的电脑和会话都是模拟的，不会联网，也不影响这台手机上真实的配对。")
                 }
+                Section {
+                    Button { model.guide.openTutorial() } label: { Label("新手教程", systemImage: "book") }
+                    Button { model.guide.openWhatsNew() } label: { Label("更新说明", systemImage: "sparkles") }
+                    Button {
+                        model.guide.resetTips()
+                        model.showToast("各页的提示卡片已重新显示", .success)
+                    } label: {
+                        Label("重新显示提示卡片", systemImage: "lightbulb")
+                    }
+                } header: {
+                    Text("帮助")
+                } footer: {
+                    Text("提示卡片在总览、账号页、用量统计、折合金额的顶上，点「知道了」后不再显示。")
+                }
                 Section("关于") {
                     LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
                     NavigationLink("开源许可") { LicensesView() }
@@ -87,6 +106,7 @@ struct SettingsView: View {
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
+            .demoSubtitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { model.showSettings = false }
@@ -103,6 +123,10 @@ struct SettingsView: View {
             } message: {
                 Text("取消后，这台手机将无法再接入那台电脑上的会话，正在接入的会断开；之后需要重新配对。")
             }
+            .toastOverlay(bottom: 16)
+        }
+        .sheet(item: Binding(get: { model.guide.sheet }, set: { if $0 == nil { model.guide.dismissSheet() } })) { _ in
+            GuideSheet()
         }
     }
 }

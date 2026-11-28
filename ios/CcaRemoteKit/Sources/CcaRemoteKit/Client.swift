@@ -75,15 +75,20 @@ public struct RemoteSession: Identifiable, Hashable, Sendable {
     public let info: SessionInfo
     /// 那台机器这会儿连着服务器
     public let online: Bool
+    /// 连着服务器、那台机器上的宿主却有一阵没说话了（被挂起了、睡着了；3.8.0 起的服务器才给）：接不上，Mac App 上是「无响应」
+    public let busy: Bool
     /// 现在有几处接着
     public let viewers: Int
 
     public var id: String { sid }
+    /// 接得上（Mac App 的 `attachable`：state 是 ok）
+    public var attachable: Bool { online && !busy }
 
-    public init(sid: String, info: SessionInfo, online: Bool, viewers: Int) {
+    public init(sid: String, info: SessionInfo, online: Bool, viewers: Int, busy: Bool = false) {
         self.sid = sid
         self.info = info
         self.online = online
+        self.busy = online && busy
         self.viewers = viewers
     }
 }
@@ -310,12 +315,12 @@ public final class RemoteClient: @unchecked Sendable {
             var launcher: HostLauncher?
             for r in rows[peer.pid] as? [Any] ?? [] {
                 guard let r = r as? [String: Any], let sid = r["sid"] as? String, sid.count == 32, Bytes.unhex(sid) != nil else { continue }
-                let online = r["online"] as? Bool == true
+                let online = r["online"] as? Bool == true, busy = r["busy"] as? Bool == true
                 if let info = dirOpen(keys, pid: peer.pid, sid: sid, r["blob"]) {
-                    sessions.append(RemoteSession(sid: sid, info: info, online: online, viewers: jsonInt(r["viewers"]) ?? 0))
+                    sessions.append(RemoteSession(sid: sid, info: info, online: online, viewers: jsonInt(r["viewers"]) ?? 0, busy: busy))
                 } else if launcher == nil, let info = launchOpen(lkeys, pid: peer.pid, sid: sid, r["blob"]) {
                     // 那台机器的启动器：在服务器上它也是一个“会话”，说明是另一把密钥封的（有几个时认头一个）
-                    launcher = HostLauncher(sid: sid, info: info, online: online)
+                    launcher = HostLauncher(sid: sid, info: info, online: online, busy: busy)
                 }
                 // 都解不开的：不是这个配对的密钥封的（服务器、别人塞进来的），不显示
             }

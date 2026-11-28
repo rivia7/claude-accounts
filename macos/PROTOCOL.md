@@ -629,6 +629,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 ### 3.1 `cca [codex] usage [账号…] --json`
 
 不写账号查全部；写了就只查这几个（App 自动刷新时只查到期的账号，带 `CCA_USAGE_JOBS=2`：最多同时查两个，默认 4）。
+App 自动刷新时另带 `CCA_USAGE_POLL=App 的进程号`（3.8.0 起）：带着事件文件运行时 cca 在结束时记下这次的结果（`~/.cca/remote/usage-poll.json`，
+照 4.3 认：成功了清掉；带着它的要同意、别的失败记下；取消的、要到终端里做的不算；不带它的失败只清掉「没查成」），配对的手机上这台 Mac
+的一栏照它说「刷新 X 的用量需要你的同意」「后台刷新 X 的用量失败」，和 App 页顶的一样；这个进程不在了（App 退出了）就不算。
 
 格式和以前一样，文档另加 `"kind": "usage"` 和 `generated_epoch`，每个账号的条目**新增**：
 
@@ -1261,7 +1264,8 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
 
 ### 5.1 检查更新：`cca update --check --json`
 
-只读，要联网（GitHub）。按现在装的版本挑：**测试版上看更新的测试版和正式版，正式版上只看正式版**（自动更新、不带版本号的 `cca update`
+要联网（GitHub），除了记下这次查到的（`~/.cca/update/check.json`，同一份文档：配对的手机上这台 Mac 的一栏照它说有没有新版本，
+不再联网）什么都不改。按现在装的版本挑：**测试版上看更新的测试版和正式版，正式版上只看正式版**（自动更新、不带版本号的 `cca update`
 不变，只装正式版）。stdout 只有 JSON；一个版本都拿不到（网络不通）时退出码 1，原因是 `fail` 事件的 `message`（App 带着事件文件运行它）。
 
 ```json
@@ -1462,7 +1466,8 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
     个时间时是 null）；`viewers`：现在有几处接着（不算启动它的那个终端）。别的机器上的这几样是那台机器说的，cca 去掉了控制字符和
     看不见的排版字符、截短了、数字核对过，App 当普通文字显示。
   - `local_terminal`：启动它的那个终端还开着吗（只有这台 Mac 上的知道；别的机器上的是 null）。
-  - `state`：`ok`（接得上）| `busy`（这台 Mac 上的宿主没有回应：被挂起了、机器正忙）| `offline`（那台机器暂时没连着服务器）。不是 `ok` 的 App 不给「接入」。
+  - `state`：`ok`（接得上）| `busy`（宿主没有回应：这台 Mac 上的被挂起了、机器正忙；别的机器上的，3.8.0 起：那台机器连着服务器、
+    却有一阵没说话了，被挂起了、睡着了，服务器的 `relay_list` 给的）| `offline`（那台机器暂时没连着服务器）。不是 `ok` 的 App 不给「接入」。
   - `access`：这台 Mac 接进去能做什么。`control`（看和操作）| `view`（那台机器只让看：App 只给「只看」，起 `attach` 时带 `-r`）。
     不让接入的机器上的会话不在列表里。
   - `team`（新加的，旧版 cca 没有）：这个会话属于哪个 Team（Team 的编号，名字照 `config.teams` 找）。这台 Mac 上的是它走哪个 Team 的服务器中转
@@ -1484,7 +1489,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 - `peer_launchers[]`（新加的，要 `hello.remote_launch_machines`；旧版 cca 没有）：配对过的机器上允许**这台 Mac** 远程启动的（那台机器上
   `cca remote allow <这台 Mac> launch on`），一个配对最多一项（9.5）。启动器不是会话：不在 `sessions` 里。`--local` 时是空的。
   - `id`：那台机器的启动器在服务器上的编号（32 个十六进制字符）；`peer`：是哪个配对的（`peers[].id`，`remote launch` 的第一个参数）；
-    `machine`：那台机器的名字；`state`：`ok`（连着服务器，起得了）| `offline`（暂时连不上）；`team`：同 `sessions[].team`；
+    `machine`：那台机器的名字；`state`：`ok`（连着服务器，起得了）| `busy`（3.8.0 起：连着服务器却没有回应，可能睡着了）| `offline`（暂时连不上）；`team`：同 `sessions[].team`；
     `more`：那台机器上还有几个模板说明里放不下、没列出来。
   - `templates[]`：那台机器上能用的模板（那边用不了的不列）。`id`：8 个十六进制字符（`remote launch` 的第二个参数）；`digest`：模板的摘要
     （16 个十六进制字符，起的时候原样带上：那边改过了就不起）；`name`；`tool`；`account`：账号的名字（这台 Mac 上也有这个账号时是这台 Mac 上的

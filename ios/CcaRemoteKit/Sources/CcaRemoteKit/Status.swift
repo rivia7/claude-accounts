@@ -165,6 +165,8 @@ public struct AccountUsage: Sendable, Equatable {
     public let resetCredits: ResetCredits?
     /// Antigravity 的几组额度（别的工具是空的）
     public let quotaGroups: [QuotaGroup]
+    /// Claude Code 登录时记下的套餐过时了（升降级以后要重新登录才会更新）：记下的那个（「Pro」）；没过时、旧版的宿主不给是 nil
+    public let outdatedLoginPlan: String?
 
     init?(json x: Any?) {
         guard let j = x as? [String: Any] else { return nil }
@@ -178,6 +180,7 @@ public struct AccountUsage: Sendable, Equatable {
         useFirst = UseFirst(json: j["use_first"])
         resetCredits = ResetCredits(json: j["reset_credits"])
         quotaGroups = (j["quota_groups"] as? [Any] ?? []).prefix(8).compactMap { QuotaGroup(json: $0) }
+        outdatedLoginPlan = Texts0.nonEmpty(clean(j["outdated_login_plan"], 32))
     }
 
     /// 有 5 小时、本周的用量可以显示
@@ -309,6 +312,18 @@ public struct AccountStatus: Sendable, Equatable, Identifiable {
     public let cliSince: Double?
     /// 折合金额（那台电脑上的 cca 关了折合金额、还没有记录、账号太多没带时是 nil）
     public let cost: AccountCost?
+    /// 最近一次的出口检测（旧版的宿主不给是 nil）
+    public let net: AccountNet?
+    /// 为什么用不了（PROTOCOL 2.2 的 can_why）：桌面 App（app_missing 是没装）、在终端里打开（tool_missing 是没装命令）；能用、旧版的宿主不给是 nil
+    public let whyApp: String?
+    public let whyCLI: String?
+    /// 第三方 API 账号用的模型（官方账号、没写模型的是 nil）
+    public let model: String?
+    /// 哪个 Team 给的（Team 的名字）：这台设备自己的账号、旧版的宿主不给是 nil
+    public let team: String?
+    /// 端口池的实况里这个账号的端口有问题（Mac App 的 Diagnosis）：closed 连不上、drift 路由器给它选错了节点。没问题、那台电脑的界面 App
+    /// 没开着（没查）、旧版的宿主不给是 nil
+    public let port: String?
 
     init?(json x: Any?) {
         guard let j = x as? [String: Any], let id = j["id"] as? String, lowerHex(id, 16) else { return nil }
@@ -331,6 +346,14 @@ public struct AccountStatus: Sendable, Equatable, Identifiable {
         cliSessions = min(max(roundedInt(j["cli"]) ?? 0, 0), 999)
         cliSince = finiteNumber(j["since"])
         cost = AccountCost(json: j["cost"])
+        net = AccountNet(json: j["net"])
+        let why = j["why"] as? [String: Any]
+        whyApp = Texts0.nonEmpty(clean(why?["app"], 24))
+        whyCLI = Texts0.nonEmpty(clean(why?["cli"], 24))
+        model = Texts0.nonEmpty(clean(j["model"], 64))
+        team = Texts0.nonEmpty(clean(j["team"], 64))
+        let p = clean(j["port"], 8)
+        port = ["closed", "drift"].contains(p) ? p : nil
     }
 
     /// 第三方 API 账号（没有订阅的用量）
@@ -397,6 +420,16 @@ public struct HostStatus: Sendable, Equatable {
     public let costLeftOut: Bool
     /// 这个配对所在的 Team（那台电脑上这个 Team 的状态）；旧版的宿主不给是 nil
     public let team: HostTeam?
+    /// 那台电脑上 cca 的版本（旧版的宿主不给是 nil）
+    public let ccaVersion: String?
+    /// 那台电脑上的 cca 有新版本时是哪个（Mac App 页顶的「cca 有新版本 X」：照那台电脑最近一次检查更新查到的）；没有、旧版的宿主不给是 nil
+    public let update: String?
+    /// 那台电脑的「远程会话」开关（之后在终端里启动的会话放不放进会话宿主、接不接得上）；旧版的宿主不给是 nil
+    public let remoteOn: Bool?
+    /// 这台手机在那台电脑上能做什么：control（看和操作）、view（只看）；旧版的宿主不给是 nil
+    public let allow: String?
+    /// 那台电脑上 cca 报的问题（Mac App 页顶的提示条：文件读不了、账号表校验不过、共享设置有问题）
+    public let problems: [HostProblem]
     /// 那台电脑封它的时间（那台电脑的钟）
     public let at: Double
     /// 查到时它在服务器上放了多久（服务器的钟，秒）
@@ -413,6 +446,11 @@ public struct HostStatus: Sendable, Equatable {
         cost = HostCost(json: j["cost"])
         costLeftOut = jsonBool(j["cost"]) == false
         team = HostTeam(json: j["team"])
+        ccaVersion = Texts0.nonEmpty(clean(j["cca"], 32))
+        update = Texts0.nonEmpty(clean(j["update"], 32))
+        remoteOn = jsonBool(j["remote"])
+        allow = Texts0.nonEmpty(clean(j["allow"], 16))
+        problems = (j["problems"] as? [Any] ?? []).prefix(8).compactMap { HostProblem(json: $0) }
         var seen = Set<String>()
         accounts = (j["accounts"] as? [Any] ?? []).prefix(Self.maxAccounts).compactMap { AccountStatus(json: $0) }.filter { seen.insert($0.id).inserted }
         more = max(jsonInt(j["more"]) ?? 0, 0)
@@ -423,6 +461,81 @@ public struct HostStatus: Sendable, Equatable {
 
     /// 放到服务器上的时间（照这台手机的钟：拿到的时间减去在服务器上放了多久）
     public var putAt: Double { received - age }
+}
+
+/// 一个账号最近一次的出口检测（宿主的 `net`，取自 PROTOCOL 3.3 的 health：不带出口 IP、运营商、节点、说明）：结果、不可用的地区、纯净度、
+/// DNS / WebRTC 的泄露检测、过时了没有、是不是现在的节点测的、是不是启动时测的。从没测过时宿主放的是 `{}`（checked 是 false）
+public struct AccountNet: Sendable, Equatable {
+    /// 测过没有
+    public let checked: Bool
+    /// ok、low_purity、restricted、no_exit、no_score、port_closed、api_ok、api_unreachable（PROTOCOL 3.3 的 result）
+    public let result: String
+    /// 出口在不可用的地区时是哪里
+    public let region: String?
+    /// 纯净度（0～100）和检测网站给的说法（「极度纯净」）；没有评分是 nil
+    public let trust: Int?
+    public let trustLabel: String?
+    /// ok、leak、failed；WebRTC 另有 note（看到的地址和出口不同、但不是中国大陆的：只作提醒）；没测是 nil
+    public let dns: String?
+    public let webrtc: String?
+    /// 超过 6 小时了
+    public let stale: Bool
+    /// 测的时候用的节点和账号现在的一样（换了节点就是旧结果）
+    public let applies: Bool
+    public let checkedEpoch: Double?
+    /// 启动账号时测的（不然是在电脑上点了检测）
+    public let atLaunch: Bool
+
+    public init(result: String, region: String? = nil, trust: Int? = nil, trustLabel: String? = nil, dns: String? = nil, webrtc: String? = nil,
+                stale: Bool = false, applies: Bool = true, checkedEpoch: Double? = nil, atLaunch: Bool = false) {
+        self.result = result
+        checked = !result.isEmpty
+        self.region = region
+        self.trust = trust
+        self.trustLabel = trustLabel
+        self.dns = dns
+        self.webrtc = webrtc
+        self.stale = stale
+        self.applies = applies
+        self.checkedEpoch = checkedEpoch
+        self.atLaunch = atLaunch
+    }
+
+    init?(json x: Any?) {
+        guard let j = x as? [String: Any] else { return nil }
+        self.init(result: clean(j["result"], 24), region: Texts0.nonEmpty(clean(j["region"], 32)),
+                  trust: roundedInt(j["trust"]).map { min(max($0, 0), 100) }, trustLabel: Texts0.nonEmpty(clean(j["trust_label"], 16)),
+                  dns: Texts0.nonEmpty(clean(j["dns"], 16)), webrtc: Texts0.nonEmpty(clean(j["webrtc"], 16)), stale: jsonBool(j["stale"]) ?? false,
+                  applies: jsonBool(j["applies"]) ?? true, checkedEpoch: finiteNumber(j["at"]), atLaunch: clean(j["source"], 8) == "launch")
+    }
+
+    /// 算数的那一份：测过、是现在的节点测的、没过时（Mac App 的 Diagnosis 只看这样的），不然是 nil
+    public var current: AccountNet? { checked && applies && !stale ? self : nil }
+    /// 出口有问题（Diagnosis.exitBad）：不可用的地区、拿不到出口 IP、端口无法连接、接口无法连接
+    public var exitBad: Bool { ["restricted", "no_exit", "port_closed", "api_unreachable"].contains(result) }
+    /// DNS 或 WebRTC 有泄露风险（WebRTC 的 note 只作提醒，不算；Mac App 的 hasLeak）
+    public var hasLeak: Bool { dns == "leak" || webrtc == "leak" }
+}
+
+/// 那台电脑上 cca 报的一个问题（宿主的 `problems`，Mac App 页顶的提示条）：原因码、哪个工具、共享设置里的哪几项（来源和配置键，不带值）。
+/// 不带说明（里面有路径、账号表的键）
+public struct HostProblem: Sendable, Equatable {
+    /// config_unreadable、table_unreadable、account_unreadable（文件读不了，PROTOCOL 2.2 的 errors）、table_invalid（账号表校验不过：启动账号会失败）、
+    /// settings_problems（共享设置里有会盖掉账号代理、接口或凭证的项）；3.8.0 起还有 usage_consent、usage_failed（界面 App 后台刷新这个工具的
+    /// 用量要同意、没查成）、core_down（内置代理停了）。先后照 Mac App 页顶的
+    public let code: String
+    /// claude、codex、agy；不是哪个工具的（config.json 读不了）是 nil
+    public let tool: String?
+    /// 共享设置里的那几项（settings.json:ANTHROPIC_BASE_URL 这样的）
+    public let items: [String]
+
+    init?(json x: Any?) {
+        guard let j = x as? [String: Any] else { return nil }
+        code = clean(j["code"], 32)
+        guard !code.isEmpty else { return nil }
+        tool = Texts0.nonEmpty(clean(j["tool"], 16))
+        items = (j["items"] as? [Any] ?? []).prefix(6).map { clean($0, 64) }.filter { !$0.isEmpty }
+    }
 }
 
 /// P 派生的“账号的状态”的密钥

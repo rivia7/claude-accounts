@@ -15,7 +15,7 @@ enum DeskPose {
     case stranger
     /// 趴在桌上（额度用完了）
     case sleeping
-    /// 扶着额头冒汗（线路、出口有问题：手机上不知道，不会出现）
+    /// 扶着额头冒汗（出口有问题：最近一次出口检测；路由器上那一格的实况——端口连不上、节点选错了——手机上不知道）
     case sweating
     /// 前倾打字（在用）
     case typing
@@ -60,6 +60,8 @@ struct DeskLook: Equatable {
         case .loggedOut?: (pose, screen) = (.away, .login(warn: false))
         case .expired?: (pose, screen) = (.away, .login(warn: true))
         case .wrongAccount?: (pose, screen) = (.stranger, .login(warn: true))
+        case .exit?, .portClosed?: (pose, screen) = (.sweating, .noSignal(severe: true))
+        case .wrongNode?: (pose, screen) = (.sweating, .noSignal(severe: false))
         case .usedUp?: (pose, screen) = (.sleeping, .asleep)
         case nil: (pose, screen) = (.relaxed, .standby)
         }

@@ -62,11 +62,12 @@ struct LaunchTarget: Identifiable, Equatable {
     var id: String { peer.pid + "|" + (account ?? "") }
 }
 
-/// 弹出来说的一句话（Mac App 是右上角的提示）：标题、说明
-struct Notice: Identifiable, Equatable {
+/// 浮在底下的一句提示（Mac App 的 Toast）：几秒后自己消失，读屏念出来（AppModel.showToast）
+struct Toast: Identifiable, Equatable {
+    enum Style: Equatable { case info, success, warning }
     let id = UUID()
-    let title: String
-    let message: String
+    var text: String
+    var style: Style
 }
 
 /// App 的状态：配对过的电脑、它们上面的会话、配对、开着的终端。界面只读它、调它的方法
@@ -107,12 +108,16 @@ final class AppModel {
     var launchFor: LaunchTarget?
     /// 正在等哪几台电脑回话（远程启动，配对的 pid）：「新建会话」那一页关了也照样等，起来了打开它的终端（和 Mac App 一样）
     private(set) var launching: Set<String> = []
-    /// 没起成的原因（配对的 pid）：「新建会话」那一页上说；那一页已经关了的弹出来说（notice）
+    /// 没起成的原因（配对的 pid）：「新建会话」那一页上说；那一页已经关了的在底下的提示里说（toast）
     private(set) var launchFailure: [String: String] = [:]
     /// 正在后台结束的会话（列表里点了「结束会话」、没开着它能操作的终端的，见 end）
     private(set) var endingSessions: Set<String> = []
-    /// 要弹出来说的一句话：开满了终端接不了、关了「新建会话」那一页以后没起成、结束会话没成
-    var notice: Notice?
+    /// 浮在底下的一句提示（Mac App 窗口底下的那一条）：开满了终端接不了、关了「新建会话」那一页以后没起成、结束会话成没成、取消了配对、
+    /// 重新显示了提示卡片。5 秒后自己消失（点一下也消失），出来时读屏念一遍
+    private(set) var toast: Toast?
+    @ObservationIgnored private var toastTask: Task<Void, Never>?
+    /// 新手教程、更新了什么、提示卡片（演示模式只记在内存里）
+    let guide: Guide
     /// 会话列表里会话的先后（拖动排的，CcaRemoteKit 的 SessionOrder）：记在 UserDefaults 里；演示模式的只在内存里，退出演示时丢掉
     private(set) var sessionOrder = SessionOrder()
     /// 会话列表在「排序」（List 的编辑状态：拖动右边的把手调整先后）
@@ -136,6 +141,10 @@ final class AppModel {
     }
     var accountPlan: String {
         didSet { UserDefaults.standard.set(accountPlan, forKey: "accountPlan") }
+    }
+    /// 按 Team 筛（Mac App 侧栏的「按 Team 筛选」：只管显示），记着；记着的那个 Team 已经没有账号了时照全部的看
+    var accountTeam: AccountShelf.TeamPick {
+        didSet { UserDefaults.standard.set(accountTeam.stored, forKey: "accountTeam") }
     }
 
     var appearance: AppearanceMode {
@@ -162,12 +171,17 @@ final class AppModel {
         tab = AppTab(rawValue: d.string(forKey: "tab") ?? "") ?? .overview
         accountTool = d.string(forKey: "accountTool") ?? "claude"
         accountPlan = d.string(forKey: "accountPlan") ?? ""
+        accountTeam = AccountShelf.TeamPick(stored: d.string(forKey: "accountTeam") ?? "")
         costDays = d.bool(forKey: "costDays")
         let name = Texts.nonEmpty(d.string(forKey: "deviceName")) ?? Self.defaultName
         deviceName = name
-        backend = demo ? DemoBackend() : LiveBackend(deviceName: name)
+        let b: Backend = demo ? DemoBackend() : LiveBackend(deviceName: name)
+        let known = b.peers()
+        // 打开时已经配对过电脑的（从有引导以前的版本更新上来的）不再给新手教程（Guide）
+        guide = Guide(demo: demo, paired: !known.isEmpty)
+        backend = b
         sessionOrder = demo ? SessionOrder() : Self.storedOrder()
-        peers = backend.peers()
+        peers = known
     }
 
     static var defaultName: String {
@@ -194,7 +208,8 @@ final class AppModel {
         launching = []
         launchFailure = [:]
         endingSessions = []
-        notice = nil
+        dismissToast()
+        guide.reset(demo: b.isDemo)
         backend = b
         peers = b.peers()
         listings = [:]
@@ -207,6 +222,27 @@ final class AppModel {
         loading = false   // 前一个那头还没查完的，回来时看到换了就不管了（fetch 里的 b === backend）
         refresh()
         Pusher.shared.start(self)
+    }
+
+    // MARK: 提示
+
+    /// 底下浮出一句提示（Mac App 的 showToast）：5 秒后自己消失；同时让读屏念出来（优先级高：打断正在念的，和 Mac App 一样）
+    func showToast(_ text: String, _ style: Toast.Style) {
+        let t = Toast(text: text, style: style)
+        toast = t
+        var spoken = AttributedString(text)
+        spoken.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(spoken).post()
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled, self?.toast?.id == t.id { self?.toast = nil }
+        }
+    }
+
+    func dismissToast() {
+        toastTask?.cancel()
+        toast = nil
     }
 
     // MARK: 会话
@@ -317,6 +353,7 @@ final class AppModel {
         if let a = account(ref)?.account {
             accountTool = a.tool
             if !accountPlan.isEmpty, a.plan != accountPlan { accountPlan = "" }
+            if !accountTeam.includes(a) { accountTeam = .all }
         }
         refresh()
     }
@@ -386,6 +423,7 @@ final class AppModel {
             peers = b.peers()
             listings[p.pid] = nil
             Pusher.shared.peersChanged(on: p.server)
+            showToast("已取消和「\(p.name)」的配对", .success)
         }
     }
 
@@ -418,7 +456,7 @@ final class AppModel {
             if launchFor?.peer.pid == peer.pid {
                 launchFailure[peer.pid] = why.text
             } else {
-                notice = Notice(title: "没能在「\(peer.name)」上新建会话", message: why.text)
+                showToast("没能在「\(peer.name)」上新建会话：\(why.text)", .warning)
             }
         }
     }
@@ -480,7 +518,7 @@ final class AppModel {
             return
         }
         if old == nil, terminals.count >= Self.terminalLimit {
-            notice = Notice(title: "无法接入", message: Texts.terminalsFull(launch: false))
+            showToast(Texts.terminalsFull(launch: false), .warning)
             return
         }
         let t = TerminalSession(backend: backend, peer: peer, session: s, readOnly: viewing)
@@ -553,8 +591,11 @@ final class AppModel {
             guard b === backend else { return }
             endingSessions.remove(s.sid)
             refresh()
-            guard !done else { return }
-            notice = Notice(title: "没能结束「\(Texts.sessionTitle(s))」", message: why.map(Texts.closed) ?? "电脑没有响应，请稍后再试")
+            if done {
+                showToast("已结束「\(Texts.sessionTitle(s))」", .success)
+            } else {
+                showToast("没能结束「\(Texts.sessionTitle(s))」：" + (why.map(Texts.closed) ?? "电脑没有响应，请稍后再试"), .warning)
+            }
         }
     }
 
@@ -570,7 +611,7 @@ final class AppModel {
             for i in 0..<5 {
                 guard b === backend else { return }
                 if let p = peers.first(where: { $0.pid == pid }), let s = listings[pid]?.sessions.first(where: { $0.sid == sid }) {
-                    if s.online { attach(s, on: p, readOnly: readOnly) }
+                    if s.attachable { attach(s, on: p, readOnly: readOnly) }
                     return
                 }
                 if i > 0 { try? await Task.sleep(for: .seconds(1)) }

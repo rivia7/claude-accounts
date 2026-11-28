@@ -75,7 +75,7 @@ enum TestDriver {
             for _ in 0..<60 where target == nil {
                 await model.fetch()
                 for p in model.peers {
-                    if let s = model.listing(p)?.sessions.first(where: \.online) {
+                    if let s = model.listing(p)?.sessions.first(where: \.attachable) {
                         target = (p, s)
                         break
                     }

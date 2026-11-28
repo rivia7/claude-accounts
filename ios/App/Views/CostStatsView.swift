@@ -28,6 +28,9 @@ struct CostStatsView: View {
                             HStack { Spacer(); CostGranularityPicker() }
                         }
                     }
+                    TipCard(id: .costStats, message: "按 Anthropic、OpenAI、Google 官方 API 的价格，把每个账号用掉的 token 折算成美元，方便比较哪个账号用得多；"
+                        + "订阅并不按此收费。右边可以切换按周、按天查看。每个账号一行，一根竖条代表一周（或一天），颜色较浅的表示那一项开始时还没有记录；"
+                        + "用过多台设备的账号会分设备列出。点击一行查看这个账号的柱状图。")
                     if model.fetchedAt == nil, all.isEmpty {
                         HStack(spacing: 8) { ProgressView(); Text("正在查询…").foregroundStyle(.secondary) }
                     } else if rows.isEmpty {
@@ -82,10 +85,6 @@ struct CostStatsView: View {
                         }
                         UploadedLine(now: now)
                     }
-                    Text("每个账号一行，一根竖条代表一周（或一天），颜色较浅的表示那一项开始时还没有记录；用过多台设备的账号会分设备列出。点击一行查看这个账号的柱状图。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)

@@ -272,7 +272,7 @@ Team 的安装脚本默认开着（见「Team 的同步服务器 → 部署」�
 | `pair_drop` | `pid` | 取消配对（两台里哪一台都行）。这个配对正接着的连接随即断开 |
 | `relay_host` | `sid`、`pids` | 宿主：给这个会话的控制连接换一张票据 `{tid, tkey, port, ttl}`。`pids` 里不是自己的配对的不算，一个都不是回 404 `no_pairing` |
 | `relay_attach` | `sid`、`pid` | 接入方：换一张票据。会话不在、不是给这个配对看的、不是对方那台设备的，都回 404 `no_session`；接入的已经有 4 处回 429 `busy` |
-| `relay_list` | `pids`、`have`（可以不带） | `{peers: {pid: {fp, name}}, sessions: {pid: [{sid, blob, age, viewers, online}]}}`：还在的配对、对方那台设备上给这个配对看的会话（`blob` 是说明的密文）；带了 `have` 的多一项 `status`（对方放上来的账号的状态，下面「账号的状态」） |
+| `relay_list` | `pids`、`have`（可以不带） | `{peers: {pid: {fp, name}}, sessions: {pid: [{sid, blob, age, viewers, online, busy?}]}}`：还在的配对、对方那台设备上给这个配对看的会话（`blob` 是说明的密文；启动器也是一个会话）；`busy`（3.8.0 起，只在是 true 时有）：连着服务器（`online`），宿主的控制连接却超过 45 秒（`CTL_QUIET`；宿主 20 秒发一个 PING）一点动静都没有——被挂起了、机器睡着了——这会儿接不上、起不了会话；带了 `have` 的多一项 `status`（对方放上来的账号的状态，下面「账号的状态」） |
 | `status_put` | `pid`、`blob`（密文）、`later`（可以不带） | 宿主：放这台设备上账号的状态、到点再推的通知（3.7.5 起，下面「账号的状态」）。不是自己的配对回 404 `no_pairing` |
 | `push_note` | `pid`、`id`、`note`（密文） | 宿主：马上推一条额度的通知（3.7.5 起，下面「推送」）。回 `{"v":1,"ok":true,"sent":…}`（交给推送网关了没有）；不是自己的配对回 404 `no_pairing` |
 

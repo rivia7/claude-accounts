@@ -266,7 +266,7 @@ private struct RemoteSessionList: View {
     private func newSession(_ l: RemotePeerLauncher) -> some View {
         RowAction("新建会话…", systemImage: "plus.rectangle.on.rectangle") { model.newRemoteSession(on: l) }
             .disabled(!l.online || l.templates.isEmpty)
-            .help(!l.online ? "「\(l.machine)」暂时未连接服务器，无法新建会话"
+            .help(!l.online ? Texts.launcherDown(l.machine, l.state)
                   : l.templates.isEmpty ? "「\(l.machine)」上还没有可用的模板" : "用「\(l.machine)」上的模板在那台机器上新建会话，启动后在这里接入")
     }
 
@@ -812,7 +812,7 @@ struct RemoteLaunchSheet: View {
                 }
             }
             if !l.online {
-                Label("「\(machine)」暂时未连接服务器，无法新建会话", systemImage: "exclamationmark.triangle")
+                Label(Texts.launcherDown(machine, l.state), systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
             if let e = d.error {

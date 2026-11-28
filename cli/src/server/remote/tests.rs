@@ -7,7 +7,7 @@ use super::*;
 use crate::dict;
 use crate::py::fs::TempDir;
 use crate::py::re::Re;
-use crate::server::{LATER_MAX, LATER_SPAN, PAIR_WAITERS, STATUS_BLOB};
+use crate::server::{CTL_QUIET, LATER_MAX, LATER_SPAN, PAIR_WAITERS, STATUS_BLOB};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -501,6 +501,23 @@ fn relay_list_rows() {
         row(64, 9, 0, true)
     );
     assert_eq!(t.op("relay_list", 2, dict! { "pids" => vec![V::str(&p1)] }), (200, want));
+    // 宿主有一阵没说话（CTL_QUIET 秒以上）：连着的标 busy；断了的不标（本来就接不上），刚好到点的也不标
+    {
+        let mut r = t.sh.lock();
+        for (sid, ago) in [(60, CTL_QUIET + 1.0), (61, CTL_QUIET + 1.0), (63, CTL_QUIET)] {
+            r.sessions.get_mut(&hex(sid)).unwrap().heard = t.now - ago;
+        }
+    }
+    let busy = format!(r#"{{"sid":"{}","blob":{BLOB},"age":0,"viewers":0,"online":true,"busy":true}}"#, hex(60));
+    let want = format!(
+        r#"{{"v":1,"ok":true,"peers":{{"{p2}":{{"fp":"{}","name":"dev"}},"{p1}":{{"fp":"{}","name":"dev"}}}},"sessions":{{"{p2}":[{}],"{p1}":[{},{}]}}}}"#,
+        fp(3),
+        fp(2),
+        row(63, 0, 0, true),
+        busy,
+        row(61, 2, 2, false),
+    );
+    assert_eq!(t.op("relay_list", 1, dict! { "pids" => vec![V::str(&p2), V::str(&p1)] }), (200, want));
 }
 
 #[test]

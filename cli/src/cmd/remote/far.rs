@@ -40,6 +40,8 @@ pub struct Far {
     pub viewers: i64,
     /// 那台机器现在连着服务器
     pub online: bool,
+    /// 连着服务器、宿主却有一阵没说话了（服务器给的 `busy`：被挂起了、机器睡着了），这会儿接不上；旧的服务器不给，当它有回应
+    pub busy: bool,
     /// 那边只让看
     pub view_only: bool,
 }
@@ -55,6 +57,8 @@ pub struct FarLauncher {
     pub peer: String,
     /// 启动器这会儿连着服务器
     pub online: bool,
+    /// 连着服务器、却有一阵没说话了（同 `Far::busy`）：这会儿起不了会话
+    pub busy: bool,
     /// 说明里放不下的模板还有几个
     pub more: i64,
     pub templates: Vec<FarTemplate>,
@@ -188,6 +192,8 @@ pub fn row(f: &Far) -> String {
     }
     if !f.online {
         note.push_str("，那台机器暂时连不上");
+    } else if f.busy {
+        note.push_str("，那台机器没有回应");
     }
     let when = if f.since > 0.0 { format!("{} 开始  ", strftime_local("%m-%d %H:%M", f.since)) } else { String::new() };
     format!("{}  {}  {}  {}  {}{}", &f.sid[..8], f.tool, f.name, f.cwd, when, note)
@@ -292,6 +298,7 @@ pub fn fetch(srv: &Server, peers: &[Peer], timeout: i64) -> R<Result<Listing, Fa
             let Some(blob) = r.get("blob") else { continue };
             // 服务器回的、对方写的都可能缺了哪一项：用 `get`（`at` 取不存在的键会崩）
             let online = r.get("online").and_then(|v| v.as_bool()).unwrap_or(false);
+            let busy = online && r.get("busy").and_then(|v| v.as_bool()).unwrap_or(false);
             let Some(doc) = crypto::dir_open(&secret, &peer.pid, &sid, &blob) else {
                 // 会话的说明的密钥解不开的：可能是那台机器的启动器（另一把密钥封的），也解不开的不算
                 let opened = crypto::launch_open(&secret, &peer.pid, &sid, &blob).and_then(|d| launcher_of(&d));
@@ -301,12 +308,14 @@ pub fn fetch(srv: &Server, peers: &[Peer], timeout: i64) -> R<Result<Listing, Fa
                         pid: peer.pid.clone(),
                         peer: peer.name.clone(),
                         online,
+                        busy,
                         more: o.more,
                         templates: o.templates,
                         accounts: o.accounts,
                     };
                     match launchers.iter_mut().find(|x| x.pid == l.pid) {
-                        Some(x) if !x.online && l.online => *x = l,
+                        // 有回应的优先（一个配对只给一个）
+                        Some(x) if l.online && !l.busy && (!x.online || x.busy) => *x = l,
                         Some(_) => {}
                         None => launchers.push(l),
                     }
@@ -327,6 +336,7 @@ pub fn fetch(srv: &Server, peers: &[Peer], timeout: i64) -> R<Result<Listing, Fa
                 since: sane_time(doc.get("since").and_then(|v| v.as_num()).unwrap_or(0.0)),
                 viewers: r.get("viewers").and_then(|v| v.as_int()).unwrap_or(0).clamp(0, 99),
                 online,
+                busy,
                 view_only: doc.str("access").as_deref() == Some("view"),
             });
         }
@@ -439,6 +449,7 @@ mod tests {
             since: 0.0,
             viewers: 2,
             online: false,
+            busy: false,
             view_only: true,
         };
         let r = row(&f);
@@ -446,6 +457,8 @@ mod tests {
             r, "01234567  claude  工作  ~/项目  在「服务器」上，只能看，2 处接入，那台机器暂时连不上",
             "没有启动时间的不写时间"
         );
+        let r = row(&Far { online: true, busy: true, viewers: 0, view_only: false, ..f.clone() });
+        assert!(r.ends_with("在「服务器」上，那台机器没有回应"), "连着服务器、宿主没有回应：{r}");
         let r = row(&Far { since: 1794000000.0, ..f });
         assert!(r.starts_with("01234567  claude  工作  ~/项目  ") && r.contains(" 开始  在「服务器」上"), "{r}");
     }
@@ -579,6 +592,7 @@ mod tests {
             since: 0.0,
             viewers: 0,
             online: true,
+            busy: false,
             view_only: false,
         };
         let names = HashMap::from([(("claude".to_string(), aid.clone()), "这边的名字".to_string())]);

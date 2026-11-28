@@ -1224,6 +1224,13 @@ canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_al
 out3=$(run cca usage alice --json 2>/dev/null)
 mixed=$(run CCA_USAGE_JOBS=1 cca usage alice bob --json 2>/dev/null)
 ok "cca usage：可以写好几个账号，只查这几个（App 自动刷新只查到期的；CCA_USAGE_JOBS 限制同时查几个）" 'printf "%s" "$mixed" | "$TESTBIN" check -f d=- "len(d[\"accounts\"]) == 2"'
+# App 起的 cca usage（带着事件文件）结束时记下这次的结果，给手机上这台电脑的一栏（remote/usage-poll.json，辅助程序的 remote-usage-poll）：
+# 后台刷新（CCA_USAGE_POLL 是 App 的进程号）没查成记下进程号，成功了清掉；终端里起的（没有事件文件）不记
+UP="$H/.cca/remote/usage-poll.json"; rm -f "$UP"
+run CCA_EVENTS="$T/ev.poll" CCA_USAGE_POLL=$$ cca usage nosuch --json >/dev/null 2>&1; rc=$?; cp "$UP" "$T/up1.json" 2>/dev/null
+run CCA_EVENTS="$T/ev.poll" CCA_USAGE_POLL=$$ cca usage alice --json >/dev/null 2>&1; rc2=$?; cp "$UP" "$T/up2.json" 2>/dev/null
+run CCA_USAGE_POLL=$$ cca usage nosuch --json >/dev/null 2>&1; rm -f "$T/ev.poll"
+ok "App 起的 cca usage：后台刷新没查成时记下 App 的进程号（退出码照旧），成功了清掉；终端里起的不记" '[ $rc -ne 0 ] && [ $rc2 -eq 0 ] && "$TESTBIN" check -f "d=$T/up1.json" "d[\"tools\"] == {\"claude\": {\"failed\": $$}}" && "$TESTBIN" check -f "d=$T/up2.json" "d[\"tools\"] == {}" && "$TESTBIN" check -f "d=$UP" "d[\"tools\"] == {}" && [ "$(stat -f %Lp "$UP")" = 600 ]'
 canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
 ok "cca usage --json：分模型的每周额度（Fable）带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
 # 有没有 5 小时限制只看接口给没给 five_hour（没有 5 小时限制的套餐不给，limits 里也没有 session 那一项；cca 原样给 null，表格里是 —，App 不画这一行）。
@@ -2096,6 +2103,7 @@ mkdir -p "$T/gh/v99.0.0"; printf x > "$T/gh/v99.0.0/cca"; printf 'cca 99.0.0：�
 out=$(run cca update --check --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$GF/update.json"
 rm -rf "$T/gh" "$T/gh.log"   # 11b 的自动更新从空的假 GitHub 开始
 ok "update --check --json：stdout 只有 JSON（kind=update：最新版本、有没有新的、更新说明、发布页），开发模式下也能查" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"update\" and d[\"cca_version\"] == \"$VER\" and d[\"latest\"] == \"99.0.0\" and d[\"available\"] is True and \"dev_mode\" not in d and d[\"source\"] == \"releases\" and d[\"notes\"].startswith(\"cca 99.0.0\") and d[\"url\"].endswith(\"/releases/tag/v99.0.0\")"'
+ok "update --check：记下这次查到的（update/check.json，同一份文档，只有自己读得了：手机上这台电脑的一栏照它说有没有新版本，不再联网）" '"$TESTBIN" check -f "d=$H/.cca/update/check.json" "d[\"kind\"] == \"update\" and d[\"latest\"] == \"99.0.0\" and d[\"available\"] is True" && [ "$(stat -f %Lp "$H/.cca/update/check.json")" = 600 ]'
 # 改别名（cca rename；App 的“改别名…”用它）：只换账号表里的键，账号目录、端口、“上次使用”、路由器的摘要都不变，启动器跟着改名
 edit_table 'j["kimi9"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "id": "kimi9"}'; run cca ls >/dev/null 2>&1 </dev/null
 sb=$(gj state | "$TESTBIN" val -f d=- 'd["routing"]["sync"]')

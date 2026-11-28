@@ -13,7 +13,7 @@ struct AccountsView: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = context.date.timeIntervalSince1970
             let all = model.peers.compactMap { model.status($0) }.flatMap(\.accounts)
-            let shelf = AccountShelf(all, tool: model.accountTool, plan: model.accountPlan)
+            let shelf = AccountShelf(all, tool: model.accountTool, plan: model.accountPlan, team: model.accountTeam)
             let animate = !reduceMotion && !ProcessInfo.processInfo.isLowPowerModeEnabled
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -23,6 +23,9 @@ struct AccountsView: View {
                         }
                     }
                     if !all.isEmpty { ShelfHeader(shelf: shelf, now: now) }
+                    TipCard(id: .office, message: "每台电脑一组，每个账号一张卡片，图中是它当前的状态：屏幕在动表示在用；趴在桌上表示额度已用完，屏幕上显示几点恢复；"
+                        + "椅子空着表示未登录，灰色的人表示登录的不是这个账号。左下角的小票是还能重置额度的次数，右下角的沙漏表示建议先用（本周额度即将重置、"
+                        + "还剩不少）。点击卡片查看详情。")
                     ForEach(model.peers) { p in
                         MachineAccounts(peer: p, listing: model.listing(p), shelf: shelf, now: now, animate: animate)
                     }
@@ -88,11 +91,36 @@ private struct ShelfHeader: View {
             if !shelf.planChips.isEmpty {
                 PlanFilter(shelf: shelf) { model.accountPlan = $0 }
             }
-            Text(Texts.census(AccountCensus(shelf.shown, now: now), tool: shelf.tool))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(Texts.census(AccountCensus(shelf.shown, now: now), tool: shelf.tool))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !shelf.teamPicks.isEmpty { TeamFilter(shelf: shelf) { model.accountTeam = $0 } }
+            }
         }
-        .padding(.vertical, 2)    }
+        .padding(.vertical, 2)
+    }
+}
+
+/// 按 Team 筛（Mac App 侧栏的「按 Team 筛选」：只管显示）：全部账号、账号里有的各个 Team、不在 Team 里的；分不出两组时不放（AccountShelf.teamPicks）
+private struct TeamFilter: View {
+    let shelf: AccountShelf
+    let pick: (AccountShelf.TeamPick) -> Void
+
+    var body: some View {
+        Menu {
+            Picker("按 Team 筛选", selection: Binding(get: { shelf.team }, set: pick)) {
+                ForEach([AccountShelf.TeamPick.all] + shelf.teamPicks, id: \.self) { Text(Texts.teamPick($0)).tag($0) }
+            }
+        } label: {
+            Label(Texts.teamPick(shelf.team), systemImage: "person.3")
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+        }
+        .accessibilityLabel("按 Team 筛选账号")
+        .accessibilityValue(Texts.teamPick(shelf.team))
+    }
 }
 
 /// 按套餐筛（照 Mac App 侧栏的 Team 筛选，只管显示）：「全部」和这个工具的账号里有的那几种套餐（AccountShelf.planChips，档位从低到高），
@@ -163,7 +191,7 @@ private struct MachineAccounts: View {
 
     var body: some View {
         let rows = listing?.status.map { shelf.rows($0.accounts) } ?? []
-        if !Self.skipped(listing, rows: rows) {
+        if !Self.skipped(listing, rows: rows, tool: shelf.tool) {
             VStack(alignment: .leading, spacing: 10) {
                 MachineHeader(peer: peer)
                 if let l = listing {
@@ -191,10 +219,16 @@ private struct MachineAccounts: View {
         }
     }
 
-    /// 这一组不列：那台电脑放上来了账号，可是没有这个工具（这个套餐）的
-    static func skipped(_ l: PeerListing?, rows: [AccountStatus]) -> Bool {
+    /// 这一组不列：那台电脑放上来了账号，可是没有这个工具（这个套餐、这个 Team）的，也没报这个工具的问题、没有新版本（报了的照列：
+    /// Mac App 页顶的提示条不跟着筛选走，一直看得到）
+    static func skipped(_ l: PeerListing?, rows: [AccountStatus], tool: String) -> Bool {
         guard let l, !l.gone, l.failure == nil, let st = l.status, !st.off, !st.accounts.isEmpty else { return false }
-        return rows.isEmpty
+        return rows.isEmpty && relevantProblems(st, tool: tool).isEmpty && st.update == nil
+    }
+
+    /// 那台电脑报的问题里要在这一页列的：不分工具的和这个工具的；tool 是 nil 时全列（那台电脑一个账号也没放上来：没有别的可看）
+    static func relevantProblems(_ st: HostStatus, tool: String?) -> [HostProblem] {
+        st.problems.filter { p in tool == nil || p.tool == nil || p.tool == tool }
     }
 
     private func note(_ text: String, systemImage: String, tint: Color = .secondary) -> some View {
@@ -207,14 +241,42 @@ private struct MachineAccounts: View {
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
     }
 
+    /// 那台电脑上的 cca 有新版本（Mac App 页顶最上面那一条）、cca 报的问题（Mac App 页顶的提示条：账号表校验不过、文件读不了是红的，
+    /// 共享设置有问题、后台刷新用量要同意 / 没查成、内置代理停了是橙的，记号照 Mac 的）：问题只列不分工具的和正在看的这个工具的（Mac App
+    /// 的提示条在窗口顶上，不分工具；这里每个工具一页），见 relevantProblems
+    @ViewBuilder
+    private func problems(_ st: HostStatus, tool: String?) -> some View {
+        if let v = st.update {
+            note(Texts.hostUpdate(v), systemImage: "arrow.down.circle", tint: .accentColor)
+        }
+        ForEach(Array(Self.relevantProblems(st, tool: tool).enumerated()), id: \.offset) { _, p in
+            let (image, tint) = Self.problemLook(p.code)
+            note(Texts.hostProblem(p), systemImage: image, tint: tint)
+        }
+    }
+
+    /// 一条提示的记号和颜色（Mac App 的 TopBanners）
+    static func problemLook(_ code: String) -> (String, Color) {
+        switch code {
+        case "settings_problems": return ("gearshape.2", .orange)
+        case "table_invalid": return ("tablecells.badge.ellipsis", .red)
+        case "usage_consent": return ("hand.raised", .orange)
+        case "usage_failed": return ("exclamationmark.triangle", .orange)
+        case "core_down": return ("exclamationmark.arrow.triangle.2.circlepath", .orange)
+        default: return ("exclamationmark.octagon", .red)
+        }
+    }
+
     @ViewBuilder
     private func content(_ l: PeerListing, rows: [AccountStatus]) -> some View {
         if let st = l.status {
             if st.off {
                 note("电脑已不允许这台手机接入，账号也不再显示。", systemImage: "hand.raised")
             } else if st.accounts.isEmpty {
+                problems(st, tool: nil)
                 note("电脑上没有可以显示的账号（只显示经同一台服务器中转的账号）。", systemImage: "person.crop.circle.badge.questionmark")
             } else {
+                problems(st, tool: shelf.tool)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 300), spacing: 12)], alignment: .leading, spacing: 12) {
                     ForEach(rows) { a in
                         DeskCard(peer: peer, account: a, now: now, animate: animate)
@@ -248,9 +310,9 @@ struct MachineHeader: View {
     }
 }
 
-/// 一个账号的卡片（Mac App 总览的 DeskCard）：插画、名字和套餐、现在怎么样、5 小时和本周的小条。整张卡片点了进这个账号的那一页。
-/// 插画的左上角是在用什么（桌面 App、命令行里几个会话），右上角是额度即将用完（Mac 那里还有出口、泄露的几样，手机上不知道），
-/// 左下角是还能重置几次额度和最早什么时候过期，右下角是建议先用
+/// 一个账号的卡片（Mac App 总览的 DeskCard）：插画、名字和套餐（第三方 API 账号是它的模型）、现在怎么样、5 小时和本周的小条。整张卡片点了进
+/// 这个账号的那一页。插画的左上角是在用什么（桌面 App、命令行里几个会话），右上角是头条之外的小事（额度即将用完、纯净度偏低、可能泄露是
+/// 橙色的叹号，没装桌面 App、没检测过出口是灰色的提示：和 Mac App 一样），左下角是还能重置几次额度和最早什么时候过期，右下角是建议先用
 private struct DeskCard: View {
     let peer: Peer
     let account: AccountStatus
@@ -265,7 +327,7 @@ private struct DeskCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 DeskScene(account: a, look: DeskLook(a, mood: m), animate: animate, now: now)
                     .overlay(alignment: .topLeading) { workBadge(a, m) }
-                    .overlay(alignment: .topTrailing) { if m.nearLimit { nearLimitBadge } }
+                    .overlay(alignment: .topTrailing) { flagBadge(m, a) }
                     .overlay(alignment: .bottomLeading) { resetBadge(a) }
                     .overlay(alignment: .bottomTrailing) { if m.useFirst != nil { useFirstBadge } }
                 info(a, m)
@@ -288,7 +350,7 @@ private struct DeskCard: View {
                     name(a)
                     Spacer(minLength: 4)
                     if a.isAPI {
-                        Text("第三方 API").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(a.model ?? "第三方 API").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     } else if !a.plan.isEmpty {
                         PlanBadge(plan: a.plan, tier: a.tier)
                     }
@@ -318,25 +380,30 @@ private struct DeskCard: View {
         Text(Texts.nonEmpty(a.name) ?? "账号").font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
     }
 
-    /// 状态前面的小记号（和 Mac App 的一样）：颜色只表达状态（在用是绿点；在用、又有问题时是问题的记号）；账号不符、登录失效是橙点，
-    /// 未登录是灰点，额度用完是灰色的月亮，空闲不画
+    /// 状态前面的小记号（和 Mac App 的一样）：颜色只表达状态（在用是绿点；在用、又有问题时是问题的记号）；账号不符、登录失效、节点选错了
+    /// 是橙点，端口连不上、出口有问题是红点，未登录是灰点，额度用完是灰色的月亮，空闲不画
     @ViewBuilder
     private func moodMark(_ m: AccountMood) -> some View {
         switch m.trouble {
         case .usedUp?: Image(systemName: "moon.zzz.fill").font(.caption2).foregroundStyle(.secondary)
         case .loggedOut?: Circle().fill(Color.gray).frame(width: 6, height: 6)
-        case .wrongAccount?, .expired?: Circle().fill(Color.orange).frame(width: 6, height: 6)
+        case .wrongAccount?, .expired?, .wrongNode?: Circle().fill(Color.orange).frame(width: 6, height: 6)
+        case .exit?, .portClosed?: Circle().fill(Color.red).frame(width: 6, height: 6)
         case nil: if m.busy { Circle().fill(Color.green).frame(width: 6, height: 6) }
         }
     }
 
-    /// 右上角：额度即将用完（橙色，和 Mac App 右上角的标记一样）
-    private var nearLimitBadge: some View {
-        Image(systemName: "exclamationmark.circle.fill")
-            .font(.callout)
-            .foregroundStyle(.orange)
-            .background(Circle().fill(.background).padding(1))
-            .padding(4)
+    /// 右上角：头条之外还要提一句的（额度快用完、泄露、纯净度低是橙色的叹号；没装 App、没检测过只是灰色的提示：和 Mac App 的 flagBadge 一样）
+    @ViewBuilder
+    private func flagBadge(_ m: AccountMood, _ a: AccountStatus) -> some View {
+        if !m.flags.isEmpty {
+            let warn = m.flags.contains(where: \.warns)
+            Image(systemName: warn ? "exclamationmark.circle.fill" : "info.circle")
+                .font(.callout)
+                .foregroundStyle(warn ? Color.orange : Color.secondary)
+                .background(Circle().fill(.background).padding(1))
+                .padding(4)
+        }
     }
 
     /// 左上角：在用什么（桌面 App、命令行里几个会话）
@@ -383,8 +450,9 @@ private struct DeskCard: View {
     private func label(_ a: AccountStatus, _ m: AccountMood) -> String {
         var parts = [Texts.nonEmpty(a.name) ?? "账号", a.isAPI ? "第三方 API" : Texts.department(a.tool)]
         if !a.plan.isEmpty { parts.append(Texts.planName(a.plan)) }
+        if a.isAPI, let model = a.model { parts.append(model) }
         parts.append(Texts.mood(m, now: now))
-        if m.nearLimit { parts.append("额度即将用完") }
+        parts += Texts.flags(m.flags, tool: a.tool)
         if m.busy, a.appOpen || a.cliSessions > 0 { parts.append(Texts.working(a, now: now)) }
         if let f = m.useFirst { parts.append(Texts.useFirst(f, now: now)) }
         // 一次都不能重置的不念（Mac App 的 resetSummary 也不说）

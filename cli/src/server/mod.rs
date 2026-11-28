@@ -187,6 +187,9 @@ pub const RELAY_CONN_IP: usize = 400;
 pub const RELAY_QUEUE: usize = 256 * 1024;
 /// 这么久一个字节都没有的连接断开（Py:921）
 pub const RELAY_IDLE: i64 = 90;
+/// 宿主的控制连接上这么久（秒）没有一帧就算没回应（relay_list 的 `busy`：被挂起了、机器睡着了）。宿主没别的要说时每 20 秒发一个
+/// PING（辅助程序 `cmd/remote/relay.rs` 的 `PING_EVERY`），错过两个还多；到 RELAY_IDLE 就断开、算不在线
+pub const CTL_QUIET: f64 = 45.0;
 /// 会话的控制连接断了以后，会话留这么久等它重连（Py:922）
 pub const RELAY_GRACE: i64 = 60;
 /// 连上以后这么久还没说完开场白就断开（Py:923）

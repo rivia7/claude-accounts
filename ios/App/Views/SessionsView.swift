@@ -93,8 +93,7 @@ private struct MachineSection: View {
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
                     if l.sessions.isEmpty {
-                        Text(l.launcher == nil ? "暂无可接入的会话。在电脑的终端里用 cca 启动一个（例如 cca @账号），就会显示在这里。"
-                             : "暂无可接入的会话。点「新建会话」在电脑上启动一个，或在电脑的终端里用 cca 启动。")
+                        Text(Self.empty(launch: l.launcher != nil, remoteOff: l.status?.remoteOn == false))
                             .font(.callout).foregroundStyle(.secondary)
                     } else {
                         // 照这台手机记着的先后（拖动排过的，SessionOrder）；读屏的用「上移」「下移」
@@ -125,8 +124,20 @@ private struct MachineSection: View {
                 Image(systemName: "desktopcomputer").foregroundStyle(.secondary).accessibilityHidden(true)
                 Text(peer.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).textCase(nil).lineLimit(1)
                 if let team = peer.team { Tag(text: team) }
+                // 那台电脑只让这台手机看、不让操作（Mac App「远程会话」页的「它接入这台 Mac 时」选了「只看」）
+                if listing?.status?.allow == "view" { Tag(text: "只看", systemImage: "eye").textCase(nil) }
             }
         }
+    }
+
+    /// 没有会话时那句话（Mac App「远程会话」页的说法）：电脑上「远程会话」的开关关着时，终端里启动的会话接不上（远程启动的照样接得上）
+    static func empty(launch: Bool, remoteOff: Bool) -> String {
+        if remoteOff {
+            return "暂无可接入的会话。" + (launch ? "点「新建会话」在电脑上启动一个；" : "")
+                + "电脑上「远程会话」的开关关着，在终端里启动的会话接不上：先在电脑上打开它（或运行 cca remote on）。"
+        }
+        return launch ? "暂无可接入的会话。点「新建会话」在电脑上启动一个，或在电脑的终端里用 cca 启动。"
+            : "暂无可接入的会话。在电脑的终端里用 cca 启动一个（例如 cca @账号），就会显示在这里。"
     }
 }
 
@@ -138,7 +149,7 @@ private struct LaunchRow: View {
     let launcher: HostLauncher
 
     var body: some View {
-        let usable = launcher.online && !launcher.info.templates.isEmpty
+        let usable = launcher.usable && !launcher.info.templates.isEmpty
         Button {
             model.launchFor = LaunchTarget(peer: peer)
         } label: {
@@ -146,15 +157,16 @@ private struct LaunchRow: View {
                 Label("新建会话", systemImage: "plus.circle")
                     .foregroundStyle(usable ? Color.accentColor : Color.secondary)
                 Spacer(minLength: 6)
-                if !launcher.online {
-                    Text("离线").font(.caption).foregroundStyle(.secondary)
+                if !launcher.usable {
+                    Text(launcher.busy ? "无响应" : "离线").font(.caption).foregroundStyle(.secondary)
                 } else if launcher.info.templates.isEmpty {
                     Text("暂无模板").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
         .disabled(!usable)
-        .accessibilityHint(!launcher.online ? "电脑暂时没有连接服务器" : usable ? "选择一个模板，在电脑上启动新会话" : "电脑上还没有模板")
+        .accessibilityHint(!launcher.usable ? (launcher.busy ? "电脑没有回应（可能已休眠）" : "电脑暂时没有连接服务器")
+                           : usable ? "选择一个模板，在电脑上启动新会话" : "电脑上还没有模板")
     }
 }
 
@@ -180,7 +192,7 @@ struct SessionRow: View {
             model.attach(session, on: peer, readOnly: open?.readOnly ?? false)
         } label: {
             HStack(spacing: 12) {
-                StatusDot(kind: session.online ? .on : .off)
+                StatusDot(kind: session.attachable ? .on : session.busy ? .busy : .off)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(Texts.sessionTitle(session)).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
@@ -195,8 +207,9 @@ struct SessionRow: View {
                 if ending {
                     ProgressView().controlSize(.small)
                     Text("正在结束…").font(.caption).foregroundStyle(.secondary)
-                } else if !session.online {
-                    Text("离线").font(.caption).foregroundStyle(.secondary)
+                } else if !session.attachable {
+                    // Mac App 的 remoteStateNote：宿主没有回应（被挂起了、睡着了）是「无响应」
+                    Text(session.busy ? "无响应" : "离线").font(.caption).foregroundStyle(.secondary)
                 } else if !editing {
                     Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
                 }
@@ -204,9 +217,9 @@ struct SessionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!session.online && !editing)
+        .disabled(!session.attachable && !editing)
         .contextMenu {
-            if session.online {
+            if session.attachable {
                 if let open {
                     Button { model.show(open) } label: { Label("切换到它的终端", systemImage: "arrow.right.circle") }
                     if !session.info.viewOnly {
@@ -229,7 +242,7 @@ struct SessionRow: View {
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if session.online, session.info.canEnd, !ending {
+            if session.attachable, session.info.canEnd, !ending {
                 Button { confirmingEnd = true } label: { Label("结束", systemImage: "stop.circle") }
                     .tint(.red)
             }
@@ -244,7 +257,7 @@ struct SessionRow: View {
     }
 
     private func hint(open: Bool) -> String {
-        guard session.online else { return "电脑离线" }
+        guard session.attachable else { return session.busy ? "电脑没有回应（可能已休眠）" : "电脑离线" }
         if open { return "已接入：切换到它的终端" }
         return session.info.viewOnly ? "打开终端查看这个会话" : "打开终端，查看和操作这个会话"
     }

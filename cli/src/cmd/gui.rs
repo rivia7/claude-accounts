@@ -16,7 +16,7 @@ use super::session::{cli_marks, cli_view, gui_procs, proc_starts};
 use super::usage::{parse_ts, usage_cached, usage_entry, usage_row, usage_weeks_view};
 use super::{arg, arity, Cmd};
 use crate::cmd::secrets::{kc_hints, kc_list, kc_slot, py_in};
-use crate::core::base::{sh, CFG, FIRST_PORT, HINT_RE, NOTICES, RO_BAD};
+use crate::core::base::{sh, CCA_HOME, CFG, FIRST_PORT, HINT_RE, NOTICES, RO, RO_BAD};
 use crate::core::ctx::{cfg_save, ctx, pool_size, reconcile_all};
 use crate::core::model::{
     acct_id, adir, api_host, cfg_fill, cfg_load, is_api, key_hint, label_of, name_of, node_of, parse_key, pool, secret_ok,
@@ -24,7 +24,7 @@ use crate::core::model::{
 use crate::core::policy::{alias_locks, policy_map, policy_sources};
 use crate::core::sync::sync_digest;
 use crate::core::tool::{t, tools, Kind, Using};
-use crate::py::fs::{load_quiet, save_json};
+use crate::py::fs::{load_quiet, makedirs, save_json};
 use crate::py::io;
 use crate::py::json;
 use crate::py::obj::{repr_str, Dict, List, V};
@@ -306,6 +306,23 @@ pub fn ver_key(v: &str) -> Option<(Part, Part, Part, (bool, Part))> {
     Some((part(m.g(1)), part(m.g(2)), part(m.g(3)), beta))
 }
 
+/// 最近一次 `cca update --check` 查到的（kind=update 的那一份，PROTOCOL 5.1）：手机上那台电脑的一栏照它说有没有新版本
+/// （remote/status.rs 的 update_of），不用再联网
+pub fn update_check_file() -> String {
+    path::join_all(&[&CCA_HOME, "update", "check.json"])
+}
+
+/// 记下这次查到的（update_check_file）；最新的版本、有没有新的变了就给配对的手机放一轮。出错不管
+fn update_check_save(doc: &Dict) {
+    let file = update_check_file();
+    let old = load_quiet(&file).and_then(|v| v.as_dict()).unwrap_or_default();
+    let same = |k: &str| old.get(k).map(|v| json::dumps(&v, json::LINE)) == doc.get(k).map(|v| json::dumps(&v, json::LINE));
+    let saved = makedirs(&path::dirname(&file)).is_ok() && save_json(&file, &V::Dict(doc.clone()), Some(0o600), true).is_ok();
+    if saved && !(same("latest") && same("available") && same("cca_version")) {
+        crate::cmd::remote::status_kick();
+    }
+}
+
 /// cca update --check [--json]：stdin 是 GitHub 上最近的发布（api.github.com 的 releases 列表，拿不到时是空的），
 /// fallback 是 releases/latest 指向的正式版（列表拿不到时 bash 才去取，只有版本号）。按现在的版本挑：测试版上看更新的
 /// 测试版和正式版，正式版上只看正式版（自动更新、不带版本号的 cca update 不变，只看正式版）。
@@ -347,12 +364,15 @@ pub fn cmd_update_check(args: &[String]) -> R<()> {
     };
     let available = ver_key(current).is_none_or(|now| ver_key(&best.0).is_some_and(|new| new > now));
     let notes = Some(&best.1).filter(|n| n.truthy());
+    let doc = dict! {
+        "version" => 1, "kind" => "update", "generated_epoch" => time(), "cca_version" => current,
+        "channel" => if beta { "beta" } else { "stable" }, "source" => source, "latest" => best.0.as_str(), "available" => available,
+        "notes" => notes.cloned().unwrap_or(V::None), "url" => best.2.as_str(), "published_epoch" => &best.3,
+    };
+    if !*RO {
+        update_check_save(&doc);
+    }
     if mode == "json" {
-        let doc = dict! {
-            "version" => 1, "kind" => "update", "generated_epoch" => time(), "cca_version" => current,
-            "channel" => if beta { "beta" } else { "stable" }, "source" => source, "latest" => best.0.as_str(), "available" => available,
-            "notes" => notes.cloned().unwrap_or(V::None), "url" => best.2.as_str(), "published_epoch" => &best.3,
-        };
         out!("{}", json::dumps(&V::Dict(doc), json::FILE));
         return Ok(());
     }

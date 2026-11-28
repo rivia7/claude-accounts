@@ -96,8 +96,10 @@ struct TerminalScreen: View {
     }
 
     /// 哪台电脑、哪个 Team、哪个文件夹、终端的标题（和 Mac App 终端上面那一行一样）
+    /// 标题下面那一行：哪台电脑、哪个 Team、文件夹、会话的标题；演示模式时最前面写着「演示模式」（这一页的标题是自己画的，demoSubtitle 不管用）
     private var place: String {
-        [session.peer.name, session.peer.team.map { "「\($0)」" }, Texts.nonEmpty(session.session.info.cwd), Texts.nonEmpty(session.title)]
+        [model.isDemo ? "演示模式" : nil, session.peer.name, session.peer.team.map { "「\($0)」" }, Texts.nonEmpty(session.session.info.cwd),
+         Texts.nonEmpty(session.title)]
             .compactMap { $0 }.joined(separator: " · ")
     }
 

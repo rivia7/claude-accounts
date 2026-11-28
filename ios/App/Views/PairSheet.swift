@@ -12,6 +12,7 @@ struct PairSheet: View {
             content
                 .navigationTitle("和电脑配对")
                 .navigationBarTitleDisplayMode(.inline)
+                .demoSubtitle()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button(done ? "完成" : "取消") { model.cancelPairing() }

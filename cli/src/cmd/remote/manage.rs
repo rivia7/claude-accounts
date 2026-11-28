@@ -42,7 +42,9 @@ pub fn cmd_remote_set(args: &[String]) -> R<()> {
         }
         _ => return die("用法：remote-set on|off"),
     }
-    cfg_save(&c)
+    cfg_save(&c)?;
+    super::status::status_kick(); // 手机上那台电脑一栏照新的开关说（remote/status.rs 的 host_of）
+    Ok(())
 }
 
 /// 列表里的一行：编号的前 8 位、工具、账号、文件夹、几点开始的、现在谁接着；会话走哪个 Team 的服务器中转时最后带上它的名字
@@ -303,6 +305,16 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
     })
 }
 
+/// 别的机器上的会话、启动器的 `state`（PROTOCOL 9.1）：不在线是 offline；连着服务器、宿主却有一阵没说话了是 busy（服务器给的，
+/// 和这台机器上没回应的会话一样）
+fn far_state(online: bool, busy: bool) -> &'static str {
+    match (online, busy) {
+        (false, _) => "offline",
+        (true, true) => "busy",
+        (true, false) => "ok",
+    }
+}
+
 /// 别的机器上的一个会话在给界面 App 的文档里的样子（PROTOCOL 9.1 的 `sessions[]`；`remote launch --json` 的 `session` 也是它）
 pub(super) fn far_entry(f: &far::Far, all: &[peers::Peer]) -> Dict {
     // 别的机器上的会话是经哪个配对看到的，就是哪个 Team 的服务器上的
@@ -313,7 +325,7 @@ pub(super) fn far_entry(f: &far::Far, all: &[peers::Peer]) -> Dict {
         "cwd" => f.cwd.as_str(),
         "since_epoch" => if f.since > 0.0 { V::from(f.since) } else { V::None }, "viewers" => f.viewers,
         "local_terminal" => V::None,
-        "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" },
+        "state" => far_state(f.online, f.busy), "access" => if f.view_only { "view" } else { "control" },
         "team" => team
     }
 }
@@ -341,7 +353,7 @@ fn launcher_entry(l: &far::FarLauncher, all: &[peers::Peer]) -> Dict {
     });
     dict! {
         "id" => l.sid.as_str(), "peer" => l.pid.as_str(), "machine" => l.peer.as_str(),
-        "state" => if l.online { "ok" } else { "offline" }, "team" => team, "more" => l.more, "templates" => templates,
+        "state" => far_state(l.online, l.busy), "team" => team, "more" => l.more, "templates" => templates,
         "accounts" => accounts
     }
 }

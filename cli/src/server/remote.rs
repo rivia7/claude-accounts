@@ -325,6 +325,8 @@ pub(super) struct Session {
     pub(super) conn: Option<u64>,
     /// 控制连接什么时候断的（单调时钟）
     pub(super) lost: Option<f64>,
+    /// 控制连接上最后一次收到一帧的时候（服务器的时间）：多久没说话了（relay_list 的 `busy`）
+    pub(super) heard: f64,
     /// 正接着几处
     pub(super) viewers: usize,
     /// 什么时候开的（服务器的时间）
@@ -777,8 +779,10 @@ impl Remote {
     /// 测试里放一个开着的会话进来（平常是宿主在数据端口上连上来时建的）：控制连接算连着，还没有说明
     pub(super) fn test_session(&mut self, sid: &str, fp: &str, pids: &[&str], since: f64) {
         let pids = pids.iter().map(|p| p.to_string()).collect();
-        self.sessions
-            .insert(sid, Session { fp: fp.to_string(), pids, blobs: OMap::new(), conn: Some(0), lost: None, viewers: 0, since });
+        self.sessions.insert(
+            sid,
+            Session { fp: fp.to_string(), pids, blobs: OMap::new(), conn: Some(0), lost: None, heard: since, viewers: 0, since },
+        );
     }
 
     /// 测试里放一个配了对的访客进来（不经配对的那几步）

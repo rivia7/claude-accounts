@@ -531,7 +531,7 @@ impl Relay {
                 Some(x) => {
                     let old = x.conn.replace(id);
                     x.pids.clone_from(&k.pids);
-                    x.lost = None;
+                    (x.lost, x.heard) = (None, wall);
                     x.blobs.retain(|p, _| k.pids.iter().any(|q| q == p));
                     Ok(old)
                 }
@@ -541,7 +541,7 @@ impl Relay {
                     let (fp, pids) = (k.fp.clone(), k.pids.clone());
                     r.sessions.insert(
                         k.sid.clone(),
-                        Session { fp, pids, blobs: OMap::new(), conn: Some(id), lost: None, viewers: 0, since: wall },
+                        Session { fp, pids, blobs: OMap::new(), conn: Some(id), lost: None, heard: wall, viewers: 0, since: wall },
                     );
                     Ok(None)
                 }
@@ -611,6 +611,10 @@ impl Relay {
     /// 控制连接上的一帧。不对的就把这条连接关掉（control 看到它不在了就停）（Py:1393-1415）
     fn control_frame(&mut self, lz: &mut Lazy, id: u64, kind: u8, payload: &[u8], now: f64) {
         let Some(sid) = self.conns.get(&id).and_then(|c| c.sid.clone()) else { return };
+        // 宿主还在说话（PING、ANNOUNCE……）：记下是什么时候（relay_list 照它说这个会话有没有回应）
+        if let Some(x) = lz.get().sessions.get_mut(&sid).filter(|x| x.conn == Some(id)) {
+            x.heard = time::time();
+        }
         match kind {
             F_PING => self.send(lz, id, &frame(F_PONG, payload.get(..16).unwrap_or(payload)), now),
             F_BYE => {

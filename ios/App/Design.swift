@@ -44,6 +44,26 @@ enum Palette {
     static func usage(percent: Double) -> Color {
         percent >= 90 ? .red : percent >= 70 ? .orange : .green
     }
+
+    /// 出口检测的结果（Mac App 的 Palette.health）：正常是绿的，纯净度偏低、没有评分是橙的，用不了的是红的，认不出的是灰的
+    static func health(_ r: String) -> Color {
+        switch r {
+        case "ok", "api_ok": return .green
+        case "low_purity", "no_score": return .orange
+        case "restricted", "no_exit", "port_closed", "api_unreachable": return .red
+        default: return .gray
+        }
+    }
+
+    /// DNS / WebRTC 的泄露检测（Mac App 的 Palette.leak）
+    static func leak(_ s: String?) -> Color {
+        switch s {
+        case "ok"?: return .green
+        case "leak"?: return .red
+        case "failed"?: return .orange
+        default: return .secondary
+        }
+    }
 }
 
 /// 用量条（Mac App 的 Meter）：灰色的底槽，按用了多少填上颜色；数据旧了填灰色（不靠透明度）
@@ -432,5 +452,74 @@ extension View {
     /// 内容的版心：iPad、横屏时不铺满整个宽度
     func pageColumn() -> some View {
         frame(maxWidth: 640).frame(maxWidth: .infinity)
+    }
+}
+
+/// 浮在底下的一句提示（Mac App 窗口底下的 ToastView，玻璃）：几秒后自己消失（AppModel.showToast），点一下也消失
+struct ToastView: View {
+    let toast: Toast
+
+    var body: some View {
+        let (icon, color): (String, Color) = {
+            switch toast.style {
+            case .success: return ("checkmark.circle.fill", .green)
+            case .warning: return ("exclamationmark.triangle.fill", .orange)
+            case .info: return ("info.circle.fill", .accentColor)
+            }
+        }()
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon).foregroundStyle(color)
+            Text(toast.text).font(.callout).lineLimit(4).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension View {
+    /// 底下浮着的提示（AppModel.toast）：根上放一份（bottom：标签栏上面多高）；弹出来的那几页（设置）上也放一份，免得被弹层挡住
+    func toastOverlay(bottom: CGFloat) -> some View {
+        modifier(ToastOverlay(bottom: bottom))
+    }
+}
+
+private struct ToastOverlay: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let bottom: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .bottom) {
+                if let t = model.toast {
+                    ToastView(toast: t)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, bottom)
+                        .onTapGesture { model.dismissToast() }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .id(t.id)
+                }
+            }
+            .animation(.snappy, value: model.toast)
+    }
+}
+
+extension View {
+    /// 演示模式时导航栏的标题下面写着「演示模式」（每一页都写：和 Mac App 侧栏最下面的「演示数据」一样一直看得到）
+    func demoSubtitle() -> some View {
+        modifier(DemoSubtitle())
+    }
+}
+
+private struct DemoSubtitle: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        if model.isDemo {
+            content.navigationSubtitle("演示模式")
+        } else {
+            content
+        }
     }
 }

@@ -4,6 +4,8 @@
 
 配对、握手、记录、帧的格式是四份实现（辅助程序、`tests/kit/spec.rs`、网页端的 `core.js`、这里的 CcaRemoteKit），SwiftTerm 和 `macos/Vendor/SwiftTerm/` 是同一个版本：改的时候一起改，清单在 `.claude/rules/remote.md`（读这里的文件时自动加载）。
 
+传 TestFlight 之前：有用户看得到的改动就在 `ios/App/Model/WhatsNew.swift` 最前面加一条「更新了什么」（`n` 比上一条大 1，`date` 写上传那天；docs/dev/ios.md「新手引导」）。
+
 ## 和 Mac App 对齐
 - iOS App 是 Mac App 在手机上的那一份：Mac App 有的页面、信息、提示、通知，手机上能做的都要做，样子、口径、说法照 Mac 的，Mac 改了 iOS 跟着改。差在哪、还没补的（排好了先后）、做不了的见 docs/dev/ios.md「和 Mac App 的对照」：补上一项、发现新的差别就改它
 - 新功能两个 App 一起做：Mac App 加了页面、字段、提示、通知，同一次把 iOS 也做了；这次不做的写进对照的「还没补的」，不能默默只做 Mac 的。手机上先有、Mac 也该有的（像结束在别的机器上远程启动的会话）一样记进去

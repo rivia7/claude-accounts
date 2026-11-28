@@ -21,6 +21,9 @@ private typealias ResponseOverride = @Sendable () -> CcaResponse
     let poll = CcaCommand.usagePoll(.claude, keys: ["a", "工作(b@example.com)"])
     check("自动刷新只查这几个账号，低优先级，最多同时查两个", poll.arguments == ["usage", "a", "工作(b@example.com)", "--json"] && poll.isBackground
           && poll.extraEnvironment["CCA_USAGE_JOBS"] == "2" && poll.gate == CcaCommand.usage(.claude, key: nil).gate)
+    check("自动刷新带着 App 的进程号（cca 记下结果给手机看），用户点的不带",
+          poll.extraEnvironment["CCA_USAGE_POLL"] == String(ProcessInfo.processInfo.processIdentifier)
+          && CcaCommand.usage(.claude, key: nil).extraEnvironment["CCA_USAGE_POLL"] == nil)
     check("ChatGPT 账号带前缀", CcaCommand.usagePoll(.codex, keys: ["x"]).arguments == ["codex", "usage", "x", "--json"])
     check("用户点的不降优先级", !CcaCommand.usage(.claude, key: nil).isBackground && !CcaCommand.clientCheck(force: true).isBackground && CcaCommand.clientCheck(force: false).isBackground)
 

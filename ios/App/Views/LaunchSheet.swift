@@ -38,7 +38,7 @@ struct LaunchSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                if launcher?.online == false {
+                if launcher.map({ !$0.usable }) == true {
                     Section {
                         Label("电脑暂时收不到启动请求（可能已休眠、断网，或远程启动的后台进程没有运行），现在无法启动。", systemImage: "moon.zzz")
                             .font(.callout).foregroundStyle(.secondary)
@@ -126,6 +126,7 @@ struct LaunchSheet: View {
             .listStyle(.insetGrouped)
             .navigationTitle("新建会话")
             .navigationBarTitleDisplayMode(.inline)
+            .demoSubtitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(working ? "关闭" : "取消") { close() }
@@ -178,7 +179,7 @@ struct LaunchSheet: View {
 
     /// 能启动：选了模板（要挑账号的也挑了）、启动器在线、开场白（写了的话）发得出去、没在等
     private var ready: Bool {
-        guard !working, let t = template, launcher?.online == true else { return false }
+        guard !working, let t = template, launcher?.usable == true else { return false }
         if choices != nil, account == nil { return false }
         guard t.line, let said = Self.opening(line) else { return true }
         return LaunchAsk.lineOK(said)

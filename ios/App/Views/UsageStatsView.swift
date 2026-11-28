@@ -22,6 +22,8 @@ struct UsageStatsView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    TipCard(id: .usageStats, message: "每个账号一行，一根竖条代表一周：填得越满用得越多，填满表示这一周的额度已用完；灰色的那一周最后一天没有数据，"
+                        + "实际可能更多。名字右边是平均每周的用量、用完的周数、不到一半的周数，小图右边是本周至今的用量。点击一行查看这个账号的详情。")
                     if model.fetchedAt == nil, all.isEmpty {
                         HStack(spacing: 8) { ProgressView(); Text("正在查询…").foregroundStyle(.secondary) }
                     } else if rows.isEmpty {
@@ -43,11 +45,6 @@ struct UsageStatsView: View {
                         }
                         UploadedLine(now: now)
                     }
-                    Text("每个账号一行，一根竖条代表一周：填得越满用得越多，填满表示这一周的额度已用完；灰色的那一周最后一天没有数据，实际可能更多。"
-                        + "名字右边是平均每周的用量、用完的周数、不到一半的周数，小图右边是本周至今的用量。点击一行查看这个账号的详情。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)

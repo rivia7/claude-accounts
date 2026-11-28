@@ -129,6 +129,16 @@ enum CostChart {
     /// 纵轴的刻度：0、一半、最高
     static func ticks(top: Double) -> [Double] { [0, top / 2, top] }
 
+    /// 纵轴的刻度写出来（「$0」「$25」「$50」）
+    static func axisLabels(top: Double) -> [String] { ticks(top: top).map(Texts.moneyAxis) }
+
+    /// 账号页每周用量的图右边留多宽（Mac App 的 gutterLabels）：和下面折合金额的纵轴一样宽，同一周的柱子上下对齐。折合金额画了图时
+    /// 是它纵轴的刻度（CostSection 的 chartTile：这一段有不是 0 的才画），没画时是空的（不留）
+    static func gutterLabels(_ c: AccountCost?, days: Bool) -> [String] {
+        guard let bars = c?.periods(days: days), bars.contains(where: { $0.cents > 0 }) else { return [] }
+        return axisLabels(top: niceTop(maxUSD([bars])))
+    }
+
     /// 几行里最高的一根（美元）
     static func maxUSD(_ lists: [[CostPeriod]]) -> Double {
         lists.joined().map(\.usd).max() ?? 0
@@ -302,7 +312,7 @@ struct CostBarChart: View {
     }
 
     private func axis(_ ticks: [Double]) -> some View {
-        let labels = ticks.map(Texts.moneyAxis)
+        let labels = CostChart.axisLabels(top: top)
         return AxisColumn(labels: labels)
             .frame(maxHeight: .infinity)
             .overlay {
@@ -343,6 +353,12 @@ struct CostColumn: View {
             .clipShape(Capsule())
         }
     }
+}
+
+extension EnvironmentValues {
+    /// 每周用量的图右边留的那一栏（看不见的刻度撑开，和下面折合金额的纵轴一样宽：同一周的柱子上下对齐）：账号页上设
+    /// （CostChart.gutterLabels），别处是空的
+    @Entry var weeklyGutter: [String] = []
 }
 
 /// 纵轴那一栏：宽是最宽的那个刻度（看不见的文字撑开）

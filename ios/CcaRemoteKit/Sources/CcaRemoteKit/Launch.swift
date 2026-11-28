@@ -92,11 +92,16 @@ public struct HostLauncher: Sendable, Equatable {
     public let info: LauncherInfo
     /// 启动器这会儿连着服务器
     public let online: Bool
+    /// 连着服务器却有一阵没说话了（那台机器睡着了；3.8.0 起的服务器才给）：起不了
+    public let busy: Bool
+    /// 起得了会话（Mac App 的 RemotePeerLauncher.online：state 是 ok）
+    public var usable: Bool { online && !busy }
 
-    public init(sid: String, info: LauncherInfo, online: Bool) {
+    public init(sid: String, info: LauncherInfo, online: Bool, busy: Bool = false) {
         self.sid = sid
         self.info = info
         self.online = online
+        self.busy = online && busy
     }
 }
 

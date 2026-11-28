@@ -382,6 +382,8 @@ struct WeeklyChart: View {
     var top: Double?
     /// 点选的那一周（它的 endEpoch）；给了才能点
     var picked: Binding<Double?>?
+    /// 账号页：右边留出和下面折合金额的纵轴一样宽的一栏（AccountDetailView 设的）
+    @Environment(\.weeklyGutter) private var gutter
 
     static let week: Double = 7 * 86400
 
@@ -398,10 +400,14 @@ struct WeeklyChart: View {
 
     var body: some View {
         let top = self.top ?? Self.scaleTop([weeks])
-        SlotChart(items: weeks, domain: domain ?? Self.domain([weeks], now: now), barWidth: compact ? 5 : 10, topInset: compact ? 0 : 6,
-                  dateRow: compact ? 0 : 18, picked: picked, label: { w, p in CostChart.weekLabel(Texts.weekLabel(w), p) },
-                  accessibility: { w in (Texts.weekLabel(w), Texts.weekDetail(w, now: now)) }) { w in
-            WeekBar(percent: w.usedPercent, top: top, color: w.partial ? Meter.dimColor : Palette.usage(percent: w.usedPercent))
+        HStack(alignment: .top, spacing: 8) {
+            SlotChart(items: weeks, domain: domain ?? Self.domain([weeks], now: now), barWidth: compact ? 5 : 10, topInset: compact ? 0 : 6,
+                      dateRow: compact ? 0 : 18, picked: picked, label: { w, p in CostChart.weekLabel(Texts.weekLabel(w), p) },
+                      accessibility: { w in (Texts.weekLabel(w), Texts.weekDetail(w, now: now)) }) { w in
+                WeekBar(percent: w.usedPercent, top: top, color: w.partial ? Meter.dimColor : Palette.usage(percent: w.usedPercent))
+            }
+            // 和 CostBarChart 的纵轴一样：同样的间距、同样宽的一栏（只是不写字）
+            if !compact, !gutter.isEmpty { AxisColumn(labels: gutter) }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("每周用量")

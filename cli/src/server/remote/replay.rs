@@ -38,6 +38,8 @@ fn session(s: &Dict) -> Session {
         blobs,
         conn: s.at("online").truthy().then_some(0),
         lost: None,
+        // 对照数据是 Python 那一份录的，没有 busy：当它一直在说话
+        heard: f64::INFINITY,
         viewers: num(s, "viewers"),
         since: s.at("since").as_num().unwrap(),
     }

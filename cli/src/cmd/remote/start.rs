@@ -286,6 +286,8 @@ pub fn cmd_remote_launch(args: &[String]) -> R<()> {
             }
             if !l.online {
                 crate::err!("「{}」暂时没连着服务器：它上面的模板现在起不了", l.peer);
+            } else if l.busy {
+                crate::err!("「{}」没有回应（可能睡着了）：它上面的模板现在起不了", l.peer);
             }
             if l.more > 0 {
                 crate::err!("「{}」上还有 {} 个模板没列出来（说明里放不下）", l.peer, l.more);
@@ -359,6 +361,9 @@ pub fn cmd_remote_launch(args: &[String]) -> R<()> {
     };
     if !l.online {
         return fail(EXIT_RELAY, &format!("「{}」暂时没连着服务器：过一会儿再试", l.peer));
+    }
+    if l.busy {
+        return fail(EXIT_RELAY, &format!("「{}」没有回应（可能睡着了）：过一会儿再试", l.peer));
     }
     let size = clamp(size.or_else(|| if as_json { None } else { pty::get_size(0) }).unwrap_or(DEFAULT_SIZE));
     let (Some(peer), Some(secret)) = (all.iter().find(|p| p.pid == l.pid), peers::secret(&l.pid)) else {
@@ -491,6 +496,7 @@ mod tests {
             pid: "ab".repeat(16),
             peer: "Mac mini".into(),
             online: true,
+            busy: false,
             more: 0,
             templates: Vec::new(),
             accounts,

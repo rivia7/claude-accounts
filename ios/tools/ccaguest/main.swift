@@ -80,7 +80,9 @@ func statusJSON(_ s: HostStatus, now: Double) -> [String: Any] {
         return ["id": a.id, "aid": a.aid, "tool": a.tool, "name": a.name, "kind": a.kind, "login": a.login, "plan": a.plan, "tier": a.tier,
                 "busy": a.busy, "color": a.color ?? NSNull(), "badge": a.badge, "source": a.usage?.source ?? NSNull(),
                 "five_hour": win(a.usage?.fiveHour), "seven_day": win(a.usage?.sevenDay), "weeks": a.weeks?.weeks.count ?? NSNull(),
-                "exhausted": used, "app": a.appOpen, "cli": a.cliSessions, "since": a.cliSince ?? NSNull(), "cost": costJSON(a.cost)]
+                "exhausted": used, "app": a.appOpen, "cli": a.cliSessions, "since": a.cliSince ?? NSNull(), "cost": costJSON(a.cost),
+                "net": netJSON(a.net), "why": ["app": a.whyApp ?? NSNull(), "cli": a.whyCLI ?? NSNull()] as [String: Any], "model": a.model ?? NSNull(),
+                "team": a.team ?? NSNull(), "outdated_login_plan": a.usage?.outdatedLoginPlan ?? NSNull(), "port": a.port ?? NSNull()]
     }
     let cost: Any = s.cost.map { c -> [String: Any] in
         ["prices_date": c.pricesDate, "updated": c.updatedEpoch ?? NSNull(), "scanning": c.scanning, "unattributed": c.unattributed, "brief": c.brief]
@@ -89,8 +91,18 @@ func statusJSON(_ s: HostStatus, now: Double) -> [String: Any] {
         ["name": t.name, "role": t.role, "coadmin": t.coadmin, "state": t.state, "error": t.error, "seq": t.seq, "accounts": t.accounts,
          "device": t.device, "host": t.host, "joined": t.joinedEpoch ?? NSNull(), "update": t.update ?? NSNull()]
     } ?? NSNull()
+    let problems: [[String: Any]] = s.problems.map { ["code": $0.code, "tool": $0.tool ?? NSNull(), "items": $0.items] }
     return ["machine": s.machine, "off": s.off, "more": s.more, "at": s.at, "age": s.age, "accounts": accounts, "weeks_left_out": s.weeksLeftOut,
-            "cost": cost, "cost_left_out": s.costLeftOut, "team": team]
+            "cost": cost, "cost_left_out": s.costLeftOut, "team": team, "cca": s.ccaVersion ?? NSNull(), "remote": s.remoteOn ?? NSNull(),
+            "allow": s.allow ?? NSNull(), "problems": problems, "update": s.update ?? NSNull()]
+}
+
+/// 一个账号的出口检测：解开、清理以后的样子，再加上 App 照它算的那几样（current、exit_bad、leak：AccountMood 用的）
+func netJSON(_ n: AccountNet?) -> Any {
+    guard let n else { return NSNull() }
+    return ["checked": n.checked, "result": n.result, "region": n.region ?? NSNull(), "trust": n.trust ?? NSNull(), "trust_label": n.trustLabel ?? NSNull(),
+            "dns": n.dns ?? NSNull(), "webrtc": n.webrtc ?? NSNull(), "stale": n.stale, "applies": n.applies, "at": n.checkedEpoch ?? NSNull(),
+            "launch": n.atLaunch, "current": n.current != nil, "exit_bad": n.exitBad, "leak": n.hasLeak] as [String: Any]
 }
 
 var args = Array(CommandLine.arguments.dropFirst())
@@ -113,7 +125,7 @@ func launcherJSON(_ l: HostLauncher) -> [String: Any] {
     let accounts: Any = l.info.accounts.map { list in
         list.map { a -> [String: Any] in ["i": a.id, "k": a.tool, "n": a.name, "aid": a.aid] }
     } ?? NSNull()
-    return ["sid": l.sid, "online": l.online, "machine": l.info.machine, "more": l.info.more, "t": t, "accounts": accounts]
+    return ["sid": l.sid, "online": l.online, "busy": l.busy, "machine": l.info.machine, "more": l.info.more, "t": t, "accounts": accounts]
 }
 
 /// --size 列x行（没有、不对是 80x24）
@@ -154,7 +166,7 @@ case "list":
             print(String(decoding: try! JSONSerialization.data(withJSONObject: head, options: [.sortedKeys]), as: UTF8.self))
             for s in row.sessions {
                 let j = base.merging(["sid": s.sid, "machine": s.info.machine, "tool": s.info.tool, "name": s.info.name, "cwd": s.info.cwd,
-                                      "online": s.online, "view": s.info.viewOnly, "viewers": s.viewers, "aid": s.info.aid,
+                                      "online": s.online, "busy": s.busy, "view": s.info.viewOnly, "viewers": s.viewers, "aid": s.info.aid,
                                       "end": s.info.canEnd]) { $1 }
                 print(String(decoding: try! JSONSerialization.data(withJSONObject: j, options: [.sortedKeys]), as: UTF8.self))
             }

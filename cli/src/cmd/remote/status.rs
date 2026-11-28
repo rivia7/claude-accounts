@@ -20,7 +20,7 @@ use super::local;
 use super::peers::{self, Incoming, Peer};
 use super::relay::{self, Fault, Server};
 use crate::cmd::arity;
-use crate::cmd::gui::gui_snapshot;
+use crate::cmd::gui::{gui_snapshot, update_check_file, ver_key};
 use crate::cmd::hub::HubKind;
 use crate::cmd::presence::{flock, spawn_background};
 use crate::dict;
@@ -29,6 +29,7 @@ use crate::py::hash::sha256_hex;
 use crate::py::json;
 use crate::py::obj::{Dict, List, V};
 use crate::py::path;
+use crate::py::proc::{getenv, Cmd as Proc, In, Out};
 use crate::py::time::{strftime_local, time};
 use crate::py::R;
 use crate::server::{LATER_MAX, LATER_SPAN, STATUS_BLOB};
@@ -243,6 +244,11 @@ fn usage_of(u: &Dict) -> Dict {
         }
         d.set("quota_groups", out);
     }
+    // Claude Code 登录时记下的套餐过时了（升降级以后要重新登录才会更新）：记下的那个（Mac App 的 Diagnosis.outdatedLoginPlan）
+    let old = text(u, "outdated_login_plan", 32);
+    if !old.is_empty() {
+        d.set("outdated_login_plan", old);
+    }
     d
 }
 
@@ -397,9 +403,402 @@ fn team_of(snap: &Dict, hub: HubKind) -> Option<Dict> {
     Some(d)
 }
 
+/// 账号是哪个 Team 给的（PROTOCOL 2.2 账号的 `team`，Team 的编号）：那个 Team 的名字（没记名字时是编号的前 8 位，和配对的链接里一样）；
+/// 这台设备已经不在那个 Team 里了是 None（手机按 Team 筛时照「不在 Team 里的」）
+fn team_name(snap: &Dict, id: &str) -> Option<String> {
+    let teams = snap.dict("config")?.list("teams")?;
+    let t = teams.items().iter().filter_map(|t| t.as_dict()).find(|t| t.str("id").as_deref() == Some(id))?;
+    let name = text(&t, "name", 64);
+    Some(if name.is_empty() { far::clean(&id.chars().take(8).collect::<String>(), 8) } else { name })
+}
+
+/// 这台电脑的几样（手机上那台电脑的一栏）：cca 的版本（`cca`）、有新版本时是哪个（`update`，update_of）、「远程会话」的开关（`remote`：
+/// 之后启动的会话放不放进会话宿主，manage.rs 的 `remote_on`）、Mac App 页顶的那几条提示（`problems`：账号表校验不过、共享设置里有会盖掉
+/// 账号代理 / 接口 / 凭证的项、文件读不了，加上 extra：后台查用量要同意、没查成，内置代理停了）。提示只给原因码、哪个工具和共享设置里的项
+/// （来源和配置键，不带值），不给说明：说明里有路径、账号表的键、端口
+fn host_of(snap: &Dict, remote: bool, extra: &[(String, String)], update: Option<&str>) -> Dict {
+    let d = Dict::new();
+    let v = text(snap, "cca_version", 32);
+    if !v.is_empty() {
+        d.set("cca", v);
+    }
+    d.set("remote", remote);
+    if let Some(u) = update {
+        d.set("update", u);
+    }
+    let problems = List::new();
+    let add = |code: String, tool: Option<String>, items: Option<List>| {
+        let p = dict! { "code" => code };
+        if let Some(t) = tool.filter(|t| !t.is_empty()) {
+            p.set("tool", t);
+        }
+        if let Some(items) = items {
+            p.set("items", items);
+        }
+        let same = |x: &V| x.as_dict().is_some_and(|x| x.str("code") == p.str("code") && x.str("tool") == p.str("tool"));
+        if problems.len() < PROBLEMS_MAX && !problems.items().iter().any(same) {
+            problems.push(p);
+        }
+    };
+    // 照 Mac App 页顶的先后：账号表校验不过、共享设置有问题（各个工具的），文件读不了，后台查用量的（extra 里先要同意的、再没查成的），
+    // 内置代理停了
+    let tools: Vec<Dict> = snap.list("tools").map(|l| l.items()).unwrap_or_default().iter().filter_map(|t| t.as_dict()).collect();
+    for tool in &tools {
+        let id = text(tool, "id", 16);
+        for e in tool.list("errors").map(|l| l.items()).unwrap_or_default() {
+            let code = e.as_dict().map(|e| text(&e, "code", 32)).unwrap_or_default();
+            if !code.is_empty() {
+                add(code, Some(id.clone()), None);
+            }
+        }
+    }
+    for tool in &tools {
+        let id = text(tool, "id", 16);
+        let items: Vec<V> = tool
+            .list("settings_problems")
+            .map(|l| l.items())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| s.as_str().map(|s| far::clean(s, 64)))
+            .filter(|s| !s.is_empty())
+            .take(PROBLEM_ITEMS)
+            .map(V::from)
+            .collect();
+        if !items.is_empty() {
+            add("settings_problems".to_string(), Some(id), Some(List::from_vec(items)));
+        }
+    }
+    for e in snap.list("errors").map(|l| l.items()).unwrap_or_default() {
+        let Some(e) = e.as_dict() else { continue };
+        let code = text(&e, "code", 32);
+        if !code.is_empty() {
+            add(code, Some(text(&e, "tool", 16)), None);
+        }
+    }
+    for (code, tool) in extra {
+        add(code.clone(), Some(tool.clone()), None);
+    }
+    if !problems.is_empty() {
+        d.set("problems", problems);
+    }
+    d
+}
+
+/// 页顶的提示最多给几条、共享设置里的项最多列几个
+const PROBLEMS_MAX: usize = 8;
+const PROBLEM_ITEMS: usize = 6;
+
+// --- 电脑上另外查的：端口池的实况、有没有新版本 ------------------------------------------------------------------------------
+
+/// 端口池的实况（`cca _gui live`：在家经 SSH 问路由器、在外面问内置代理，再挨个连账号的端口）多久查一次：Mac App 的总览看得见时
+/// 两分钟一次，这里在后台，放慢些
+const LIVE_EVERY: f64 = 600.0;
+/// 上次查到了问题（端口连不上、节点选错了、内置代理停了）：两分钟就再查（和 Mac App 的总览看得见时一样快），好了马上不说
+const LIVE_RECHECK: f64 = 120.0;
+/// 记着的实况过了这么久不再给（这期间没人叫这里放一轮，不知道现在怎样）
+const LIVE_STALE: f64 = 1800.0;
+/// `_gui live` 最多等几秒（问路由器要 SSH 过去）
+const LIVE_WAIT: f64 = 45.0;
+/// 新版本要是这么久以内查到的才说（App 一天查一次；记着的太旧就不说了）
+const UPDATE_FRESH: f64 = 7.0 * 86400.0;
+
+/// 端口池的实况里给手机的（PROTOCOL 2.3 的 `slots`、`local`）：哪几个账号的端口连不上（closed）、路由器给它选错了节点（drift），和
+/// Mac App 的 Diagnosis 一个口径；走内置代理、它却没在运行（core_down：Mac App 页顶的「内置代理停了」）。账号按 `live_tag` 认：
+/// 记在 remote/status.json 里的不带邮箱、账号表的键
+#[derive(Debug, Default, PartialEq)]
+struct Live {
+    ports: Vec<(String, String)>,
+    core_down: bool,
+}
+
+/// 实况里认账号的：工具和账号表的键的 SHA-256 的前 16 个字符
+fn live_tag(tool: &str, key: &str) -> String {
+    sha256_hex(format!("{tool}\0{key}"))[..16].to_string()
+}
+
+/// `_gui live` 的那一份里给手机的
+fn live_of(doc: &Dict) -> Live {
+    let mut ports = Vec::new();
+    for s in doc.list("slots").map(|l| l.items()).unwrap_or_default() {
+        let Some(s) = s.as_dict() else { continue };
+        let (Some(tool), Some(key), Some(st)) = (s.str("tool"), s.str("key"), s.str("state")) else { continue };
+        if matches!(&*st, "closed" | "drift") {
+            ports.push((live_tag(&tool, &key), st.to_string()));
+        }
+    }
+    let local = doc.dict("local").unwrap_or_default();
+    let stopped = local.get("running").and_then(|v| v.as_bool()) == Some(false);
+    Live { ports, core_down: doc.str("route").as_deref() == Some("local") && flag(&local, "configured") && stopped }
+}
+
+/// 记着的实况（remote/status.json 的 `live`：`{"at", "ports": {live_tag: closed|drift}, "core_down"}`，没查成的只有 `at`）
+fn live_saved(l: &Dict) -> Option<Live> {
+    let ports = l.dict("ports")?;
+    let ports = ports.items().into_iter().filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string()))).collect();
+    Some(Live { ports, core_down: flag(l, "core_down") })
+}
+
+/// 放这一轮用的实况：记着的还不到 LIVE_STALE 才用（查是 `live_refresh` 的事，放完这一轮才查）
+fn live_now(state: &Dict, now: f64) -> Live {
+    state
+        .dict("live")
+        .filter(|l| number(l, "at").is_some_and(|at| (0.0..LIVE_STALE).contains(&(now - at))))
+        .and_then(|l| live_saved(&l))
+        .unwrap_or_default()
+}
+
+/// 这台电脑上 Mac App 看得到的那几样（端口池的实况、后台查用量的结果）现在算不算数：macOS 上是界面 App 开着（bash 的 `gui_running`：
+/// 它不开着时内置代理没人托管、没人在后台查用量，Mac 上也什么都不显示；启动账号时 cca 会把它叫起来）；Linux 上没有界面 App，总是算
+fn watched() -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    let app = getenv("CCA_GUI_APP")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| path::join_all(&[&crate::core::base::HOME, "Applications", "cca.app"]));
+    let pat = format!("{app}/Contents/MacOS/cca( |$)");
+    let cmd = Proc::new(["pgrep", "-f", pat.as_str()]).stdin(In::Null).stdout(Out::Null).stderr(Out::Null).timeout(5.0);
+    cmd.run().is_ok_and(|d| d.rc == 0)
+}
+
+/// 问一次端口池的实况（`cca _gui live`，只读）；没有 CCA_SELF（不是 cca 起的）、查不成、超时是 None
+fn run_live() -> Option<Dict> {
+    let me = getenv("CCA_SELF").filter(|s| !s.is_empty())?;
+    let cmd = Proc::new([me.as_str(), "_gui", "live"]).stdin(In::Null).stdout(Out::Capture).stderr(Out::Null).timeout(LIVE_WAIT);
+    let done = cmd.run().ok().filter(|d| d.rc == 0)?;
+    json::loads(&done.out()).ok()?.as_dict().filter(|d| d.str("kind").as_deref() == Some("live"))
+}
+
+/// 端口池的实况到了该查的时候（LIVE_EVERY）查一次，记进 remote/status.json；和记着的不一样时是 true（再放一轮）。只在有手机看得到
+/// 这台电脑的账号、`watched` 的时候查；`CCA_STATUS_LIVE=off` 不查（回归：它在后台随时会经 SSH 问路由器）
+fn live_refresh(now: f64) -> bool {
+    if getenv("CCA_STATUS_LIVE").as_deref() == Some("off") || !peers::load().iter().any(|p| p.web && p.incoming != Incoming::None) {
+        return false;
+    }
+    let state = load_state();
+    let old = state.dict("live");
+    let had = old.as_ref().and_then(live_saved).unwrap_or_default();
+    let every = if had == Live::default() { LIVE_EVERY } else { LIVE_RECHECK };
+    if old.as_ref().and_then(|l| number(l, "at")).is_some_and(|at| (0.0..every).contains(&(now - at))) || !watched() {
+        return false;
+    }
+    let got = run_live().map(|d| live_of(&d));
+    let rec = dict! { "at" => now };
+    if let Some(l) = &got {
+        let ports = Dict::new();
+        for (tag, st) in &l.ports {
+            ports.set(tag.as_str(), st.as_str());
+        }
+        rec.set("ports", ports);
+        rec.set("core_down", l.core_down);
+    }
+    let changed = had != got.unwrap_or_default();
+    state.set("live", rec);
+    let saved = local::ensure_dir().is_ok() && fs::save_json(&state_file(), &V::Dict(state), Some(0o600), true).is_ok();
+    saved && changed
+}
+
+/// 电脑上的 cca 有没有新版本（Mac App 页顶的「cca 有新版本 X」「cca 有新的测试版 X」）：照最近一次 `cca update --check` 记下的那一份
+/// （gui.rs 的 `update_check_file`：App 一天查一次，这里不联网）。开发模式（cca 旁边有 .git：用 git 更新）不说，和 App 一样
+fn update_of(now: f64) -> Option<String> {
+    let me = getenv("CCA_SELF").filter(|s| !s.is_empty())?;
+    if path::exists(&path::join(&path::dirname(&me), ".git")) {
+        return None;
+    }
+    let doc = fs::load_quiet(&update_check_file()).and_then(|v| v.as_dict())?;
+    update_in(&doc, &getenv("CCA_VERSION")?, now)
+}
+
+// --- App 后台刷新用量的结果（remote-usage-poll）-----------------------------------------------------------------------------------
+
+/// 记着的：`{"v": 1, "tools": {工具: {"consent": App 的进程号, "failed": App 的进程号}}}`（remote/usage-poll.json）。值是记下它的那个
+/// App 的进程号：Mac App 记在内存里，退出了就没了，这里照它（进程不在了就不算）
+fn poll_file() -> String {
+    path::join(&local::dir(), "usage-poll.json")
+}
+
+/// 一次 `cca usage` 结束以后要怎么改记着的
+#[derive(Debug, PartialEq)]
+enum PollEnd {
+    /// 成功：两样都清掉
+    Clear,
+    /// App 里手动刷新的失败：弹框说过了，清掉「没查成」
+    ClearFailed,
+    /// 后台刷新要同意（consent）、没查成（failed）：记下
+    Set(&'static str),
+    /// 不动：取消的（被信号停掉、`cancelled`）、要到终端里做的（`terminal`）、手动刷新时问同意的那一轮（App 接着弹框问）
+    Keep,
+}
+
+/// 和 Mac App 的 `AppModel.finishUsage`（PROTOCOL 4.3 的重跑流程认的那几样）一个口径。events 是这次的事件文件
+fn poll_end(rc: i64, background: bool, events: &str) -> PollEnd {
+    if rc == 0 {
+        return PollEnd::Clear;
+    }
+    if rc >= 128 {
+        return PollEnd::Keep;
+    }
+    let evs: Vec<Dict> = events.lines().filter_map(|l| json::loads(l).ok().and_then(|v| v.as_dict())).collect();
+    let has = |k: &str| evs.iter().any(|e| e.str("ev").as_deref() == Some(k));
+    if has("consent") {
+        return if background { PollEnd::Set("consent") } else { PollEnd::Keep };
+    }
+    let last_fail = evs.iter().rev().find(|e| e.str("ev").as_deref() == Some("fail")).and_then(|e| e.str("code"));
+    if has("terminal") || last_fail.as_deref() == Some("cancelled") {
+        return PollEnd::Keep;
+    }
+    if background {
+        PollEnd::Set("failed")
+    } else {
+        PollEnd::ClearFailed
+    }
+}
+
+/// `remote-usage-poll 退出码 [App 的进程号] [事件文件]`（bash cmd_usage 的 EXIT trap：App 起的 `cca usage` 才调，事件文件是 CCA_EVENTS，
+/// 后台刷新时 App 带着自己的进程号 CCA_USAGE_POLL）：记下 App 刷新用量的结果，给手机上那台电脑的一栏（host_of 的 extra：「刷新 X 的
+/// 用量需要你的同意」「后台刷新 X 的用量失败」，poll_problems）。工具是 CCA_TOOL。变了就放一轮。出什么错都安静地退出
+pub fn cmd_remote_usage_poll(args: &[String]) -> R<()> {
+    arity("cmd_remote_usage_poll", args, 1, 3)?;
+    if *crate::core::base::RO {
+        return Ok(());
+    }
+    let rc = args[0].trim().parse::<i64>().unwrap_or(1);
+    let pid = crate::cmd::arg(args, 1, "").trim().parse::<i64>().ok().filter(|p| *p > 1);
+    let events =
+        Some(crate::cmd::arg(args, 2, "")).filter(|p| !p.is_empty()).and_then(|p| fs::read_text(p).ok()).unwrap_or_default();
+    let end = poll_end(rc, pid.is_some(), &events);
+    if end == PollEnd::Keep {
+        return Ok(());
+    }
+    let Ok(d) = local::ensure_dir() else { return Ok(()) };
+    let Ok(lock) = std::fs::OpenOptions::new().append(true).create(true).open(path::join(&d, "usage-poll.lock")) else {
+        return Ok(());
+    };
+    if !flock(&lock, libc::LOCK_EX) {
+        return Ok(());
+    }
+    let file = poll_file();
+    let doc = fs::load_quiet(&file).and_then(|v| v.as_dict()).filter(|d| d.get("v").and_then(|v| v.as_int()) == Some(1));
+    let doc = doc.unwrap_or_else(|| dict! { "v" => 1 });
+    let tools = doc.dict("tools").unwrap_or_default();
+    let tool = crate::core::tool::t().name.to_string();
+    let rec = tools.dict(&tool).unwrap_or_default();
+    let before = json::dumps(&V::Dict(rec.clone()), json::LINE);
+    match end {
+        PollEnd::Clear => {
+            rec.pop("consent");
+            rec.pop("failed");
+        }
+        PollEnd::ClearFailed => {
+            rec.pop("failed");
+        }
+        PollEnd::Set(k) => rec.set(k, pid.unwrap_or(0)),
+        PollEnd::Keep => {}
+    }
+    if json::dumps(&V::Dict(rec.clone()), json::LINE) == before {
+        return Ok(());
+    }
+    if rec.is_empty() {
+        tools.pop(&tool);
+    } else {
+        tools.set(tool.as_str(), rec);
+    }
+    doc.set("tools", tools);
+    if fs::save_json(&file, &V::Dict(doc), Some(0o600), true).is_ok() {
+        status_kick();
+    }
+    Ok(())
+}
+
+/// 进程还在（App 没退出）
+fn alive(pid: i64) -> bool {
+    pid > 1 && i32::try_from(pid).is_ok_and(|p| unsafe { libc::kill(p, 0) } == 0)
+}
+
+/// 记着的结果里还算数的（记下它的 App 还开着）：照 Mac App 页顶的先后，每个工具一条，要同意的在前（`(原因码, 工具)`）
+fn poll_problems() -> Vec<(String, String)> {
+    let Some(tools) = fs::load_quiet(&poll_file()).and_then(|v| v.as_dict()).and_then(|d| d.dict("tools")) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for tool in crate::core::tool::TOOLS.iter().map(|t| t.name) {
+        let Some(rec) = tools.dict(tool) else { continue };
+        let on = |k: &str| rec.get(k).and_then(|v| v.as_int()).is_some_and(alive);
+        if on("consent") {
+            out.push(("usage_consent".to_string(), tool.to_string()));
+        } else if on("failed") {
+            out.push(("usage_failed".to_string(), tool.to_string()));
+        }
+    }
+    out
+}
+
+/// 记下的那一份里的最新版本：比现在的新、查了不到 UPDATE_FRESH 才算
+fn update_in(doc: &Dict, current: &str, now: f64) -> Option<String> {
+    let at = number(doc, "generated_epoch")?;
+    let latest = text(doc, "latest", 32);
+    let newer = matches!((ver_key(&latest), ver_key(current)), (Some(new), Some(cur)) if new > cur);
+    ((0.0..UPDATE_FRESH).contains(&(now - at)) && newer).then_some(latest)
+}
+
 /// 头像的颜色（启动器的颜色，`#RRGGBB`）
 fn color_ok(c: &str) -> bool {
     c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// 出口检测的结果（PROTOCOL 3.3 的 `health`）里手机要的：`result`、不可用的地区（`region`）、纯净度（`trust`、`trust_label`）、
+/// DNS / WebRTC 的泄露检测（`dns`、`webrtc`）、过时了（`stale`：超过 6 小时）、不是现在的节点测的（`applies` 是 false）、什么时候测的（`at`）、
+/// 是启动时测的（`source` 是 launch）。从没测过是空的 `{}`（手机照它说「尚未检测出口」）。不给出口 IP、运营商、节点、说明（`message` 里有 IP）
+fn net_of(h: Option<Dict>) -> Dict {
+    let d = Dict::new();
+    let Some(h) = h else { return d };
+    d.set("result", text(&h, "result", 24));
+    let region = text(&h, "restricted_region", 32);
+    if !region.is_empty() {
+        d.set("region", region);
+    }
+    if let V::Int(t) = count(&h, "trust") {
+        d.set("trust", t.min(100));
+        let label = text(&h, "trust_label", 16);
+        if !label.is_empty() {
+            d.set("trust_label", label);
+        }
+    }
+    if let Some(l) = h.dict("leak") {
+        for k in ["dns", "webrtc"] {
+            let s = text(&l, k, 16);
+            if !s.is_empty() {
+                d.set(k, s);
+            }
+        }
+    }
+    if flag(&h, "stale") {
+        d.set("stale", true);
+    }
+    if h.get("applies").and_then(|v| v.as_bool()) == Some(false) {
+        d.set("applies", false);
+    }
+    if let V::Int(t) = epoch(&h, "checked_at") {
+        d.set("at", t);
+    }
+    if h.str("source").as_deref() == Some("launch") {
+        d.set("source", "launch");
+    }
+    d
+}
+
+/// 为什么用不了（PROTOCOL 2.2 的 `can_why`）里手机要的：桌面 App（`app`：`app_missing` 是没装）、在终端里打开（`cli`：`tool_missing`
+/// 是没装 claude / codex / agy）；都能用时是 None
+fn why_of(a: &Dict) -> Option<Dict> {
+    let w = a.dict("can_why")?;
+    let d = Dict::new();
+    for k in ["app", "cli"] {
+        let s = text(&w, k, 24);
+        if !s.is_empty() {
+            d.set(k, s);
+        }
+    }
+    (!d.is_empty()).then_some(d)
 }
 
 /// 给手机的一个账号（不带邮箱、键；按配对的 id、aid 另加）。a 是快照里的一个账号
@@ -429,6 +828,15 @@ fn row_of(a: &Dict, tool: &str, name: &str) -> Dict {
         }
         d.set("badge", far::clean(&b.str("label").map(|s| s.to_string()).unwrap_or_default(), 8));
     }
+    // 出口检测的结果（总览的「有问题」、账号页那句话：和 Mac App 的 Diagnosis 一个口径）、为什么用不了、第三方 API 的模型
+    d.set("net", net_of(a.dict("health")));
+    if let Some(why) = why_of(a) {
+        d.set("why", why);
+    }
+    let model = a.dict("api").map(|x| text(&x, "model", 64)).unwrap_or_default();
+    if !model.is_empty() {
+        d.set("model", model);
+    }
     d
 }
 
@@ -443,13 +851,18 @@ fn accounts(snap: &Dict, now: f64) -> Vec<Acct> {
             let Some(a) = a.as_dict() else { continue };
             let (Some(key), Some(ident)) = (a.str("key"), a.str("id")) else { continue };
             let name = far::clean(far::short_name(&a.str("name").map(|s| s.to_string()).unwrap_or_default()), 64);
+            let row = row_of(&a, &id, &name);
+            // 是哪个 Team 给的（手机按 Team 筛）
+            if let Some(t) = a.str("team").and_then(|t| team_name(snap, &t)) {
+                row.set("team", t);
+            }
             out.push(Acct {
                 tool: id.to_string(),
                 label: label.clone(),
                 ident: ident.to_string(),
                 key: key.to_string(),
                 hub: relay::session_hub(&id, &key),
-                row: row_of(&a, &id, &name),
+                row,
                 cost: a.dict("cost").and_then(|c| Some((cost_of(&c, false)?, cost_of(&c, true)?))),
                 used: exhausted(&a, now),
                 name,
@@ -477,12 +890,15 @@ enum CostFit {
     Off,
 }
 
-/// 给一个配对的那一份里不是哪个账号的：这个 Team 的盐（算 aid）、机器名、这台电脑的折合金额那几样（cost_meta）、这个配对所在的 Team（team_of）
+/// 给一个配对的那一份里不是哪个账号的：这个 Team 的盐（算 aid）、机器名、这台电脑的折合金额那几样（cost_meta）、这个配对所在的 Team（team_of）、
+/// 这台电脑的版本和开关、提示（host_of）、这台手机在这台电脑上能做什么（`control` 看和操作、`view` 只看：peers.json 的 `incoming`）
 struct Ctx<'a> {
     salt: Option<&'a str>,
     machine: &'a str,
     cost: Option<&'a Dict>,
     team: Option<&'a Dict>,
+    host: Option<&'a Dict>,
+    allow: &'a str,
 }
 
 /// 给一个配对的那一份（PROTOCOL 见 docs/dev/remote.md「手机上的账号」）：走这台服务器的账号（`accts`）。`id`：按配对算的账号编号；
@@ -525,6 +941,12 @@ fn doc_for(p: &[u8], accts: &[&Acct], cx: &Ctx, fit: Fit) -> Dict {
     }
     if let Some(t) = cx.team {
         d.set("team", t);
+    }
+    if let Some(h) = cx.host {
+        d.update(h);
+    }
+    if !cx.allow.is_empty() {
+        d.set("allow", cx.allow);
     }
     if fit.n < accts.len() {
         d.set("more", accts.len() - fit.n);
@@ -763,6 +1185,23 @@ fn publish(now: f64) -> R<()> {
         let snap = if phones.iter().any(|p| p.incoming != Incoming::None) { Some(gui_snapshot(false)?) } else { None };
         let accts = snap.as_ref().map_or_else(Vec::new, |s| accounts(s, now));
         let cost = snap.as_ref().and_then(cost_meta);
+        let remote =
+            fs::load_quiet(&crate::core::base::CFG).and_then(|c| c.as_dict()).is_some_and(|c| super::manage::remote_on(&c));
+        // Mac App 看得到的那几样：App 开着才给（watched）。端口的问题照记着的实况（查在放完以后，live_refresh）
+        let watched = snap.is_some() && watched();
+        let live = if watched { live_now(&state, now) } else { Live::default() };
+        for a in &accts {
+            let tag = live_tag(&a.tool, &a.key);
+            if let Some((_, st)) = live.ports.iter().find(|(t, _)| *t == tag) {
+                a.row.set("port", st.as_str());
+            }
+        }
+        let mut extra = if watched { poll_problems() } else { Vec::new() };
+        if live.core_down {
+            extra.push(("core_down".to_string(), String::new()));
+        }
+        let update = update_of(now);
+        let host = snap.as_ref().map(|s| host_of(s, remote, &extra, update.as_deref()));
         let mut hubs: Vec<HubKind> = Vec::new();
         for p in &phones {
             if !hubs.contains(&p.hub) {
@@ -773,7 +1212,6 @@ fn publish(now: f64) -> R<()> {
             let Ok(srv) = relay::server_of(hub)? else { continue };
             let salt = far::team_salt(hub);
             let team = snap.as_ref().and_then(|s| team_of(s, hub));
-            let cx = Ctx { salt: salt.as_deref(), machine: &machine, cost: cost.as_ref(), team: team.as_ref() };
             let mine: Vec<&Acct> = accts.iter().filter(|a| a.hub == Some(hub)).collect();
             for peer in phones.iter().filter(|p| p.hub == hub) {
                 let Some(secret) = peers::secret(&peer.pid) else { continue };
@@ -783,6 +1221,14 @@ fn publish(now: f64) -> R<()> {
                     }
                     continue;
                 }
+                let cx = Ctx {
+                    salt: salt.as_deref(),
+                    machine: &machine,
+                    cost: cost.as_ref(),
+                    team: team.as_ref(),
+                    host: host.as_ref(),
+                    allow: peer.incoming.word(),
+                };
                 let st = pids.dict(&peer.pid).unwrap_or_default();
                 publish_peer(&srv, peer, &secret, &mine, &cx, now, &st)?;
                 pids.set(peer.pid.as_str(), st);
@@ -817,6 +1263,10 @@ pub fn cmd_remote_status(args: &[String]) -> R<()> {
             let _ = std::fs::remove_file(&again);
             if let Err(e) = publish(time()) {
                 e.swallowed();
+            }
+            // 端口池的实况该查了：先放上面这一轮（问路由器要几秒），查完和记着的不一样再放一轮
+            if live_refresh(time()) {
+                let _ = touch();
             }
         }
         drop(lock);
@@ -941,7 +1391,7 @@ mod tests {
     }
 
     fn cx(salt: Option<&str>) -> Ctx<'_> {
-        Ctx { salt, machine: "box", cost: None, team: None }
+        Ctx { salt, machine: "box", cost: None, team: None, host: None, allow: "" }
     }
 
     fn full(n: usize) -> Fit {
@@ -1179,7 +1629,7 @@ mod tests {
         let accts = accts_of(&[a]);
         let refs: Vec<&Acct> = accts.iter().collect();
         let meta = cost_meta(&snap).unwrap();
-        let c = Ctx { salt: None, machine: "box", cost: Some(&meta), team: Some(&t) };
+        let c = Ctx { salt: None, machine: "box", cost: Some(&meta), team: Some(&t), host: None, allow: "" };
         let doc = doc_for(&P, &refs, &c, full(1));
         let row = doc.list("accounts").unwrap().get(0).unwrap().as_dict().unwrap();
         assert_eq!(row.dict("cost").unwrap().list("models").unwrap().len(), COST_MODELS);
@@ -1214,7 +1664,7 @@ mod tests {
             .collect();
         a.set("usage_weeks", dict! { "since_epoch" => 1.0, "weeks" => weeks, "summary" => dict! { "weeks" => 12, "average_percent" => 50, "maxed" => 0, "under_half" => 0 } });
         let meta = dict! { "prices_date" => "2026-11-01", "updated" => NOW as i64 };
-        let c = Ctx { salt: None, machine: "box", cost: Some(&meta), team: None };
+        let c = Ctx { salt: None, machine: "box", cost: Some(&meta), team: None, host: None, allow: "" };
         let pid = "ab".repeat(16);
         let fits = |n: usize| -> (Option<bool>, bool, bool, usize) {
             let many: Vec<Dict> = (0..n).map(|_| a.copy()).collect();
@@ -1319,5 +1769,188 @@ mod tests {
         let sealed = crypto::note_seal(&P, &"ab".repeat(16), &n).unwrap();
         assert!(sealed.str("c").unwrap().len() <= crate::server::PUSH_BLOB, "服务器收得下");
         assert!(!json::dumps(&V::Dict(n), json::Fmt::new().utf8().compact()).contains("example.com"));
+    }
+
+    #[test]
+    fn health_why_and_team_for_the_phone() {
+        // 出口检测（health → net：不给出口 IP、运营商、说明；从没测过是 {}）、can_why（只给 app、cli）、第三方 API 的模型（不给接口的地址）、
+        // 套餐过时、是哪个 Team 给的（不在 config.teams 里的 Team 不写）
+        let l = |xs: Vec<V>| V::List(List::from_vec(xs));
+        let json_of = |d: &Dict| json::dumps(&V::Dict(d.clone()), json::Fmt::new().utf8().compact());
+        let tid = "ab".repeat(16);
+        let a = acct(w(10.0, Some(NOW + 60.0)), V::None);
+        a.set(
+            "health",
+            dict! {
+                "version" => 1, "checked_at" => NOW - 100.5, "age_seconds" => 100, "stale" => false, "applies" => true, "source" => "check",
+                "result" => "restricted", "ip" => "203.0.113.1", "country" => "XX", "org" => "Example Networks", "trust" => 40,
+                "restricted_region" => "某地\u{202e}", "message" => "203.0.113.1 · XX · Example Networks",
+                "leak" => dict! { "dns" => "leak", "webrtc" => "note", "line" => "DNS 203.0.113.9", "dns_message" => "203.0.113.9" },
+            },
+        );
+        a.set("can_why", dict! { "app" => "app_missing", "web" => "no_chrome" });
+        a.set("team", tid.as_str());
+        a.dict("usage").unwrap().set("outdated_login_plan", "Pro");
+        let api = acct(V::None, V::None);
+        api.set("kind", "api");
+        api.set("login", "api");
+        api.set("usage", V::None);
+        api.set("api", dict! { "host" => "api.example.com", "model" => "model-x" });
+        api.set(
+            "health",
+            dict! {
+                "result" => "api_ok", "stale" => true, "applies" => false, "leak" => V::None, "checked_at" => V::None, "source" => "launch",
+                "trust" => V::None, "trust_label" => "",
+            },
+        );
+        api.set("team", "ef".repeat(16));
+        let fresh = acct(V::None, V::None);
+        fresh.set("can_why", Dict::new());
+        let tool =
+            dict! { "id" => "claude", "label" => "Claude Code", "accounts" => l(vec![V::Dict(a), V::Dict(api), V::Dict(fresh)]) };
+        let team = dict! { "id" => tid.as_str(), "name" => "示例 Team", "role" => "member" };
+        let snap = dict! { "tools" => l(vec![V::Dict(tool)]), "config" => dict! { "teams" => l(vec![V::Dict(team)]) } };
+        let accts = accounts(&snap, NOW);
+        let refs: Vec<&Acct> = accts.iter().collect();
+        let doc = doc_for(&P, &refs, &cx(None), full(3));
+        let text = json_of(&doc);
+        for no in ["203.0.113", "Example Networks", "example.com", "no_chrome", "\u{202e}"] {
+            assert!(!text.contains(no), "{no}：{text}");
+        }
+        let rows = doc.list("accounts").unwrap();
+        let row = |i: usize| rows.get(i).unwrap().as_dict().unwrap();
+        assert_eq!(
+            json_of(&row(0).dict("net").unwrap()),
+            format!(
+                r#"{{"result":"restricted","region":"某地","trust":40,"dns":"leak","webrtc":"note","at":{}}}"#,
+                (NOW - 101.0) as i64
+            )
+        );
+        assert_eq!(json_of(&row(0).dict("why").unwrap()), r#"{"app":"app_missing"}"#);
+        assert_eq!(row(0).str("team").as_deref(), Some("示例 Team"));
+        assert_eq!(row(0).dict("usage").unwrap().str("outdated_login_plan").as_deref(), Some("Pro"));
+        assert!(row(0).get("model").is_none());
+        assert_eq!(json_of(&row(1).dict("net").unwrap()), r#"{"result":"api_ok","stale":true,"applies":false,"source":"launch"}"#);
+        assert_eq!(row(1).str("model").as_deref(), Some("model-x"));
+        assert!(row(1).get("team").is_none(), "这台设备已经不在那个 Team 里了");
+        assert_eq!(json_of(&row(2).dict("net").unwrap()), "{}", "从没测过");
+        assert!(row(2).get("why").is_none() && row(2).dict("usage").unwrap().get("outdated_login_plan").is_none());
+        // 这台电脑的几样：版本、开关、页顶的提示（只给原因码、工具、共享设置里的项；同样的只给一次，不给说明）
+        let item = |code: &str, msg: &str| V::Dict(dict! { "code" => code, "message" => msg });
+        let snap2 = dict! {
+            "cca_version" => "3.8.0-beta.2",
+            "errors" => l(vec![
+                V::Dict(dict! { "code" => "account_unreadable", "tool" => "codex", "message" => "/Users/x/.cca/accounts/alice@example.com" }),
+                V::Dict(dict! { "code" => "account_unreadable", "tool" => "codex", "message" => "又一个" }),
+                V::Dict(dict! { "code" => "config_unreadable", "tool" => V::None, "message" => "/Users/x/.cca/config.json" }),
+            ]),
+            "tools" => l(vec![
+                V::Dict(dict! {
+                    "id" => "claude", "errors" => l(vec![item("table_invalid", "alice@example.com 的节点 US-Z 不存在"), item("table_invalid", "…")]),
+                    "settings_problems" => l(vec![V::from("settings.json:ANTHROPIC_BASE_URL"), V::from(""), V::from("settings.local.json:env.HTTPS_PROXY")]),
+                }),
+                V::Dict(dict! { "id" => "codex", "errors" => l(vec![]), "settings_problems" => l(vec![]) }),
+            ]),
+        };
+        // 照 Mac App 页顶的先后：账号表、共享设置（各个工具的），文件读不了，后台查用量的，内置代理停了；有新版本时带着版本号
+        let extra = [("usage_consent".to_string(), "codex".to_string()), ("core_down".to_string(), String::new())];
+        let h = host_of(&snap2, true, &extra, Some("3.8.1"));
+        assert_eq!(
+            json_of(&h),
+            concat!(
+                r#"{"cca":"3.8.0-beta.2","remote":true,"update":"3.8.1","problems":[{"code":"table_invalid","tool":"claude"},"#,
+                r#"{"code":"settings_problems","tool":"claude","items":["settings.json:ANTHROPIC_BASE_URL","settings.local.json:env.HTTPS_PROXY"]},"#,
+                r#"{"code":"account_unreadable","tool":"codex"},{"code":"config_unreadable"},{"code":"usage_consent","tool":"codex"},"#,
+                r#"{"code":"core_down"}]}"#
+            )
+        );
+        assert_eq!(json_of(&host_of(&Dict::new(), false, &[], None)), r#"{"remote":false}"#, "没有版本、提示时只有开关");
+        let c = Ctx { salt: None, machine: "box", cost: None, team: None, host: Some(&h), allow: "view" };
+        let doc = doc_for(&P, &refs, &c, full(3));
+        assert_eq!((doc.str("cca").as_deref(), doc.get("remote").unwrap().as_bool()), (Some("3.8.0-beta.2"), Some(true)));
+        assert_eq!((doc.str("allow").as_deref(), doc.list("problems").unwrap().len()), (Some("view"), 6));
+        assert_eq!(doc.str("update").as_deref(), Some("3.8.1"));
+        let lean = doc_for(&P, &refs, &c, Fit { weeks: false, cost: CostFit::Off, n: 0 });
+        assert!(lean.list("problems").is_some() && lean.str("allow").is_some() && lean.str("cca").is_some(), "少放账号时照样带着");
+        assert!(doc_for(&P, &refs, &cx(None), full(3)).get("allow").is_none(), "不知道（测试里）时不写");
+    }
+
+    #[test]
+    fn live_ports_and_core_for_the_phone() {
+        // _gui live 的 slots：只要 closed、drift，按工具和账号表的键的摘要认（status.json 里不带邮箱）；内置代理：走它、配置了、没在运行才算停了
+        let l = |xs: Vec<V>| V::List(List::from_vec(xs));
+        let slot = |tool: &str, key: &str, st: &str| V::Dict(dict! { "tool" => tool, "key" => key, "state" => st, "port" => 7001 });
+        let doc = dict! {
+            "kind" => "live", "route" => "local",
+            "slots" => l(vec![
+                slot("claude", "工作(alice@example.com)", "closed"), slot("codex", "bob@example.com", "drift"),
+                slot("claude", "carol@example.com", "ok"), V::from("坏的"),
+            ]),
+            "local" => dict! { "configured" => true, "running" => false },
+        };
+        let live = live_of(&doc);
+        let want = vec![
+            (live_tag("claude", "工作(alice@example.com)"), "closed".to_string()),
+            (live_tag("codex", "bob@example.com"), "drift".to_string()),
+        ];
+        assert_eq!((&live.ports, live.core_down), (&want, true));
+        assert_ne!(live_tag("claude", "bob@example.com"), live_tag("codex", "bob@example.com"), "两个工具里同一个邮箱是两个账号");
+        assert_eq!(live_tag("claude", "bob@example.com").len(), 16);
+        for (route, local) in [
+            ("router", dict! { "configured" => true, "running" => false }),
+            ("local", dict! { "configured" => false, "running" => false }),
+            ("local", dict! { "configured" => true, "running" => true }),
+            ("local", dict! { "configured" => true, "running" => V::None }),
+        ] {
+            let d = dict! { "route" => route, "local" => local.clone() };
+            assert!(!live_of(&d).core_down, "{route} {}", json::dumps(&V::Dict(local), json::LINE));
+        }
+        // 记进 status.json 的读回来一样；太旧的、没查成的（只有 at）不用
+        let ports = Dict::new();
+        for (t, s) in &want {
+            ports.set(t.as_str(), s.as_str());
+        }
+        let rec = dict! { "at" => NOW - 60.0, "ports" => ports, "core_down" => true };
+        assert_eq!(live_saved(&rec), Some(Live { ports: want.clone(), core_down: true }));
+        let st = dict! { "v" => 1, "live" => rec };
+        assert_eq!(live_now(&st, NOW), Live { ports: want, core_down: true });
+        assert_eq!(live_now(&st, NOW - 60.0 + LIVE_STALE), Live::default(), "太旧了");
+        assert_eq!(live_now(&dict! { "live" => dict! { "at" => NOW } }, NOW), Live::default(), "没查成的只有 at");
+    }
+
+    #[test]
+    fn update_from_the_last_check() {
+        let doc =
+            |latest: &str, at: f64| dict! { "kind" => "update", "latest" => latest, "generated_epoch" => at, "available" => true };
+        assert_eq!(update_in(&doc("3.8.1", NOW), "3.8.0", NOW).as_deref(), Some("3.8.1"));
+        assert_eq!(
+            update_in(&doc("3.8.0-beta.3", NOW), "3.8.0-beta.2", NOW).as_deref(),
+            Some("3.8.0-beta.3"),
+            "测试版上的更新的测试版"
+        );
+        assert_eq!(update_in(&doc("3.8.0", NOW), "3.8.0-beta.2", NOW).as_deref(), Some("3.8.0"), "同号的正式版比测试版新");
+        assert_eq!(update_in(&doc("3.8.0", NOW), "3.8.0", NOW), None, "已经换成它了（App 还没再查）");
+        assert_eq!(update_in(&doc("3.7.13", NOW), "3.8.0-beta.2", NOW), None, "比现在的旧");
+        assert_eq!(update_in(&doc("3.8.1", NOW - UPDATE_FRESH), "3.8.0", NOW), None, "查得太久以前了");
+        assert_eq!(update_in(&doc("坏的", NOW), "3.8.0", NOW), None);
+        assert_eq!(update_in(&dict! { "latest" => "3.8.1" }, "3.8.0", NOW), None, "没有时间");
+    }
+
+    #[test]
+    fn usage_poll_like_the_mac_app() {
+        // 和 AppModel.finishUsage 一个口径：成功清掉；后台的要同意、没查成记下；手动的失败清掉「没查成」；取消的、要到终端里做的不动
+        let consent = r#"{"v":1,"ev":"consent","item":"router_reload","scope":"openclash","grant":"router_reload:openclash"}"#;
+        let fail = |code: &str| format!(r#"{{"v":1,"ev":"fail","code":"{code}","message":"x"}}"#);
+        assert_eq!(poll_end(0, true, consent), PollEnd::Clear);
+        assert_eq!(poll_end(0, false, ""), PollEnd::Clear, "App 里手动刷新成了也清掉");
+        assert_eq!(poll_end(1, true, consent), PollEnd::Set("consent"));
+        assert_eq!(poll_end(1, false, consent), PollEnd::Keep, "手动的：App 接着弹框问");
+        assert_eq!(poll_end(1, true, &fail("port_closed")), PollEnd::Set("failed"));
+        assert_eq!(poll_end(1, false, &fail("port_closed")), PollEnd::ClearFailed, "手动的失败弹框说过了");
+        assert_eq!(poll_end(1, true, &format!("{}\n{}", fail("port_closed"), fail("cancelled"))), PollEnd::Keep, "取消的");
+        assert_eq!(poll_end(1, true, r#"{"v":1,"ev":"terminal","code":"login","argv":[]}"#), PollEnd::Keep, "要到终端里做的");
+        assert_eq!(poll_end(130, true, ""), PollEnd::Keep, "被信号停掉的");
+        assert_eq!(poll_end(1, true, "不是 JSON\n"), PollEnd::Set("failed"));
+        assert!(alive(i64::from(std::process::id())) && !alive(0) && !alive(1));
     }
 }
